@@ -691,7 +691,7 @@ export default function YouTubeSyncPlayer({
           />
 
           <div className="local-drop-icon">
-            <svg viewBox="0 0 24 24" width="28" height="28" fill="#3ea6ff">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="#3ea6ff">
               <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
             </svg>
           </div>
@@ -709,7 +709,7 @@ export default function YouTubeSyncPlayer({
         {/* YouTube Watch Party Card */}
         <div className="yt-placeholder-card">
           <div className="yt-placeholder-icon">
-            <svg viewBox="0 0 24 24" width="60" height="60" fill="#FF0033">
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="#FF0033">
               <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
             </svg>
           </div>
