@@ -15,8 +15,18 @@ const ICE_SERVERS = [
   { urls: 'stun:stun1.l.google.com:19302' }
 ];
 
+const IS_LOCAL = typeof window !== 'undefined' && (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname === '[::1]' ||
+  Boolean(import.meta.env?.DEV)
+);
+
 export default function App() {
-  const [signalUrl, setSignalUrl] = useState(() => localStorage.getItem('webrtc_signal_url') || DEFAULT_SIGNAL_URL);
+  const [signalUrl, setSignalUrl] = useState(() => {
+    if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
+    return localStorage.getItem('webrtc_signal_url') || DEFAULT_SIGNAL_URL;
+  });
   const [username, setUsername] = useState(() => localStorage.getItem('webrtc_username') || `User_${Math.floor(100 + Math.random() * 900)}`);
 
   const [signalStatus, setSignalStatus] = useState({ connected: false, label: 'Connecting...' });
@@ -26,6 +36,7 @@ export default function App() {
   const [isP2PConnected, setIsP2PConnected] = useState(false);
   const [p2pStatusText, setP2pStatusText] = useState('Waiting for peer to enter 5-digit code...');
   const [messages, setMessages] = useState([]);
+  const [systemLogs, setSystemLogs] = useState([]);
 
   // YouTube & Local Media Synchronization State
   const [activeVideoId, setActiveVideoId] = useState(null);
@@ -41,8 +52,13 @@ export default function App() {
   const [initialJoinPin, setInitialJoinPin] = useState('');
   const [toastMessage, setToastMessage] = useState('');
 
+  // WebRTC Voice Chat State
+  const [isMicMuted, setIsMicMuted] = useState(true);
+  const [isAudioBlocked, setIsAudioBlocked] = useState(false);
+  const [peerVoiceStates, setPeerVoiceStates] = useState({});
+
   // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
-  // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue }>
+  // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement }>
   const peersRef = useRef(new Map());
   const wsRef = useRef(null);
   const currentRoomRef = useRef(null);
@@ -52,9 +68,15 @@ export default function App() {
   const activeVideoIdRef = useRef(null);
   const syncStateGetterRef = useRef(null);
 
+  const localStreamRef = useRef(null);
+  const isMicMutedRef = useRef(true);
+  const isAudioBlockedRef = useRef(false);
+
   currentRoomRef.current = roomId;
   isHostRef.current = isHost;
   activeVideoIdRef.current = activeVideoId;
+  isMicMutedRef.current = isMicMuted;
+  isAudioBlockedRef.current = isAudioBlocked;
 
   const showToast = useCallback((msg) => {
     setToastMessage(msg);
@@ -63,16 +85,20 @@ export default function App() {
     }, 2800);
   }, []);
 
-  const addSystemMessage = useCallback((text) => {
-    setMessages((prev) => [
+  const addSystemMessage = useCallback((text, category = 'system') => {
+    setSystemLogs((prev) => [
       ...prev,
       {
         id: crypto.randomUUID(),
-        isSystem: true,
         text,
+        category,
         timestamp: Date.now()
       }
     ]);
+  }, []);
+
+  const handleClearLogs = useCallback(() => {
+    setSystemLogs([]);
   }, []);
 
   const updateP2PStatus = useCallback(() => {
@@ -100,6 +126,13 @@ export default function App() {
   const cleanupPeer = useCallback((targetPeerId) => {
     if (peersRef.current.has(targetPeerId)) {
       const entry = peersRef.current.get(targetPeerId);
+      try {
+        if (entry.audioElement) {
+          entry.audioElement.pause();
+          entry.audioElement.srcObject = null;
+          entry.audioElement = null;
+        }
+      } catch {}
       try { entry.dataChannel?.close(); } catch {}
       try { entry.pc?.close(); } catch {}
       peersRef.current.delete(targetPeerId);
@@ -110,6 +143,13 @@ export default function App() {
   // Clean up all peers
   const cleanupAllPeers = useCallback(() => {
     for (const [peerId, entry] of peersRef.current.entries()) {
+      try {
+        if (entry.audioElement) {
+          entry.audioElement.pause();
+          entry.audioElement.srcObject = null;
+          entry.audioElement = null;
+        }
+      } catch {}
       try { entry.dataChannel?.close(); } catch {}
       try { entry.pc?.close(); } catch {}
     }
@@ -213,9 +253,47 @@ export default function App() {
       pc,
       dataChannel: null,
       isConnected: false,
-      candidateQueue: []
+      candidateQueue: [],
+      audioElement: null
     };
     peersRef.current.set(targetPeerId, peerEntry);
+
+    // Audio Transceiver for WebRTC Voice Chat (guarantees audio m-line in SDP offer/answer)
+    try {
+      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      if (localStreamRef.current) {
+        const audioTrack = localStreamRef.current.getAudioTracks()[0];
+        if (audioTrack && !isMicMutedRef.current) {
+          audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => console.error(err));
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to add audio transceiver:', err);
+    }
+
+    // Handle incoming audio stream from remote peer
+    pc.ontrack = (event) => {
+      const remoteStream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      let audioEl = peerEntry.audioElement;
+      if (!audioEl) {
+        audioEl = new Audio();
+        audioEl.autoplay = true;
+        audioEl.playsInline = true;
+        peerEntry.audioElement = audioEl;
+      }
+      audioEl.srcObject = remoteStream;
+      audioEl.muted = isAudioBlockedRef.current;
+      audioEl.play().catch((err) => {
+        console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
+        const resumeOnInteraction = () => {
+          audioEl.play().catch(() => {});
+          window.removeEventListener('click', resumeOnInteraction);
+          window.removeEventListener('keydown', resumeOnInteraction);
+        };
+        window.addEventListener('click', resumeOnInteraction);
+        window.addEventListener('keydown', resumeOnInteraction);
+      });
+    };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
@@ -244,6 +322,15 @@ export default function App() {
         addSystemMessage('Direct Peer-to-Peer DataChannel established. Chat & YouTube Sync is live!');
         showToast('Direct P2P Connected!');
 
+        // Share initial voice mute status with peer
+        try {
+          dc.send(JSON.stringify({
+            type: 'peer-voice-status',
+            sender: username,
+            isMuted: isMicMutedRef.current
+          }));
+        } catch (e) {}
+
         // Request YouTube sync state from existing room peers
         try {
           dc.send(JSON.stringify({ type: 'yt-request-sync' }));
@@ -256,6 +343,11 @@ export default function App() {
           if (data.type === 'chat') {
             setMessages((prev) => [...prev, { ...data, isSelf: false }]);
             sound.playPop();
+          } else if (data.type === 'peer-voice-status') {
+            setPeerVoiceStates((prev) => ({
+              ...prev,
+              [data.sender]: { isMuted: data.isMuted }
+            }));
           } else if (data.type === 'yt-action') {
             handleRemoteYouTubeAction(data);
           } else if (data.type === 'local-video-action') {
@@ -594,6 +686,15 @@ export default function App() {
       if (roomId) {
         sendSignal({ type: 'leave' });
       }
+      if (localStreamRef.current) {
+        try {
+          localStreamRef.current.getTracks().forEach((track) => track.stop());
+        } catch {}
+        localStreamRef.current = null;
+      }
+      setIsMicMuted(true);
+      setIsAudioBlocked(false);
+      setPeerVoiceStates({});
       cleanupAllPeers();
       setRoomId(null);
       setIsHost(false);
@@ -676,6 +777,136 @@ export default function App() {
     addSystemMessage(`📁 You exited the local video`);
   }, [addSystemMessage]);
 
+  // Voice Chat: Toggle Microphone Mute/Unmute
+  const toggleMicrophone = useCallback(async () => {
+    // If incoming audio is currently blocked, unmuting microphone also unblocks audio
+    if (isAudioBlockedRef.current) {
+      setIsAudioBlocked(false);
+      isAudioBlockedRef.current = false;
+      for (const peer of peersRef.current.values()) {
+        if (peer.audioElement) {
+          peer.audioElement.muted = false;
+        }
+      }
+    }
+
+    if (isMicMutedRef.current) {
+      try {
+        let stream = localStreamRef.current;
+        const currentTrack = stream?.getAudioTracks()[0];
+        if (!currentTrack || currentTrack.readyState === 'ended') {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+          localStreamRef.current = stream;
+        }
+
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = true;
+          for (const peer of peersRef.current.values()) {
+            if (peer.pc) {
+              const senders = peer.pc.getSenders();
+              const audioSender = senders.find((s) => !s.track || s.track.kind === 'audio');
+              if (audioSender) {
+                audioSender.replaceTrack(audioTrack).catch((err) => console.error('replaceTrack error:', err));
+              }
+            }
+          }
+        }
+
+        setIsMicMuted(false);
+        isMicMutedRef.current = false;
+        sound.playPop();
+        showToast('🎙️ Microphone unmuted (Live)');
+        addSystemMessage('🎙️ You unmuted your microphone (Voice Chat Active).');
+
+        const voiceMsg = {
+          type: 'peer-voice-status',
+          sender: username,
+          isMuted: false
+        };
+        for (const peer of peersRef.current.values()) {
+          if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+          }
+        }
+      } catch (err) {
+        console.error('Microphone access error:', err);
+        showToast('⚠️ Could not access microphone. Check permissions.');
+      }
+    } else {
+      if (localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach((track) => {
+          track.enabled = false;
+        });
+      }
+      setIsMicMuted(true);
+      isMicMutedRef.current = true;
+      showToast('🔇 Microphone muted');
+      addSystemMessage('🔇 You muted your microphone.');
+
+      const voiceMsg = {
+        type: 'peer-voice-status',
+        sender: username,
+        isMuted: true
+      };
+      for (const peer of peersRef.current.values()) {
+        if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+          try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+        }
+      }
+    }
+  }, [addSystemMessage, showToast, username]);
+
+  // Voice Chat: Toggle Block Incoming Audio (Deafen) - blocks incoming audio AND microphone
+  const toggleBlockAudio = useCallback(() => {
+    setIsAudioBlocked((prev) => {
+      const nextVal = !prev;
+      isAudioBlockedRef.current = nextVal;
+
+      // Mute/unmute all peer audio streams
+      for (const peer of peersRef.current.values()) {
+        if (peer.audioElement) {
+          peer.audioElement.muted = nextVal;
+        }
+      }
+
+      if (nextVal) {
+        // When audio is blocked, the microphone is also blocked (muted)
+        if (localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach((track) => {
+            track.enabled = false;
+          });
+        }
+        setIsMicMuted(true);
+        isMicMutedRef.current = true;
+
+        const voiceMsg = {
+          type: 'peer-voice-status',
+          sender: username,
+          isMuted: true
+        };
+        for (const peer of peersRef.current.values()) {
+          if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+          }
+        }
+
+        showToast('🔇 Audio & microphone blocked (Text Chat only)');
+        addSystemMessage('🔇 Audio & microphone blocked (Text Chat only mode).');
+      } else {
+        showToast('🔊 Incoming audio unblocked');
+        addSystemMessage('🔊 You unblocked incoming audio.');
+      }
+      return nextVal;
+    });
+  }, [addSystemMessage, showToast, username]);
+
   return (
     <>
       <Header
@@ -685,6 +916,11 @@ export default function App() {
         signalStatus={signalStatus}
         onOpenSettings={() => setShowSettingsModal(true)}
         username={username}
+        isMicMuted={isMicMuted}
+        isAudioBlocked={isAudioBlocked}
+        onToggleMic={toggleMicrophone}
+        onToggleBlockAudio={toggleBlockAudio}
+        isLocal={IS_LOCAL}
       />
 
       <main className="main-container">
@@ -713,15 +949,24 @@ export default function App() {
           onRegisterStateGetter={(getter) => {
             syncStateGetterRef.current = getter;
           }}
+          isMicMuted={isMicMuted}
+          isAudioBlocked={isAudioBlocked}
+          onToggleMic={toggleMicrophone}
+          onToggleBlockAudio={toggleBlockAudio}
+          peerVoiceStates={peerVoiceStates}
         />
 
         <LiveChat
           messages={messages}
+          systemLogs={systemLogs}
           onSendMessage={handleSendMessage}
+          onClearLogs={handleClearLogs}
           isP2PConnected={isP2PConnected}
           username={username}
           isOpen={isChatOpen}
           onClose={() => setIsChatOpen(false)}
+          isAudioBlocked={isAudioBlocked}
+          onToggleBlockAudio={toggleBlockAudio}
         />
       </main>
 
@@ -741,12 +986,14 @@ export default function App() {
         initialPin={initialJoinPin}
       />
 
-      <ServerSettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        currentUrl={signalUrl}
-        onApply={handleApplyServer}
-      />
+      {IS_LOCAL && (
+        <ServerSettingsModal
+          isOpen={showSettingsModal}
+          onClose={() => setShowSettingsModal(false)}
+          currentUrl={signalUrl}
+          onApply={handleApplyServer}
+        />
+      )}
 
       {/* Toast Notification */}
       {toastMessage && <div className="toast">{toastMessage}</div>}
