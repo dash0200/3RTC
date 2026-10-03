@@ -4,26 +4,39 @@ import { getAvatarColor } from '../utils/sound';
 const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
 export default function LiveChat({
-  messages,
+  messages = [],
+  systemLogs = [],
   onSendMessage,
+  onClearLogs,
   isP2PConnected,
   username,
   isOpen,
-  onClose
+  onClose,
+  isAudioBlocked = false,
+  onToggleBlockAudio
 }) {
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'logs'
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [unreadLogsCount, setUnreadLogsCount] = useState(0);
   const [inputText, setInputText] = useState('');
   const [showScrollPill, setShowScrollPill] = useState(false);
-  const messagesEndRef = useRef(null);
-  const containerRef = useRef(null);
+
+  const chatContainerRef = useRef(null);
+  const chatEndRef = useRef(null);
+  const logsContainerRef = useRef(null);
+  const logsEndRef = useRef(null);
   const textareaRef = useRef(null);
+
+  const prevMsgCountRef = useRef(messages.length);
+  const prevLogsCountRef = useRef(systemLogs.length);
 
   const initial = (username[0] || 'U').toUpperCase();
   const avatarBg = getAvatarColor(username);
 
-  // Auto-scroll when messages update if user is near bottom
+  // Auto-scroll chat messages when new messages arrive
   useEffect(() => {
-    const scroller = containerRef.current;
-    if (!scroller) return;
+    const scroller = chatContainerRef.current;
+    if (!scroller || activeTab !== 'chat') return;
 
     const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
     if (isNearBottom) {
@@ -32,10 +45,42 @@ export default function LiveChat({
     } else {
       setShowScrollPill(true);
     }
-  }, [messages]);
+  }, [messages, activeTab]);
+
+  // Auto-scroll room logs when new logs arrive
+  useEffect(() => {
+    const scroller = logsContainerRef.current;
+    if (!scroller || activeTab !== 'logs') return;
+
+    const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+    if (isNearBottom) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  }, [systemLogs, activeTab]);
+
+  // Track unread counts when user is on the alternate tab
+  useEffect(() => {
+    if (activeTab !== 'chat') {
+      const diff = messages.length - prevMsgCountRef.current;
+      if (diff > 0) {
+        setUnreadChatCount((prev) => prev + diff);
+      }
+    }
+    prevMsgCountRef.current = messages.length;
+  }, [messages.length, activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'logs') {
+      const diff = systemLogs.length - prevLogsCountRef.current;
+      if (diff > 0) {
+        setUnreadLogsCount((prev) => prev + diff);
+      }
+    }
+    prevLogsCountRef.current = systemLogs.length;
+  }, [systemLogs.length, activeTab]);
 
   const handleScroll = () => {
-    const scroller = containerRef.current;
+    const scroller = chatContainerRef.current;
     if (!scroller) return;
 
     const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
@@ -45,8 +90,8 @@ export default function LiveChat({
   };
 
   const scrollToBottom = () => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
       setShowScrollPill(false);
     }
   };
@@ -56,6 +101,8 @@ export default function LiveChat({
     if (clean && isP2PConnected) {
       onSendMessage(clean);
       setInputText('');
+      setActiveTab('chat');
+      setUnreadChatCount(0);
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
@@ -78,8 +125,10 @@ export default function LiveChat({
   const handleReactionClick = (emoji) => {
     if (isP2PConnected) {
       onSendMessage(emoji);
+      setActiveTab('chat');
+      setUnreadChatCount(0);
     } else {
-      setInputText(prev => prev + emoji);
+      setInputText((prev) => prev + emoji);
     }
   };
 
@@ -87,93 +136,191 @@ export default function LiveChat({
     <aside className={`chat-section ${isOpen ? '' : 'collapsed'}`}>
       <div className="chat-header">
         <div className="chat-header-title-wrap">
-          <span className="chat-header-title">Live chat</span>
-          <svg className="dropdown-chevron" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-            <path d="M7 10l5 5 5-5z"/>
-          </svg>
+          <span className="chat-header-title">Live Chat & Activity</span>
         </div>
 
         <div className="chat-header-actions">
-          <button className="header-icon-btn" title="Chat Guidelines">
+          <button className="header-icon-btn" onClick={onClose} title="Close Sidebar">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
-            </svg>
-          </button>
-          <button className="header-icon-btn" onClick={onClose} title="Close Chat">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
             </svg>
           </button>
         </div>
       </div>
 
-      <div className="pinned-banner">
-        <div className="pinned-icon">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="#3ea6ff">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      {/* Tabs: Chat vs Room Logs */}
+      <div className="chat-nav-tabs">
+        <button
+          type="button"
+          className={`chat-tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('chat');
+            setUnreadChatCount(0);
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+            <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
           </svg>
-        </div>
-        <div className="pinned-text">
-          <strong>Welcome to P2P Live Chat!</strong> Messages travel directly between peers through WebRTC data channels with zero server storage.
-        </div>
+          <span>Chat</span>
+          {messages.length > 0 && <span className="tab-badge">{messages.length}</span>}
+          {unreadChatCount > 0 && activeTab !== 'chat' && (
+            <span className="tab-unread-dot" title={`${unreadChatCount} new messages`}></span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className={`chat-tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('logs');
+            setUnreadLogsCount(0);
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+            <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
+          </svg>
+          <span>Room Logs</span>
+          {systemLogs.length > 0 && <span className="tab-badge secondary">{systemLogs.length}</span>}
+          {unreadLogsCount > 0 && activeTab !== 'logs' && (
+            <span className="tab-unread-dot logs" title={`${unreadLogsCount} new events`}></span>
+          )}
+        </button>
       </div>
 
-      <div className="chat-messages-container" ref={containerRef} onScroll={handleScroll}>
-        <div className="chat-messages-inner">
-          {messages.map((msg) => {
-            if (msg.isSystem) {
-              return (
-                <div key={msg.id} className="yt-system-msg">
-                  <span>{msg.text}</span>
-                </div>
-              );
-            }
-
-            const date = new Date(msg.timestamp || Date.now());
-            const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            const msgInitial = (msg.sender[0] || '?').toUpperCase();
-            const msgAvatarBg = getAvatarColor(msg.sender);
-            const authorClass = msg.isSelf ? 'self' : 'peer';
-
-            return (
-              <div key={msg.id} className="yt-message">
-                <div className="yt-avatar" style={{ background: msgAvatarBg }}>
-                  {msgInitial}
-                </div>
-                <div className="yt-message-content">
-                  <span className="yt-timestamp">{timeStr}</span>
-                  <span className={`yt-author ${authorClass}`}>{msg.sender}</span>
-                  {msg.isHost && <span className="yt-badge">HOST</span>}
-                  <span className="yt-text">{msg.text}</span>
-                </div>
-              </div>
-            );
-          })}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {showScrollPill && (
-          <button className="scroll-bottom-pill" onClick={scrollToBottom}>
-            <span>New messages</span>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
+      {isAudioBlocked && (
+        <div className="audio-blocked-chat-banner">
+          <div className="blocked-banner-left">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#f59e0b">
+              <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
             </svg>
-          </button>
-        )}
-      </div>
+            <span>Audio & microphone blocked (Text-only mode)</span>
+          </div>
+          {typeof onToggleBlockAudio === 'function' && (
+            <button
+              type="button"
+              className="btn-unblock-audio"
+              onClick={onToggleBlockAudio}
+              title="Click to unblock audio & microphone"
+            >
+              Unblock
+            </button>
+          )}
+        </div>
+      )}
 
+      {/* TAB 1: Real Peer Chat */}
+      {activeTab === 'chat' ? (
+        <>
+          <div className="chat-messages-container" ref={chatContainerRef} onScroll={handleScroll}>
+            {messages.length === 0 ? (
+              <div className="chat-empty-state">
+                <div className="empty-state-icon">💬</div>
+                <div className="empty-state-title">No messages yet</div>
+                <div className="empty-state-subtitle">Say hello to your peers in the room!</div>
+              </div>
+            ) : (
+              <div className="chat-messages-inner">
+                {messages.map((msg) => {
+                  const date = new Date(msg.timestamp || Date.now());
+                  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+                  const msgInitial = (msg.sender?.[0] || '?').toUpperCase();
+                  const msgAvatarBg = getAvatarColor(msg.sender || 'Peer');
+                  const authorClass = msg.isSelf ? 'self' : 'peer';
+
+                  return (
+                    <div key={msg.id} className="yt-message">
+                      <div className="yt-avatar" style={{ background: msgAvatarBg }}>
+                        {msgInitial}
+                      </div>
+                      <div className="yt-message-content">
+                        <span className="yt-timestamp">{timeStr}</span>
+                        <span className={`yt-author ${authorClass}`}>{msg.sender}</span>
+                        {msg.isHost && <span className="yt-badge">HOST</span>}
+                        <span className="yt-text">{msg.text}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={chatEndRef} />
+              </div>
+            )}
+
+            {showScrollPill && (
+              <button className="scroll-bottom-pill" onClick={scrollToBottom}>
+                <span>New messages</span>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </>
+      ) : (
+        /* TAB 2: Room Activity Logs */
+        <div className="logs-panel-wrapper">
+          <div className="logs-header-bar">
+            <span className="logs-count-label">
+              <span className="logs-count-dot"></span>
+              {systemLogs.length} event{systemLogs.length === 1 ? '' : 's'} recorded
+            </span>
+            {systemLogs.length > 0 && typeof onClearLogs === 'function' && (
+              <button
+                type="button"
+                className="btn-clear-logs"
+                onClick={onClearLogs}
+                title="Clear all room activity logs"
+              >
+                Clear Logs
+              </button>
+            )}
+          </div>
+
+          <div className="room-logs-container" ref={logsContainerRef}>
+            {systemLogs.length === 0 ? (
+              <div className="chat-empty-state">
+                <div className="empty-state-icon">📋</div>
+                <div className="empty-state-title">No room logs</div>
+                <div className="empty-state-subtitle">Room events, playback sync, and voice actions will appear here.</div>
+              </div>
+            ) : (
+              <div className="room-logs-list">
+                {systemLogs.map((log) => {
+                  const date = new Date(log.timestamp || Date.now());
+                  const timeStr = date.toLocaleTimeString([], {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    second: '2-digit'
+                  });
+
+                  return (
+                    <div key={log.id} className={`room-log-item log-cat-${log.category || 'system'}`}>
+                      <span className="room-log-time">{timeStr}</span>
+                      <div className="room-log-content">{log.text}</div>
+                    </div>
+                  );
+                })}
+                <div ref={logsEndRef} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Quick Reactions Bar */}
       <div className="quick-reactions-bar">
         {QUICK_REACTIONS.map((emoji) => (
           <button
             key={emoji}
             className="reaction-chip"
             onClick={() => handleReactionClick(emoji)}
+            title={`Send ${emoji}`}
           >
             {emoji}
           </button>
         ))}
       </div>
 
+      {/* Chat Input Footer */}
       <div className="chat-footer">
         <div className="input-card">
           <div className="input-sender-avatar" style={{ background: avatarBg }}>
@@ -204,7 +351,7 @@ export default function LiveChat({
             title="Send message"
           >
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
           </button>
         </div>

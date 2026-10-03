@@ -21,7 +21,12 @@ export default function Stage({
   onCloseLocalVideo,
   onBroadcastAction,
   remoteAction,
-  onRegisterStateGetter
+  onRegisterStateGetter,
+  isMicMuted = true,
+  isAudioBlocked = false,
+  onToggleMic,
+  onToggleBlockAudio,
+  peerVoiceStates = {}
 }) {
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
   const [hasEnteredTheater, setHasEnteredTheater] = useState(false);
@@ -43,73 +48,8 @@ export default function Stage({
   // When room is active and (peers are connected OR media active OR watch party entered)
   const showTheater = Boolean(roomId && (isP2PConnected || isMediaActive || hasEnteredTheater));
 
-  const handleExitVideo = () => {
-    if (localVideoFile || remoteLocalVideoMeta) {
-      if (typeof onCloseLocalVideo === 'function') {
-        onCloseLocalVideo();
-      }
-    } else {
-      onVideoChange(null);
-      if (typeof onBroadcastAction === 'function') {
-        onBroadcastAction('close', {});
-      }
-    }
-  };
-
   return (
     <section className="stage-section">
-      {/* Top Stage Bar when inside a room */}
-      {roomId && (
-        <div className="stage-room-bar">
-          <div className="room-bar-left">
-            <span
-              className="room-badge"
-              onClick={() => onCopyRoom(String(roomId))}
-              title="Click to copy Room ID"
-              style={{ cursor: 'pointer' }}
-            >
-              <span className="room-badge-label">ROOM</span>
-              <strong className="room-badge-code">{roomId}</strong>
-            </span>
-            <button className="btn-copy-pill" onClick={() => onCopyRoom(String(roomId))} title="Copy 5-digit Room ID">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-              </svg>
-              Copy Code
-            </button>
-          </div>
-
-          <div className="room-bar-center">
-            <div className={`p2p-pill ${isP2PConnected ? 'connected' : ''}`}>
-              <span className="p2p-pill-dot"></span>
-              <span className="p2p-pill-text">{p2pStatusText}</span>
-            </div>
-          </div>
-
-          <div className="room-bar-right">
-            {isMediaActive && (
-              <button
-                type="button"
-                className="btn-exit-video-pill"
-                onClick={handleExitVideo}
-                title="Exit video and return to watch party stage"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                </svg>
-                <span>Exit Video</span>
-              </button>
-            )}
-            <button className="btn-leave-pill" onClick={onLeaveRoom} title="Leave room">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/>
-              </svg>
-              Leave
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Main Canvas Area */}
       <div className={`stage-canvas ${isMediaActive ? 'has-video' : ''}`}>
         {!roomId ? (
@@ -251,16 +191,59 @@ export default function Stage({
         </div>
 
         <div className="controls-center">
-          <button className="control-btn disabled" title="Microphone (Reserved for WebRTC Audio)" disabled>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
-            </svg>
+          {/* Microphone Mute/Unmute Button */}
+          <button
+            type="button"
+            className={`control-btn ${!roomId ? 'disabled' : isMicMuted ? 'mic-muted' : 'mic-live'}`}
+            onClick={roomId ? onToggleMic : undefined}
+            title={
+              !roomId
+                ? "Join a room to use microphone"
+                : isAudioBlocked
+                ? "Microphone blocked (Audio is blocked. Click to unblock and speak)"
+                : isMicMuted
+                ? "Unmute Microphone (Click to speak)"
+                : "Mute Microphone (Microphone is live)"
+            }
+            disabled={!roomId}
+          >
+            {isMicMuted ? (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/>
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+              </svg>
+            )}
+            {!isMicMuted && <span className="mic-pulse-wave"></span>}
           </button>
-          <button className="control-btn disabled" title="Camera (Reserved for WebRTC Video)" disabled>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
-            </svg>
+
+          {/* Block Incoming Audio / Deafen Button */}
+          <button
+            type="button"
+            className={`control-btn ${!roomId ? 'disabled' : isAudioBlocked ? 'audio-blocked' : 'audio-allowed'}`}
+            onClick={roomId ? onToggleBlockAudio : undefined}
+            title={
+              !roomId
+                ? "Join a room to manage audio"
+                : isAudioBlocked
+                ? "Audio & mic are blocked. Click to unblock"
+                : "Block Audio & Mic (Text Chat only / Deafen)"
+            }
+            disabled={!roomId}
+          >
+            {isAudioBlocked ? (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+              </svg>
+            )}
           </button>
+
           {roomId && (
             <button className="control-btn danger" onClick={onLeaveRoom} title="Leave Room">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
