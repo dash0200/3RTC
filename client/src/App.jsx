@@ -131,12 +131,12 @@ export default function App() {
         if (entry.audioElement) {
           entry.audioElement.pause();
           entry.audioElement.srcObject = null;
-          try { entry.audioElement.remove(); } catch {}
+          try { entry.audioElement.remove(); } catch { }
           entry.audioElement = null;
         }
-      } catch {}
-      try { entry.dataChannel?.close(); } catch {}
-      try { entry.pc?.close(); } catch {}
+      } catch { }
+      try { entry.dataChannel?.close(); } catch { }
+      try { entry.pc?.close(); } catch { }
       peersRef.current.delete(targetPeerId);
       updateP2PStatus();
     }
@@ -149,12 +149,12 @@ export default function App() {
         if (entry.audioElement) {
           entry.audioElement.pause();
           entry.audioElement.srcObject = null;
-          try { entry.audioElement.remove(); } catch {}
+          try { entry.audioElement.remove(); } catch { }
           entry.audioElement = null;
         }
-      } catch {}
-      try { entry.dataChannel?.close(); } catch {}
-      try { entry.pc?.close(); } catch {}
+      } catch { }
+      try { entry.dataChannel?.close(); } catch { }
+      try { entry.pc?.close(); } catch { }
     }
     peersRef.current.clear();
     setIsP2PConnected(false);
@@ -305,7 +305,7 @@ export default function App() {
       event.track.onunmute = () => {
         console.log(`[WebRTC Audio] Remote track onunmute for ${targetPeerId}`);
         if (peerEntry.audioElement && !isAudioBlockedRef.current) {
-          peerEntry.audioElement.play().catch(() => {});
+          peerEntry.audioElement.play().catch(() => { });
         }
       };
 
@@ -315,7 +315,7 @@ export default function App() {
           console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
           const resumeOnInteraction = () => {
             if (peerEntry.audioElement && !isAudioBlockedRef.current) {
-              peerEntry.audioElement.play().catch(() => {});
+              peerEntry.audioElement.play().catch(() => { });
             }
             window.removeEventListener('click', resumeOnInteraction);
             window.removeEventListener('keydown', resumeOnInteraction);
@@ -362,12 +362,12 @@ export default function App() {
             sender: username,
             isMuted: isMicMutedRef.current
           }));
-        } catch (e) {}
+        } catch (e) { }
 
         // Request YouTube sync state from existing room peers
         try {
           dc.send(JSON.stringify({ type: 'yt-request-sync' }));
-        } catch (e) {}
+        } catch (e) { }
       };
 
       dc.onmessage = (event) => {
@@ -385,7 +385,7 @@ export default function App() {
             if (!data.isMuted) {
               for (const peer of peersRef.current.values()) {
                 if (peer.audioElement && !isAudioBlockedRef.current) {
-                  peer.audioElement.play().catch(() => {});
+                  peer.audioElement.play().catch(() => { });
                 }
               }
             }
@@ -548,7 +548,7 @@ export default function App() {
                 if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
                   const audioTrack = localStreamRef.current.getAudioTracks()[0];
                   if (audioTrack) {
-                    t.sender.replaceTrack(audioTrack).catch(() => {});
+                    t.sender.replaceTrack(audioTrack).catch(() => { });
                   }
                 }
               }
@@ -656,14 +656,14 @@ export default function App() {
           // Defer closing until open to avoid Chrome console error:
           // "WebSocket is closed before the connection is established"
           socket.onopen = () => {
-            try { socket.close(1000, 'Replaced or unmounted'); } catch {}
+            try { socket.close(1000, 'Replaced or unmounted'); } catch { }
           };
-          socket.onerror = () => {};
-          socket.onclose = () => {};
+          socket.onerror = () => { };
+          socket.onclose = () => { };
         } else if (socket.readyState === WebSocket.OPEN) {
           socket.close(1000, 'Replaced or unmounted');
         }
-      } catch {}
+      } catch { }
     };
 
     if (wsRef.current) {
@@ -732,7 +732,7 @@ export default function App() {
           if (ws.readyState === WebSocket.OPEN) {
             try {
               ws.send(JSON.stringify({ type: 'ping' }));
-            } catch {}
+            } catch { }
           }
         }, 25000);
       };
@@ -837,7 +837,7 @@ export default function App() {
       if (localStreamRef.current) {
         try {
           localStreamRef.current.getTracks().forEach((track) => track.stop());
-        } catch {}
+        } catch { }
         localStreamRef.current = null;
       }
       setIsMicMuted(true);
@@ -925,6 +925,18 @@ export default function App() {
     addSystemMessage(`📁 You exited the local video`);
   }, [addSystemMessage]);
 
+  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta);
+
+  const handleExitVideo = useCallback(() => {
+    if (localVideoFile || remoteLocalVideoMeta) {
+      handleCloseLocalVideo();
+      handleBroadcastAction('close', { type: 'local-video-action' });
+    } else if (activeVideoId) {
+      handleVideoChange(null);
+      handleBroadcastAction('close', {});
+    }
+  }, [localVideoFile, remoteLocalVideoMeta, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
+
   // Voice Chat: Toggle Microphone Mute/Unmute
   const toggleMicrophone = useCallback(async () => {
     // If incoming audio is currently blocked, unmuting microphone also unblocks audio
@@ -992,7 +1004,7 @@ export default function App() {
         };
         for (const peer of peersRef.current.values()) {
           if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
           }
         }
       } catch (err) {
@@ -1017,7 +1029,7 @@ export default function App() {
       };
       for (const peer of peersRef.current.values()) {
         if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-          try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+          try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
         }
       }
     }
@@ -1053,7 +1065,7 @@ export default function App() {
         };
         for (const peer of peersRef.current.values()) {
           if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
           }
         }
 
@@ -1081,6 +1093,11 @@ export default function App() {
         onToggleMic={toggleMicrophone}
         onToggleBlockAudio={toggleBlockAudio}
         isLocal={IS_LOCAL}
+        isP2PConnected={isP2PConnected}
+        p2pStatusText={p2pStatusText}
+        isMediaActive={isMediaActive}
+        onExitVideo={handleExitVideo}
+        onLeaveRoom={handleLeaveRoom}
       />
 
       <main className="main-container">
