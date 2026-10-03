@@ -7,6 +7,7 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
+    "deploy": "python deploy_vercel.py",
     "lint": "oxlint",
     "preview": "vite preview"
   },
