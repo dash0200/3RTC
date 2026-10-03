@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
+import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
 
 export default function Stage({
   roomId,
@@ -14,6 +15,10 @@ export default function Stage({
   onToggleChat,
   activeVideoId,
   onVideoChange,
+  localVideoFile,
+  remoteLocalVideoMeta,
+  onLocalFileSelect,
+  onCloseLocalVideo,
   onBroadcastAction,
   remoteAction,
   onRegisterStateGetter
@@ -27,19 +32,27 @@ export default function Stage({
     }
   }, [roomId]);
 
+  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta);
+
   useEffect(() => {
-    if (isP2PConnected || activeVideoId) {
+    if (isP2PConnected || isMediaActive) {
       setHasEnteredTheater(true);
     }
-  }, [isP2PConnected, activeVideoId]);
+  }, [isP2PConnected, isMediaActive]);
 
-  // When room is active and (peers are connected OR a video has been selected OR watch party entered)
-  const showYouTubeTheater = Boolean(roomId && (isP2PConnected || activeVideoId || hasEnteredTheater));
+  // When room is active and (peers are connected OR media active OR watch party entered)
+  const showTheater = Boolean(roomId && (isP2PConnected || isMediaActive || hasEnteredTheater));
 
   const handleExitVideo = () => {
-    onVideoChange(null);
-    if (typeof onBroadcastAction === 'function') {
-      onBroadcastAction('close', {});
+    if (localVideoFile || remoteLocalVideoMeta) {
+      if (typeof onCloseLocalVideo === 'function') {
+        onCloseLocalVideo();
+      }
+    } else {
+      onVideoChange(null);
+      if (typeof onBroadcastAction === 'function') {
+        onBroadcastAction('close', {});
+      }
     }
   };
 
@@ -74,7 +87,7 @@ export default function Stage({
           </div>
 
           <div className="room-bar-right">
-            {activeVideoId && (
+            {isMediaActive && (
               <button
                 type="button"
                 className="btn-exit-video-pill"
@@ -98,7 +111,7 @@ export default function Stage({
       )}
 
       {/* Main Canvas Area */}
-      <div className={`stage-canvas ${activeVideoId ? 'has-video' : ''}`}>
+      <div className={`stage-canvas ${isMediaActive ? 'has-video' : ''}`}>
         {!roomId ? (
           /* Case 1: No room joined yet */
           <div className="stage-overlay">
@@ -138,8 +151,20 @@ export default function Stage({
               </div>
             </div>
           </div>
-        ) : showYouTubeTheater ? (
-          /* Case 2: Room active + connected (or video loaded) -> Show Synchronized YouTube Theater */
+        ) : (localVideoFile || remoteLocalVideoMeta) ? (
+          /* Case 2A: Local Video Drag-and-Drop Sync Player */
+          <LocalVideoSyncPlayer
+            initialFile={localVideoFile}
+            remoteMeta={remoteLocalVideoMeta}
+            onFileSelect={onLocalFileSelect}
+            onClose={onCloseLocalVideo}
+            onBroadcastAction={onBroadcastAction}
+            remoteAction={remoteAction}
+            isP2PConnected={isP2PConnected}
+            onRegisterStateGetter={onRegisterStateGetter}
+          />
+        ) : showTheater ? (
+          /* Case 2B: YouTube Player / Watch Party Lobby */
           <YouTubeSyncPlayer
             videoId={activeVideoId}
             onVideoChange={onVideoChange}
@@ -147,6 +172,7 @@ export default function Stage({
             remoteAction={remoteAction}
             isP2PConnected={isP2PConnected}
             onRegisterStateGetter={onRegisterStateGetter}
+            onLocalFileSelect={onLocalFileSelect}
           />
         ) : (
           /* Case 3: Room created/joined, waiting for peer to connect */

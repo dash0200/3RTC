@@ -27,8 +27,10 @@ export default function App() {
   const [p2pStatusText, setP2pStatusText] = useState('Waiting for peer to enter 5-digit code...');
   const [messages, setMessages] = useState([]);
 
-  // YouTube Synchronization State
+  // YouTube & Local Media Synchronization State
   const [activeVideoId, setActiveVideoId] = useState(null);
+  const [localVideoFile, setLocalVideoFile] = useState(null);
+  const [remoteLocalVideoMeta, setRemoteLocalVideoMeta] = useState(null);
   const [remoteAction, setRemoteAction] = useState(null);
 
   // UI Panels & Modals
@@ -114,12 +116,14 @@ export default function App() {
     peersRef.current.clear();
     setIsP2PConnected(false);
     setP2pStatusText('Waiting for peer to enter 5-digit code...');
+    setLocalVideoFile(null);
+    setRemoteLocalVideoMeta(null);
   }, []);
 
-  // Broadcast an action (e.g. YouTube play/pause/seek/load) to all connected peers
+  // Broadcast an action (e.g. YouTube or Local Video play/pause/seek/load) to all connected peers
   const handleBroadcastAction = useCallback((action, payload = {}) => {
     const msg = {
-      type: 'yt-action',
+      type: payload.type || 'yt-action',
       action,
       sender: username,
       timestamp: Date.now(),
@@ -147,6 +151,8 @@ export default function App() {
       return;
     }
     if (data.action === 'load') {
+      setLocalVideoFile(null);
+      setRemoteLocalVideoMeta(null);
       const newId = data.newVideoId || data.videoId;
       setActiveVideoId(newId);
       const titleInfo = data.title ? `: "${data.title}"` : '';
@@ -162,6 +168,38 @@ export default function App() {
       addSystemMessage(`⏩ ${data.sender || 'Peer'} seeked to ${min}:${sec}`);
     }
     setRemoteAction(data);
+  }, [addSystemMessage, showToast]);
+
+  // Handle incoming remote Local Video action
+  const handleRemoteLocalVideoAction = useCallback((data) => {
+    if (data.action === 'load') {
+      setActiveVideoId(null);
+      setRemoteLocalVideoMeta({
+        fileName: data.fileName,
+        fileSize: data.fileSize,
+        sender: data.sender
+      });
+      setRemoteAction(data);
+      addSystemMessage(`📁 ${data.sender || 'Peer'} loaded local video: "${data.fileName}"`);
+      showToast(`${data.sender || 'Peer'} loaded: ${data.fileName}`);
+    } else if (data.action === 'close') {
+      setLocalVideoFile(null);
+      setRemoteLocalVideoMeta(null);
+      setRemoteAction(data);
+      addSystemMessage(`📁 ${data.sender || 'Peer'} exited the local video`);
+      showToast(`${data.sender || 'Peer'} exited local video`);
+    } else {
+      setRemoteAction(data);
+      if (data.action === 'play') {
+        addSystemMessage(`▶️ ${data.sender || 'Peer'} played local video`);
+      } else if (data.action === 'pause') {
+        addSystemMessage(`⏸️ ${data.sender || 'Peer'} paused local video`);
+      } else if (data.action === 'seek') {
+        const min = Math.floor((data.currentTime || 0) / 60);
+        const sec = Math.floor((data.currentTime || 0) % 60).toString().padStart(2, '0');
+        addSystemMessage(`⏩ ${data.sender || 'Peer'} seeked to ${min}:${sec}`);
+      }
+    }
   }, [addSystemMessage, showToast]);
 
   // Create or get peer connection in mesh
@@ -220,21 +258,33 @@ export default function App() {
             sound.playPop();
           } else if (data.type === 'yt-action') {
             handleRemoteYouTubeAction(data);
+          } else if (data.type === 'local-video-action') {
+            handleRemoteLocalVideoAction(data);
           } else if (data.type === 'yt-request-sync') {
-            // A newly joined peer is asking for the current playing video & timestamp
+            // A newly joined peer is asking for the current playing media & timestamp
             if (syncStateGetterRef.current) {
               const state = syncStateGetterRef.current();
-              if (state && state.videoId) {
-                dc.send(JSON.stringify({
-                  type: 'yt-sync-state',
-                  ...state,
-                  sender: username
-                }));
+              if (state) {
+                if (state.mediaType === 'local' && state.fileName) {
+                  dc.send(JSON.stringify({
+                    type: 'local-video-sync-state',
+                    ...state,
+                    sender: username
+                  }));
+                } else if (state.videoId) {
+                  dc.send(JSON.stringify({
+                    type: 'yt-sync-state',
+                    ...state,
+                    sender: username
+                  }));
+                }
               }
             }
           } else if (data.type === 'yt-sync-state') {
             // Received sync state from an existing peer in the room
             if (data.videoId) {
+              setLocalVideoFile(null);
+              setRemoteLocalVideoMeta(null);
               setActiveVideoId(data.videoId);
               setRemoteAction({
                 action: data.isPlaying ? 'play' : 'pause',
@@ -242,6 +292,22 @@ export default function App() {
                 newVideoId: data.videoId
               });
               addSystemMessage(`🔄 Synced YouTube playback with room`);
+            }
+          } else if (data.type === 'local-video-sync-state') {
+            if (data.fileName) {
+              setActiveVideoId(null);
+              setRemoteLocalVideoMeta({
+                fileName: data.fileName,
+                fileSize: data.fileSize,
+                sender: data.sender
+              });
+              setRemoteAction({
+                action: data.isPlaying ? 'play' : 'pause',
+                currentTime: data.currentTime,
+                fileName: data.fileName,
+                sender: data.sender
+              });
+              addSystemMessage(`🔄 Synced with room's local video session: "${data.fileName}"`);
             }
           }
         } catch (e) {
@@ -288,7 +354,7 @@ export default function App() {
     }
 
     return peerEntry;
-  }, [addSystemMessage, handleRemoteYouTubeAction, sendSignal, showToast, updateP2PStatus, username]);
+  }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, sendSignal, showToast, updateP2PStatus, username]);
 
   // Handle incoming signaling messages
   const handleSignalingMessage = useCallback(async (msg) => {
@@ -533,6 +599,8 @@ export default function App() {
       setIsHost(false);
       setPeerCount(0);
       setActiveVideoId(null);
+      setLocalVideoFile(null);
+      setRemoteLocalVideoMeta(null);
       setRemoteAction(null);
       addSystemMessage('You left the room.');
       showToast('Left room');
@@ -583,12 +651,29 @@ export default function App() {
   };
 
   const handleVideoChange = useCallback((newId) => {
+    if (newId) {
+      setLocalVideoFile(null);
+      setRemoteLocalVideoMeta(null);
+    }
     setActiveVideoId(newId);
     if (newId) {
       addSystemMessage(`🎬 You loaded video ID: ${newId}`);
     } else {
       addSystemMessage(`🎬 You exited the video`);
     }
+  }, [addSystemMessage]);
+
+  const handleLocalFileSelect = useCallback((file) => {
+    setActiveVideoId(null);
+    setLocalVideoFile(file);
+    addSystemMessage(`📁 You loaded local video: "${file.name}"`);
+    showToast(`Loaded "${file.name}"`);
+  }, [addSystemMessage, showToast]);
+
+  const handleCloseLocalVideo = useCallback(() => {
+    setLocalVideoFile(null);
+    setRemoteLocalVideoMeta(null);
+    addSystemMessage(`📁 You exited the local video`);
   }, [addSystemMessage]);
 
   return (
@@ -619,6 +704,10 @@ export default function App() {
           onToggleChat={() => setIsChatOpen((prev) => !prev)}
           activeVideoId={activeVideoId}
           onVideoChange={handleVideoChange}
+          localVideoFile={localVideoFile}
+          remoteLocalVideoMeta={remoteLocalVideoMeta}
+          onLocalFileSelect={handleLocalFileSelect}
+          onCloseLocalVideo={handleCloseLocalVideo}
           onBroadcastAction={handleBroadcastAction}
           remoteAction={remoteAction}
           onRegisterStateGetter={(getter) => {
