@@ -132,9 +132,9 @@ export default function App() {
           entry.audioElement.srcObject = null;
           entry.audioElement = null;
         }
-      } catch {}
-      try { entry.dataChannel?.close(); } catch {}
-      try { entry.pc?.close(); } catch {}
+      } catch { }
+      try { entry.dataChannel?.close(); } catch { }
+      try { entry.pc?.close(); } catch { }
       peersRef.current.delete(targetPeerId);
       updateP2PStatus();
     }
@@ -149,9 +149,9 @@ export default function App() {
           entry.audioElement.srcObject = null;
           entry.audioElement = null;
         }
-      } catch {}
-      try { entry.dataChannel?.close(); } catch {}
-      try { entry.pc?.close(); } catch {}
+      } catch { }
+      try { entry.dataChannel?.close(); } catch { }
+      try { entry.pc?.close(); } catch { }
     }
     peersRef.current.clear();
     setIsP2PConnected(false);
@@ -286,7 +286,7 @@ export default function App() {
       audioEl.play().catch((err) => {
         console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
         const resumeOnInteraction = () => {
-          audioEl.play().catch(() => {});
+          audioEl.play().catch(() => { });
           window.removeEventListener('click', resumeOnInteraction);
           window.removeEventListener('keydown', resumeOnInteraction);
         };
@@ -329,12 +329,12 @@ export default function App() {
             sender: username,
             isMuted: isMicMutedRef.current
           }));
-        } catch (e) {}
+        } catch (e) { }
 
         // Request YouTube sync state from existing room peers
         try {
           dc.send(JSON.stringify({ type: 'yt-request-sync' }));
-        } catch (e) {}
+        } catch (e) { }
       };
 
       dc.onmessage = (event) => {
@@ -592,7 +592,7 @@ export default function App() {
     let isCancelled = false;
 
     if (wsRef.current) {
-      try { wsRef.current.close(); } catch {}
+      try { wsRef.current.close(); } catch { }
     }
 
     setSignalStatus({ connected: false, label: 'Connecting...' });
@@ -641,7 +641,7 @@ export default function App() {
 
     return () => {
       isCancelled = true;
-      try { ws.close(); } catch {}
+      try { ws.close(); } catch { }
     };
   }, [signalUrl]);
 
@@ -689,7 +689,7 @@ export default function App() {
       if (localStreamRef.current) {
         try {
           localStreamRef.current.getTracks().forEach((track) => track.stop());
-        } catch {}
+        } catch { }
         localStreamRef.current = null;
       }
       setIsMicMuted(true);
@@ -844,7 +844,7 @@ export default function App() {
         };
         for (const peer of peersRef.current.values()) {
           if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
           }
         }
       } catch (err) {
@@ -869,7 +869,7 @@ export default function App() {
       };
       for (const peer of peersRef.current.values()) {
         if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-          try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+          try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
         }
       }
     }
@@ -905,7 +905,7 @@ export default function App() {
         };
         for (const peer of peersRef.current.values()) {
           if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch {}
+            try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
           }
         }
 
