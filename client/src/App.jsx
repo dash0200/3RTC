@@ -67,6 +67,7 @@ export default function App() {
   const hasInitializedRef = useRef(false);
   const activeVideoIdRef = useRef(null);
   const syncStateGetterRef = useRef(null);
+  const peerIdRef = useRef(crypto.randomUUID());
 
   const localStreamRef = useRef(null);
   const isMicMutedRef = useRef(true);
@@ -130,6 +131,7 @@ export default function App() {
         if (entry.audioElement) {
           entry.audioElement.pause();
           entry.audioElement.srcObject = null;
+          try { entry.audioElement.remove(); } catch {}
           entry.audioElement = null;
         }
       } catch {}
@@ -147,6 +149,7 @@ export default function App() {
         if (entry.audioElement) {
           entry.audioElement.pause();
           entry.audioElement.srcObject = null;
+          try { entry.audioElement.remove(); } catch {}
           entry.audioElement = null;
         }
       } catch {}
@@ -260,39 +263,69 @@ export default function App() {
 
     // Audio Transceiver for WebRTC Voice Chat (guarantees audio m-line in SDP offer/answer)
     try {
-      const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      let audioTransceiver = pc.getTransceivers ? pc.getTransceivers().find(t =>
+        t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio'
+      ) : null;
+
+      if (!audioTransceiver) {
+        audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      } else {
+        audioTransceiver.direction = 'sendrecv';
+      }
+
       if (localStreamRef.current) {
         const audioTrack = localStreamRef.current.getAudioTracks()[0];
-        if (audioTrack && !isMicMutedRef.current) {
-          audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => console.error(err));
+        if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
+          audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => console.error('Transceiver replaceTrack error:', err));
         }
       }
     } catch (err) {
-      console.warn('Failed to add audio transceiver:', err);
+      console.warn('Failed to configure audio transceiver:', err);
     }
 
     // Handle incoming audio stream from remote peer
     pc.ontrack = (event) => {
-      const remoteStream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      console.log(`[WebRTC Audio] Remote track received from ${targetPeerId}:`, event.track.id, event.track.kind);
       let audioEl = peerEntry.audioElement;
       if (!audioEl) {
-        audioEl = new Audio();
+        audioEl = document.createElement('audio');
+        audioEl.id = `remote-audio-${targetPeerId}`;
         audioEl.autoplay = true;
         audioEl.playsInline = true;
+        audioEl.style.display = 'none';
+        document.body.appendChild(audioEl);
         peerEntry.audioElement = audioEl;
       }
+
+      const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
       audioEl.srcObject = remoteStream;
       audioEl.muted = isAudioBlockedRef.current;
-      audioEl.play().catch((err) => {
-        console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
-        const resumeOnInteraction = () => {
-          audioEl.play().catch(() => {});
-          window.removeEventListener('click', resumeOnInteraction);
-          window.removeEventListener('keydown', resumeOnInteraction);
-        };
-        window.addEventListener('click', resumeOnInteraction);
-        window.addEventListener('keydown', resumeOnInteraction);
-      });
+
+      // Handle when remote sender un-mutes
+      event.track.onunmute = () => {
+        console.log(`[WebRTC Audio] Remote track onunmute for ${targetPeerId}`);
+        if (peerEntry.audioElement && !isAudioBlockedRef.current) {
+          peerEntry.audioElement.play().catch(() => {});
+        }
+      };
+
+      const playPromise = audioEl.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
+          const resumeOnInteraction = () => {
+            if (peerEntry.audioElement && !isAudioBlockedRef.current) {
+              peerEntry.audioElement.play().catch(() => {});
+            }
+            window.removeEventListener('click', resumeOnInteraction);
+            window.removeEventListener('keydown', resumeOnInteraction);
+            window.removeEventListener('touchstart', resumeOnInteraction);
+          };
+          window.addEventListener('click', resumeOnInteraction);
+          window.addEventListener('keydown', resumeOnInteraction);
+          window.addEventListener('touchstart', resumeOnInteraction);
+        });
+      }
     };
 
     pc.onicecandidate = (event) => {
@@ -348,6 +381,14 @@ export default function App() {
               ...prev,
               [data.sender]: { isMuted: data.isMuted }
             }));
+            // When remote peer un-mutes, ensure their audio element is actively playing
+            if (!data.isMuted) {
+              for (const peer of peersRef.current.values()) {
+                if (peer.audioElement && !isAudioBlockedRef.current) {
+                  peer.audioElement.play().catch(() => {});
+                }
+              }
+            }
           } else if (data.type === 'yt-action') {
             handleRemoteYouTubeAction(data);
           } else if (data.type === 'local-video-action') {
@@ -499,6 +540,21 @@ export default function App() {
 
           await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
 
+          // Ensure all audio transceivers on the answerer are active and set to sendrecv
+          if (pc.getTransceivers) {
+            for (const t of pc.getTransceivers()) {
+              if (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio') {
+                t.direction = 'sendrecv';
+                if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
+                  const audioTrack = localStreamRef.current.getAudioTracks()[0];
+                  if (audioTrack) {
+                    t.sender.replaceTrack(audioTrack).catch(() => {});
+                  }
+                }
+              }
+            }
+          }
+
           // Flush queued candidates
           while (peerEntry.candidateQueue.length > 0) {
             const cand = peerEntry.candidateQueue.shift();
@@ -590,60 +646,152 @@ export default function App() {
   // Connect to Signaling Server
   useEffect(() => {
     let isCancelled = false;
+    let reconnectTimeout = null;
+    let pingInterval = null;
+
+    const safeCloseSocket = (socket) => {
+      if (!socket) return;
+      try {
+        if (socket.readyState === WebSocket.CONNECTING) {
+          // Defer closing until open to avoid Chrome console error:
+          // "WebSocket is closed before the connection is established"
+          socket.onopen = () => {
+            try { socket.close(1000, 'Replaced or unmounted'); } catch {}
+          };
+          socket.onerror = () => {};
+          socket.onclose = () => {};
+        } else if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, 'Replaced or unmounted');
+        }
+      } catch {}
+    };
 
     if (wsRef.current) {
-      try { wsRef.current.close(); } catch {}
+      safeCloseSocket(wsRef.current);
+      wsRef.current = null;
     }
 
-    setSignalStatus({ connected: false, label: 'Connecting...' });
+    const isLocalServer = signalUrl.includes('localhost') || signalUrl.includes('127.0.0.1');
+    const serverLabel = isLocalServer ? 'Local' : 'Cloud';
 
-    let ws;
-    try {
-      ws = new WebSocket(signalUrl);
-      wsRef.current = ws;
-    } catch {
-      setSignalStatus({ connected: false, label: 'Connection Failed' });
-      showToast(`Failed to connect to ${signalUrl}`);
-      return;
-    }
-
-    ws.onopen = () => {
+    const connect = () => {
       if (isCancelled) return;
-      setSignalStatus({ connected: true, label: 'Signaling Connected' });
-      showToast('Signaling server connected');
+      let hasOpened = false;
 
-      // Flush any queued signals
-      while (pendingSignalsRef.current.length > 0) {
-        const data = pendingSignalsRef.current.shift();
-        ws.send(JSON.stringify(data));
-      }
-    };
+      setSignalStatus({ connected: false, label: 'Connecting...' });
 
-    ws.onmessage = (event) => {
-      if (isCancelled) return;
+      let ws;
       try {
-        const msg = JSON.parse(event.data);
-        handleSignalingMessageRef.current?.(msg);
+        ws = new WebSocket(signalUrl);
+        wsRef.current = ws;
       } catch (err) {
-        console.error('Signaling parse error:', err);
+        if (isCancelled) return;
+        setSignalStatus({ connected: false, label: 'Connection Failed' });
+        showToast(`Failed to connect to ${signalUrl}`);
+        return;
       }
+
+      ws.onopen = () => {
+        hasOpened = true;
+        if (isCancelled) {
+          safeCloseSocket(ws);
+          return;
+        }
+
+        setSignalStatus({ connected: true, label: `${serverLabel} Connected` });
+        showToast(`Connected to ${serverLabel} signaling`);
+
+        // If previously inside a room before connection drop, re-announce
+        if (currentRoomRef.current) {
+          const activeRoom = currentRoomRef.current;
+          addSystemMessage(`🔄 Reconnected to signaling. Resuming room ${activeRoom}...`);
+          if (isHostRef.current) {
+            ws.send(JSON.stringify({
+              type: 'create-room',
+              roomId: activeRoom,
+              peerId: peerIdRef.current
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              type: 'join',
+              roomId: activeRoom,
+              peerId: peerIdRef.current
+            }));
+          }
+        }
+
+        // Flush any queued signals
+        while (pendingSignalsRef.current.length > 0) {
+          const data = pendingSignalsRef.current.shift();
+          ws.send(JSON.stringify(data));
+        }
+
+        // Start periodic ping to prevent reverse proxies (e.g. Caddy on GCP) from terminating idle connections
+        clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            } catch {}
+          }
+        }, 25000);
+      };
+
+      ws.onmessage = (event) => {
+        if (isCancelled) return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'pong') return;
+          handleSignalingMessageRef.current?.(msg);
+        } catch (err) {
+          console.error('Signaling parse error:', err);
+        }
+      };
+
+      ws.onclose = (event) => {
+        clearInterval(pingInterval);
+        if (isCancelled) return;
+
+        // If closed cleanly with code 1000 on intentional unmount, do not reconnect
+        if (event.code === 1000) {
+          setSignalStatus({ connected: false, label: 'Disconnected' });
+          return;
+        }
+
+        setSignalStatus({ connected: false, label: 'Reconnecting...' });
+
+        // Show friendly prompt if local dev server was selected but is not running
+        if (isLocalServer && !hasOpened) {
+          showToast('Local server not reachable on port 8080. Start "node server.js" or switch to GCP Cloud Server.');
+        }
+
+        // Schedule auto-reconnect
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = setTimeout(() => {
+          if (!isCancelled) {
+            connect();
+          }
+        }, 2500);
+      };
+
+      ws.onerror = () => {
+        if (isCancelled) return;
+        setSignalStatus({ connected: false, label: 'Signaling Error' });
+      };
     };
 
-    ws.onclose = () => {
-      if (isCancelled) return;
-      setSignalStatus({ connected: false, label: 'Disconnected' });
-    };
-
-    ws.onerror = () => {
-      if (isCancelled) return;
-      setSignalStatus({ connected: false, label: 'Signaling Error' });
-    };
+    connect();
 
     return () => {
       isCancelled = true;
-      try { ws.close(); } catch {}
+      clearTimeout(reconnectTimeout);
+      clearInterval(pingInterval);
+      if (wsRef.current) {
+        safeCloseSocket(wsRef.current);
+        wsRef.current = null;
+      }
     };
-  }, [signalUrl]);
+  }, [signalUrl, showToast, addSystemMessage]);
 
   // Auto-detect ?room=12345 URL parameter on initial load
   useEffect(() => {
@@ -666,7 +814,7 @@ export default function App() {
     setShowCreateModal(false);
     sendSignal({
       type: 'create-room',
-      peerId: crypto.randomUUID()
+      peerId: peerIdRef.current
     });
   };
 
@@ -677,7 +825,7 @@ export default function App() {
     sendSignal({
       type: 'join',
       roomId: pin,
-      peerId: crypto.randomUUID()
+      peerId: peerIdRef.current
     });
   };
 
@@ -810,10 +958,22 @@ export default function App() {
           audioTrack.enabled = true;
           for (const peer of peersRef.current.values()) {
             if (peer.pc) {
-              const senders = peer.pc.getSenders();
-              const audioSender = senders.find((s) => !s.track || s.track.kind === 'audio');
-              if (audioSender) {
-                audioSender.replaceTrack(audioTrack).catch((err) => console.error('replaceTrack error:', err));
+              const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
+              let replaced = false;
+              for (const t of transceivers) {
+                if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
+                  t.direction = 'sendrecv';
+                  t.sender.replaceTrack(audioTrack).catch((err) => console.error('Transceiver replaceTrack error:', err));
+                  replaced = true;
+                }
+              }
+              if (!replaced) {
+                const senders = peer.pc.getSenders();
+                for (const s of senders) {
+                  if (!s.track || s.track.kind === 'audio') {
+                    s.replaceTrack(audioTrack).catch((err) => console.error('Sender replaceTrack error:', err));
+                  }
+                }
               }
             }
           }
