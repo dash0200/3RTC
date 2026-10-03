@@ -1,0 +1,63 @@
+/* ==========================================================================
+   YouTube Live Dark Mode & P2P Studio Design System
+   ========================================================================== */
+
+:root {
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #181818;
+  --bg-surface: #212121;
+  --bg-hover: #272727;
+  --bg-input: #1e1e1e;
+  --bg-card: rgba(33, 33, 33, 0.85);
+
+  --text-primary: #f1f1f1;
+  --text-secondary: #aaaaaa;
+  --text-muted: #717171;
+  --text-link: #3ea6ff;
+
+  --accent-red: #ff0033;
+  --accent-red-hover: #cc0029;
+  --accent-blue: #3ea6ff;
+  --accent-green: #2ba640;
+  --accent-purple: #a855f7;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(255, 255, 255, 0.2);
+
+  --font-main: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --chat-width: 380px;
+  --header-height: 56px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+  --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body.dark-theme {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-main);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

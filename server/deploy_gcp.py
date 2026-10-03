@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""
+Deploy WebRTC Signaling Server to Google Cloud Platform Always Free Tier.
+- Free Tier Spec: e2-micro instance, 30GB pd-standard disk in an eligible US region (us-central1, us-west1, or us-east1).
+- TLS / WSS: Configures Caddy reverse proxy with automated Let's Encrypt SSL via <IP>.sslip.io.
+"""
+
+import sys
+import os
+import shutil
+import subprocess
+import json
+import base64
+import time
+import urllib.request
+import webbrowser
+from pathlib import Path
+
+# Eligible Always Free regions and zones
+FREE_REGIONS = {
+    "1": ("us-central1", "us-central1-a", "Iowa (us-central1-a) [Recommended]"),
+    "2": ("us-west1", "us-west1-b", "Oregon (us-west1-b)"),
+    "3": ("us-east1", "us-east1-b", "South Carolina (us-east1-b)")
+}
+
+FIREWALL_RULE_NAME = "allow-webrtc-signaling"
+FIREWALL_TAG = "webrtc-signaling-server"
+DEFAULT_INSTANCE_NAME = "webrtc-signaling-free"
+DEFAULT_PORT = "443"
+ALT_PORT = "8443"
+
+
+# Force line buffering for interactive terminals (Git Bash, MSYS2, Windows Terminal)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(line_buffering=True)
+
+
+def print_step(title):
+    print(f"\n{'=' * 60}")
+    print(f" {title}")
+    print(f"{'=' * 60}", flush=True)
+
+
+def find_gcloud():
+    """Find gcloud executable across PATH and standard Windows/Unix locations."""
+    cmd = shutil.which("gcloud") or shutil.which("gcloud.cmd")
+    if cmd:
+        return cmd
+
+    if sys.platform == "win32":
+        possible_paths = [
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"),
+            os.path.expandvars(r"%ProgramFiles%\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"),
+            os.path.expanduser(r"~\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd")
+        ]
+        for p in possible_paths:
+            if os.path.exists(p):
+                return p
+
+    return None
+
+
+def run_cmd(cmd_list, capture_output=True, check=True, text=True):
+    """Execute a subprocess command cleanly."""
+    try:
+        res = subprocess.run(
+            cmd_list,
+            capture_output=capture_output,
+            check=check,
+            text=text,
+            shell=(sys.platform == "win32" and isinstance(cmd_list, str))
+        )
+        return res
+    except subprocess.CalledProcessError as e:
+        if capture_output and e.stderr:
+            print(f"[Error Output]: {e.stderr.strip()}")
+        raise e
+
+
+def check_prerequisites():
+    print_step("Step 1: Checking Prerequisites")
+
+    # 1. Python version
+    if sys.version_info < (3, 8):
+        print(f"[ERROR] Python 3.8+ is required. Found: {sys.version}")
+        sys.exit(1)
+    print(f"[OK] Python {sys.version.split()[0]} detected.")
+
+    # 2. Local signaling server files
+    script_dir = Path(__file__).resolve().parent
+    server_js = script_dir / "server.js"
+    package_json = script_dir / "package.json"
+
+    if not server_js.exists() or not package_json.exists():
+        print(f"[ERROR] Missing server files in {script_dir}.")
+        print("Please ensure 'server.js' and 'package.json' are located in the same directory.")
+        sys.exit(1)
+    print("[OK] Local server.js and package.json found.")
+
+    # 3. Check Google Cloud CLI (gcloud)
+    gcloud_bin = find_gcloud()
+    while not gcloud_bin:
+        print("\n[!] Google Cloud CLI ('gcloud') is NOT installed or not in PATH.")
+        print("The Google Cloud SDK is required to provision and manage your instance.")
+        print("\nOptions:")
+        if sys.platform == "win32":
+            print("  1) Download and run Google Cloud SDK Installer for Windows")
+        print("  2) Open Google Cloud SDK installation docs in browser")
+        print("  3) Re-check PATH (if you just finished installing)")
+        print("  4) Exit")
+
+        choice = input("\nEnter choice [1-4]: ").strip()
+        if choice == "1" and sys.platform == "win32":
+            installer_url = "https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe"
+            installer_path = Path(os.environ.get("TEMP", ".")) / "GoogleCloudSDKInstaller.exe"
+            print(f"Downloading installer to {installer_path}...")
+            urllib.request.urlretrieve(installer_url, str(installer_path))
+            print("Launching installer... Please complete the installation wizard.")
+            subprocess.run([str(installer_path)])
+            input("Press Enter when installation completes to continue...")
+        elif choice == "2":
+            webbrowser.open("https://cloud.google.com/sdk/docs/install")
+            input("Press Enter after installing gcloud to continue...")
+        elif choice == "3":
+            pass
+        elif choice == "4":
+            print("Exiting.")
+            sys.exit(0)
+
+        gcloud_bin = find_gcloud()
+
+    print(f"[OK] Google Cloud CLI found at: {gcloud_bin}")
+    return gcloud_bin, server_js, package_json
+
+
+def authenticate_gcp(gcloud):
+    print_step("Step 2: Google Cloud Authentication")
+
+    # Check for active authenticated account
+    res = run_cmd([gcloud, "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"], check=False)
+    active_account = res.stdout.strip() if res.returncode == 0 else ""
+
+    if active_account:
+        print(f"Active account found: {active_account}")
+        use_current = input(f"Proceed with account '{active_account}'? [Y/n]: ").strip().lower()
+        if use_current in ("", "y", "yes"):
+            return active_account
+
+    print("\nRequesting Google Cloud login...")
+    print("A browser window will open for you to log in to your Google Cloud account.")
+    run_cmd([gcloud, "auth", "login"], capture_output=False)
+
+    res = run_cmd([gcloud, "auth", "list", "--filter=status:ACTIVE", "--format=value(account)"])
+    account = res.stdout.strip()
+    print(f"[OK] Successfully authenticated as: {account}")
+    return account
+
+
+def select_or_create_project(gcloud):
+    print_step("Step 3: GCP Project Selection")
+
+    # Current configured project
+    current_proj_res = run_cmd([gcloud, "config", "get-value", "project"], check=False)
+    current_proj = current_proj_res.stdout.strip() if current_proj_res.returncode == 0 else ""
+
+    if current_proj and current_proj != "(unset)":
+        print(f"Current configured project: {current_proj}", flush=True)
+        use_current = input(f"Use current project '{current_proj}'? [Y/n]: ").strip().lower()
+        if use_current in ("", "y", "yes"):
+            selected_project = current_proj
+        else:
+            selected_project = None
+    else:
+        selected_project = None
+
+    if not selected_project:
+        print("Querying Google Cloud for available projects...", flush=True)
+        res = run_cmd([gcloud, "projects", "list", "--format=json"])
+        projects = json.loads(res.stdout or "[]")
+
+        if projects:
+            print("\nAvailable Google Cloud Projects:", flush=True)
+            for idx, p in enumerate(projects, 1):
+                is_curr = " (current)" if p["projectId"] == current_proj else ""
+                print(f"  {idx}) {p.get('name', p['projectId'])} [{p['projectId']}]{is_curr}")
+            print(f"  {len(projects) + 1}) Enter a custom or new Project ID", flush=True)
+
+            while not selected_project:
+                choice = input(f"\nSelect a project [1-{len(projects) + 1}]: ").strip()
+                if choice.isdigit():
+                    val = int(choice)
+                    if 1 <= val <= len(projects):
+                        selected_project = projects[val - 1]["projectId"]
+                    elif val == len(projects) + 1:
+                        selected_project = input("Enter Project ID: ").strip()
+                elif choice:
+                    selected_project = choice
+        else:
+            print("No existing projects found in this account.", flush=True)
+            selected_project = input("Enter your GCP Project ID to use: ").strip()
+
+    if not selected_project:
+        print("[ERROR] No project selected. Exiting.", flush=True)
+        sys.exit(1)
+
+    print(f"\nSetting active project to: {selected_project}", flush=True)
+    run_cmd([gcloud, "config", "set", "project", selected_project])
+
+    # Enable Compute Engine API
+    print("Checking Compute Engine API status...", flush=True)
+    services_res = run_cmd([gcloud, "services", "list", "--enabled", "--filter=name:compute.googleapis.com", "--format=value(name)"])
+    if "compute.googleapis.com" not in services_res.stdout:
+        print("Enabling Compute Engine API (this can take 30-60 seconds)...", flush=True)
+        run_cmd([gcloud, "services", "enable", "compute.googleapis.com"], capture_output=False)
+        print("[OK] Compute Engine API enabled.", flush=True)
+    else:
+        print("[OK] Compute Engine API is already enabled.", flush=True)
+
+    return selected_project
+
+
+def choose_region_and_zone():
+    print_step("Step 4: Select Always Free Tier Region & Zone")
+    print("GCP Always Free provides 1 free 'e2-micro' VM instance in these US regions:")
+    for k, (_, _, label) in FREE_REGIONS.items():
+        print(f"  {k}) {label}")
+
+    choice = input("\nSelect Region [1-3, default: 1]: ").strip() or "1"
+    _, zone, desc = FREE_REGIONS.get(choice, FREE_REGIONS["1"])
+    print(f"[OK] Selected: {desc} (Zone: {zone})")
+    return zone
+
+
+def ensure_firewall(gcloud):
+    print_step("Step 5: Verifying Firewall Rules")
+    print(f"Checking for firewall rule '{FIREWALL_RULE_NAME}'...")
+
+    res = run_cmd([gcloud, "compute", "firewall-rules", "describe", FIREWALL_RULE_NAME], check=False)
+    if res.returncode == 0:
+        print(f"[OK] Firewall rule '{FIREWALL_RULE_NAME}' already exists.")
+        return
+
+    print("Creating firewall rule allowing ports 80, 443, 8443, and 8080...")
+    for attempt in range(1, 4):
+        try:
+            run_cmd([
+                gcloud, "compute", "firewall-rules", "create", FIREWALL_RULE_NAME,
+                "--network=default",
+                "--allow=tcp:80,tcp:443,tcp:8443,tcp:8080",
+                f"--target-tags={FIREWALL_TAG}",
+                "--source-ranges=0.0.0.0/0",
+                "--description=Allow incoming traffic for WebRTC signaling server"
+            ], capture_output=False)
+            print(f"[OK] Firewall rule '{FIREWALL_RULE_NAME}' created.")
+            return
+        except subprocess.CalledProcessError:
+            # Check if created despite transient error
+            check_again = run_cmd([gcloud, "compute", "firewall-rules", "describe", FIREWALL_RULE_NAME], check=False)
+            if check_again.returncode == 0:
+                print(f"[OK] Firewall rule '{FIREWALL_RULE_NAME}' exists.")
+                return
+            if attempt < 3:
+                print(f"[!] GCP returned a transient error. Retrying firewall creation in 5 seconds (attempt {attempt}/3)...")
+                time.sleep(5)
+            else:
+                raise
+
+
+
+def build_startup_script(server_js_path, package_json_path):
+    """Embed server.js and package.json into cloud-init startup script with Node.js & Caddy TLS."""
+    with open(server_js_path, "r", encoding="utf-8") as f:
+        server_b64 = base64.b64encode(f.read().encode("utf-8")).decode("utf-8")
+
+    with open(package_json_path, "r", encoding="utf-8") as f:
+        pkg_b64 = base64.b64encode(f.read().encode("utf-8")).decode("utf-8")
+
+    script = f"""#!/bin/bash
+set -e
+
+exec > >(tee -a /var/log/startup-script.log) 2>&1
+echo "[Startup] Starting WebRTC Signaling Server initialization..."
+
+# 1. Setup 2GB Swap file (critical for smooth operation on 1GB RAM e2-micro)
+if [ ! -f /swapfile ]; then
+    echo "[Swap] Setting up 2GB swap..."
+    fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+# 2. Install Node.js 20 & Caddy
+echo "[Deps] Installing prerequisites..."
+apt-get update -y
+apt-get install -y curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https
+
+# Install Node.js 20.x
+echo "[Node] Installing Node.js 20..."
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+apt-get update -y
+apt-get install -y nodejs
+
+# Install Caddy
+echo "[Caddy] Installing Caddy reverse proxy for automated TLS..."
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+apt-get update -y
+apt-get install -y caddy
+
+# 3. Create app directory and unpack code
+echo "[App] Writing application code..."
+mkdir -p /opt/webrtc-server
+cd /opt/webrtc-server
+
+echo "{pkg_b64}" | base64 -d > package.json
+echo "{server_b64}" | base64 -d > server.js
+
+echo "[App] Installing npm dependencies..."
+npm install --omit=dev
+
+# 4. Create systemd service for signaling server
+echo "[Systemd] Creating webrtc-signaling service..."
+cat <<'EOF' > /etc/systemd/system/webrtc-signaling.service
+[Unit]
+Description=WebRTC Signaling Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/webrtc-server
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+Environment=PORT=8080
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable webrtc-signaling
+systemctl restart webrtc-signaling
+
+# 5. Fetch external IP and configure Caddy
+EXTERNAL_IP=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip)
+DOMAIN="${{EXTERNAL_IP}}.sslip.io"
+
+echo "[TLS] Configuring Caddy for domain: ${{DOMAIN}}"
+cat <<EOF > /etc/caddy/Caddyfile
+{{
+    admin off
+}}
+
+# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443
+${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
+    reverse_proxy 127.0.0.1:8080
+}}
+
+# HTTP status check & ACME challenge support on port 80
+:80 {{
+    respond "WebRTC Signaling Server Ready at wss://${{DOMAIN}}:443" 200
+}}
+EOF
+
+systemctl restart caddy
+echo "[Done] WebRTC Signaling Server initialization finished successfully!"
+"""
+    return script
+
+
+def deploy_vm(gcloud, zone, server_js, package_json):
+    print_step("Step 6: Deploying Forever Free e2-micro Instance")
+
+    # Detect existing instances in the zone
+    inst_list_res = run_cmd([gcloud, "compute", "instances", "list", f"--zones={zone}", "--format=value(name)"], check=False)
+    existing_instances = [name.strip() for name in inst_list_res.stdout.splitlines() if name.strip()]
+    default_name = existing_instances[0] if existing_instances else DEFAULT_INSTANCE_NAME
+
+    instance_name = input(f"Enter instance name [default: {default_name}]: ").strip() or default_name
+
+    # Check if instance already exists
+    res = run_cmd([gcloud, "compute", "instances", "describe", instance_name, f"--zone={zone}"], check=False)
+    if res.returncode == 0:
+        ip_res = run_cmd([
+            gcloud, "compute", "instances", "describe", instance_name,
+            f"--zone={zone}",
+            "--format=value(networkInterfaces[0].accessConfigs[0].natIP)"
+        ])
+        external_ip = ip_res.stdout.strip()
+
+        print(f"\n[!] Instance '{instance_name}' already exists in zone '{zone}' (IP: {external_ip}).")
+        print("  1) Update code on running instance (hot-update server.js and restart service) [Recommended]")
+        print("  2) Just fetch existing wss:// URL without updating code")
+        print("  3) Delete existing instance and recreate from scratch")
+        print("  4) Cancel")
+        c = input("Choose option [1-4, default: 1]: ").strip() or "1"
+        if c == "1":
+            print(f"\nUploading latest server files to '{instance_name}'...")
+            run_cmd([
+                gcloud, "compute", "scp", str(server_js), f"{instance_name}:/tmp/server.js",
+                f"--zone={zone}", "--quiet"
+            ], capture_output=False)
+            run_cmd([
+                gcloud, "compute", "scp", str(package_json), f"{instance_name}:/tmp/package.json",
+                f"--zone={zone}", "--quiet"
+            ], capture_output=False)
+            print("Restarting webrtc-signaling service...")
+            run_cmd([
+                gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+                "--command=sudo mv /tmp/server.js /opt/webrtc-server/server.js && sudo mv /tmp/package.json /opt/webrtc-server/package.json && sudo systemctl restart webrtc-signaling",
+                "--quiet"
+            ], capture_output=False)
+            print("[OK] Server updated and restarted successfully!")
+            return instance_name, external_ip
+        elif c == "2":
+            return instance_name, external_ip
+        elif c == "3":
+            print(f"Deleting existing instance '{instance_name}'...")
+            run_cmd([gcloud, "compute", "instances", "delete", instance_name, f"--zone={zone}", "--quiet"], capture_output=False)
+        else:
+            print("Cancelled.")
+            sys.exit(0)
+
+    # Generate startup script
+    startup_script = build_startup_script(server_js, package_json)
+    temp_script_path = Path(__file__).resolve().parent / "_startup_script.sh"
+    with open(temp_script_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(startup_script)
+
+    print("\nCreating VM with GCP Always Free specs:")
+    print(" - Machine Type: e2-micro (2 vCPUs, 1 GB RAM)")
+    print(" - Boot Disk: 30 GB pd-standard (Standard Persistent Disk)")
+    print(f" - Zone: {zone}")
+    print(f" - Tags: {FIREWALL_TAG}, http-server, https-server")
+
+    try:
+        run_cmd([
+            gcloud, "compute", "instances", "create", instance_name,
+            f"--zone={zone}",
+            "--network=default",
+            "--machine-type=e2-micro",
+            "--boot-disk-size=30GB",
+            "--boot-disk-type=pd-standard",
+            "--image-family=debian-12",
+            "--image-project=debian-cloud",
+            f"--tags={FIREWALL_TAG},http-server,https-server",
+            f"--metadata-from-file=startup-script={temp_script_path}",
+            "--description=Always Free WebRTC Signaling Server"
+        ], capture_output=False)
+    finally:
+        if temp_script_path.exists():
+            temp_script_path.unlink()
+
+    # Get External IP
+    ip_res = run_cmd([
+        gcloud, "compute", "instances", "describe", instance_name,
+        f"--zone={zone}",
+        "--format=value(networkInterfaces[0].accessConfigs[0].natIP)"
+    ])
+    external_ip = ip_res.stdout.strip()
+    print(f"\n[OK] Instance created! External IP: {external_ip}")
+    return instance_name, external_ip
+
+
+def wait_for_ready(external_ip):
+    print_step("Step 7: Verifying Deployment & Obtaining wss:// URL")
+    domain = f"{external_ip}.sslip.io"
+    http_url = f"http://{external_ip}"
+    wss_url = f"wss://{domain}:{DEFAULT_PORT}"
+    wss_alt = f"wss://{domain}:{ALT_PORT}"
+
+    print(f"Server domain: {domain}")
+    print("Waiting for instance startup script, Node.js installation, and TLS provisioning...")
+    print("(This typically takes ~90-120 seconds on a fresh e2-micro instance)")
+
+    max_retries = 36  # ~3 minutes
+    ready = False
+    for i in range(1, max_retries + 1):
+        try:
+            req = urllib.request.Request(http_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=4) as response:
+                if response.status == 200:
+                    ready = True
+                    break
+        except Exception:
+            pass
+
+        time.sleep(5)
+        print(f"  [{i * 5}s] Initializing packages and SSL cert...", end="\r", flush=True)
+
+    print()
+    if ready:
+        print("[OK] Signaling server and TLS reverse proxy are LIVE!")
+    else:
+        print("[Notice] Instance is still running startup script. URLs will be live shortly.")
+
+    print("\n" + "=" * 60)
+    print(" WebRTC Signaling Server Deployed Successfully (Always Free)")
+    print("=" * 60)
+    print(f"\n Secure WebSocket (WSS) URLs with Port:\n")
+    print(f"  Primary WSS URL : {wss_url}")
+    print(f"  Alternative WSS : {wss_alt}")
+    print(f"  Plain WS (Port) : ws://{external_ip}:8080")
+    print("\n" + "-" * 60)
+    print("Details:")
+    print(f"  External IP  : {external_ip}")
+    print(f"  SSL Domain   : {domain} (Valid Let's Encrypt Certificate)")
+    print("  Tier         : Google Cloud Always Free (e2-micro, 30GB pd-standard)")
+    print("=" * 60 + "\n")
+
+
+def main():
+    print("""
+============================================================
+ WebRTC Signaling Server - GCP Always Free Tier Deployer
+============================================================
+""")
+    gcloud, server_js, package_json = check_prerequisites()
+    authenticate_gcp(gcloud)
+    select_or_create_project(gcloud)
+    zone = choose_region_and_zone()
+    ensure_firewall(gcloud)
+    _, external_ip = deploy_vm(gcloud, zone, server_js, package_json)
+    wait_for_ready(external_ip)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nDeployment cancelled by user.")
+        sys.exit(0)
