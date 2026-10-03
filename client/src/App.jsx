@@ -6,6 +6,7 @@ import CreateRoomModal from './components/CreateRoomModal';
 import JoinRoomModal from './components/JoinRoomModal';
 import ServerSettingsModal from './components/ServerSettingsModal';
 import { sound } from './utils/sound';
+import { copyToClipboard } from './utils/clipboard';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
@@ -26,6 +27,10 @@ export default function App() {
   const [p2pStatusText, setP2pStatusText] = useState('Waiting for peer to enter 5-digit code...');
   const [messages, setMessages] = useState([]);
 
+  // YouTube Synchronization State
+  const [activeVideoId, setActiveVideoId] = useState(null);
+  const [remoteAction, setRemoteAction] = useState(null);
+
   // UI Panels & Modals
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -42,9 +47,12 @@ export default function App() {
   const isHostRef = useRef(false);
   const pendingSignalsRef = useRef([]);
   const hasInitializedRef = useRef(false);
+  const activeVideoIdRef = useRef(null);
+  const syncStateGetterRef = useRef(null);
 
   currentRoomRef.current = roomId;
   isHostRef.current = isHost;
+  activeVideoIdRef.current = activeVideoId;
 
   const showToast = useCallback((msg) => {
     setToastMessage(msg);
@@ -108,6 +116,54 @@ export default function App() {
     setP2pStatusText('Waiting for peer to enter 5-digit code...');
   }, []);
 
+  // Broadcast an action (e.g. YouTube play/pause/seek/load) to all connected peers
+  const handleBroadcastAction = useCallback((action, payload = {}) => {
+    const msg = {
+      type: 'yt-action',
+      action,
+      sender: username,
+      timestamp: Date.now(),
+      ...payload
+    };
+
+    for (const peer of peersRef.current.values()) {
+      if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+        try {
+          peer.dataChannel.send(JSON.stringify(msg));
+        } catch (err) {
+          console.error('Error broadcasting yt-action to peer:', err);
+        }
+      }
+    }
+  }, [username]);
+
+  // Handle incoming remote YouTube action
+  const handleRemoteYouTubeAction = useCallback((data) => {
+    if (data.action === 'close' || data.action === 'unload') {
+      setActiveVideoId(null);
+      setRemoteAction(data);
+      addSystemMessage(`🎬 ${data.sender || 'Peer'} exited the video`);
+      showToast(`${data.sender || 'Peer'} exited the video`);
+      return;
+    }
+    if (data.action === 'load') {
+      const newId = data.newVideoId || data.videoId;
+      setActiveVideoId(newId);
+      const titleInfo = data.title ? `: "${data.title}"` : '';
+      addSystemMessage(`🎬 ${data.sender || 'Peer'} loaded a YouTube video${titleInfo}`);
+      showToast(`${data.sender || 'Peer'} loaded ${data.title || 'video'}`);
+    } else if (data.action === 'play') {
+      addSystemMessage(`▶️ ${data.sender || 'Peer'} played the video`);
+    } else if (data.action === 'pause') {
+      addSystemMessage(`⏸️ ${data.sender || 'Peer'} paused the video`);
+    } else if (data.action === 'seek') {
+      const min = Math.floor((data.currentTime || 0) / 60);
+      const sec = Math.floor((data.currentTime || 0) % 60).toString().padStart(2, '0');
+      addSystemMessage(`⏩ ${data.sender || 'Peer'} seeked to ${min}:${sec}`);
+    }
+    setRemoteAction(data);
+  }, [addSystemMessage, showToast]);
+
   // Create or get peer connection in mesh
   const getOrCreatePeerConnection = useCallback((targetPeerId, isInitiator) => {
     if (peersRef.current.has(targetPeerId)) {
@@ -147,8 +203,13 @@ export default function App() {
         peerEntry.isConnected = true;
         updateP2PStatus();
         sound.playChime();
-        addSystemMessage('Direct Peer-to-Peer DataChannel established. Chat is live!');
+        addSystemMessage('Direct Peer-to-Peer DataChannel established. Chat & YouTube Sync is live!');
         showToast('Direct P2P Connected!');
+
+        // Request YouTube sync state from existing room peers
+        try {
+          dc.send(JSON.stringify({ type: 'yt-request-sync' }));
+        } catch (e) {}
       };
 
       dc.onmessage = (event) => {
@@ -157,6 +218,31 @@ export default function App() {
           if (data.type === 'chat') {
             setMessages((prev) => [...prev, { ...data, isSelf: false }]);
             sound.playPop();
+          } else if (data.type === 'yt-action') {
+            handleRemoteYouTubeAction(data);
+          } else if (data.type === 'yt-request-sync') {
+            // A newly joined peer is asking for the current playing video & timestamp
+            if (syncStateGetterRef.current) {
+              const state = syncStateGetterRef.current();
+              if (state && state.videoId) {
+                dc.send(JSON.stringify({
+                  type: 'yt-sync-state',
+                  ...state,
+                  sender: username
+                }));
+              }
+            }
+          } else if (data.type === 'yt-sync-state') {
+            // Received sync state from an existing peer in the room
+            if (data.videoId) {
+              setActiveVideoId(data.videoId);
+              setRemoteAction({
+                action: data.isPlaying ? 'play' : 'pause',
+                currentTime: data.currentTime,
+                newVideoId: data.videoId
+              });
+              addSystemMessage(`🔄 Synced YouTube playback with room`);
+            }
           }
         } catch (e) {
           console.error('DataChannel message parse error:', e);
@@ -202,7 +288,7 @@ export default function App() {
     }
 
     return peerEntry;
-  }, [addSystemMessage, sendSignal, showToast, updateP2PStatus]);
+  }, [addSystemMessage, handleRemoteYouTubeAction, sendSignal, showToast, updateP2PStatus, username]);
 
   // Handle incoming signaling messages
   const handleSignalingMessage = useCallback(async (msg) => {
@@ -340,8 +426,13 @@ export default function App() {
     }
   }, [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, sendSignal, showToast, username]);
 
+  const handleSignalingMessageRef = useRef();
+  handleSignalingMessageRef.current = handleSignalingMessage;
+
   // Connect to Signaling Server
   useEffect(() => {
+    let isCancelled = false;
+
     if (wsRef.current) {
       try { wsRef.current.close(); } catch {}
     }
@@ -359,6 +450,7 @@ export default function App() {
     }
 
     ws.onopen = () => {
+      if (isCancelled) return;
       setSignalStatus({ connected: true, label: 'Signaling Connected' });
       showToast('Signaling server connected');
 
@@ -370,26 +462,30 @@ export default function App() {
     };
 
     ws.onmessage = (event) => {
+      if (isCancelled) return;
       try {
         const msg = JSON.parse(event.data);
-        handleSignalingMessage(msg);
+        handleSignalingMessageRef.current?.(msg);
       } catch (err) {
         console.error('Signaling parse error:', err);
       }
     };
 
     ws.onclose = () => {
+      if (isCancelled) return;
       setSignalStatus({ connected: false, label: 'Disconnected' });
     };
 
     ws.onerror = () => {
+      if (isCancelled) return;
       setSignalStatus({ connected: false, label: 'Signaling Error' });
     };
 
     return () => {
+      isCancelled = true;
       try { ws.close(); } catch {}
     };
-  }, [signalUrl, handleSignalingMessage, showToast]);
+  }, [signalUrl]);
 
   // Auto-detect ?room=12345 URL parameter on initial load
   useEffect(() => {
@@ -401,7 +497,7 @@ export default function App() {
         setInitialJoinPin(roomParam);
         setShowJoinModal(true);
       }
-      addSystemMessage('Welcome to P2P Live! Create or join a 5-digit room to chat (max 3 users).');
+      addSystemMessage('Welcome to P2P Live! Create or join a 5-digit room to chat and watch YouTube together.');
     }
   }, [addSystemMessage]);
 
@@ -436,21 +532,23 @@ export default function App() {
       setRoomId(null);
       setIsHost(false);
       setPeerCount(0);
+      setActiveVideoId(null);
+      setRemoteAction(null);
       addSystemMessage('You left the room.');
       showToast('Left room');
     }
   };
 
-  const handleCopyRoom = () => {
+  const handleCopyRoom = useCallback(async (customVal) => {
     if (!roomId) return;
-    const url = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
-    navigator.clipboard.writeText(url).then(() => {
-      showToast(`Copied room link: ${roomId}`);
-    }).catch(() => {
-      navigator.clipboard.writeText(roomId);
-      showToast(`Copied code: ${roomId}`);
-    });
-  };
+    const valueToCopy = typeof customVal === 'string' && customVal.trim() ? customVal.trim() : String(roomId).trim();
+    const success = await copyToClipboard(valueToCopy);
+    if (success) {
+      showToast(`Copied Room ID: ${valueToCopy}`);
+    } else {
+      showToast(`Room ID: ${valueToCopy}`);
+    }
+  }, [roomId, showToast]);
 
   const handleSendMessage = (text) => {
     const msgPayload = {
@@ -484,6 +582,15 @@ export default function App() {
     showToast(`Connecting to ${newUrl}...`);
   };
 
+  const handleVideoChange = useCallback((newId) => {
+    setActiveVideoId(newId);
+    if (newId) {
+      addSystemMessage(`🎬 You loaded video ID: ${newId}`);
+    } else {
+      addSystemMessage(`🎬 You exited the video`);
+    }
+  }, [addSystemMessage]);
+
   return (
     <>
       <Header
@@ -510,6 +617,13 @@ export default function App() {
           onCopyRoom={handleCopyRoom}
           onLeaveRoom={handleLeaveRoom}
           onToggleChat={() => setIsChatOpen((prev) => !prev)}
+          activeVideoId={activeVideoId}
+          onVideoChange={handleVideoChange}
+          onBroadcastAction={handleBroadcastAction}
+          remoteAction={remoteAction}
+          onRegisterStateGetter={(getter) => {
+            syncStateGetterRef.current = getter;
+          }}
         />
 
         <LiveChat

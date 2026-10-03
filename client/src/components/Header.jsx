@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { getAvatarColor } from '../utils/sound';
+import { copyToClipboard } from '../utils/clipboard';
 
 export default function Header({
   isLive,
@@ -9,8 +10,23 @@ export default function Header({
   onOpenSettings,
   username
 }) {
+  const [copied, setCopied] = useState(false);
   const initial = (username[0] || 'U').toUpperCase();
   const avatarBg = getAvatarColor(username);
+
+  const handleCopyClick = async (e) => {
+    e.stopPropagation();
+    if (!roomId) return;
+    const cleanId = String(roomId).trim();
+    const success = await copyToClipboard(cleanId);
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      if (typeof onCopyRoom === 'function') {
+        onCopyRoom(cleanId);
+      }
+    }
+  };
 
   return (
     <header className="app-header">
@@ -29,14 +45,39 @@ export default function Header({
 
       <div className="header-center">
         {roomId && (
-          <div className="room-status-chip">
+          <div
+            className={`room-status-chip ${copied ? 'copied' : ''}`}
+            onClick={handleCopyClick}
+            title="Click to copy 5-digit Room ID"
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleCopyClick(e);
+              }
+            }}
+          >
             <span className="chip-label">ROOM:</span>
             <span className="chip-code">{roomId}</span>
-            <button className="chip-copy-btn" onClick={onCopyRoom} title="Copy Room Link">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-              </svg>
+            <button
+              type="button"
+              className="chip-copy-btn"
+              title="Copy Room ID"
+              tabIndex={-1}
+              onClick={handleCopyClick}
+            >
+              {copied ? (
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="#00e676">
+                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                </svg>
+              )}
             </button>
+            {copied && <span className="chip-copied-text">Copied!</span>}
           </div>
         )}
       </div>

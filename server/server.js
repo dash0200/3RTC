@@ -183,7 +183,12 @@ wss.on('connection', (ws) => {
         }
 
         if (!rooms.has(roomId)) {
-          rooms.set(roomId, new Map());
+          safeSend(ws, {
+            type: 'error',
+            message: `Room "${roomId}" not found. Please verify the 5-digit code or create a room.`
+          });
+          log('WARN', `Peer ${ws.peerId} tried to join non-existent room "${roomId}"`);
+          return;
         }
 
         const room = rooms.get(roomId);

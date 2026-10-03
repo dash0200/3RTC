@@ -48,12 +48,21 @@ export default function JoinRoomModal({ isOpen, onClose, onConfirm, currentUsern
 
   const handlePaste = (e) => {
     e.preventDefault();
-    const paste = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '');
-    if (paste.length > 0) {
-      const chars = paste.slice(0, 5).split('');
+    const raw = (e.clipboardData || window.clipboardData).getData('text').trim();
+    // Check if user pasted a full room invitation link with ?room=12345
+    const urlMatch = raw.match(/[?&]room=(\d{5})/i);
+    let digits = '';
+    if (urlMatch) {
+      digits = urlMatch[1];
+    } else {
+      digits = raw.replace(/\D/g, '').slice(0, 5);
+    }
+
+    if (digits.length > 0) {
+      const chars = digits.split('');
       const newDigits = ['', '', '', '', ''];
       chars.forEach((c, i) => {
-        newDigits[i] = c;
+        if (i < 5) newDigits[i] = c;
       });
       setPinDigits(newDigits);
       const nextIdx = Math.min(chars.length, 4);
