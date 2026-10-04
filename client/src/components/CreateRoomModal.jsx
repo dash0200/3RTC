@@ -11,8 +11,9 @@ export default function CreateRoomModal({ isOpen, onClose, onConfirm, currentUse
   };
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-card">
+        <div className="mobile-modal-pill" onClick={onClose}></div>
         <div className="modal-header">
           <div className="modal-title">Create New Room</div>
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
