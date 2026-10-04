@@ -445,6 +445,10 @@ export default function App() {
             setRemoteAction(data);
             addSystemMessage(`📁 ${data.sender || 'Peer'} exited the local video`);
             showToast(`${data.sender || 'Peer'} exited local video`);
+        } else if (data.action === 'subtitle-share') {
+            setRemoteAction(data);
+            addSystemMessage(`💬 ${data.sender || 'Peer'} shared subtitles: "${data.fileName || 'captions'}"`);
+            showToast(`Subtitles loaded from ${data.sender || 'Peer'}`);
         } else {
             setRemoteAction(data);
             if (data.action === 'play') {
@@ -889,7 +893,8 @@ export default function App() {
                                 action: data.isPlaying ? 'play' : 'pause',
                                 currentTime: data.currentTime,
                                 fileName: data.fileName,
-                                sender: data.sender
+                                sender: data.sender,
+                                subtitleInfo: data.subtitleInfo
                             });
                             addSystemMessage(`🔄 Synced with room's local video session: "${data.fileName}"`);
                         }

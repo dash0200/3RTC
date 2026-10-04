@@ -57,12 +57,24 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 1.5 Drag & Drop Subtitles (.SRT / .VTT) for Local Video
-- **Description**: Support external subtitle files for the local video player.
+### 1.5 Drag & Drop Subtitles (.SRT / .VTT) for Local Video ✅ `[COMPLETED]`
+- **Description**: Seamlessly load and synchronize external subtitle files (.SRT / .VTT) on the local video player, styled to perfection and auto-shared across peers.
 - **Key Capabilities**:
-  - Drop `.srt` or `.vtt` file directly onto the player.
-  - Real-time subtitle parser converting cues to WebVTT `<track>`.
-  - Custom subtitle styling (font size, background opacity, vertical position offset, and subtitle delay synchronization $\pm 0.5\text{s}$).
+  - **Drag & Drop Subtitles**: Drag and drop any `.srt` or `.vtt` file directly onto the local video player (or browse via the CC menu) with dynamic visual drop indicators.
+  - **Parser Engine**: Converts SubRip (`.srt`) and WebVTT (`.vtt`) files into normalized cues with BOM stripping, CRLF normalization, and live WebVTT `<track>` Blob URL generation.
+  - **Synchronized Subtitle Overlay**: Real-time cue matching against `currentTimeSec` with custom styling and hardware-accelerated animations.
+  - **CC Settings Menu (Glassmorphic Popover)**: Dedicated CC button in player toolbar with active glow indicator opening:
+    - Master Subtitles Toggle (`ON` / `OFF`).
+    - Active Subtitle File card (filename, cue count, replace & remove actions).
+    - Timing Sync Offset Steppers ($-1.0\text{s}$, $-0.5\text{s}$, $-0.1\text{s}$, Reset, $+0.1\text{s}$, $+0.5\text{s}$, $+1.0\text{s}$).
+    - Appearance customization: Font Size (`S`, `M`, `L`, `XL`), Colors (`White`, `Yellow`, `Cyan`, `Lime`), Background Box (`Semi-Dark`, `Solid`, `Outline/Shadow`), and Position (`Bottom`, `Elevated`, `Top`).
+  - **P2P Subtitle Synchronization**: Automatically broadcasts loaded subtitle files over WebRTC DataChannel (`action: 'subtitle-share'`) so all room peers enjoy synchronized subtitles without needing to manually find the file. Late-joiners receive active subtitles via room sync state.
+  - **Keyboard Hotkeys**: `C` (toggle subtitles / open CC menu), `[` (delay -0.1s), `]` (delay +0.1s).
+- **Implementation Notes**:
+  - `subtitleParser.js`: [subtitleParser.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/subtitleParser.js).
+  - Player overlay, controls, and CC popover: [LocalVideoSyncPlayer.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LocalVideoSyncPlayer.jsx).
+  - WebRTC DataChannel subtitle routing and late-joiner state: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx).
+  - Glassmorphic menu and cue styling: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
