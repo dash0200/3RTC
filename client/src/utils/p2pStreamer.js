@@ -12,6 +12,16 @@ export const STREAM_CHUNK_SIZE = 61440; // 60 KB (safely within WebRTC 64 KB SCT
 export const BUFFERED_AMOUNT_HIGH = 512 * 1024; // 512 KB backpressure threshold
 export const BUFFERED_AMOUNT_LOW = 128 * 1024;  // 128 KB resume threshold
 
+export function getVideoMimeType(file) {
+  if (file?.type) return file.type;
+  const name = (file?.name || '').toLowerCase();
+  if (name.endsWith('.webm')) return 'video/webm';
+  if (name.endsWith('.mp4') || name.endsWith('.m4v')) return 'video/mp4';
+  if (name.endsWith('.mov')) return 'video/quicktime';
+  if (name.endsWith('.mkv')) return 'video/mp4';
+  return 'video/mp4';
+}
+
 /**
  * P2P Stream Sender: Slices a local File and streams it with backpressure control.
  */
@@ -51,7 +61,7 @@ export class P2PStreamSender {
       streamId: this.streamId,
       fileName: this.file.name,
       fileSize: this.file.size,
-      mimeType: this.file.type || 'video/mp4',
+      mimeType: getVideoMimeType(this.file),
       chunkSize: STREAM_CHUNK_SIZE,
       totalChunks: this.totalChunks,
       targetPeerId: this.targetPeerId,
