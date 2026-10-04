@@ -64,10 +64,10 @@ export default function Stage({
                 </svg>
               </div>
 
-              <h1 className="stage-title">P2P Watch Party & Live Chat</h1>
+              <h1 className="stage-title">3RTC Watch Party</h1>
               <p className="stage-subtitle">
-                Create a 5-digit room or enter an existing code to connect directly peer-to-peer (up to 3 users).
-                Watch YouTube videos together with real-time synchronized play, pause & seek.
+                Create a 5-digit room or enter an existing code to connect directly peer-to-peer (up to 3 peers).
+                Watch YouTube videos together.
               </p>
 
               <div className="initial-actions">
