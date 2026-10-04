@@ -8,6 +8,7 @@ import ServerSettingsModal from './components/ServerSettingsModal';
 import { fetchYouTubeTitle } from './components/YouTubeSyncPlayer';
 import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
+import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
@@ -61,6 +62,14 @@ export default function App() {
     const [localVideoFile, setLocalVideoFile] = useState(null);
     const [remoteLocalVideoMeta, setRemoteLocalVideoMeta] = useState(null);
     const [remoteAction, setRemoteAction] = useState(null);
+
+    // Feature 1.4: WebRTC Direct Video Streaming (MSE Chunk Sharing)
+    const [streamProgress, setStreamProgress] = useState(null);
+    const [streamVideoUrl, setStreamVideoUrl] = useState(null);
+    const streamReceiverRef = useRef(null);
+    const activeStreamSendersRef = useRef(new Map());
+    const localVideoFileRef = useRef(null);
+    localVideoFileRef.current = localVideoFile;
 
     // Feature 1.1: Shared Video Queue & Collaborative Playlist
     const [queue, setQueue] = useState([]);
@@ -652,6 +661,9 @@ export default function App() {
 
         const bindDataChannel = (dc) => {
             peerEntry.dataChannel = dc;
+            try {
+                dc.binaryType = 'arraybuffer';
+            } catch (e) { }
 
             dc.onopen = () => {
                 peerEntry.isConnected = true;
@@ -676,6 +688,14 @@ export default function App() {
             };
 
             dc.onmessage = (event) => {
+                // Binary Chunk over WebRTC DataChannel (Feature 1.4: P2P Video Streaming)
+                if (event.data instanceof ArrayBuffer) {
+                    if (streamReceiverRef.current) {
+                        streamReceiverRef.current.handleChunk(event.data);
+                    }
+                    return;
+                }
+
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'chat') {
@@ -702,6 +722,92 @@ export default function App() {
                         handleRemoteQueueAction(data);
                     } else if (data.type === 'reaction') {
                         handleRemoteReaction(data);
+                    } else if (data.type === 'p2p-stream-request') {
+                        // Remote peer requests to stream the local video file
+                        if (localVideoFileRef.current && peerEntry.dataChannel) {
+                            addSystemMessage(`📡 Peer "${data.requester || 'User'}" requested video stream. Slicing and streaming chunks...`);
+                            showToast(`Streaming video to ${data.requester || 'peer'}...`);
+
+                            const sender = new P2PStreamSender(localVideoFileRef.current, peerEntry.dataChannel, {
+                                targetPeerId,
+                                senderName: username,
+                                onProgress: () => { },
+                                onComplete: (info) => {
+                                    addSystemMessage(`✅ Completed streaming video chunks to ${data.requester || 'peer'} (${(info.totalBytes / (1024 * 1024)).toFixed(1)} MB in ${info.durationSec.toFixed(1)}s)`);
+                                    showToast(`Stream transfer complete!`);
+                                },
+                                onError: (err) => {
+                                    addSystemMessage(`❌ Stream transfer error: ${err.message}`);
+                                }
+                            });
+                            activeStreamSendersRef.current.set(targetPeerId, sender);
+                            sender.start();
+                        }
+                    } else if (data.type === 'p2p-stream-header') {
+                        // Incoming P2P video stream header
+                        addSystemMessage(`📡 Receiving video stream from ${data.sender || 'Peer'}: "${data.fileName}" (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB)`);
+                        showToast(`Streaming "${data.fileName}"...`);
+
+                        if (streamReceiverRef.current) {
+                            streamReceiverRef.current.abort();
+                        }
+
+                        const receiver = new P2PStreamReceiver(data, {
+                            onReady: (blobUrl, meta) => {
+                                setStreamVideoUrl(blobUrl);
+                                setStreamProgress((prev) => ({
+                                    ...(prev || {}),
+                                    isReady: true,
+                                    percent: meta.percent
+                                }));
+                            },
+                            onProgress: (prog) => {
+                                setStreamProgress((prev) => ({
+                                    ...(prev || {}),
+                                    ...prog
+                                }));
+                            },
+                            onComplete: (blobUrl, meta) => {
+                                setStreamVideoUrl(blobUrl);
+                                setStreamProgress((prev) => ({
+                                    ...(prev || {}),
+                                    percent: 100,
+                                    isReady: true,
+                                    isCompleted: true
+                                }));
+                                addSystemMessage(`✅ Video stream fully buffered (${(meta.fileSize / (1024 * 1024)).toFixed(1)} MB). Ready to play!`);
+                                showToast(`Stream ready to play!`);
+                            },
+                            onError: (err) => {
+                                addSystemMessage(`❌ Video stream error: ${err.message}`);
+                                showToast(`Stream error: ${err.message}`);
+                            }
+                        });
+                        streamReceiverRef.current = receiver;
+                        setStreamProgress({
+                            percent: 0,
+                            speedMBs: 0,
+                            receivedBytes: 0,
+                            totalBytes: data.fileSize,
+                            receivedChunksCount: 0,
+                            totalChunks: data.totalChunks,
+                            fileName: data.fileName,
+                            isReady: false
+                        });
+                    } else if (data.type === 'p2p-stream-complete') {
+                        if (streamReceiverRef.current) {
+                            streamReceiverRef.current.handleComplete();
+                        }
+                    } else if (data.type === 'p2p-stream-cancel') {
+                        if (activeStreamSendersRef.current.has(targetPeerId)) {
+                            activeStreamSendersRef.current.get(targetPeerId).abort();
+                            activeStreamSendersRef.current.delete(targetPeerId);
+                        }
+                        if (streamReceiverRef.current) {
+                            streamReceiverRef.current.abort();
+                            streamReceiverRef.current = null;
+                            setStreamProgress(null);
+                        }
                     } else if (data.type === 'yt-request-sync') {
                         // A newly joined peer is asking for the current playing media & timestamp
                         if (syncStateGetterRef.current) {
@@ -770,6 +876,10 @@ export default function App() {
             };
 
             dc.onclose = () => {
+                if (activeStreamSendersRef.current.has(targetPeerId)) {
+                    activeStreamSendersRef.current.get(targetPeerId).abort();
+                    activeStreamSendersRef.current.delete(targetPeerId);
+                }
                 peerEntry.isConnected = false;
                 updateP2PStatus();
             };
@@ -1198,6 +1308,19 @@ export default function App() {
             setLocalVideoFile(null);
             setRemoteLocalVideoMeta(null);
             setRemoteAction(null);
+            if (streamReceiverRef.current) {
+                streamReceiverRef.current.abort();
+                streamReceiverRef.current = null;
+            }
+            if (streamVideoUrl) {
+                try { URL.revokeObjectURL(streamVideoUrl); } catch (e) { }
+                setStreamVideoUrl(null);
+            }
+            setStreamProgress(null);
+            for (const sender of activeStreamSendersRef.current.values()) {
+                sender.abort();
+            }
+            activeStreamSendersRef.current.clear();
             addSystemMessage('You left the room.');
             showToast('Left room');
         }
@@ -1486,29 +1609,104 @@ export default function App() {
     }, []);
 
     const handleLocalFileSelect = useCallback((file) => {
+        if (streamReceiverRef.current) {
+            streamReceiverRef.current.abort();
+            streamReceiverRef.current = null;
+        }
+        if (streamVideoUrl) {
+            try { URL.revokeObjectURL(streamVideoUrl); } catch (e) { }
+            setStreamVideoUrl(null);
+        }
+        setStreamProgress(null);
         setActiveVideoId(null);
         setLocalVideoFile(file);
         addSystemMessage(`📁 You loaded local video: "${file.name}"`);
         showToast(`Loaded "${file.name}"`);
-    }, [addSystemMessage, showToast]);
+    }, [streamVideoUrl, addSystemMessage, showToast]);
 
     const handleCloseLocalVideo = useCallback(() => {
         setLocalVideoFile(null);
         setRemoteLocalVideoMeta(null);
+        if (streamReceiverRef.current) {
+            streamReceiverRef.current.abort();
+            streamReceiverRef.current = null;
+        }
+        if (streamVideoUrl) {
+            try { URL.revokeObjectURL(streamVideoUrl); } catch (e) { }
+            setStreamVideoUrl(null);
+        }
+        setStreamProgress(null);
+        for (const sender of activeStreamSendersRef.current.values()) {
+            sender.abort();
+        }
+        activeStreamSendersRef.current.clear();
         addSystemMessage(`📁 You exited the local video`);
-    }, [addSystemMessage]);
+    }, [streamVideoUrl, addSystemMessage]);
 
-    const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta);
+    const handleRequestP2PStream = useCallback(() => {
+        if (!remoteLocalVideoMeta) return;
+        const reqMsg = {
+            type: 'p2p-stream-request',
+            requester: username,
+            fileName: remoteLocalVideoMeta.fileName,
+            timestamp: Date.now()
+        };
+        for (const peer of peersRef.current.values()) {
+            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+                try {
+                    peer.dataChannel.send(JSON.stringify(reqMsg));
+                } catch (e) { }
+            }
+        }
+        setStreamProgress({
+            percent: 0,
+            speedMBs: 0,
+            receivedBytes: 0,
+            totalBytes: remoteLocalVideoMeta.fileSize || 0,
+            receivedChunksCount: 0,
+            totalChunks: 0,
+            fileName: remoteLocalVideoMeta.fileName,
+            isReady: false
+        });
+        addSystemMessage(`📡 Requesting direct P2P video stream from peer...`);
+        showToast(`Requesting video stream...`);
+    }, [remoteLocalVideoMeta, username, addSystemMessage, showToast]);
+
+    const handleCancelP2PStream = useCallback(() => {
+        if (streamReceiverRef.current) {
+            streamReceiverRef.current.abort();
+            streamReceiverRef.current = null;
+        }
+        if (streamVideoUrl) {
+            try { URL.revokeObjectURL(streamVideoUrl); } catch (e) { }
+            setStreamVideoUrl(null);
+        }
+        setStreamProgress(null);
+        for (const peer of peersRef.current.values()) {
+            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+                try {
+                    peer.dataChannel.send(JSON.stringify({
+                        type: 'p2p-stream-cancel',
+                        timestamp: Date.now()
+                    }));
+                } catch (e) { }
+            }
+        }
+        addSystemMessage(`Cancelled P2P stream`);
+        showToast(`Stream cancelled`);
+    }, [streamVideoUrl, addSystemMessage, showToast]);
+
+    const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl);
 
     const handleExitVideo = useCallback(() => {
-        if (localVideoFile || remoteLocalVideoMeta) {
+        if (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) {
             handleCloseLocalVideo();
             handleBroadcastAction('close', { type: 'local-video-action' });
         } else if (activeVideoId) {
             handleVideoChange(null);
             handleBroadcastAction('close', {});
         }
-    }, [localVideoFile, remoteLocalVideoMeta, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
+    }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
 
     // Voice Chat: Toggle Microphone Mute/Unmute
     const toggleMicrophone = useCallback(async () => {
@@ -1722,6 +1920,10 @@ export default function App() {
                         onRegisterStateGetter={(getter) => {
                             syncStateGetterRef.current = getter;
                         }}
+                        streamProgress={streamProgress}
+                        streamVideoUrl={streamVideoUrl}
+                        onRequestP2PStream={handleRequestP2PStream}
+                        onCancelP2PStream={handleCancelP2PStream}
                         isMicMuted={isMicMuted}
                         isAudioBlocked={isAudioBlocked}
                         onToggleMic={toggleMicrophone}

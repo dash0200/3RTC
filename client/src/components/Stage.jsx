@@ -40,7 +40,12 @@ export default function Stage({
   activeVideoTitle = '',
   username = '',
   floatingReactions = [],
-  onSendReaction
+  onSendReaction,
+  // Feature 1.4: WebRTC Direct Video Streaming
+  streamProgress = null,
+  streamVideoUrl = null,
+  onRequestP2PStream,
+  onCancelP2PStream
 }) {
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
   const [hasEnteredTheater, setHasEnteredTheater] = useState(false);
@@ -51,7 +56,7 @@ export default function Stage({
     }
   }, [roomId]);
 
-  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta);
+  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl);
 
   useEffect(() => {
     if (isP2PConnected || isMediaActive) {
@@ -105,8 +110,8 @@ export default function Stage({
               </div>
             </div>
           </div>
-        ) : (localVideoFile || remoteLocalVideoMeta) ? (
-          /* Case 2A: Local Video Drag-and-Drop Sync Player */
+        ) : (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) ? (
+          /* Case 2A: Local Video Drag-and-Drop Sync Player or P2P Streamed Video */
           <LocalVideoSyncPlayer
             initialFile={localVideoFile}
             remoteMeta={remoteLocalVideoMeta}
@@ -116,6 +121,11 @@ export default function Stage({
             remoteAction={remoteAction}
             isP2PConnected={isP2PConnected}
             onRegisterStateGetter={onRegisterStateGetter}
+            streamProgress={streamProgress}
+            streamVideoUrl={streamVideoUrl}
+            onRequestP2PStream={onRequestP2PStream}
+            onCancelP2PStream={onCancelP2PStream}
+            isHost={isHost}
           />
         ) : showTheater ? (
           /* Case 2B: YouTube Player / Watch Party Lobby */
