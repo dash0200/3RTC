@@ -27,7 +27,13 @@ export default function LocalVideoSyncPlayer({
   onBroadcastAction,
   remoteAction,
   isP2PConnected,
-  onRegisterStateGetter
+  onRegisterStateGetter,
+  // Feature 1.4: WebRTC Direct Video Streaming
+  streamProgress = null,
+  streamVideoUrl = null,
+  onRequestP2PStream,
+  onCancelP2PStream,
+  isHost = false
 }) {
   const [file, setFile] = useState(initialFile);
   const [objectUrl, setObjectUrl] = useState(null);
@@ -296,6 +302,9 @@ export default function LocalVideoSyncPlayer({
     if (objectUrl) {
       try { URL.revokeObjectURL(objectUrl); } catch (e) {}
     }
+    if (typeof onCancelP2PStream === 'function') {
+      onCancelP2PStream();
+    }
     setFile(null);
     setObjectUrl(null);
     if (typeof onBroadcastAction === 'function') {
@@ -446,11 +455,13 @@ export default function LocalVideoSyncPlayer({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isMuted]);
 
-  const activeFileName = file?.name || remoteMeta?.fileName || 'Local Video';
-  const activeFileSize = file?.size || remoteMeta?.fileSize || 0;
+  const activeVideoSrc = streamVideoUrl || objectUrl;
+  const isStreamed = Boolean(streamVideoUrl && !objectUrl);
+  const activeFileName = file?.name || remoteMeta?.fileName || streamProgress?.fileName || 'Local Video';
+  const activeFileSize = file?.size || remoteMeta?.fileSize || streamProgress?.totalBytes || 0;
 
-  // Case A: User has not loaded their copy of the video file yet
-  if (!objectUrl) {
+  // Case A: User has not loaded their copy of the video file yet AND no active stream URL
+  if (!activeVideoSrc) {
     return (
       <div
         className={`local-dropzone-wrapper ${isDragOver ? 'drag-over' : ''}`}
@@ -474,46 +485,156 @@ export default function LocalVideoSyncPlayer({
           </div>
 
           {remoteMeta ? (
-            <>
+            <div className="local-dual-choice-container">
               <div className="local-remote-banner">
                 <span className="local-remote-badge">PEER VIDEO LOADED</span>
                 <h2 className="local-remote-filename">"{remoteMeta.fileName}"</h2>
                 {remoteMeta.fileSize > 0 && (
                   <span className="local-file-size-tag">({formatFileSize(remoteMeta.fileSize)})</span>
                 )}
+                <p className="local-waiting-subtitle">
+                  {remoteMeta.sender || 'A peer'} loaded this video file. Choose how you want to join the watch party:
+                </p>
               </div>
-              <p className="local-waiting-subtitle">
-                A peer in this room is playing this video. Drag & drop your local copy of this file here to join in synchronized playback!
-              </p>
-            </>
+
+              <div className="p2p-stream-options-grid">
+                {/* Option 1: 1.4 WebRTC Direct Video Stream (MSE Chunk Sharing) */}
+                <div className={`stream-option-card card-streaming ${streamProgress ? 'is-streaming' : ''}`}>
+                  <div className="stream-card-badge">OPTION 1 • WEBRTC DIRECT STREAM</div>
+                  <div className="stream-card-icon">
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="#00e676">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                    </svg>
+                  </div>
+                  <h3 className="stream-card-title">Stream from Peer (P2P)</h3>
+                  <p className="stream-card-desc">
+                    Don't have this video on your computer? Stream it directly peer-to-peer from <strong>{remoteMeta.sender || 'Peer'}</strong> with zero server upload.
+                  </p>
+
+                  {!streamProgress ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-stream-action"
+                      onClick={onRequestP2PStream}
+                    >
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                      </svg>
+                      Stream from Peer (P2P)
+                    </button>
+                  ) : (
+                    <div className="p2p-stream-progress-card">
+                      <div className="p2p-stream-prog-header">
+                        <span className="p2p-stream-prog-status">
+                          <span className="p2p-pulse-dot"></span>
+                          {streamProgress.isCompleted
+                            ? '✅ Ready to play!'
+                            : streamProgress.isReady
+                            ? '▶️ Buffered initial chunks!'
+                            : '📡 Receiving chunks...'}
+                        </span>
+                        <span className="p2p-stream-prog-percent">{streamProgress.percent || 0}%</span>
+                      </div>
+                      <div className="p2p-stream-track">
+                        <div
+                          className="p2p-stream-fill"
+                          style={{ width: `${Math.max(4, streamProgress.percent || 0)}%` }}
+                        ></div>
+                      </div>
+                      <div className="p2p-stream-metrics">
+                        <span>
+                          {formatFileSize(streamProgress.receivedBytes || 0)} / {formatFileSize(remoteMeta.fileSize || streamProgress.totalBytes || 0)}
+                        </span>
+                        <span>⚡ {(streamProgress.speedMBs || 0).toFixed(1)} MB/s</span>
+                        {streamProgress.totalChunks > 0 && (
+                          <span>{streamProgress.receivedChunksCount || 0}/{streamProgress.totalChunks} chunks</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm p2p-cancel-btn"
+                        onClick={onCancelP2PStream}
+                      >
+                        ✕ Cancel Stream
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="stream-card-tags">
+                    <span className="stream-mini-tag">⚡ Direct SCTP DataChannel</span>
+                    <span className="stream-mini-tag">🔒 End-to-End P2P</span>
+                  </div>
+                </div>
+
+                {/* Option 2: Current Behavior - Local Video File (0 Bandwidth) */}
+                <div className="stream-option-card card-local-file">
+                  <div className="stream-card-badge">OPTION 2 • ZERO NETWORK BANDWIDTH</div>
+                  <div className="stream-card-icon">
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="#3ea6ff">
+                      <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                    </svg>
+                  </div>
+                  <h3 className="stream-card-title">Select Local File (Current)</h3>
+                  <p className="stream-card-desc">
+                    Already have this identical file on your disk? Select or drag & drop it here for instant playback with <strong>0 MB/s network usage</strong>.
+                  </p>
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-file-action"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                    Select File from Computer
+                  </button>
+
+                  <div className="stream-card-tags">
+                    <span className="stream-mini-tag">⚡ 0 Network Bandwidth</span>
+                    <span className="stream-mini-tag">📁 Drag & Drop Supported</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="local-action-buttons">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExitVideo}
+                >
+                  Back to Stage
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <h2 className="local-waiting-title">Drag & Drop Any Video File</h2>
               <p className="local-waiting-subtitle">
-                Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files. Video runs 100% locally with <strong>zero server upload</strong>, and playback stays synchronized with all peers.
+                Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files. Video runs 100% locally with <strong>zero server upload</strong>, and peers can either stream it from you peer-to-peer or sync their local copies.
               </p>
+
+              <div className="local-action-buttons">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-lg"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                  </svg>
+                  Select Video from Computer
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExitVideo}
+                >
+                  Back to Stage
+                </button>
+              </div>
             </>
           )}
-
-          <div className="local-action-buttons">
-            <button
-              type="button"
-              className="btn btn-primary btn-lg"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-              </svg>
-              Select Video from Computer
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleExitVideo}
-            >
-              Back to Stage
-            </button>
-          </div>
 
           <div className="local-privacy-pills">
             <span className="local-pill">⚡ 0 Network Bandwidth</span>
@@ -525,7 +646,7 @@ export default function LocalVideoSyncPlayer({
     );
   }
 
-  // Case B: Local video is ready and playing
+  // Case B: Video is ready and playing (either local file or P2P stream)
   return (
     <div
       ref={playerContainerRef}
@@ -564,23 +685,46 @@ export default function LocalVideoSyncPlayer({
           isHoveringTopRef.current = false;
         }}
       >
-        <div className="local-file-info-pill" title={activeFileName}>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="#3ea6ff">
-            <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
-          </svg>
-          <span className="local-filename-text">{activeFileName}</span>
-          {activeFileSize > 0 && (
-            <span className="local-filesize-text">({formatFileSize(activeFileSize)})</span>
-          )}
-          <button
-            type="button"
-            className="local-replace-btn"
-            onClick={() => fileInputRef.current?.click()}
-            title="Change local video file"
-          >
-            Change
-          </button>
-        </div>
+        {isStreamed ? (
+          <div className="local-file-info-pill is-streamed" title={activeFileName}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#00e676">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+            </svg>
+            <span className="local-stream-badge">📡 P2P STREAM</span>
+            <span className="local-filename-text">{activeFileName}</span>
+            {streamProgress && (
+              <span className="local-filesize-text">
+                ({streamProgress.percent}% {streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`})
+              </span>
+            )}
+            <button
+              type="button"
+              className="local-replace-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title="Switch to playing local copy (0 network bandwidth)"
+            >
+              Use Local File
+            </button>
+          </div>
+        ) : (
+          <div className="local-file-info-pill" title={activeFileName}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#3ea6ff">
+              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>
+            <span className="local-filename-text">{activeFileName}</span>
+            {activeFileSize > 0 && (
+              <span className="local-filesize-text">({formatFileSize(activeFileSize)})</span>
+            )}
+            <button
+              type="button"
+              className="local-replace-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title="Change local video file"
+            >
+              Change
+            </button>
+          </div>
+        )}
 
         <div className="yt-stage-top-controls">
           <div className={`yt-sync-pill ${isPlaying ? 'playing' : 'paused'}`}>
@@ -681,7 +825,7 @@ export default function LocalVideoSyncPlayer({
       >
         <video
           ref={videoRef}
-          src={objectUrl}
+          src={activeVideoSrc}
           playsInline
           className="local-video-element"
           onPlay={handleVideoPlay}

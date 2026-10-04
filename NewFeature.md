@@ -42,14 +42,18 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 1.4 WebRTC Direct Video Streaming (MSE Chunk Sharing)
-- **Description**: Eliminate the requirement that both peers possess the identical local video file beforehand.
+### 1.4 WebRTC Direct Video Streaming (MSE Chunk Sharing) ✅ `[COMPLETED]`
+- **Description**: Slices local video files and streams them peer-to-peer over WebRTC DataChannel, while retaining the existing zero-bandwidth local file sync option.
 - **Key Capabilities**:
-  - The host drags and drops any video file (e.g., `.mp4`, `.webm`).
-  - The video file is sliced into chunks and streamed peer-to-peer over the DataChannel.
-  - Peers buffer and play the incoming video stream using browser `MediaSource` Extensions (MSE).
+  - **Dual-Option Interoperability**:
+    - **Option 1 (P2P Streaming)**: Peers who do not have the video file on their device can stream it directly peer-to-peer from the room peer with progressive chunk buffering, live transfer stats (`%`, `MB/s`, `chunks`), and autoplay once buffered.
+    - **Option 2 (Zero-Bandwidth Sync - Current)**: Peers who already possess the identical video file locally can select or drag & drop their local file for zero network bandwidth usage.
+  - Slices video files into 60 KB binary chunks with backpressure flow control (`bufferedAmountHigh: 512KB`, `bufferedAmountLow: 128KB`).
+  - Full WebRTC playback synchronization (play, pause, seek, restart, sync pulse) works seamlessly across both streamed and local-file peers.
 - **Implementation Notes**:
-  - High performance chunking with backpressure control over WebRTC `bufferedAmount`.
+  - `P2PStreamSender` & `P2PStreamReceiver` in [p2pStreamer.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/p2pStreamer.js).
+  - Dual-option waiting UI and topbar streaming status pills in [LocalVideoSyncPlayer.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LocalVideoSyncPlayer.jsx).
+  - Binary DataChannel routing (`dc.binaryType = 'arraybuffer'`) and lifecycle handlers in [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx).
 
 ---
 
