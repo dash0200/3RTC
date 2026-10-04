@@ -15,8 +15,97 @@ export default function LiveChat({
   isOpen,
   onClose,
   isAudioBlocked = false,
-  onToggleBlockAudio
+  onToggleBlockAudio,
+  signalStatus,
+  onOpenSettings
 }) {
+  const DEFAULT_WIDTH = 380;
+  const MIN_WIDTH = 260;
+  const MAX_WIDTH = 720;
+
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const saved = localStorage.getItem('3rtc_sidebar_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= MIN_WIDTH && parsed <= MAX_WIDTH) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return DEFAULT_WIDTH;
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const isResizingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(DEFAULT_WIDTH);
+
+  const handleStartResize = (e) => {
+    if (e.type === 'mousedown' && e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    isResizingRef.current = true;
+    setIsResizing(true);
+    const clientX = e.type === 'touchstart' ? e.touches[0].clientX : e.clientX;
+    startXRef.current = clientX;
+    startWidthRef.current = sidebarWidth;
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handlePointerMove = (moveEvent) => {
+      if (!isResizingRef.current) return;
+      const currentX = moveEvent.type === 'touchmove' ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const deltaX = startXRef.current - currentX;
+      const maxWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - 300));
+      const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, startWidthRef.current + deltaX));
+      setSidebarWidth(newWidth);
+    };
+
+    const handlePointerUp = () => {
+      if (!isResizingRef.current) return;
+      isResizingRef.current = false;
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', handlePointerUp);
+      window.removeEventListener('touchmove', handlePointerMove);
+      window.removeEventListener('touchend', handlePointerUp);
+      window.removeEventListener('touchcancel', handlePointerUp);
+
+      setSidebarWidth((latestWidth) => {
+        try {
+          localStorage.setItem('3rtc_sidebar_width', String(latestWidth));
+        } catch {
+          // ignore
+        }
+        return latestWidth;
+      });
+    };
+
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', handlePointerUp);
+    window.addEventListener('touchmove', handlePointerMove, { passive: false });
+    window.addEventListener('touchend', handlePointerUp);
+    window.addEventListener('touchcancel', handlePointerUp);
+  };
+
+  const handleResetWidth = (e) => {
+    e.stopPropagation();
+    setSidebarWidth(DEFAULT_WIDTH);
+    try {
+      localStorage.setItem('3rtc_sidebar_width', String(DEFAULT_WIDTH));
+    } catch {
+      // ignore
+    }
+  };
+
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'logs'
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [unreadLogsCount, setUnreadLogsCount] = useState(0);
@@ -30,15 +119,13 @@ export default function LiveChat({
   const logsEndRef = useRef(null);
   const textareaRef = useRef(null);
 
+  const displayLogs = systemLogs.filter((log) => log.category !== 'debug');
   const prevMsgCountRef = useRef(messages.length);
-  const prevLogsCountRef = useRef(systemLogs.length);
-
-  const initial = (username[0] || 'U').toUpperCase();
-  const avatarBg = getAvatarColor(username);
+  const prevLogsCountRef = useRef(displayLogs.length);
 
   const handleCopyLogs = async () => {
-    if (!systemLogs || systemLogs.length === 0) return;
-    const formatted = systemLogs.map((log) => {
+    if (!displayLogs || displayLogs.length === 0) return;
+    const formatted = displayLogs.map((log) => {
       const d = new Date(log.timestamp || Date.now());
       const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
       return `[${timeStr}] ${log.text}`;
@@ -50,30 +137,30 @@ export default function LiveChat({
     }
   };
 
-  // Auto-scroll chat messages when new messages arrive
+  // Auto-scroll to top when new messages arrive (latest message on top)
   useEffect(() => {
     const scroller = chatContainerRef.current;
     if (!scroller || activeTab !== 'chat') return;
 
-    const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 90;
-    if (isNearBottom) {
-      scroller.scrollTop = scroller.scrollHeight;
+    const isNearTop = scroller.scrollTop < 60;
+    if (isNearTop) {
+      scroller.scrollTop = 0;
       setShowScrollPill(false);
     } else {
       setShowScrollPill(true);
     }
   }, [messages, activeTab]);
 
-  // Auto-scroll room logs when new logs arrive
+  // Auto-scroll room logs when new logs arrive (latest on top)
   useEffect(() => {
     const scroller = logsContainerRef.current;
     if (!scroller || activeTab !== 'logs') return;
 
-    const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
-    if (isNearBottom) {
-      scroller.scrollTop = scroller.scrollHeight;
+    const isNearTop = scroller.scrollTop < 80;
+    if (isNearTop) {
+      scroller.scrollTop = 0;
     }
-  }, [systemLogs, activeTab]);
+  }, [displayLogs, activeTab]);
 
   // Track unread counts when user is on the alternate tab
   useEffect(() => {
@@ -88,27 +175,27 @@ export default function LiveChat({
 
   useEffect(() => {
     if (activeTab !== 'logs') {
-      const diff = systemLogs.length - prevLogsCountRef.current;
+      const diff = displayLogs.length - prevLogsCountRef.current;
       if (diff > 0) {
         setUnreadLogsCount((prev) => prev + diff);
       }
     }
-    prevLogsCountRef.current = systemLogs.length;
-  }, [systemLogs.length, activeTab]);
+    prevLogsCountRef.current = displayLogs.length;
+  }, [displayLogs.length, activeTab]);
 
   const handleScroll = () => {
     const scroller = chatContainerRef.current;
     if (!scroller) return;
 
-    const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
-    if (isNearBottom) {
+    const isNearTop = scroller.scrollTop < 50;
+    if (isNearTop) {
       setShowScrollPill(false);
     }
   };
 
-  const scrollToBottom = () => {
+  const scrollToTop = () => {
     if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+      chatContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
       setShowScrollPill(false);
     }
   };
@@ -120,6 +207,9 @@ export default function LiveChat({
       setInputText('');
       setActiveTab('chat');
       setUnreadChatCount(0);
+      if (chatContainerRef.current) {
+        chatContainerRef.current.scrollTop = 0;
+      }
       if (textareaRef.current) {
         textareaRef.current.style.height = 'auto';
       }
@@ -156,7 +246,26 @@ export default function LiveChat({
         onClick={onClose}
         aria-hidden="true"
       />
-      <aside className={`chat-section ${isOpen ? '' : 'collapsed'}`}>
+      <aside
+        className={`chat-section ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''}`}
+        style={isOpen ? { width: `${sidebarWidth}px` } : undefined}
+      >
+        {/* Sidebar resize handle on the left edge (desktop) */}
+        {isOpen && (
+          <div
+            className={`sidebar-resize-handle ${isResizing ? 'resizing' : ''}`}
+            onMouseDown={handleStartResize}
+            onTouchStart={handleStartResize}
+            onDoubleClick={handleResetWidth}
+            title="Drag to resize sidebar (double-click to reset)"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+          >
+            <div className="resize-handle-bar" />
+          </div>
+        )}
+
         <div
           className="mobile-sheet-pill-bar"
           onClick={onClose}
@@ -170,14 +279,37 @@ export default function LiveChat({
             <span className="chat-header-title">Live Chat & Activity</span>
           </div>
 
-        <div className="chat-header-actions">
-          <button className="header-icon-btn" onClick={onClose} title="Close Sidebar">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-          </button>
+          <div className="chat-header-actions">
+            {signalStatus && (
+              <button
+                type="button"
+                className={`sidebar-cloud-pill ${signalStatus.connected ? 'connected' : ''}`}
+                onClick={onOpenSettings}
+                title={
+                  signalStatus.connected
+                    ? "Cloud signaling server connected. Click for server settings."
+                    : `Cloud signaling: ${signalStatus.label || 'Connecting...'}. Click for server settings.`
+                }
+              >
+                <span className={`signal-dot ${signalStatus.connected ? 'connected' : ''}`} />
+                <span className="sidebar-cloud-label">
+                  {signalStatus.connected ? 'Cloud Connected' : (signalStatus.label || 'Connecting...')}
+                </span>
+                {typeof onOpenSettings === 'function' && (
+                  <svg className="sidebar-cloud-gear" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6-1.62 3.6-3.6 3.6z" />
+                  </svg>
+                )}
+              </button>
+            )}
+
+            <button className="header-icon-btn close-sidebar-btn" onClick={onClose} title="Close Sidebar" aria-label="Close Sidebar">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
 
       {/* Tabs: Chat vs Room Logs */}
       <div className="chat-nav-tabs">
@@ -211,7 +343,7 @@ export default function LiveChat({
             <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
           </svg>
           <span>Room Logs</span>
-          {systemLogs.length > 0 && <span className="tab-badge secondary">{systemLogs.length}</span>}
+          {displayLogs.length > 0 && <span className="tab-badge secondary">{displayLogs.length}</span>}
           {unreadLogsCount > 0 && activeTab !== 'logs' && (
             <span className="tab-unread-dot logs" title={`${unreadLogsCount} new events`}></span>
           )}
@@ -251,7 +383,7 @@ export default function LiveChat({
               </div>
             ) : (
               <div className="chat-messages-inner">
-                {messages.map((msg) => {
+                {[...messages].reverse().map((msg) => {
                   const date = new Date(msg.timestamp || Date.now());
                   const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                   const msgInitial = (msg.sender?.[0] || '?').toUpperCase();
@@ -272,16 +404,15 @@ export default function LiveChat({
                     </div>
                   );
                 })}
-                <div ref={chatEndRef} />
               </div>
             )}
 
             {showScrollPill && (
-              <button className="scroll-bottom-pill" onClick={scrollToBottom}>
-                <span>New messages</span>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z" />
+              <button className="scroll-top-pill" onClick={scrollToTop} title="Jump to latest messages">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                  <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
                 </svg>
+                <span>New messages</span>
               </button>
             )}
           </div>
@@ -292,7 +423,7 @@ export default function LiveChat({
           <div className="logs-header-bar">
             <span className="logs-count-label">
               <span className="logs-count-dot"></span>
-              {systemLogs.length} event{systemLogs.length === 1 ? '' : 's'} recorded
+              {displayLogs.length} event{displayLogs.length === 1 ? '' : 's'} recorded
             </span>
             <div className="logs-actions-group">
               {typeof onTestSound === 'function' && (
@@ -305,7 +436,7 @@ export default function LiveChat({
                   🔊 Test Sound
                 </button>
               )}
-              {systemLogs.length > 0 && (
+              {displayLogs.length > 0 && (
                 <button
                   type="button"
                   className="btn-copy-logs"
@@ -315,7 +446,7 @@ export default function LiveChat({
                   {logsCopied ? '✓ Copied!' : '📋 Copy Logs'}
                 </button>
               )}
-              {systemLogs.length > 0 && typeof onClearLogs === 'function' && (
+              {displayLogs.length > 0 && typeof onClearLogs === 'function' && (
                 <button
                   type="button"
                   className="btn-clear-logs"
@@ -329,7 +460,7 @@ export default function LiveChat({
           </div>
 
           <div className="room-logs-container" ref={logsContainerRef}>
-            {systemLogs.length === 0 ? (
+            {displayLogs.length === 0 ? (
               <div className="chat-empty-state">
                 <div className="empty-state-icon">📋</div>
                 <div className="empty-state-title">No room logs</div>
@@ -337,7 +468,7 @@ export default function LiveChat({
               </div>
             ) : (
               <div className="room-logs-list">
-                {systemLogs.map((log) => {
+                {[...displayLogs].reverse().map((log) => {
                   const date = new Date(log.timestamp || Date.now());
                   const timeStr = date.toLocaleTimeString([], {
                     hour: 'numeric',
@@ -352,58 +483,53 @@ export default function LiveChat({
                     </div>
                   );
                 })}
-                <div ref={logsEndRef} />
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Quick Reactions Bar */}
-      <div className="quick-reactions-bar">
-        {QUICK_REACTIONS.map((emoji) => (
-          <button
-            key={emoji}
-            className="reaction-chip"
-            onClick={() => handleReactionClick(emoji)}
-            title={`Send ${emoji}`}
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
-
-      {/* Chat Input Footer */}
+      {/* Ultra-compact Chat Footer */}
       <div className="chat-footer">
-        <div className="input-card">
-          <div className="input-sender-avatar" style={{ background: avatarBg }}>
-            {initial}
-          </div>
-          <div className="input-body">
-            <div className="sender-name-label">Chatting as {username}</div>
-            <textarea
-              ref={textareaRef}
-              className="chat-textarea"
-              rows={1}
-              maxLength={200}
-              placeholder={isP2PConnected ? `Chat publicly as ${username}...` : 'Waiting for P2P connection...'}
-              value={inputText}
-              onChange={handleTextareaChange}
-              onKeyDown={handleKeyDown}
-              disabled={!isP2PConnected}
-            />
-          </div>
+        <div className="quick-reactions-bar">
+          <span className="reaction-label">React:</span>
+          {QUICK_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              className="reaction-chip"
+              onClick={() => handleReactionClick(emoji)}
+              title={`Send ${emoji}`}
+            >
+              {emoji}
+            </button>
+          ))}
         </div>
 
-        <div className="chat-footer-bottom">
-          <div className="char-count">{inputText.length}/200</div>
+        <div className="chat-input-bar">
+          <textarea
+            ref={textareaRef}
+            className="chat-textarea"
+            rows={1}
+            maxLength={200}
+            placeholder={isP2PConnected ? 'Chat in room...' : 'Waiting for connection...'}
+            value={inputText}
+            onChange={handleTextareaChange}
+            onKeyDown={handleKeyDown}
+            disabled={!isP2PConnected}
+          />
+          {inputText.length > 0 && (
+            <span className="char-count-inline">{inputText.length}/200</span>
+          )}
           <button
-            className="send-btn"
+            type="button"
+            className="send-btn-compact"
             onClick={handleSend}
             disabled={!isP2PConnected || inputText.trim().length === 0}
-            title="Send message"
+            title="Send message (Enter)"
+            aria-label="Send message"
           >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
           </button>

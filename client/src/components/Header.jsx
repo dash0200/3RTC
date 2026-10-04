@@ -1,37 +1,24 @@
 import React, { useState } from 'react';
-import { getAvatarColor } from '../utils/sound';
 import { copyToClipboard } from '../utils/clipboard';
 
 export default function Header({
   isLive,
   roomId,
   onCopyRoom,
-  signalStatus,
-  onOpenSettings,
-  username,
   isMicMuted = true,
   isAudioBlocked = false,
   onToggleMic,
   onToggleBlockAudio,
-  isLocal,
   isP2PConnected = false,
   p2pStatusText = '',
   isMediaActive = false,
   onExitVideo,
-  onLeaveRoom
+  onLeaveRoom,
+  isChatOpen = false,
+  unreadChatCount = 0,
+  onToggleChat
 }) {
-  const isLocalEnv = isLocal !== undefined ? isLocal : (
-    typeof window !== 'undefined' && (
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1' ||
-      window.location.hostname === '[::1]' ||
-      Boolean(import.meta.env?.DEV)
-    )
-  );
-
   const [copied, setCopied] = useState(false);
-  const initial = (username[0] || 'U').toUpperCase();
-  const avatarBg = getAvatarColor(username);
 
   const handleCopyClick = async (e) => {
     e.stopPropagation();
@@ -169,24 +156,26 @@ export default function Header({
       </div>
 
       <div className="header-right">
-        {isLocalEnv && (
-          <div className="server-config-wrapper">
-            <div className={`signal-indicator ${signalStatus.connected ? 'connected' : ''}`} title="Signaling Server Status">
-              <span className="signal-dot"></span>
-              <span className="signal-label">{signalStatus.label}</span>
-            </div>
-            <button className="icon-btn" onClick={onOpenSettings} title="Server Settings">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-              </svg>
-            </button>
-          </div>
+        {typeof onToggleChat === 'function' && (
+          <button
+            type="button"
+            className={`header-sidebar-toggle-btn ${isChatOpen ? 'active' : ''} ${!isChatOpen && unreadChatCount > 0 ? 'has-unread' : ''}`}
+            onClick={onToggleChat}
+            title={isChatOpen ? "Close sidebar" : `Open sidebar${unreadChatCount > 0 ? ` (${unreadChatCount} new)` : ''}`}
+            aria-label={isChatOpen ? "Close sidebar" : "Open sidebar"}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              <line x1="15" y1="3" x2="15" y2="21" />
+            </svg>
+            <span>{isChatOpen ? 'Close Sidebar' : 'Open Sidebar'}</span>
+            {!isChatOpen && unreadChatCount > 0 && (
+              <span className="header-sidebar-badge">
+                {unreadChatCount > 99 ? '99+' : unreadChatCount}
+              </span>
+            )}
+          </button>
         )}
-
-        <div className="user-profile-pill">
-          <div className="user-avatar" style={{ background: avatarBg }}>{initial}</div>
-          <span className="user-name">{username}</span>
-        </div>
       </div>
     </header>
   );

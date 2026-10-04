@@ -15,6 +15,7 @@ export default function Stage({
   onToggleChat,
   isChatOpen = false,
   chatCount = 0,
+  unreadChatCount = 0,
   activeVideoId,
   onVideoChange,
   localVideoFile,
@@ -258,14 +259,19 @@ export default function Stage({
         <div className="controls-right">
           <button
             type="button"
-            className={`control-btn ${isChatOpen ? 'chat-active' : ''}`}
+            className={`control-btn chat-toggle-btn ${isChatOpen ? 'chat-active' : ''} ${!isChatOpen && (unreadChatCount || chatCount) > 0 ? 'has-unread' : ''}`}
             onClick={onToggleChat}
-            title={isChatOpen ? "Close Live Chat" : "Open Live Chat"}
+            title={isChatOpen ? "Close Live Chat" : `Open Live Chat${(unreadChatCount || chatCount) > 0 ? ` (${unreadChatCount || chatCount} new)` : ''}`}
+            aria-label={isChatOpen ? "Close Live Chat" : "Open Live Chat"}
           >
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
             </svg>
-            {chatCount > 0 && <span className="control-badge">{chatCount}</span>}
+            {!isChatOpen && (unreadChatCount || chatCount) > 0 && (
+              <span className="control-badge unread-badge">
+                {(unreadChatCount || chatCount) > 99 ? '99+' : (unreadChatCount || chatCount)}
+              </span>
+            )}
           </button>
         </div>
       </div>

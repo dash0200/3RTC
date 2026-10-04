@@ -10,7 +10,7 @@ export async function copyToClipboard(text) {
       await navigator.clipboard.writeText(text);
       return true;
     } catch (e) {
-      console.warn('navigator.clipboard.writeText failed, using fallback:', e);
+      // Fallback to execCommand below
     }
   }
 
@@ -30,7 +30,6 @@ export async function copyToClipboard(text) {
     document.body.removeChild(textArea);
     return successful;
   } catch (err) {
-    console.error('execCommand copy failed:', err);
     return false;
   }
 }
