@@ -1086,6 +1086,29 @@
   background: #3ea6ff;
 }
 
+.logs-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-copy-logs {
+  background: rgba(0, 230, 118, 0.12);
+  border: 1px solid rgba(0, 230, 118, 0.35);
+  color: #00e676;
+  padding: 3px 9px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-copy-logs:hover {
+  background: rgba(0, 230, 118, 0.22);
+  border-color: rgba(0, 230, 118, 0.55);
+}
+
 .btn-clear-logs {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-subtle);
@@ -1161,6 +1184,15 @@
 
 .room-log-item.log-cat-media {
   border-left: 2px solid #a855f7;
+}
+
+.room-log-item.log-cat-debug {
+  border-left: 2px solid #00e676;
+  background: rgba(0, 230, 118, 0.04);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  color: #a7f3d0;
+  word-break: break-all;
 }
 
 .room-log-time {
