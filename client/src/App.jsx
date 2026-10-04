@@ -80,6 +80,8 @@ export default function App() {
         return true;
     });
     const [sidebarTab, setSidebarTab] = useState('chat');
+    // Feature 1.2: Floating Live Reactions Over Video Player
+    const [floatingReactions, setFloatingReactions] = useState([]);
 
     // Track unread messages count when the sidebar is closed
     const [unreadChatCount, setUnreadChatCount] = useState(0);
@@ -448,6 +450,33 @@ export default function App() {
         }
     }, [addSystemMessage, showToast]);
 
+    // Handle incoming remote Live Reaction
+    const handleRemoteReaction = useCallback((data) => {
+        if (!data || !data.emoji) return;
+        const id = data.id || crypto.randomUUID();
+        const reactionItem = {
+            id,
+            emoji: data.emoji,
+            sender: data.sender || 'Peer',
+            isSelf: false,
+            lane: typeof data.lane === 'number' ? data.lane : (20 + Math.random() * 60),
+            driftVariant: data.driftVariant || Math.floor(1 + Math.random() * 4),
+            scale: data.scale || (1.05 + Math.random() * 0.35),
+            rot: typeof data.rot === 'number' ? data.rot : ((Math.random() - 0.5) * 30),
+            createdAt: Date.now()
+        };
+
+        if (!isAudioBlockedRef.current) {
+            sound.playReactionPop();
+        }
+
+        setFloatingReactions((prev) => [...prev.slice(-25), reactionItem]);
+
+        setTimeout(() => {
+            setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
+        }, 2600);
+    }, []);
+
     // Create or get peer connection in mesh
     const getOrCreatePeerConnection = useCallback((targetPeerId, isInitiator) => {
         if (peersRef.current.has(targetPeerId)) {
@@ -671,6 +700,8 @@ export default function App() {
                         handleRemoteLocalVideoAction(data);
                     } else if (data.type === 'queue-action') {
                         handleRemoteQueueAction(data);
+                    } else if (data.type === 'reaction') {
+                        handleRemoteReaction(data);
                     } else if (data.type === 'yt-request-sync') {
                         // A newly joined peer is asking for the current playing media & timestamp
                         if (syncStateGetterRef.current) {
@@ -777,7 +808,7 @@ export default function App() {
         }
 
         return peerEntry;
-    }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
+    }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
 
     // Handle incoming signaling messages
     const handleSignalingMessage = useCallback(async (msg) => {
@@ -1208,6 +1239,57 @@ export default function App() {
             showToast('Waiting for peer to connect before sending');
         }
     };
+
+    // Feature 1.2: Floating Live Reactions Over Video Player
+    const handleSendReaction = useCallback((emoji) => {
+        if (!emoji) return;
+
+        const id = crypto.randomUUID();
+        const lane = 20 + Math.random() * 60;
+        const driftVariant = Math.floor(1 + Math.random() * 4);
+        const scale = 1.05 + Math.random() * 0.35;
+        const rot = (Math.random() - 0.5) * 30;
+
+        const reactionItem = {
+            id,
+            emoji,
+            sender: username,
+            isSelf: true,
+            lane,
+            driftVariant,
+            scale,
+            rot,
+            createdAt: Date.now()
+        };
+
+        sound.playReactionPop();
+
+        setFloatingReactions((prev) => [...prev.slice(-25), reactionItem]);
+
+        setTimeout(() => {
+            setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
+        }, 2600);
+
+        const msg = {
+            type: 'reaction',
+            id,
+            emoji,
+            sender: username,
+            lane,
+            driftVariant,
+            scale,
+            rot,
+            timestamp: Date.now()
+        };
+
+        for (const peer of peersRef.current.values()) {
+            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+                try {
+                    peer.dataChannel.send(JSON.stringify(msg));
+                } catch { }
+            }
+        }
+    }, [username]);
 
     const handleApplyServer = (newUrl) => {
         setSignalUrl(newUrl);
@@ -1652,6 +1734,8 @@ export default function App() {
                         skipVotes={skipVotes}
                         onOpenQueue={handleOpenQueue}
                         username={username}
+                        floatingReactions={floatingReactions}
+                        onSendReaction={handleSendReaction}
                     />
                 </main>
             </div>
@@ -1684,6 +1768,7 @@ export default function App() {
                 peerCount={peerCount}
                 activeTab={sidebarTab}
                 onTabChange={setSidebarTab}
+                onSendReaction={handleSendReaction}
             />
 
             {/* Modals */}

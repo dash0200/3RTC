@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
 import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
+import FloatingReactions from './FloatingReactions';
 
 export default function Stage({
   roomId,
@@ -37,7 +38,9 @@ export default function Stage({
   skipVotes = [],
   onOpenQueue,
   activeVideoTitle = '',
-  username = ''
+  username = '',
+  floatingReactions = [],
+  onSendReaction
 }) {
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
   const [hasEnteredTheater, setHasEnteredTheater] = useState(false);
@@ -194,6 +197,13 @@ export default function Stage({
             </div>
           </div>
         )}
+
+        {/* Floating Live Reactions Overlay & Reaction Dock */}
+        <FloatingReactions
+          reactions={floatingReactions}
+          onSendReaction={onSendReaction}
+          showDock={Boolean(roomId)}
+        />
       </div>
 
       {/* Bottom Stage Controls Bar */}
