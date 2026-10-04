@@ -385,7 +385,7 @@ export default function App() {
       audioEl.muted = isAudioBlockedRef.current;
       audioEl.volume = 1.0;
       if (typeof audioEl.setSinkId === 'function') {
-        audioEl.setSinkId('').catch(() => {});
+        audioEl.setSinkId('').catch(() => { });
       }
 
       // 2. Direct Web Audio API Pipeline (Routes directly to system audio hardware, bypassing Chromium MediaElement sink bugs)
@@ -398,14 +398,14 @@ export default function App() {
           }
           const ctx = window.__webrtcAudioCtx;
           if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => {});
+            ctx.resume().catch(() => { });
           }
 
           if (peerEntry.webAudioSource) {
-            try { peerEntry.webAudioSource.disconnect(); } catch {}
+            try { peerEntry.webAudioSource.disconnect(); } catch { }
           }
           if (peerEntry.webAudioGain) {
-            try { peerEntry.webAudioGain.disconnect(); } catch {}
+            try { peerEntry.webAudioGain.disconnect(); } catch { }
           }
 
           const srcNode = ctx.createMediaStreamSource(stream);
@@ -453,7 +453,7 @@ export default function App() {
           logLocalDebug('INITIAL_PLAY_BLOCKED', `Peer: ${targetPeerId} Autoplay blocked (${err.name}): ${err.message}`);
           const resumeOnInteraction = () => {
             if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
-              window.__webrtcAudioCtx.resume().catch(() => {});
+              window.__webrtcAudioCtx.resume().catch(() => { });
             }
             if (peerEntry.audioElement && !isAudioBlockedRef.current) {
               peerEntry.audioElement.play().then(() => {
@@ -986,7 +986,7 @@ export default function App() {
           const ctxState = window.__webrtcAudioCtx ? window.__webrtcAudioCtx.state : 'none';
           const webAudioActive = Boolean(peer.webAudioSource && peer.webAudioGain);
           logLocalDebug('AUDIO_TELEMETRY', `Peer ${peerId.slice(0, 6)} | Outbound: ${sentBytes}B | Inbound: ${recvBytes}B ${audioLevel !== null ? `(lvl: ${audioLevel})` : ''} | AudioEl: ${elStatus} | Ctx: ${ctxState} (routed: ${webAudioActive})`);
-        } catch {}
+        } catch { }
       }
     }, 4000);
     return () => clearInterval(interval);
@@ -996,7 +996,7 @@ export default function App() {
   useEffect(() => {
     const resumeAudioCtx = () => {
       if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
-        window.__webrtcAudioCtx.resume().catch(() => {});
+        window.__webrtcAudioCtx.resume().catch(() => { });
       }
     };
     window.addEventListener('click', resumeAudioCtx);
@@ -1019,7 +1019,7 @@ export default function App() {
         setInitialJoinPin(roomParam);
         setShowJoinModal(true);
       }
-      addSystemMessage('Welcome to P2P Live! Create or join a 5-digit room to chat and watch YouTube together.');
+      addSystemMessage('Welcome to 3RTC! Create or join a room to chat and watch YouTube together.');
     }
   }, [addSystemMessage]);
 
@@ -1170,7 +1170,7 @@ export default function App() {
     }
 
     if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
-      window.__webrtcAudioCtx.resume().catch(() => {});
+      window.__webrtcAudioCtx.resume().catch(() => { });
     }
 
     if (isMicMutedRef.current) {
