@@ -687,12 +687,20 @@ export default function App() {
                 } catch (e) { }
             };
 
-            dc.onmessage = (event) => {
+            dc.onmessage = async (event) => {
                 // Binary Chunk over WebRTC DataChannel (Feature 1.4: P2P Video Streaming)
                 if (event.data instanceof ArrayBuffer) {
                     if (streamReceiverRef.current) {
                         streamReceiverRef.current.handleChunk(event.data);
                     }
+                    return;
+                } else if (event.data instanceof Blob) {
+                    try {
+                        const buf = await event.data.arrayBuffer();
+                        if (streamReceiverRef.current) {
+                            streamReceiverRef.current.handleChunk(buf);
+                        }
+                    } catch (e) { }
                     return;
                 }
 
@@ -810,6 +818,7 @@ export default function App() {
                         }
                     } else if (data.type === 'yt-request-sync') {
                         // A newly joined peer is asking for the current playing media & timestamp
+                        let hasSent = false;
                         if (syncStateGetterRef.current) {
                             const state = syncStateGetterRef.current();
                             if (state) {
@@ -819,6 +828,7 @@ export default function App() {
                                         ...state,
                                         sender: username
                                     }));
+                                    hasSent = true;
                                 } else if (state.videoId) {
                                     dc.send(JSON.stringify({
                                         type: 'yt-sync-state',
@@ -828,8 +838,20 @@ export default function App() {
                                         activeVideoTitle: activeVideoTitleRef.current,
                                         sender: username
                                     }));
+                                    hasSent = true;
                                 }
                             }
+                        }
+                        if (!hasSent && localVideoFileRef.current) {
+                            dc.send(JSON.stringify({
+                                type: 'local-video-sync-state',
+                                mediaType: 'local',
+                                fileName: localVideoFileRef.current.name,
+                                fileSize: localVideoFileRef.current.size,
+                                currentTime: 0,
+                                isPlaying: false,
+                                sender: username
+                            }));
                         }
                     } else if (data.type === 'yt-sync-state') {
                         // Received sync state from an existing peer in the room
@@ -1609,6 +1631,8 @@ export default function App() {
     }, []);
 
     const handleLocalFileSelect = useCallback((file) => {
+        if (!file) return;
+        localVideoFileRef.current = file;
         if (streamReceiverRef.current) {
             streamReceiverRef.current.abort();
             streamReceiverRef.current = null;
@@ -1620,9 +1644,18 @@ export default function App() {
         setStreamProgress(null);
         setActiveVideoId(null);
         setLocalVideoFile(file);
+        setRemoteLocalVideoMeta(null);
         addSystemMessage(`📁 You loaded local video: "${file.name}"`);
         showToast(`Loaded "${file.name}"`);
-    }, [streamVideoUrl, addSystemMessage, showToast]);
+
+        // Broadcast to all peers in the room that this video was loaded
+        handleBroadcastAction('load', {
+            type: 'local-video-action',
+            fileName: file.name,
+            fileSize: file.size,
+            sender: username
+        });
+    }, [streamVideoUrl, handleBroadcastAction, username, addSystemMessage, showToast]);
 
     const handleCloseLocalVideo = useCallback(() => {
         setLocalVideoFile(null);
