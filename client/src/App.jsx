@@ -22,6 +22,22 @@ const IS_LOCAL = typeof window !== 'undefined' && (
   Boolean(import.meta.env?.DEV)
 );
 
+function extractAudioSdp(sdp) {
+  if (!sdp) return 'none';
+  const lines = sdp.split('\n');
+  const audioIndex = lines.findIndex((l) => l.startsWith('m=audio'));
+  if (audioIndex === -1) return 'no m=audio';
+  const audioBlock = [];
+  for (let i = audioIndex; i < Math.min(lines.length, audioIndex + 15); i++) {
+    const line = lines[i].trim();
+    if (i > audioIndex && line.startsWith('m=')) break;
+    if (line.startsWith('m=audio') || line.startsWith('a=sendrecv') || line.startsWith('a=recvonly') || line.startsWith('a=sendonly') || line.startsWith('a=inactive') || line.startsWith('a=mid')) {
+      audioBlock.push(line);
+    }
+  }
+  return audioBlock.join(' | ');
+}
+
 export default function App() {
   const [signalUrl, setSignalUrl] = useState(() => {
     if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
@@ -98,9 +114,30 @@ export default function App() {
     ]);
   }, []);
 
+  const logLocalDebug = useCallback((tag, ...args) => {
+    if (!IS_LOCAL) return;
+    const formatted = args.map((a) => {
+      if (a === null) return 'null';
+      if (a === undefined) return 'undefined';
+      if (typeof a === 'object') {
+        try { return JSON.stringify(a); } catch { return String(a); }
+      }
+      return String(a);
+    }).join(' ');
+    const logText = `[Voice-Debug] [${tag}] ${formatted}`;
+    console.log(`%c${logText}`, 'color: #00e676; font-weight: bold;');
+    addSystemMessage(logText, 'debug');
+  }, [addSystemMessage]);
+
   const handleClearLogs = useCallback(() => {
     setSystemLogs([]);
   }, []);
+
+  const handleTestSound = useCallback(() => {
+    sound.playChime();
+    logLocalDebug('TEST_SOUND', 'Played test chime via Web Audio. If you hear this chime, your browser tab audio output works!');
+    showToast('🔊 Playing test sound...');
+  }, [logLocalDebug, showToast]);
 
   const updateP2PStatus = useCallback(() => {
     const activePeers = Array.from(peersRef.current.values()).filter(p => p.isConnected).length;
@@ -135,6 +172,18 @@ export default function App() {
           entry.audioElement = null;
         }
       } catch { }
+      try {
+        if (entry.webAudioSource) {
+          entry.webAudioSource.disconnect();
+          entry.webAudioSource = null;
+        }
+      } catch { }
+      try {
+        if (entry.webAudioGain) {
+          entry.webAudioGain.disconnect();
+          entry.webAudioGain = null;
+        }
+      } catch { }
       try { entry.dataChannel?.close(); } catch { }
       try { entry.pc?.close(); } catch { }
       peersRef.current.delete(targetPeerId);
@@ -151,6 +200,18 @@ export default function App() {
           entry.audioElement.srcObject = null;
           try { entry.audioElement.remove(); } catch { }
           entry.audioElement = null;
+        }
+      } catch { }
+      try {
+        if (entry.webAudioSource) {
+          entry.webAudioSource.disconnect();
+          entry.webAudioSource = null;
+        }
+      } catch { }
+      try {
+        if (entry.webAudioGain) {
+          entry.webAudioGain.disconnect();
+          entry.webAudioGain = null;
         }
       } catch { }
       try { entry.dataChannel?.close(); } catch { }
@@ -261,38 +322,55 @@ export default function App() {
     };
     peersRef.current.set(targetPeerId, peerEntry);
 
-    // Audio Transceiver for WebRTC Voice Chat (guarantees audio m-line in SDP offer/answer)
+    // Audio Transceiver for WebRTC Voice Chat
+    // Initiator must call addTransceiver to include 'm=audio sendrecv' in Offer.
+    // Answerer must NOT call addTransceiver before Offer arrives; setRemoteDescription(offer) will create the single mid:0 transceiver cleanly.
     try {
-      let audioTransceiver = pc.getTransceivers ? pc.getTransceivers().find(t =>
-        t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio'
-      ) : null;
+      if (isInitiator) {
+        let audioTransceiver = pc.getTransceivers ? pc.getTransceivers().find(t =>
+          t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio'
+        ) : null;
 
-      if (!audioTransceiver) {
-        audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      } else {
-        audioTransceiver.direction = 'sendrecv';
-      }
-
-      if (localStreamRef.current) {
-        const audioTrack = localStreamRef.current.getAudioTracks()[0];
-        if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
-          audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => console.error('Transceiver replaceTrack error:', err));
+        if (!audioTransceiver) {
+          audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+        } else {
+          audioTransceiver.direction = 'sendrecv';
         }
+
+        logLocalDebug('TRANSCEIVER_INIT', `Role: HOST/OFFERER -> Peer: ${targetPeerId} | Transceiver mid: ${audioTransceiver?.mid || 'pending'} | direction: ${audioTransceiver?.direction}`);
+
+        if (localStreamRef.current) {
+          const audioTrack = localStreamRef.current.getAudioTracks()[0];
+          if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
+            audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => console.error('Transceiver replaceTrack error:', err));
+          }
+        }
+      } else {
+        logLocalDebug('TRANSCEIVER_INIT', `Role: PEER/ANSWERER -> Peer: ${targetPeerId} (Awaiting offer to configure single audio transceiver)`);
       }
     } catch (err) {
       console.warn('Failed to configure audio transceiver:', err);
+      logLocalDebug('TRANSCEIVER_INIT_ERR', err.message);
     }
 
     // Handle incoming audio stream from remote peer
     pc.ontrack = (event) => {
       console.log(`[WebRTC Audio] Remote track received from ${targetPeerId}:`, event.track.id, event.track.kind);
+      logLocalDebug('ONTRACK', `Peer: ${targetPeerId} | Kind: ${event.track.kind} | Track ID: ${event.track.id} | Muted: ${event.track.muted} | ReadyState: ${event.track.readyState} | Streams: ${event.streams?.length || 0}`);
+
+      // 1. Audio Element Pipeline (Offscreen layout instead of display:none to prevent Chrome background throttling)
       let audioEl = peerEntry.audioElement;
       if (!audioEl) {
         audioEl = document.createElement('audio');
         audioEl.id = `remote-audio-${targetPeerId}`;
         audioEl.autoplay = true;
         audioEl.playsInline = true;
-        audioEl.style.display = 'none';
+        audioEl.style.position = 'fixed';
+        audioEl.style.left = '-9999px';
+        audioEl.style.top = '-9999px';
+        audioEl.style.width = '1px';
+        audioEl.style.height = '1px';
+        audioEl.style.opacity = '0.01';
         document.body.appendChild(audioEl);
         peerEntry.audioElement = audioEl;
       }
@@ -300,22 +378,84 @@ export default function App() {
       const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
       audioEl.srcObject = remoteStream;
       audioEl.muted = isAudioBlockedRef.current;
+      audioEl.volume = 1.0;
+      if (typeof audioEl.setSinkId === 'function') {
+        audioEl.setSinkId('').catch(() => {});
+      }
 
-      // Handle when remote sender un-mutes
+      // 2. Direct Web Audio API Pipeline (Routes directly to system audio hardware, bypassing Chromium MediaElement sink bugs)
+      const connectWebAudioPipeline = (stream) => {
+        try {
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContextClass) return;
+          if (!window.__webrtcAudioCtx) {
+            window.__webrtcAudioCtx = new AudioContextClass();
+          }
+          const ctx = window.__webrtcAudioCtx;
+          if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+
+          if (peerEntry.webAudioSource) {
+            try { peerEntry.webAudioSource.disconnect(); } catch {}
+          }
+          if (peerEntry.webAudioGain) {
+            try { peerEntry.webAudioGain.disconnect(); } catch {}
+          }
+
+          const srcNode = ctx.createMediaStreamSource(stream);
+          const gainNode = ctx.createGain();
+          gainNode.gain.value = isAudioBlockedRef.current ? 0 : 1.0;
+          srcNode.connect(gainNode);
+          gainNode.connect(ctx.destination);
+
+          peerEntry.webAudioSource = srcNode;
+          peerEntry.webAudioGain = gainNode;
+          logLocalDebug('WEBAUDIO_ROUTED', `Peer: ${targetPeerId} -> Web Audio route connected (ctx: ${ctx.state})`);
+        } catch (err) {
+          logLocalDebug('WEBAUDIO_ERR', `AudioContext route error: ${err.message}`);
+        }
+      };
+
+      connectWebAudioPipeline(remoteStream);
+
+      // Handle when remote sender un-mutes and RTP packets arrive
       event.track.onunmute = () => {
         console.log(`[WebRTC Audio] Remote track onunmute for ${targetPeerId}`);
+        logLocalDebug('TRACK_ONUNMUTE', `Peer: ${targetPeerId} - Incoming audio track unmuted! Refreshing audio sink & triggering play()`);
         if (peerEntry.audioElement && !isAudioBlockedRef.current) {
-          peerEntry.audioElement.play().catch(() => { });
+          const freshStream = new MediaStream([event.track]);
+          peerEntry.audioElement.srcObject = freshStream;
+          peerEntry.audioElement.play().then(() => {
+            logLocalDebug('PLAY_ON_UNMUTE_OK', `Peer: ${targetPeerId} audio is actively playing!`);
+          }).catch((err) => {
+            logLocalDebug('PLAY_ON_UNMUTE_ERR', `Peer: ${targetPeerId} - ${err.name}: ${err.message}`);
+          });
+          connectWebAudioPipeline(freshStream);
         }
+      };
+
+      event.track.onmute = () => {
+        logLocalDebug('TRACK_ONMUTE', `Peer: ${targetPeerId} - Incoming audio track muted`);
       };
 
       const playPromise = audioEl.play();
       if (playPromise !== undefined) {
-        playPromise.catch((err) => {
+        playPromise.then(() => {
+          logLocalDebug('INITIAL_PLAY_OK', `Peer: ${targetPeerId} audio element playing (paused: ${audioEl.paused})`);
+        }).catch((err) => {
           console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
+          logLocalDebug('INITIAL_PLAY_BLOCKED', `Peer: ${targetPeerId} Autoplay blocked (${err.name}): ${err.message}`);
           const resumeOnInteraction = () => {
+            if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
+              window.__webrtcAudioCtx.resume().catch(() => {});
+            }
             if (peerEntry.audioElement && !isAudioBlockedRef.current) {
-              peerEntry.audioElement.play().catch(() => { });
+              peerEntry.audioElement.play().then(() => {
+                logLocalDebug('RESUME_PLAY_OK', `Peer: ${targetPeerId} audio playback resumed on user gesture!`);
+              }).catch((e) => {
+                logLocalDebug('RESUME_PLAY_ERR', `Peer: ${targetPeerId} resume failed: ${e.name} - ${e.message}`);
+              });
             }
             window.removeEventListener('click', resumeOnInteraction);
             window.removeEventListener('keydown', resumeOnInteraction);
@@ -465,6 +605,10 @@ export default function App() {
 
         pc.createOffer().then((offer) => {
           return pc.setLocalDescription(offer).then(() => {
+            const audioSdp = extractAudioSdp(offer.sdp);
+            const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'pending'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
+            logLocalDebug('OFFER_SENT', `To: ${targetPeerId} | SDP: ${audioSdp} | Transceivers: ${tInfo}`);
+
             sendSignal({
               type: 'offer',
               targetId: targetPeerId,
@@ -476,6 +620,7 @@ export default function App() {
           });
         }).catch((err) => {
           console.error(`Error creating offer for ${targetPeerId}:`, err);
+          logLocalDebug('OFFER_ERR', `Target: ${targetPeerId} error: ${err.message}`);
         });
       } catch (err) {
         console.error(`Failed to create data channel for ${targetPeerId}:`, err);
@@ -487,7 +632,7 @@ export default function App() {
     }
 
     return peerEntry;
-  }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, sendSignal, showToast, updateP2PStatus, username]);
+  }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
 
   // Handle incoming signaling messages
   const handleSignalingMessage = useCallback(async (msg) => {
@@ -538,12 +683,17 @@ export default function App() {
           const peerEntry = getOrCreatePeerConnection(senderId, false);
           const pc = peerEntry.pc;
 
+          const offerAudioSdp = extractAudioSdp(msg.offer?.sdp);
+          logLocalDebug('OFFER_RECEIVED', `From: ${senderId} | Offer SDP: ${offerAudioSdp}`);
+
           await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
 
-          // Ensure all audio transceivers on the answerer are active and set to sendrecv
+          // Ensure the negotiated audio transceiver on the answerer is active and set to sendrecv
           if (pc.getTransceivers) {
-            for (const t of pc.getTransceivers()) {
-              if (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio') {
+            const allTransceivers = pc.getTransceivers();
+            for (const t of allTransceivers) {
+              const isValid = t.mid !== null || allTransceivers.length === 1;
+              if (isValid && (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio')) {
                 t.direction = 'sendrecv';
                 if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
                   const audioTrack = localStreamRef.current.getAudioTracks()[0];
@@ -568,6 +718,10 @@ export default function App() {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
 
+          const answerAudioSdp = extractAudioSdp(answer.sdp);
+          const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
+          logLocalDebug('ANSWER_SENT', `To: ${senderId} | Answer SDP: ${answerAudioSdp} | Transceivers: ${tInfo}`);
+
           sendSignal({
             type: 'answer',
             targetId: senderId,
@@ -578,6 +732,7 @@ export default function App() {
           });
         } catch (err) {
           console.error('Error handling offer:', err);
+          logLocalDebug('OFFER_HANDLE_ERR', err.message);
         }
         break;
       }
@@ -590,6 +745,10 @@ export default function App() {
             const pc = peerEntry.pc;
             await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
 
+            const answerAudioSdp = extractAudioSdp(msg.answer?.sdp);
+            const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
+            logLocalDebug('ANSWER_PROCESSED', `From: ${senderId} | Answer SDP: ${answerAudioSdp} | Host Transceivers: ${tInfo}`);
+
             while (peerEntry.candidateQueue.length > 0) {
               const cand = peerEntry.candidateQueue.shift();
               try {
@@ -601,6 +760,7 @@ export default function App() {
           }
         } catch (err) {
           console.error('Error handling answer:', err);
+          logLocalDebug('ANSWER_HANDLE_ERR', err.message);
         }
         break;
       }
@@ -638,7 +798,7 @@ export default function App() {
       default:
         break;
     }
-  }, [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, sendSignal, showToast, username]);
+  }, [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, logLocalDebug, sendSignal, showToast, username]);
 
   const handleSignalingMessageRef = useRef();
   handleSignalingMessageRef.current = handleSignalingMessage;
@@ -792,6 +952,57 @@ export default function App() {
       }
     };
   }, [signalUrl, showToast, addSystemMessage]);
+
+  // Local telemetry: Monitor live WebRTC audio byte counters (outbound/inbound RTP) and element playback
+  useEffect(() => {
+    if (!IS_LOCAL) return;
+    const interval = setInterval(async () => {
+      if (peersRef.current.size === 0 || !isP2PConnected) return;
+      for (const [peerId, peer] of peersRef.current.entries()) {
+        if (!peer.pc) continue;
+        const pcState = peer.pc.connectionState || peer.pc.iceConnectionState;
+        if (pcState !== 'connected') continue;
+        try {
+          const stats = await peer.pc.getStats();
+          let sentBytes = 0;
+          let recvBytes = 0;
+          let audioLevel = null;
+          stats.forEach((report) => {
+            if (report.type === 'outbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
+              sentBytes = report.bytesSent || 0;
+            }
+            if (report.type === 'inbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
+              recvBytes = report.bytesReceived || 0;
+              if (report.audioLevel !== undefined) audioLevel = report.audioLevel;
+            }
+          });
+          const audioEl = peer.audioElement;
+          const elStatus = audioEl ? `{paused: ${audioEl.paused}, muted: ${audioEl.muted}, vol: ${audioEl.volume}}` : 'null';
+          const ctxState = window.__webrtcAudioCtx ? window.__webrtcAudioCtx.state : 'none';
+          const webAudioActive = Boolean(peer.webAudioSource && peer.webAudioGain);
+          logLocalDebug('AUDIO_TELEMETRY', `Peer ${peerId.slice(0, 6)} | Outbound: ${sentBytes}B | Inbound: ${recvBytes}B ${audioLevel !== null ? `(lvl: ${audioLevel})` : ''} | AudioEl: ${elStatus} | Ctx: ${ctxState} (routed: ${webAudioActive})`);
+        } catch {}
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isP2PConnected, logLocalDebug]);
+
+  // Ensure AudioContext is resumed on any user interaction anywhere on the window
+  useEffect(() => {
+    const resumeAudioCtx = () => {
+      if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
+        window.__webrtcAudioCtx.resume().catch(() => {});
+      }
+    };
+    window.addEventListener('click', resumeAudioCtx);
+    window.addEventListener('keydown', resumeAudioCtx);
+    window.addEventListener('touchstart', resumeAudioCtx);
+    return () => {
+      window.removeEventListener('click', resumeAudioCtx);
+      window.removeEventListener('keydown', resumeAudioCtx);
+      window.removeEventListener('touchstart', resumeAudioCtx);
+    };
+  }, []);
 
   // Auto-detect ?room=12345 URL parameter on initial load
   useEffect(() => {
@@ -947,7 +1158,14 @@ export default function App() {
         if (peer.audioElement) {
           peer.audioElement.muted = false;
         }
+        if (peer.webAudioGain) {
+          peer.webAudioGain.gain.value = 1.0;
+        }
       }
+    }
+
+    if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
+      window.__webrtcAudioCtx.resume().catch(() => {});
     }
 
     if (isMicMutedRef.current) {
@@ -968,22 +1186,32 @@ export default function App() {
         const audioTrack = stream.getAudioTracks()[0];
         if (audioTrack) {
           audioTrack.enabled = true;
-          for (const peer of peersRef.current.values()) {
+          logLocalDebug('MIC_UNMUTE', `User "${username}" unmuting mic. Track: "${audioTrack.label}", ID: ${audioTrack.id}, state: ${audioTrack.readyState}`);
+
+          for (const [peerId, peer] of peersRef.current.entries()) {
             if (peer.pc) {
               const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
+              logLocalDebug('MIC_PEER_TRANSCEIVERS', `Peer ${peerId} has ${transceivers.length} transceivers: ${transceivers.map(t => `${t.mid}:${t.direction}->${t.currentDirection}`).join(', ')}`);
+
               let replaced = false;
               for (const t of transceivers) {
-                if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
+                const isValid = t.mid !== null || transceivers.length === 1;
+                if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
                   t.direction = 'sendrecv';
-                  t.sender.replaceTrack(audioTrack).catch((err) => console.error('Transceiver replaceTrack error:', err));
+                  t.sender.replaceTrack(audioTrack)
+                    .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced on transceiver mid: ${t.mid}!`))
+                    .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`));
                   replaced = true;
                 }
               }
               if (!replaced) {
+                logLocalDebug('NO_AUDIO_TRANSCEIVER', `Peer ${peerId} had no matching transceiver. Using getSenders fallback.`);
                 const senders = peer.pc.getSenders();
                 for (const s of senders) {
                   if (!s.track || s.track.kind === 'audio') {
-                    s.replaceTrack(audioTrack).catch((err) => console.error('Sender replaceTrack error:', err));
+                    s.replaceTrack(audioTrack)
+                      .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} track replaced on sender`))
+                      .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`));
                   }
                 }
               }
@@ -1009,6 +1237,7 @@ export default function App() {
         }
       } catch (err) {
         console.error('Microphone access error:', err);
+        logLocalDebug('MIC_ACCESS_ERR', `${err.name}: ${err.message}`);
         showToast('⚠️ Could not access microphone. Check permissions.');
       }
     } else {
@@ -1033,7 +1262,7 @@ export default function App() {
         }
       }
     }
-  }, [addSystemMessage, showToast, username]);
+  }, [addSystemMessage, logLocalDebug, showToast, username]);
 
   // Voice Chat: Toggle Block Incoming Audio (Deafen) - blocks incoming audio AND microphone
   const toggleBlockAudio = useCallback(() => {
@@ -1041,10 +1270,13 @@ export default function App() {
       const nextVal = !prev;
       isAudioBlockedRef.current = nextVal;
 
-      // Mute/unmute all peer audio streams
+      // Mute/unmute all peer audio streams (HTMLMediaElement + Web Audio gain)
       for (const peer of peersRef.current.values()) {
         if (peer.audioElement) {
           peer.audioElement.muted = nextVal;
+        }
+        if (peer.webAudioGain) {
+          peer.webAudioGain.gain.value = nextVal ? 0 : 1.0;
         }
       }
 
@@ -1138,12 +1370,14 @@ export default function App() {
           systemLogs={systemLogs}
           onSendMessage={handleSendMessage}
           onClearLogs={handleClearLogs}
+          onTestSound={handleTestSound}
           isP2PConnected={isP2PConnected}
           username={username}
           isOpen={isChatOpen}
           onClose={() => setIsChatOpen(false)}
           isAudioBlocked={isAudioBlocked}
           onToggleBlockAudio={toggleBlockAudio}
+          isLocal={IS_LOCAL}
         />
       </main>
 

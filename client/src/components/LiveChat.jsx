@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getAvatarColor } from '../utils/sound';
+import { copyToClipboard } from '../utils/clipboard';
 
 const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
@@ -8,6 +9,7 @@ export default function LiveChat({
   systemLogs = [],
   onSendMessage,
   onClearLogs,
+  onTestSound,
   isP2PConnected,
   username,
   isOpen,
@@ -20,6 +22,7 @@ export default function LiveChat({
   const [unreadLogsCount, setUnreadLogsCount] = useState(0);
   const [inputText, setInputText] = useState('');
   const [showScrollPill, setShowScrollPill] = useState(false);
+  const [logsCopied, setLogsCopied] = useState(false);
 
   const chatContainerRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -32,6 +35,20 @@ export default function LiveChat({
 
   const initial = (username[0] || 'U').toUpperCase();
   const avatarBg = getAvatarColor(username);
+
+  const handleCopyLogs = async () => {
+    if (!systemLogs || systemLogs.length === 0) return;
+    const formatted = systemLogs.map((log) => {
+      const d = new Date(log.timestamp || Date.now());
+      const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+      return `[${timeStr}] ${log.text}`;
+    }).join('\n');
+    const success = await copyToClipboard(formatted);
+    if (success) {
+      setLogsCopied(true);
+      setTimeout(() => setLogsCopied(false), 2000);
+    }
+  };
 
   // Auto-scroll chat messages when new messages arrive
   useEffect(() => {
@@ -263,16 +280,38 @@ export default function LiveChat({
               <span className="logs-count-dot"></span>
               {systemLogs.length} event{systemLogs.length === 1 ? '' : 's'} recorded
             </span>
-            {systemLogs.length > 0 && typeof onClearLogs === 'function' && (
-              <button
-                type="button"
-                className="btn-clear-logs"
-                onClick={onClearLogs}
-                title="Clear all room activity logs"
-              >
-                Clear Logs
-              </button>
-            )}
+            <div className="logs-actions-group">
+              {typeof onTestSound === 'function' && (
+                <button
+                  type="button"
+                  className="btn-copy-logs"
+                  onClick={onTestSound}
+                  title="Play a test chime to verify this browser window outputs sound"
+                >
+                  🔊 Test Sound
+                </button>
+              )}
+              {systemLogs.length > 0 && (
+                <button
+                  type="button"
+                  className="btn-copy-logs"
+                  onClick={handleCopyLogs}
+                  title="Copy all logs to clipboard to share in chat"
+                >
+                  {logsCopied ? '✓ Copied!' : '📋 Copy Logs'}
+                </button>
+              )}
+              {systemLogs.length > 0 && typeof onClearLogs === 'function' && (
+                <button
+                  type="button"
+                  className="btn-clear-logs"
+                  onClick={onClearLogs}
+                  title="Clear all room activity logs"
+                >
+                  Clear Logs
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="room-logs-container" ref={logsContainerRef}>
