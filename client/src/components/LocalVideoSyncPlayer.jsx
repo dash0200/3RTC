@@ -39,11 +39,18 @@ export default function LocalVideoSyncPlayer({
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showTopBar, setShowTopBar] = useState(true);
+  const [showBottomBar, setShowBottomBar] = useState(true);
+  const [isCursorIdle, setIsCursorIdle] = useState(false);
 
   const videoRef = useRef(null);
+  const playerContainerRef = useRef(null);
+  const isHoveringTopRef = useRef(false);
+  const isHoveringBottomRef = useRef(false);
   const isRemoteActionRef = useRef(false);
   const fileInputRef = useRef(null);
-  const controlsTimeoutRef = useRef(null);
+  const idleTimeoutRef = useRef(null);
   const fileRef = useRef(file);
   fileRef.current = file;
 
@@ -109,8 +116,8 @@ export default function LocalVideoSyncPlayer({
         }
         vid.play().then(() => {
           setIsPlaying(true);
-        }).catch((err) => {
-          console.warn('Autoplay prevented on remote play:', err);
+        }).catch(() => {
+          // Autoplay may await user interaction
         });
       } else if (action === 'pause') {
         setSyncStatus(`⏸️ ${sender || 'Peer'} paused`);
@@ -127,7 +134,7 @@ export default function LocalVideoSyncPlayer({
         }
       }
     } catch (err) {
-      console.error('Error applying remote local-video action:', err);
+      // Failed to apply remote action
     } finally {
       setTimeout(() => {
         isRemoteActionRef.current = false;
@@ -316,13 +323,101 @@ export default function LocalVideoSyncPlayer({
   };
 
   const toggleFullscreen = () => {
-    const container = document.querySelector('.local-fullstage-player');
+    const container = playerContainerRef.current || document.querySelector('.local-fullstage-player');
     if (!container) return;
-    if (!document.fullscreenElement) {
-      container.requestFullscreen?.().catch(() => {});
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      if (container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {});
+      } else if (container.webkitRequestFullscreen) {
+        container.webkitRequestFullscreen();
+      }
     } else {
-      document.exitFullscreen?.().catch(() => {});
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      }
     }
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isNowFullscreen = Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      setIsFullscreen(isNowFullscreen);
+      if (!isNowFullscreen) {
+        setShowTopBar(true);
+        setShowBottomBar(true);
+        setIsCursorIdle(false);
+        if (idleTimeoutRef.current) {
+          clearTimeout(idleTimeoutRef.current);
+        }
+      } else {
+        // When entering fullscreen, start with bars hidden
+        setShowTopBar(false);
+        setShowBottomBar(false);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+      if (idleTimeoutRef.current) {
+        clearTimeout(idleTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleMouseMove = (e) => {
+    if (!isFullscreen) {
+      setShowTopBar(true);
+      setShowBottomBar(true);
+      setIsCursorIdle(false);
+      return;
+    }
+
+    setIsCursorIdle(false);
+    if (idleTimeoutRef.current) {
+      clearTimeout(idleTimeoutRef.current);
+    }
+
+    const y = e.clientY;
+    const windowHeight = window.innerHeight;
+
+    // Show top bar only when cursor is brought to the top (within 85px of top edge or hovering top bar)
+    const nearTop = y <= 85 || isHoveringTopRef.current;
+    // Show bottom controls only when cursor is brought to the bottom (within 95px of bottom edge or hovering bottom bar)
+    const nearBottom = y >= windowHeight - 95 || isHoveringBottomRef.current;
+
+    setShowTopBar(Boolean(nearTop));
+    setShowBottomBar(Boolean(nearBottom));
+
+    idleTimeoutRef.current = setTimeout(() => {
+      const isFs = Boolean(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      if (isFs) {
+        if (!isHoveringTopRef.current) setShowTopBar(false);
+        if (!isHoveringBottomRef.current) setShowBottomBar(false);
+        if (!isHoveringTopRef.current && !isHoveringBottomRef.current) {
+          setIsCursorIdle(true);
+        }
+      }
+    }, (nearTop || nearBottom) ? 3500 : 1200);
   };
 
   // Keyboard shortcuts (Space = play/pause, Left = -5s, Right = +5s, M = mute, F = fullscreen)
@@ -433,7 +528,16 @@ export default function LocalVideoSyncPlayer({
   // Case B: Local video is ready and playing
   return (
     <div
-      className="local-fullstage-player"
+      ref={playerContainerRef}
+      className={`local-fullstage-player ${isFullscreen ? 'is-fullscreen' : ''} ${isCursorIdle && isFullscreen ? 'hide-cursor' : ''}`}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => {
+        if (isFullscreen) {
+          setShowTopBar(false);
+          setShowBottomBar(false);
+          setIsCursorIdle(true);
+        }
+      }}
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
@@ -447,7 +551,19 @@ export default function LocalVideoSyncPlayer({
       />
 
       {/* Top Bar for status, file info & sync controls */}
-      <div className="yt-stage-topbar local-stage-topbar">
+      <div
+        className={`yt-stage-topbar local-stage-topbar ${isFullscreen ? (showTopBar ? 'visible' : 'hidden') : ''}`}
+        onMouseEnter={() => {
+          isHoveringTopRef.current = true;
+          if (isFullscreen) {
+            setShowTopBar(true);
+            setIsCursorIdle(false);
+          }
+        }}
+        onMouseLeave={() => {
+          isHoveringTopRef.current = false;
+        }}
+      >
         <div className="local-file-info-pill" title={activeFileName}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="#3ea6ff">
             <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
@@ -558,7 +674,11 @@ export default function LocalVideoSyncPlayer({
       </div>
 
       {/* Main Video Viewport */}
-      <div className="local-video-viewport" onClick={togglePlayPause}>
+      <div
+        className="local-video-viewport"
+        onClick={togglePlayPause}
+        onDoubleClick={toggleFullscreen}
+      >
         <video
           ref={videoRef}
           src={objectUrl}
@@ -583,7 +703,20 @@ export default function LocalVideoSyncPlayer({
       </div>
 
       {/* Bottom Timeline Scrubber & Player Controls */}
-      <div className="local-bottom-controls" onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`local-bottom-controls ${isFullscreen ? (showBottomBar ? 'visible' : 'hidden') : ''}`}
+        onClick={(e) => e.stopPropagation()}
+        onMouseEnter={() => {
+          isHoveringBottomRef.current = true;
+          if (isFullscreen) {
+            setShowBottomBar(true);
+            setIsCursorIdle(false);
+          }
+        }}
+        onMouseLeave={() => {
+          isHoveringBottomRef.current = false;
+        }}
+      >
         <div className="local-scrubber-wrapper">
           <input
             type="range"
@@ -654,11 +787,17 @@ export default function LocalVideoSyncPlayer({
               type="button"
               className="local-icon-button"
               onClick={toggleFullscreen}
-              title="Fullscreen (F)"
+              title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
             >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
-              </svg>
+              {isFullscreen ? (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+                </svg>
+              )}
             </button>
           </div>
         </div>

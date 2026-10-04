@@ -178,7 +178,6 @@ export default function YouTubeSyncPlayer({
             },
             onStateChange: handlePlayerStateChange,
             onError: (e) => {
-              console.warn('YouTube Player error code:', e.data);
               let msg = 'Video playback error';
               if (e.data === 101 || e.data === 150) {
                 msg = 'Embedding disabled by video owner';
@@ -191,7 +190,6 @@ export default function YouTubeSyncPlayer({
         });
         return true;
       } catch (err) {
-        console.error('Failed to create YT.Player instance:', err);
         return false;
       }
     };
@@ -346,7 +344,7 @@ export default function YouTubeSyncPlayer({
         }
       }
     } catch (err) {
-      console.error('Error applying remote YouTube action:', err);
+      // Failed to apply remote action
     } finally {
       setTimeout(() => {
         isRemoteActionRef.current = false;

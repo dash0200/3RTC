@@ -67,6 +67,23 @@ export default function App() {
     }
     return true;
   });
+
+  // Track unread messages count when the sidebar is closed
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const prevMessagesLengthRef = useRef(0);
+
+  useEffect(() => {
+    if (isChatOpen) {
+      setUnreadChatCount(0);
+    } else {
+      const diff = messages.length - prevMessagesLengthRef.current;
+      if (diff > 0) {
+        setUnreadChatCount((prev) => prev + diff);
+      }
+    }
+    prevMessagesLengthRef.current = messages.length;
+  }, [messages.length, isChatOpen]);
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -119,20 +136,8 @@ export default function App() {
     ]);
   }, []);
 
-  const logLocalDebug = useCallback((tag, ...args) => {
-    if (!IS_LOCAL) return;
-    const formatted = args.map((a) => {
-      if (a === null) return 'null';
-      if (a === undefined) return 'undefined';
-      if (typeof a === 'object') {
-        try { return JSON.stringify(a); } catch { return String(a); }
-      }
-      return String(a);
-    }).join(' ');
-    const logText = `[Voice-Debug] [${tag}] ${formatted}`;
-    console.log(`%c${logText}`, 'color: #00e676; font-weight: bold;');
-    addSystemMessage(logText, 'debug');
-  }, [addSystemMessage]);
+  // Developer debug logging is disabled in production to keep console and user logs clean
+  const logLocalDebug = useCallback(() => {}, []);
 
   const handleClearLogs = useCallback(() => {
     setSystemLogs([]);
@@ -140,9 +145,9 @@ export default function App() {
 
   const handleTestSound = useCallback(() => {
     sound.playChime();
-    logLocalDebug('TEST_SOUND', 'Played test chime via Web Audio. If you hear this chime, your browser tab audio output works!');
+    addSystemMessage('🔊 Test chime played. If you heard the chime, your audio output is working properly.');
     showToast('🔊 Playing test sound...');
-  }, [logLocalDebug, showToast]);
+  }, [addSystemMessage, showToast]);
 
   const updateP2PStatus = useCallback(() => {
     const activePeers = Array.from(peersRef.current.values()).filter(p => p.isConnected).length;
@@ -243,9 +248,7 @@ export default function App() {
       if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
         try {
           peer.dataChannel.send(JSON.stringify(msg));
-        } catch (err) {
-          console.error('Error broadcasting yt-action to peer:', err);
-        }
+        } catch { }
       }
     }
   }, [username]);
@@ -347,21 +350,18 @@ export default function App() {
         if (localStreamRef.current) {
           const audioTrack = localStreamRef.current.getAudioTracks()[0];
           if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
-            audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => console.error('Transceiver replaceTrack error:', err));
+            audioTransceiver.sender.replaceTrack(audioTrack).catch(() => {});
           }
         }
       } else {
         logLocalDebug('TRANSCEIVER_INIT', `Role: PEER/ANSWERER -> Peer: ${targetPeerId} (Awaiting offer to configure single audio transceiver)`);
       }
     } catch (err) {
-      console.warn('Failed to configure audio transceiver:', err);
       logLocalDebug('TRANSCEIVER_INIT_ERR', err.message);
     }
 
     // Handle incoming audio stream from remote peer
     pc.ontrack = (event) => {
-      console.log(`[WebRTC Audio] Remote track received from ${targetPeerId}:`, event.track.id, event.track.kind);
-      logLocalDebug('ONTRACK', `Peer: ${targetPeerId} | Kind: ${event.track.kind} | Track ID: ${event.track.id} | Muted: ${event.track.muted} | ReadyState: ${event.track.readyState} | Streams: ${event.streams?.length || 0}`);
 
       // 1. Audio Element Pipeline (Offscreen layout instead of display:none to prevent Chrome background throttling)
       let audioEl = peerEntry.audioElement;
@@ -426,8 +426,6 @@ export default function App() {
 
       // Handle when remote sender un-mutes and RTP packets arrive
       event.track.onunmute = () => {
-        console.log(`[WebRTC Audio] Remote track onunmute for ${targetPeerId}`);
-        logLocalDebug('TRACK_ONUNMUTE', `Peer: ${targetPeerId} - Incoming audio track unmuted! Refreshing audio sink & triggering play()`);
         if (peerEntry.audioElement && !isAudioBlockedRef.current) {
           const freshStream = new MediaStream([event.track]);
           peerEntry.audioElement.srcObject = freshStream;
@@ -449,7 +447,6 @@ export default function App() {
         playPromise.then(() => {
           logLocalDebug('INITIAL_PLAY_OK', `Peer: ${targetPeerId} audio element playing (paused: ${audioEl.paused})`);
         }).catch((err) => {
-          console.warn(`Autoplay prevented for peer ${targetPeerId}, will resume on user gesture:`, err);
           logLocalDebug('INITIAL_PLAY_BLOCKED', `Peer: ${targetPeerId} Autoplay blocked (${err.name}): ${err.message}`);
           const resumeOnInteraction = () => {
             if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
@@ -588,9 +585,7 @@ export default function App() {
               addSystemMessage(`🔄 Synced with room's local video session: "${data.fileName}"`);
             }
           }
-        } catch (e) {
-          console.error('DataChannel message parse error:', e);
-        }
+        } catch (e) { }
       };
 
       dc.onclose = () => {
@@ -598,9 +593,7 @@ export default function App() {
         updateP2PStatus();
       };
 
-      dc.onerror = (err) => {
-        console.error('DataChannel error:', err);
-      };
+      dc.onerror = () => { };
     };
 
     if (isInitiator) {
@@ -624,12 +617,9 @@ export default function App() {
             });
           });
         }).catch((err) => {
-          console.error(`Error creating offer for ${targetPeerId}:`, err);
           logLocalDebug('OFFER_ERR', `Target: ${targetPeerId} error: ${err.message}`);
         });
-      } catch (err) {
-        console.error(`Failed to create data channel for ${targetPeerId}:`, err);
-      }
+      } catch (err) { }
     } else {
       pc.ondatachannel = (event) => {
         bindDataChannel(event.channel);
@@ -715,9 +705,7 @@ export default function App() {
             const cand = peerEntry.candidateQueue.shift();
             try {
               await pc.addIceCandidate(new RTCIceCandidate(cand));
-            } catch (e) {
-              console.error('Error adding queued candidate:', e);
-            }
+            } catch { }
           }
 
           const answer = await pc.createAnswer();
@@ -736,7 +724,6 @@ export default function App() {
             }
           });
         } catch (err) {
-          console.error('Error handling offer:', err);
           logLocalDebug('OFFER_HANDLE_ERR', err.message);
         }
         break;
@@ -758,13 +745,10 @@ export default function App() {
               const cand = peerEntry.candidateQueue.shift();
               try {
                 await pc.addIceCandidate(new RTCIceCandidate(cand));
-              } catch (e) {
-                console.error('Error adding queued candidate:', e);
-              }
+              } catch { }
             }
           }
         } catch (err) {
-          console.error('Error handling answer:', err);
           logLocalDebug('ANSWER_HANDLE_ERR', err.message);
         }
         break;
@@ -778,9 +762,7 @@ export default function App() {
           if (pc && pc.remoteDescription && pc.remoteDescription.type) {
             try {
               await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-            } catch (e) {
-              console.error('Error adding ICE candidate:', e);
-            }
+            } catch { }
           } else {
             peerEntry.candidateQueue.push(msg.candidate);
           }
@@ -908,9 +890,7 @@ export default function App() {
           const msg = JSON.parse(event.data);
           if (msg.type === 'pong') return;
           handleSignalingMessageRef.current?.(msg);
-        } catch (err) {
-          console.error('Signaling parse error:', err);
-        }
+        } catch (err) { }
       };
 
       ws.onclose = (event) => {
@@ -957,41 +937,6 @@ export default function App() {
       }
     };
   }, [signalUrl, showToast, addSystemMessage]);
-
-  // Local telemetry: Monitor live WebRTC audio byte counters (outbound/inbound RTP) and element playback
-  useEffect(() => {
-    if (!IS_LOCAL) return;
-    const interval = setInterval(async () => {
-      if (peersRef.current.size === 0 || !isP2PConnected) return;
-      for (const [peerId, peer] of peersRef.current.entries()) {
-        if (!peer.pc) continue;
-        const pcState = peer.pc.connectionState || peer.pc.iceConnectionState;
-        if (pcState !== 'connected') continue;
-        try {
-          const stats = await peer.pc.getStats();
-          let sentBytes = 0;
-          let recvBytes = 0;
-          let audioLevel = null;
-          stats.forEach((report) => {
-            if (report.type === 'outbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
-              sentBytes = report.bytesSent || 0;
-            }
-            if (report.type === 'inbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
-              recvBytes = report.bytesReceived || 0;
-              if (report.audioLevel !== undefined) audioLevel = report.audioLevel;
-            }
-          });
-          const audioEl = peer.audioElement;
-          const elStatus = audioEl ? `{paused: ${audioEl.paused}, muted: ${audioEl.muted}, vol: ${audioEl.volume}}` : 'null';
-          const ctxState = window.__webrtcAudioCtx ? window.__webrtcAudioCtx.state : 'none';
-          const webAudioActive = Boolean(peer.webAudioSource && peer.webAudioGain);
-          logLocalDebug('AUDIO_TELEMETRY', `Peer ${peerId.slice(0, 6)} | Outbound: ${sentBytes}B | Inbound: ${recvBytes}B ${audioLevel !== null ? `(lvl: ${audioLevel})` : ''} | AudioEl: ${elStatus} | Ctx: ${ctxState} (routed: ${webAudioActive})`);
-        } catch { }
-      }
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [isP2PConnected, logLocalDebug]);
-
   // Ensure AudioContext is resumed on any user interaction anywhere on the window
   useEffect(() => {
     const resumeAudioCtx = () => {
@@ -1241,8 +1186,6 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.error('Microphone access error:', err);
-        logLocalDebug('MIC_ACCESS_ERR', `${err.name}: ${err.message}`);
         showToast('⚠️ Could not access microphone. Check permissions.');
       }
     } else {
@@ -1317,76 +1260,79 @@ export default function App() {
   }, [addSystemMessage, showToast, username]);
 
   return (
-    <>
-      <Header
-        isLive={Boolean(roomId)}
-        roomId={roomId}
-        onCopyRoom={handleCopyRoom}
-        signalStatus={signalStatus}
-        onOpenSettings={() => setShowSettingsModal(true)}
-        username={username}
-        isMicMuted={isMicMuted}
-        isAudioBlocked={isAudioBlocked}
-        onToggleMic={toggleMicrophone}
-        onToggleBlockAudio={toggleBlockAudio}
-        isLocal={IS_LOCAL}
-        isP2PConnected={isP2PConnected}
-        p2pStatusText={p2pStatusText}
-        isMediaActive={isMediaActive}
-        onExitVideo={handleExitVideo}
-        onLeaveRoom={handleLeaveRoom}
-      />
-
-      <main className="main-container">
-        <Stage
+    <div className="app-container">
+      <div className="app-main-pane">
+        <Header
+          isLive={Boolean(roomId)}
           roomId={roomId}
-          isHost={isHost}
-          peerCount={peerCount}
-          isP2PConnected={isP2PConnected}
-          p2pStatusText={p2pStatusText}
-          onOpenCreate={() => setShowCreateModal(true)}
-          onOpenJoin={() => {
-            setInitialJoinPin('');
-            setShowJoinModal(true);
-          }}
           onCopyRoom={handleCopyRoom}
-          onLeaveRoom={handleLeaveRoom}
-          onToggleChat={() => setIsChatOpen((prev) => !prev)}
-          isChatOpen={isChatOpen}
-          chatCount={messages.length}
-          activeVideoId={activeVideoId}
-          onVideoChange={handleVideoChange}
-          localVideoFile={localVideoFile}
-          remoteLocalVideoMeta={remoteLocalVideoMeta}
-          onLocalFileSelect={handleLocalFileSelect}
-          onCloseLocalVideo={handleCloseLocalVideo}
-          onBroadcastAction={handleBroadcastAction}
-          remoteAction={remoteAction}
-          onRegisterStateGetter={(getter) => {
-            syncStateGetterRef.current = getter;
-          }}
           isMicMuted={isMicMuted}
           isAudioBlocked={isAudioBlocked}
           onToggleMic={toggleMicrophone}
           onToggleBlockAudio={toggleBlockAudio}
-          peerVoiceStates={peerVoiceStates}
+          isP2PConnected={isP2PConnected}
+          p2pStatusText={p2pStatusText}
+          isMediaActive={isMediaActive}
+          onExitVideo={handleExitVideo}
+          onLeaveRoom={handleLeaveRoom}
+          isChatOpen={isChatOpen}
+          unreadChatCount={unreadChatCount}
+          onToggleChat={() => setIsChatOpen((prev) => !prev)}
         />
 
-        <LiveChat
-          messages={messages}
-          systemLogs={systemLogs}
-          onSendMessage={handleSendMessage}
-          onClearLogs={handleClearLogs}
-          onTestSound={handleTestSound}
-          isP2PConnected={isP2PConnected}
-          username={username}
-          isOpen={isChatOpen}
-          onClose={() => setIsChatOpen(false)}
-          isAudioBlocked={isAudioBlocked}
-          onToggleBlockAudio={toggleBlockAudio}
-          isLocal={IS_LOCAL}
-        />
-      </main>
+        <main className="main-container">
+          <Stage
+            roomId={roomId}
+            isHost={isHost}
+            peerCount={peerCount}
+            isP2PConnected={isP2PConnected}
+            p2pStatusText={p2pStatusText}
+            onOpenCreate={() => setShowCreateModal(true)}
+            onOpenJoin={() => {
+              setInitialJoinPin('');
+              setShowJoinModal(true);
+            }}
+            onCopyRoom={handleCopyRoom}
+            onLeaveRoom={handleLeaveRoom}
+            onToggleChat={() => setIsChatOpen((prev) => !prev)}
+            isChatOpen={isChatOpen}
+            unreadChatCount={unreadChatCount}
+            chatCount={unreadChatCount}
+            activeVideoId={activeVideoId}
+            onVideoChange={handleVideoChange}
+            localVideoFile={localVideoFile}
+            remoteLocalVideoMeta={remoteLocalVideoMeta}
+            onLocalFileSelect={handleLocalFileSelect}
+            onCloseLocalVideo={handleCloseLocalVideo}
+            onBroadcastAction={handleBroadcastAction}
+            remoteAction={remoteAction}
+            onRegisterStateGetter={(getter) => {
+              syncStateGetterRef.current = getter;
+            }}
+            isMicMuted={isMicMuted}
+            isAudioBlocked={isAudioBlocked}
+            onToggleMic={toggleMicrophone}
+            onToggleBlockAudio={toggleBlockAudio}
+            peerVoiceStates={peerVoiceStates}
+          />
+        </main>
+      </div>
+
+      <LiveChat
+        messages={messages}
+        systemLogs={systemLogs}
+        onSendMessage={handleSendMessage}
+        onClearLogs={handleClearLogs}
+        onTestSound={handleTestSound}
+        isP2PConnected={isP2PConnected}
+        username={username}
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        isAudioBlocked={isAudioBlocked}
+        onToggleBlockAudio={toggleBlockAudio}
+        signalStatus={signalStatus}
+        onOpenSettings={() => setShowSettingsModal(true)}
+      />
 
       {/* Modals */}
       <CreateRoomModal
@@ -1404,17 +1350,15 @@ export default function App() {
         initialPin={initialJoinPin}
       />
 
-      {IS_LOCAL && (
-        <ServerSettingsModal
-          isOpen={showSettingsModal}
-          onClose={() => setShowSettingsModal(false)}
-          currentUrl={signalUrl}
-          onApply={handleApplyServer}
-        />
-      )}
+      <ServerSettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        currentUrl={signalUrl}
+        onApply={handleApplyServer}
+      />
 
       {/* Toast Notification */}
       {toastMessage && <div className="toast">{toastMessage}</div>}
-    </>
+    </div>
   );
 }
