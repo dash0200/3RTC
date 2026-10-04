@@ -60,8 +60,13 @@ export default function App() {
   const [remoteLocalVideoMeta, setRemoteLocalVideoMeta] = useState(null);
   const [remoteAction, setRemoteAction] = useState(null);
 
-  // UI Panels & Modals
-  const [isChatOpen, setIsChatOpen] = useState(true);
+  // UI Panels & Modals (Mobile default closed so stage is primary)
+  const [isChatOpen, setIsChatOpen] = useState(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      return false;
+    }
+    return true;
+  });
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -1347,6 +1352,8 @@ export default function App() {
           onCopyRoom={handleCopyRoom}
           onLeaveRoom={handleLeaveRoom}
           onToggleChat={() => setIsChatOpen((prev) => !prev)}
+          isChatOpen={isChatOpen}
+          chatCount={messages.length}
           activeVideoId={activeVideoId}
           onVideoChange={handleVideoChange}
           localVideoFile={localVideoFile}

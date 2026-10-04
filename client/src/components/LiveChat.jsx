@@ -150,11 +150,25 @@ export default function LiveChat({
   };
 
   return (
-    <aside className={`chat-section ${isOpen ? '' : 'collapsed'}`}>
-      <div className="chat-header">
-        <div className="chat-header-title-wrap">
-          <span className="chat-header-title">Live Chat & Activity</span>
+    <>
+      <div
+        className={`mobile-chat-backdrop ${isOpen ? 'active' : ''}`}
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <aside className={`chat-section ${isOpen ? '' : 'collapsed'}`}>
+        <div
+          className="mobile-sheet-pill-bar"
+          onClick={onClose}
+          title="Swipe down to dismiss"
+        >
+          <div className="mobile-sheet-pill"></div>
         </div>
+
+        <div className="chat-header">
+          <div className="chat-header-title-wrap">
+            <span className="chat-header-title">Live Chat & Activity</span>
+          </div>
 
         <div className="chat-header-actions">
           <button className="header-icon-btn" onClick={onClose} title="Close Sidebar">
@@ -396,5 +410,6 @@ export default function LiveChat({
         </div>
       </div>
     </aside>
-  );
+  </>
+);
 }

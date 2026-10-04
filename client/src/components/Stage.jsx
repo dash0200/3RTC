@@ -13,6 +13,8 @@ export default function Stage({
   onCopyRoom,
   onLeaveRoom,
   onToggleChat,
+  isChatOpen = false,
+  chatCount = 0,
   activeVideoId,
   onVideoChange,
   localVideoFile,
@@ -254,10 +256,16 @@ export default function Stage({
         </div>
 
         <div className="controls-right">
-          <button className="control-btn" onClick={onToggleChat} title="Toggle Live Chat">
+          <button
+            type="button"
+            className={`control-btn ${isChatOpen ? 'chat-active' : ''}`}
+            onClick={onToggleChat}
+            title={isChatOpen ? "Close Live Chat" : "Open Live Chat"}
+          >
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
             </svg>
+            {chatCount > 0 && <span className="control-badge">{chatCount}</span>}
           </button>
         </div>
       </div>
