@@ -19,13 +19,16 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 1.2 Floating Live Reactions Over Video Player
+### 1.2 Floating Live Reactions Over Video Player ✅ `[COMPLETED]`
 - **Description**: Animate floating emoji reactions (like YouTube Live / Twitch hearts) that float up the side of the stage when peers click quick reactions (`🔥`, `❤️`, `😂`, `👏`, `👍`, `🎉`) or press hotkeys `1`–`6`.
 - **Key Capabilities**:
-  - Smooth CSS/Canvas particle animations rising and fading along the bottom-right corner of the video.
-  - Zero performance lag using lightweight keyed DOM elements or requestAnimationFrame canvas.
+  - Smooth CSS particle animations rising, drifting organically, and fading along the bottom-right corner of the video.
+  - Sleek translucent floating reaction dock with hotkey tags `[1]` through `[6]` on the video stage.
+  - Global keyboard hotkeys `1`–`6` trigger instant reactions when watching.
+  - Zero performance lag using lightweight hardware-accelerated CSS animations and auto-cleanup.
 - **Implementation Notes**:
-  - Broadcast `{ type: 'REACTION', emoji, sender }` over DataChannel with low latency.
+  - Broadcast `{ type: 'reaction', id, emoji, sender, lane, driftVariant, scale, rot }` over DataChannel with low latency.
+  - Integrated with LiveChat quick reaction chips and sound synthesized popping effect.
 
 ---
 

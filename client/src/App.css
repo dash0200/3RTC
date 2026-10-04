@@ -4582,4 +4582,291 @@
   color: #f87171;
   background: rgba(248, 113, 113, 0.15);
   border-color: rgba(248, 113, 113, 0.35);
+}
+
+/* ==========================================================================
+   1.2 Floating Live Reactions Over Video Player
+   ========================================================================== */
+
+.floating-reactions-overlay {
+  position: absolute;
+  right: 28px;
+  bottom: 24px;
+  width: 160px;
+  height: 420px;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.floating-reaction-item {
+  position: absolute;
+  bottom: 0;
+  left: var(--lane, 50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation-duration: 2.6s;
+  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  animation-fill-mode: forwards;
+}
+
+.floating-reaction-item .reaction-emoji {
+  font-size: 1.85rem;
+  line-height: 1;
+  display: inline-block;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
+}
+
+.floating-reaction-item .reaction-sender-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(18, 18, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #f1f5f9;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  letter-spacing: 0.2px;
+}
+
+/* 4 Organic Sway Variants */
+.floating-reaction-item.drift-1 {
+  animation-name: floatReactionDrift1;
+}
+.floating-reaction-item.drift-2 {
+  animation-name: floatReactionDrift2;
+}
+.floating-reaction-item.drift-3 {
+  animation-name: floatReactionDrift3;
+}
+.floating-reaction-item.drift-4 {
+  animation-name: floatReactionDrift4;
+}
+
+@keyframes floatReactionDrift1 {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.6) rotate(0deg);
+  }
+  12% {
+    opacity: 1;
+    transform: translate3d(-10px, -45px, 0) scale(var(--scale, 1.2)) rotate(calc(var(--rot, 0deg) * 0.5));
+  }
+  45% {
+    opacity: 0.95;
+    transform: translate3d(14px, -170px, 0) scale(var(--scale, 1.2)) rotate(var(--rot, 0deg));
+  }
+  75% {
+    opacity: 0.8;
+    transform: translate3d(-8px, -290px, 0) scale(calc(var(--scale, 1.2) * 0.95)) rotate(calc(var(--rot, 0deg) * 1.2));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(12px, -390px, 0) scale(0.75) rotate(calc(var(--rot, 0deg) * 1.5));
+  }
+}
+
+@keyframes floatReactionDrift2 {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.55) rotate(0deg);
+  }
+  14% {
+    opacity: 1;
+    transform: translate3d(15px, -50px, 0) scale(var(--scale, 1.25)) rotate(calc(var(--rot, 0deg) * 0.6));
+  }
+  48% {
+    opacity: 0.95;
+    transform: translate3d(-12px, -180px, 0) scale(var(--scale, 1.25)) rotate(var(--rot, 0deg));
+  }
+  80% {
+    opacity: 0.75;
+    transform: translate3d(10px, -300px, 0) scale(calc(var(--scale, 1.25) * 0.92)) rotate(calc(var(--rot, 0deg) * 1.3));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(-8px, -400px, 0) scale(0.7) rotate(calc(var(--rot, 0deg) * 1.6));
+  }
+}
+
+@keyframes floatReactionDrift3 {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.65) rotate(0deg);
+  }
+  10% {
+    opacity: 1;
+    transform: translate3d(-14px, -40px, 0) scale(var(--scale, 1.2)) rotate(calc(var(--rot, 0deg) * -0.5));
+  }
+  50% {
+    opacity: 0.95;
+    transform: translate3d(16px, -165px, 0) scale(var(--scale, 1.2)) rotate(var(--rot, 0deg));
+  }
+  78% {
+    opacity: 0.7;
+    transform: translate3d(-10px, -285px, 0) scale(calc(var(--scale, 1.2) * 0.9)) rotate(calc(var(--rot, 0deg) * -1.2));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(6px, -385px, 0) scale(0.72) rotate(calc(var(--rot, 0deg) * -1.5));
+  }
+}
+
+@keyframes floatReactionDrift4 {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.6) rotate(0deg);
+  }
+  15% {
+    opacity: 1;
+    transform: translate3d(8px, -55px, 0) scale(var(--scale, 1.3)) rotate(calc(var(--rot, 0deg) * 0.4));
+  }
+  52% {
+    opacity: 0.92;
+    transform: translate3d(-16px, -190px, 0) scale(var(--scale, 1.3)) rotate(var(--rot, 0deg));
+  }
+  82% {
+    opacity: 0.72;
+    transform: translate3d(12px, -315px, 0) scale(calc(var(--scale, 1.3) * 0.95)) rotate(calc(var(--rot, 0deg) * 1.1));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(-4px, -410px, 0) scale(0.7) rotate(calc(var(--rot, 0deg) * 1.4));
+  }
+}
+
+/* Floating Quick Reaction Dock */
+.floating-reaction-dock {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  z-index: 55;
+  pointer-events: auto;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reaction-dock-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: rgba(18, 18, 24, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 12px rgba(255, 255, 255, 0.04);
+  transition: all 0.2s ease;
+}
+
+.reaction-dock-pill:hover {
+  background: rgba(22, 22, 30, 0.92);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 16px rgba(255, 255, 255, 0.06);
+}
+
+.reaction-dock-hint {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding-left: 6px;
+  padding-right: 2px;
+  user-select: none;
+}
+
+.reaction-dock-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.reaction-dock-btn {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.16s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.reaction-dock-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-3px) scale(1.15);
+}
+
+.reaction-dock-btn:active {
+  transform: translateY(1px) scale(0.92);
+}
+
+.reaction-dock-btn .dock-emoji {
+  font-size: 1.15rem;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.reaction-dock-btn:hover .dock-emoji {
+  transform: scale(1.1);
+}
+
+.reaction-dock-btn .dock-hotkey {
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  width: 13px;
+  height: 13px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+@media (max-width: 768px) {
+  .floating-reaction-dock {
+    right: 12px;
+    bottom: 12px;
+  }
+  .reaction-dock-pill {
+    padding: 4px 6px;
+    gap: 4px;
+  }
+  .reaction-dock-hint {
+    display: none;
+  }
+  .reaction-dock-btn {
+    width: 30px;
+    height: 30px;
+  }
+  .reaction-dock-btn .dock-emoji {
+    font-size: 1rem;
+  }
+  .floating-reactions-overlay {
+    right: 12px;
+    bottom: 20px;
+    width: 120px;
+  }
 }

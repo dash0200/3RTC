@@ -32,7 +32,8 @@ export default function LiveChat({
   skipVotes = [],
   peerCount = 0,
   activeTab: controlledActiveTab,
-  onTabChange
+  onTabChange,
+  onSendReaction
 }) {
   const DEFAULT_WIDTH = 380;
   const MIN_WIDTH = 260;
@@ -296,6 +297,9 @@ export default function LiveChat({
   };
 
   const handleReactionClick = (emoji) => {
+    if (typeof onSendReaction === 'function') {
+      onSendReaction(emoji);
+    }
     if (isP2PConnected) {
       onSendMessage(emoji);
       setActiveTab('chat');
