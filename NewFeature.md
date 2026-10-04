@@ -1,0 +1,168 @@
+# 3RTC — Feature Roadmap & Enhancement Suggestions
+
+This document tracks planned features, architectural improvements, and quality-of-life enhancements for **3RTC**.
+
+---
+
+## 1. 🎬 Media & Watch Party Enhancements
+
+### 1.1 Shared Video Queue & Collaborative Playlist
+- **Description**: Enable peers to paste YouTube links or search queries into an "Up Next" queue.
+- **Key Capabilities**:
+  - Collaborative queue where peers can add videos and re-order them.
+  - Vote-to-skip mechanism (e.g., $2/3$ peers agree to skip).
+  - Autoplay next video in the queue with synchronized start for all peers.
+- **Implementation Notes**:
+  - Broadcast queue state over WebRTC DataChannel via an action payload `{ type: 'QUEUE_UPDATE', queue: [...] }`.
+  - Maintain queue authority on the room host with consensus migration if the host disconnects.
+
+---
+
+### 1.2 Floating Live Reactions Over Video Player
+- **Description**: Animate floating emoji reactions (like YouTube Live / Twitch hearts) that float up the side of the stage when peers click quick reactions (`🔥`, `❤️`, `😂`, `👏`, `👍`, `🎉`) or press hotkeys `1`–`6`.
+- **Key Capabilities**:
+  - Smooth CSS/Canvas particle animations rising and fading along the bottom-right corner of the video.
+  - Zero performance lag using lightweight keyed DOM elements or requestAnimationFrame canvas.
+- **Implementation Notes**:
+  - Broadcast `{ type: 'REACTION', emoji, sender }` over DataChannel with low latency.
+
+---
+
+### 1.3 "Host Control" (DJ Mode) vs "Collaborative Mode"
+- **Description**: Give the room host control over playback permissions.
+  - **DJ Mode (Host Only)**: Only the host can play, pause, and scrub the timeline. Ideal for movie sessions to avoid accidental interruptions.
+  - **Collaborative Mode**: Any peer can play, pause, and seek (default current behavior).
+- **Key Capabilities**:
+  - Visual lock badge on stage player controls for non-host peers when DJ mode is enabled.
+  - Host can toggle mode anytime with a single click.
+
+---
+
+### 1.4 WebRTC Direct Video Streaming (MSE Chunk Sharing)
+- **Description**: Eliminate the requirement that both peers possess the identical local video file beforehand.
+- **Key Capabilities**:
+  - The host drags and drops any video file (e.g., `.mp4`, `.webm`).
+  - The video file is sliced into chunks and streamed peer-to-peer over the DataChannel.
+  - Peers buffer and play the incoming video stream using browser `MediaSource` Extensions (MSE).
+- **Implementation Notes**:
+  - High performance chunking with backpressure control over WebRTC `bufferedAmount`.
+
+---
+
+### 1.5 Drag & Drop Subtitles (.SRT / .VTT) for Local Video
+- **Description**: Support external subtitle files for the local video player.
+- **Key Capabilities**:
+  - Drop `.srt` or `.vtt` file directly onto the player.
+  - Real-time subtitle parser converting cues to WebVTT `<track>`.
+  - Custom subtitle styling (font size, background opacity, vertical position offset, and subtitle delay synchronization $\pm 0.5\text{s}$).
+
+---
+
+## 2. 🎙️ Voice & Peer Audio Upgrades
+
+### 2.1 Per-Peer Volume Sliders & Speaking Rings
+- **Description**: Visual voice activity detection and individual volume adjustments.
+- **Key Capabilities**:
+  - Pulsating green speaking ring around peer badges when voice audio exceeds threshold.
+  - Discrete volume slider $(0\% - 200\%)$ per connected peer to balance loud vs quiet microphones.
+  - One-click mute button for individual noisy peers without muting the entire room.
+- **Implementation Notes**:
+  - Use `AudioContext` with `AnalyserNode` to sample microphone decibel levels in real time.
+
+---
+
+### 2.2 Audio Processing Toggles (Noise Suppression & Echo Cancellation)
+- **Description**: Fine-grained audio settings for optimal voice clarity in varied environments.
+- **Key Capabilities**:
+  - Toggle browser native `noiseSuppression`, `echoCancellation`, and `autoGainControl`.
+  - Push-to-Talk (PTT) mode with customizable hotkey (e.g., `Space` or `Ctrl`).
+
+---
+
+### 2.3 Synchronized Soundboard (Mini SFX Tray)
+- **Description**: A fun, collapsible tray of instant audio sound bites synchronized across peers.
+- **Key Capabilities**:
+  - Quick 1-second sound clips (Applause, Airhorn, Drumroll, Laugh track, Cheering, Tada).
+  - Dedicated soundboard volume slider to prevent blasting peer ears.
+  - WebRTC DataChannel message triggering client-side Web Audio synthesis or cached sound assets.
+
+---
+
+## 3. 💬 Chat & Social Experience
+
+### 3.1 Picture-in-Picture (PiP) Chat & Video
+- **Description**: Enable users to browse other tabs while keeping track of the watch party.
+- **Key Capabilities**:
+  - Browser Picture-in-Picture button for video playback.
+  - Support for `Document Picture-in-Picture` API to float a mini chat and video window together outside the browser tab.
+
+---
+
+### 3.2 Rich Chat: `@mentions`, Markdown & Link Cards
+- **Description**: Enhance communication clarity and interactivity.
+- **Key Capabilities**:
+  - Autocomplete `@username` with subtle audio chime and badge highlighting for mentioned peer.
+  - Lightweight markdown rendering: `*bold*`, `_italic_`, `` `code` ``, `~strike~`.
+  - Compact link preview cards for shared web links.
+
+---
+
+### 3.3 Direct P2P Image & Screenshot Sharing
+- **Description**: Share images or paste screenshots directly into chat without an upload server.
+- **Key Capabilities**:
+  - Paste clipboard image (`Ctrl+V`) or drag & drop image into the chat input bar.
+  - Transfer binary blobs directly through WebRTC DataChannel.
+  - Lightbox preview modal for viewing shared images in high resolution.
+
+---
+
+## 4. ⚡ Connectivity, Performance & Diagnostics
+
+### 4.1 Real-Time P2P Network HUD (Ping & Latency)
+- **Description**: Transparent diagnostic HUD for enthusiasts and troubleshooters.
+- **Key Capabilities**:
+  - Real-time round-trip latency (RTT / Ping in ms).
+  - WebRTC connection type: `Direct P2P (Host/STUN)` vs `Relay (TURN)`.
+  - Video synchronization drift metric (e.g., `Synced within 14ms`).
+  - Packet loss and bitrate indicators.
+
+---
+
+### 4.2 Automatic Host Migration
+- **Description**: Seamless room continuity if the host leaves or disconnects.
+- **Key Capabilities**:
+  - Next longest-connected peer automatically promoted to room host.
+  - Room status smoothly updates without interrupting media playback or disconnecting existing peers.
+
+---
+
+### 4.3 QR Code for Instant Mobile Join
+- **Description**: Effortless mobile onboarding.
+- **Key Capabilities**:
+  - Clicking the room code or a "Share" icon generates an instant QR code.
+  - Friends in the room can scan the code using their smartphone camera to immediately open and join the room.
+
+---
+
+## 5. 📱 PWA & Platform Polish
+
+### 5.1 Progressive Web App (PWA) Installability
+- **Description**: Enable 3RTC to run as an installed desktop or mobile app.
+- **Key Capabilities**:
+  - Web App Manifest + Service Worker caching for instant loading.
+  - "Install App" prompt in browser bar.
+  - Launches in a clean, standalone, borderless native window on Windows, macOS, Android, and iOS.
+
+---
+
+### 5.2 Keyboard Shortcuts Cheat Sheet Modal (`?`)
+- **Description**: Quick reference for power users.
+- **Shortcuts**:
+  - `Space`: Play / Pause synchronized media
+  - `F`: Toggle Fullscreen mode
+  - `M`: Toggle Microphone mute / unmute
+  - `C`: Toggle Sidebar (Chat / Logs)
+  - `←` / `→`: Seek $\pm 5\text{s}$
+  - `↑` / `↓`: Volume $\pm 5\%$
+  - `1` – `6`: Trigger quick reactions
+  - `?`: Open shortcut cheat sheet
