@@ -29,7 +29,15 @@ export default function Stage({
   isAudioBlocked = false,
   onToggleMic,
   onToggleBlockAudio,
-  peerVoiceStates = {}
+  peerVoiceStates = {},
+  queue = [],
+  onAddToQueue,
+  onPlayNextInQueue,
+  onVoteSkip,
+  skipVotes = [],
+  onOpenQueue,
+  activeVideoTitle = '',
+  username = ''
 }) {
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
   const [hasEnteredTheater, setHasEnteredTheater] = useState(false);
@@ -110,12 +118,21 @@ export default function Stage({
           /* Case 2B: YouTube Player / Watch Party Lobby */
           <YouTubeSyncPlayer
             videoId={activeVideoId}
+            activeVideoTitle={activeVideoTitle}
             onVideoChange={onVideoChange}
             onBroadcastAction={onBroadcastAction}
             remoteAction={remoteAction}
             isP2PConnected={isP2PConnected}
             onRegisterStateGetter={onRegisterStateGetter}
             onLocalFileSelect={onLocalFileSelect}
+            queue={queue}
+            onAddToQueue={onAddToQueue}
+            onPlayNextInQueue={onPlayNextInQueue}
+            onVoteSkip={onVoteSkip}
+            skipVotes={skipVotes}
+            peerCount={peerCount}
+            username={username}
+            onOpenQueue={onOpenQueue}
           />
         ) : (
           /* Case 3: Room created/joined, waiting for peer to connect */
