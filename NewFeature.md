@@ -6,15 +6,16 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ## 1. 🎬 Media & Watch Party Enhancements
 
-### 1.1 Shared Video Queue & Collaborative Playlist
-- **Description**: Enable peers to paste YouTube links or search queries into an "Up Next" queue.
+### 1.1 Shared Video Queue & Collaborative Playlist ✅ `[COMPLETED]`
+- **Description**: Enable peers to paste YouTube links or presets into an "Up Next" collaborative playlist queue.
 - **Key Capabilities**:
-  - Collaborative queue where peers can add videos and re-order them.
-  - Vote-to-skip mechanism (e.g., $2/3$ peers agree to skip).
-  - Autoplay next video in the queue with synchronized start for all peers.
+  - Collaborative queue where peers can add videos, re-order (move up/down), remove items, or play immediately.
+  - Vote-to-skip mechanism with real-time peer voting and progress bar.
+  - Autoplay next video in the queue with synchronized start for all peers upon video completion (`ENDED` state).
+  - Dedicated Queue tab in sidebar with Now Playing card and animated equalizer bars.
 - **Implementation Notes**:
-  - Broadcast queue state over WebRTC DataChannel via an action payload `{ type: 'QUEUE_UPDATE', queue: [...] }`.
-  - Maintain queue authority on the room host with consensus migration if the host disconnects.
+  - Broadcast queue state over WebRTC DataChannel via action payloads `{ type: 'queue-action', action, ... }`.
+  - Full synchronization on late-join via `yt-request-sync` and `yt-sync-state`.
 
 ---
 
