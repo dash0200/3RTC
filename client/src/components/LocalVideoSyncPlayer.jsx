@@ -57,10 +57,8 @@ export default function LocalVideoSyncPlayer({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const isScrubbingRef = useRef(false);
 
-  // Toggle All Panels in Fullscreen (Pure Cinema Mode vs Pinned / Visible Controls)
-  const [panelsPinned, setPanelsPinned] = useState(false);
-  const [panelsManuallyHidden, setPanelsManuallyHidden] = useState(false);
-  const allPanelsVisible = (showBottomBar || showTopBar || panelsPinned) && !panelsManuallyHidden;
+  // Toggle All Panels in Fullscreen (Pure Cinema Mode vs Standard Playback)
+  const [panelsHidden, setPanelsHidden] = useState(false);
 
   // Feature 1.5: Drag & Drop Subtitles (.SRT / .VTT), Timing Offset & Appearance
   const [subtitles, setSubtitles] = useState(null); // { fileName, cues, vttUrl, vttString, rawText }
@@ -566,33 +564,33 @@ export default function LocalVideoSyncPlayer({
     }
   };
 
+  const arePanelsShowing = !panelsHidden && showBottomBar;
+
   const handleToggleAllPanels = useCallback((e) => {
     if (e) {
       e.stopPropagation();
       e.preventDefault();
     }
-    if (allPanelsVisible) {
-      // Hide all panels (Clean Cinema View)
-      setPanelsManuallyHidden(true);
-      setPanelsPinned(false);
+    // If panels are currently visible on screen, hide them all (enter Cinema View)
+    if (!panelsHidden && showBottomBar) {
+      setPanelsHidden(true);
       setShowTopBar(false);
       setShowBottomBar(false);
       setShowSubtitleSettings(false);
-      setIsCursorIdle(true);
+      setIsCursorIdle(false);
       if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
       setDelayToast('👁️ All Panels Hidden (Cinema View)');
     } else {
-      // Reveal and pin all panels visible
-      setPanelsManuallyHidden(false);
-      setPanelsPinned(true);
+      // Panels are currently hidden: show all panels and exit Cinema View
+      setPanelsHidden(false);
       setShowTopBar(true);
       setShowBottomBar(true);
       setIsCursorIdle(false);
       if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-      setDelayToast('📌 All Panels Shown & Locked');
+      setDelayToast('📌 All Panels Shown');
     }
     setTimeout(() => setDelayToast(''), 2200);
-  }, [allPanelsVisible]);
+  }, [panelsHidden, showBottomBar]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -604,8 +602,7 @@ export default function LocalVideoSyncPlayer({
       );
       setIsFullscreen(isNowFullscreen);
       if (!isNowFullscreen) {
-        setPanelsManuallyHidden(false);
-        setPanelsPinned(false);
+        setPanelsHidden(false);
         setShowTopBar(true);
         setShowBottomBar(true);
         setIsCursorIdle(false);
@@ -614,7 +611,7 @@ export default function LocalVideoSyncPlayer({
         }
       } else {
         // When entering fullscreen, show all controls with initial grace period
-        setPanelsManuallyHidden(false);
+        setPanelsHidden(false);
         setShowTopBar(true);
         setShowBottomBar(true);
         setIsCursorIdle(false);
@@ -626,7 +623,7 @@ export default function LocalVideoSyncPlayer({
             document.mozFullScreenElement ||
             document.msFullscreenElement
           );
-          if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings && !panelsPinned) {
+          if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings) {
             setShowTopBar(false);
             setShowBottomBar(false);
             setIsCursorIdle(true);
@@ -649,7 +646,7 @@ export default function LocalVideoSyncPlayer({
         clearTimeout(idleTimeoutRef.current);
       }
     };
-  }, [showSubtitleSettings, panelsPinned]);
+  }, [showSubtitleSettings]);
 
   // Global pointerup / mouseup to ensure scrubbing state resets safely anywhere
   useEffect(() => {
@@ -665,7 +662,7 @@ export default function LocalVideoSyncPlayer({
           const inTopZone = y <= 90 || isHoveringTopRef.current;
 
           // While cursor is in controls zones or settings are open, keep visible
-          if (inBottomZone || inTopZone || showSubtitleSettings || panelsPinned) {
+          if (inBottomZone || inTopZone || showSubtitleSettings) {
             setShowTopBar(true);
             setShowBottomBar(true);
             return;
@@ -678,7 +675,7 @@ export default function LocalVideoSyncPlayer({
               document.mozFullScreenElement ||
               document.msFullscreenElement
             );
-            if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !showSubtitleSettings && !panelsPinned) {
+            if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !showSubtitleSettings) {
               setShowTopBar(false);
               setShowBottomBar(false);
               setIsCursorIdle(true);
@@ -694,7 +691,7 @@ export default function LocalVideoSyncPlayer({
       window.removeEventListener('pointerup', handleGlobalPointerUp);
       window.removeEventListener('mouseup', handleGlobalPointerUp);
     };
-  }, [isFullscreen, showSubtitleSettings, panelsPinned]);
+  }, [isFullscreen, showSubtitleSettings]);
 
   // Fullscreen Mouse Movement & Idle Controls Manager
   const handleMouseMove = useCallback((e) => {
@@ -709,28 +706,20 @@ export default function LocalVideoSyncPlayer({
       return;
     }
 
-    // If user explicitly chose to hide all panels:
-    if (panelsManuallyHidden) {
-      const y = e ? e.clientY : lastMousePosRef.current.y;
-      const x = e ? e.clientX : lastMousePosRef.current.x;
-      const windowHeight = window.innerHeight || window.screen.height || 1080;
-      const windowWidth = window.innerWidth || window.screen.width || 1920;
-      const inCornerZone = y >= windowHeight - 90 && x >= windowWidth - 160;
-      if (inCornerZone) {
-        setIsCursorIdle(false);
-      }
-      return;
-    }
-
-    // If panels are locked/pinned:
-    if (panelsPinned) {
+    // In Cinema View (user explicitly toggled all panels hidden):
+    if (panelsHidden) {
+      // Reveal cursor so user can point and click the [Show Panels] button
       setIsCursorIdle(false);
-      setShowTopBar(true);
-      setShowBottomBar(true);
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = setTimeout(() => {
+        setIsCursorIdle(true);
+      }, 3000);
+      // DO NOT auto-reveal bottom bar or top bar while in Cinema View!
+      // The [Show Panels] button remains visible and clickable!
       return;
     }
 
-    // Any mouse motion in fullscreen wakes up ALL controls & reveals cursor
+    // Normal Fullscreen Playback:
     setIsCursorIdle(false);
     setShowTopBar(true);
     setShowBottomBar(true);
@@ -764,21 +753,27 @@ export default function LocalVideoSyncPlayer({
         document.msFullscreenElement
       );
       if (isFs) {
-        if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings && !panelsPinned) {
+        if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings) {
           setShowTopBar(false);
           setShowBottomBar(false);
           setIsCursorIdle(true);
         }
       }
     }, 3500);
-  }, [isFullscreen, showSubtitleSettings, panelsManuallyHidden, panelsPinned]);
+  }, [isFullscreen, showSubtitleSettings, panelsHidden]);
 
-  // Window-level mouse listener when in fullscreen to ensure bottom-edge moves are never missed
+  // Window & document level mouse listeners when in fullscreen to ensure bottom-edge moves are never missed
   useEffect(() => {
     if (!isFullscreen) return;
     const onGlobalMouseMove = (e) => handleMouseMove(e);
+    document.addEventListener('mousemove', onGlobalMouseMove, { passive: true });
+    document.addEventListener('pointermove', onGlobalMouseMove, { passive: true });
     window.addEventListener('mousemove', onGlobalMouseMove, { passive: true });
-    return () => window.removeEventListener('mousemove', onGlobalMouseMove);
+    return () => {
+      document.removeEventListener('mousemove', onGlobalMouseMove);
+      document.removeEventListener('pointermove', onGlobalMouseMove);
+      window.removeEventListener('mousemove', onGlobalMouseMove);
+    };
   }, [isFullscreen, handleMouseMove]);
 
   // Keyboard shortcuts (Space = play/pause, Left = -5s, Right = +5s, M = mute, F = fullscreen, C = subtitles, H = toggle all panels, [ / ] = delay offset)
@@ -1037,7 +1032,7 @@ export default function LocalVideoSyncPlayer({
   return (
     <div
       ref={playerContainerRef}
-      className={`local-fullstage-player ${isFullscreen ? 'is-fullscreen' : ''} ${isCursorIdle && isFullscreen ? 'hide-cursor' : ''}`}
+      className={`local-fullstage-player ${isFullscreen ? 'is-fullscreen' : ''} ${isCursorIdle && isFullscreen ? 'hide-cursor' : ''} ${panelsHidden ? 'panels-hidden' : ''} ${(!showBottomBar || panelsHidden) && isFullscreen ? 'controls-hidden' : ''}`}
       onMouseMove={handleMouseMove}
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
@@ -1724,23 +1719,18 @@ export default function LocalVideoSyncPlayer({
               )}
             </div>
 
-            {/* Toggle All Panels Button in Fullscreen / Bottom Toolbar */}
+            {/* Toggle All Panels (Cinema View) Button in Toolbar */}
             <button
               type="button"
-              className={`local-icon-button local-toggle-panels-btn ${panelsPinned ? 'pinned' : ''}`}
+              className="local-toolbar-panel-btn"
               onClick={handleToggleAllPanels}
-              title={allPanelsVisible ? 'Hide All Panels (H)' : 'Show All Panels (H)'}
-              aria-label={allPanelsVisible ? 'Hide All Panels' : 'Show All Panels'}
+              title="Cinema View: Hide all panels (H)"
+              aria-label="Hide All Panels"
             >
-              {allPanelsVisible ? (
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                  <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H5v-4h9v4zm0-6H5V7h9v4zm5 6h-3V7h3v10z"/>
-                </svg>
-              ) : (
-                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                  <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
-                </svg>
-              )}
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H5v-4h9v4zm0-6H5V7h9v4zm5 6h-3V7h3v10z"/>
+              </svg>
+              <span>Hide Panels</span>
             </button>
 
             <button
@@ -1763,24 +1753,25 @@ export default function LocalVideoSyncPlayer({
         </div>
       </div>
 
-      {/* Floating Corner Panel Toggle Button (Always at bottom-right in Fullscreen when panels are hidden) */}
-      {isFullscreen && !allPanelsVisible && (
+      {/* Floating Restore Panels Button in Cinema View (Stationed at Top-Right) */}
+      {panelsHidden && (
         <button
           type="button"
-          className="local-corner-panel-toggle"
+          className="local-cinema-restore-btn"
           onClick={handleToggleAllPanels}
           title="Show All Panels (H)"
           aria-label="Show All Panels"
         >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H5v-4h9v4zm0-6H5V7h9v4zm5 6h-3V7h3v10z"/>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
           </svg>
-          <span>Panels</span>
+          <span>Show Panels</span>
+          <span className="local-hotkey-badge">H</span>
         </button>
       )}
 
       {/* Floating Live Reactions in Fullscreen */}
-      {isFullscreen && allPanelsVisible && typeof onSendReaction === 'function' && (
+      {isFullscreen && typeof onSendReaction === 'function' && (
         <FloatingReactions
           reactions={floatingReactions}
           onSendReaction={onSendReaction}
