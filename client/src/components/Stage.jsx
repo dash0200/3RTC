@@ -213,6 +213,7 @@ export default function Stage({
           reactions={floatingReactions}
           onSendReaction={onSendReaction}
           showDock={Boolean(roomId)}
+          hasMedia={isMediaActive}
         />
       </div>
 
