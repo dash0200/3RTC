@@ -19,6 +19,32 @@ export function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+export async function fetchYouTubeTitle(videoId, fallbackTitle = '') {
+  if (!videoId) return fallbackTitle || 'YouTube Video';
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.title) {
+        return data.title;
+      }
+    }
+  } catch (e) {
+    // Ignore timeout or network errors
+  }
+  // Fallback to presets if matched
+  for (const cat of PRESET_CATEGORIES) {
+    const found = cat.videos.find((v) => v.id === videoId);
+    if (found) return found.title;
+  }
+  return fallbackTitle || `YouTube Video (${videoId})`;
+}
+
 export const PRESET_CATEGORIES = [
   {
     id: 'lofi',
@@ -72,12 +98,21 @@ export const PRESET_CATEGORIES = [
 
 export default function YouTubeSyncPlayer({
   videoId,
+  activeVideoTitle = '',
   onVideoChange,
   onBroadcastAction,
   remoteAction,
   isP2PConnected,
   onRegisterStateGetter,
-  onLocalFileSelect
+  onLocalFileSelect,
+  queue = [],
+  onAddToQueue,
+  onPlayNextInQueue,
+  onVoteSkip,
+  skipVotes = [],
+  peerCount = 0,
+  username = '',
+  onOpenQueue
 }) {
   const [urlInput, setUrlInput] = useState('');
   const [playerReady, setPlayerReady] = useState(false);
@@ -130,7 +165,7 @@ export default function YouTubeSyncPlayer({
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         try {
           playerRef.current.destroy();
-        } catch (e) {}
+        } catch (e) { }
         playerRef.current = null;
       }
       setPlayerReady(false);
@@ -174,7 +209,7 @@ export default function YouTubeSyncPlayer({
               try {
                 e.target.playVideo();
                 setIsPlaying(true);
-              } catch (err) {}
+              } catch (err) { }
             },
             onStateChange: handlePlayerStateChange,
             onError: (e) => {
@@ -213,7 +248,7 @@ export default function YouTubeSyncPlayer({
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         try {
           playerRef.current.destroy();
-        } catch (e) {}
+        } catch (e) { }
       }
     };
   }, []);
@@ -246,6 +281,12 @@ export default function YouTubeSyncPlayer({
       if (isP2PConnected) {
         onBroadcastAction('pause', { currentTime: curTime });
       }
+    } else if (state === window.YT.PlayerState.ENDED) {
+      setSyncStatus('Video finished');
+      setIsPlaying(false);
+      if (typeof onPlayNextInQueue === 'function') {
+        onPlayNextInQueue();
+      }
     }
 
     lastStateRef.current = state;
@@ -274,7 +315,7 @@ export default function YouTubeSyncPlayer({
           setSyncStatus(`Seeked to ${formatTime(curTime)} (Synced)`);
         }
         lastReportedTimeRef.current = curTime;
-      } catch (e) {}
+      } catch (e) { }
     }, 400);
 
     return () => clearInterval(interval);
@@ -290,7 +331,7 @@ export default function YouTubeSyncPlayer({
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         try {
           playerRef.current.destroy();
-        } catch (e) {}
+        } catch (e) { }
         playerRef.current = null;
       }
       setPlayerReady(false);
@@ -352,8 +393,23 @@ export default function YouTubeSyncPlayer({
     }
   }, [remoteAction]);
 
-  // 7. Load new YouTube URL
-  const handleLoadUrl = (e) => {
+  // 7. Load or Queue YouTube URL
+  const handleLoadUrl = async (e) => {
+    if (e) e.preventDefault();
+    const id = extractYouTubeId(urlInput);
+    if (!id) {
+      setInputError('Please enter a valid YouTube link (e.g., https://www.youtube.com/watch?v=...) or 11-char ID');
+      return;
+    }
+    setInputError('');
+    const inputVal = urlInput;
+    setUrlInput('');
+    const title = await fetchYouTubeTitle(id);
+    onVideoChange(id, title);
+    onBroadcastAction('load', { newVideoId: id, title });
+  };
+
+  const handleQueueUrl = async (e) => {
     if (e) e.preventDefault();
     const id = extractYouTubeId(urlInput);
     if (!id) {
@@ -362,8 +418,10 @@ export default function YouTubeSyncPlayer({
     }
     setInputError('');
     setUrlInput('');
-    onVideoChange(id);
-    onBroadcastAction('load', { newVideoId: id });
+    if (typeof onAddToQueue === 'function') {
+      const title = await fetchYouTubeTitle(id);
+      onAddToQueue({ videoId: id, title });
+    }
   };
 
   const handleSelectPreset = (category) => {
@@ -378,7 +436,7 @@ export default function YouTubeSyncPlayer({
     const candidateList = available.length > 0 ? available : pool;
     const randomChoice = candidateList[Math.floor(Math.random() * candidateList.length)];
 
-    onVideoChange(randomChoice.id);
+    onVideoChange(randomChoice.id, randomChoice.title);
     onBroadcastAction('load', { newVideoId: randomChoice.id, title: randomChoice.title });
   };
 
@@ -449,7 +507,7 @@ export default function YouTubeSyncPlayer({
         if (typeof playerRef.current.destroy === 'function') {
           playerRef.current.destroy();
         }
-      } catch (e) {}
+      } catch (e) { }
       playerRef.current = null;
     }
     setPlayerReady(false);
@@ -461,6 +519,10 @@ export default function YouTubeSyncPlayer({
     onBroadcastAction('close', {});
   };
 
+  const totalParticipants = peerCount + 1;
+  const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
+  const hasVotedSkip = skipVotes.includes(username);
+
   if (videoId) {
     return (
       <div className="yt-fullstage-player">
@@ -469,7 +531,7 @@ export default function YouTubeSyncPlayer({
           <form className="yt-stage-url-form" onSubmit={handleLoadUrl}>
             <div className="yt-input-wrapper compact">
               <svg className="yt-input-icon" viewBox="0 0 24 24" width="16" height="16" fill="#FF0033">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
               </svg>
               <input
                 type="text"
@@ -492,8 +554,16 @@ export default function YouTubeSyncPlayer({
                 </button>
               )}
             </div>
-            <button type="submit" className="btn btn-primary yt-load-btn compact">
+            <button type="submit" className="btn btn-primary yt-load-btn compact" title="Play immediately for all">
               Load for All
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary yt-queue-add-btn compact"
+              onClick={handleQueueUrl}
+              title="Add to shared collaborative queue"
+            >
+              + Queue
             </button>
           </form>
 
@@ -513,11 +583,11 @@ export default function YouTubeSyncPlayer({
               >
                 {isPlaying ? (
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
                   </svg>
                 ) : (
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M8 5v14l11-7z"/>
+                    <path d="M8 5v14l11-7z" />
                   </svg>
                 )}
                 <span>{isPlaying ? 'Pause' : 'Play'}</span>
@@ -530,7 +600,7 @@ export default function YouTubeSyncPlayer({
                 title="Seek back 5 seconds for all"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/>
+                  <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
                 </svg>
                 <span>-5s</span>
               </button>
@@ -542,7 +612,7 @@ export default function YouTubeSyncPlayer({
                 title="Seek forward 5 seconds for all"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/>
+                  <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
                 </svg>
                 <span>+5s</span>
               </button>
@@ -554,7 +624,7 @@ export default function YouTubeSyncPlayer({
                 title="Restart video from 0:00 for all"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+                  <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
                 </svg>
                 <span>Restart</span>
               </button>
@@ -566,10 +636,52 @@ export default function YouTubeSyncPlayer({
                 title="Force broadcast sync timestamp to all peers"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                  <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
                 </svg>
                 <span>Sync Now</span>
               </button>
+
+              {/* Next in Queue */}
+              <button
+                type="button"
+                className={`yt-ctrl-btn next-queue-btn ${queue.length > 0 ? 'has-items' : ''}`}
+                onClick={onPlayNextInQueue}
+                disabled={queue.length === 0}
+                title={queue.length > 0 ? `Play next queued: "${queue[0].title}"` : 'Queue is empty'}
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+                </svg>
+                <span>Next ({queue.length})</span>
+              </button>
+
+              {/* Vote to Skip */}
+              <button
+                type="button"
+                className={`yt-ctrl-btn vote-skip-btn ${hasVotedSkip ? 'voted' : ''}`}
+                onClick={onVoteSkip}
+                title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} votes needed)`}
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
+                </svg>
+                <span>{hasVotedSkip ? 'Voted' : 'Skip'} ({skipVotes.length}/{requiredVotes})</span>
+              </button>
+
+              {/* Open Queue in Sidebar Shortcut */}
+              {typeof onOpenQueue === 'function' && (
+                <button
+                  type="button"
+                  className="yt-ctrl-btn queue-drawer-btn"
+                  onClick={onOpenQueue}
+                  title="View and edit queue in sidebar"
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                    <path d="M4 10h12v2H4zm0-4h12v2H4zm0 8h8v2H4zm10 0v6l5-3z" />
+                  </svg>
+                  <span>Queue {queue.length > 0 ? `(${queue.length})` : ''}</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -578,9 +690,9 @@ export default function YouTubeSyncPlayer({
                 title="Exit video and return to watch party stage"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
                 </svg>
-                <span>Exit Video</span>
+                <span>Exit</span>
               </button>
             </div>
           </div>
@@ -601,7 +713,7 @@ export default function YouTubeSyncPlayer({
         <form className="yt-url-form" onSubmit={handleLoadUrl}>
           <div className="yt-input-wrapper">
             <svg className="yt-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="#FF0033">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
             </svg>
             <input
               type="text"
@@ -624,11 +736,22 @@ export default function YouTubeSyncPlayer({
               </button>
             )}
           </div>
-          <button type="submit" className="btn btn-primary yt-load-btn">
+          <button type="submit" className="btn btn-primary yt-load-btn" title="Play immediately for all">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M8 5v14l11-7z"/>
+              <path d="M8 5v14l11-7z" />
             </svg>
             Load for All
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary yt-queue-add-btn"
+            onClick={handleQueueUrl}
+            title="Add video to collaborative queue"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z" />
+            </svg>
+            + Add to Queue
           </button>
         </form>
 
@@ -638,22 +761,37 @@ export default function YouTubeSyncPlayer({
         <div className="yt-presets-bar">
           <span className="yt-presets-label" title="Click any category to play a random track from that genre">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style={{ verticalAlign: 'middle', marginRight: 4 }}>
-              <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.42l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.12z"/>
+              <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.42l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.12z" />
             </svg>
             Quick Watch (Random):
           </span>
           {PRESET_CATEGORIES.map((cat) => {
             const isCategoryActive = cat.videos.some((v) => v.id === videoId);
             return (
-              <button
-                key={cat.id}
-                type="button"
-                className={`yt-preset-chip ${isCategoryActive ? 'active' : ''}`}
-                onClick={() => handleSelectPreset(cat)}
-                title={`Play a random ${cat.name} video`}
-              >
-                {cat.name}
-              </button>
+              <div key={cat.id} className="yt-preset-chip-wrapper">
+                <button
+                  type="button"
+                  className={`yt-preset-chip ${isCategoryActive ? 'active' : ''}`}
+                  onClick={() => handleSelectPreset(cat)}
+                  title={`Play a random ${cat.name} video now`}
+                >
+                  {cat.name}
+                </button>
+                <button
+                  type="button"
+                  className="yt-preset-queue-mini"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const choice = cat.videos[Math.floor(Math.random() * cat.videos.length)];
+                    if (typeof onAddToQueue === 'function') {
+                      onAddToQueue({ videoId: choice.id, title: choice.title });
+                    }
+                  }}
+                  title={`Queue a random ${cat.name} video`}
+                >
+                  +
+                </button>
+              </div>
             );
           })}
         </div>
@@ -690,7 +828,7 @@ export default function YouTubeSyncPlayer({
 
           <div className="local-drop-icon">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="#3ea6ff">
-              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
+              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" />
             </svg>
           </div>
           <div className="local-drop-content">
@@ -708,7 +846,7 @@ export default function YouTubeSyncPlayer({
         <div className="yt-placeholder-card">
           <div className="yt-placeholder-icon">
             <svg viewBox="0 0 24 24" width="36" height="36" fill="#FF0033">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
             </svg>
           </div>
           <h2 className="yt-placeholder-title">P2P Synchronized YouTube Watch Party</h2>

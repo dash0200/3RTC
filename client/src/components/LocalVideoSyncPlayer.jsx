@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
 
 export function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -27,7 +28,13 @@ export default function LocalVideoSyncPlayer({
   onBroadcastAction,
   remoteAction,
   isP2PConnected,
-  onRegisterStateGetter
+  onRegisterStateGetter,
+  // Feature 1.4: WebRTC Direct Video Streaming
+  streamProgress = null,
+  streamVideoUrl = null,
+  onRequestP2PStream,
+  onCancelP2PStream,
+  isHost = false
 }) {
   const [file, setFile] = useState(initialFile);
   const [objectUrl, setObjectUrl] = useState(null);
@@ -43,6 +50,21 @@ export default function LocalVideoSyncPlayer({
   const [showTopBar, setShowTopBar] = useState(true);
   const [showBottomBar, setShowBottomBar] = useState(true);
   const [isCursorIdle, setIsCursorIdle] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const isScrubbingRef = useRef(false);
+
+  // Feature 1.5: Drag & Drop Subtitles (.SRT / .VTT), Timing Offset & Appearance
+  const [subtitles, setSubtitles] = useState(null); // { fileName, cues, vttUrl, vttString, rawText }
+  const [subtitlesVisible, setSubtitlesVisible] = useState(true); // Local toggle: hide & show for individual peer (NOT synced)
+  const [dragOverlayType, setDragOverlayType] = useState('video'); // 'video' | 'subtitle'
+  const [subtitleDelay, setSubtitleDelay] = useState(0); // in seconds (+ = delay later, - = earlier)
+  const [subtitleFontSize, setSubtitleFontSize] = useState('md'); // 'sm' | 'md' | 'lg' | 'xl'
+  const [subtitleColor, setSubtitleColor] = useState('white'); // 'white' | 'yellow' | 'cyan' | 'lime'
+  const [subtitleBg, setSubtitleBg] = useState('semi'); // 'semi' | 'solid' | 'none'
+  const [showSubtitleSettings, setShowSubtitleSettings] = useState(false);
+  const [delayToast, setDelayToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
+  const subtitleSettingsRef = useRef(null);
 
   const videoRef = useRef(null);
   const playerContainerRef = useRef(null);
@@ -50,6 +72,7 @@ export default function LocalVideoSyncPlayer({
   const isHoveringBottomRef = useRef(false);
   const isRemoteActionRef = useRef(false);
   const fileInputRef = useRef(null);
+  const subtitleFileInputRef = useRef(null);
   const idleTimeoutRef = useRef(null);
   const fileRef = useRef(file);
   fileRef.current = file;
@@ -77,6 +100,99 @@ export default function LocalVideoSyncPlayer({
     }
   }, [initialFile]);
 
+  // Generate active WebVTT URL with delay offset applied
+  const activeVttUrl = useMemo(() => {
+    if (!subtitles || !subtitles.cues || subtitles.cues.length === 0) return null;
+    const vttString = cuesToWebVTT(subtitles.cues, subtitleDelay);
+    const blob = new Blob([vttString], { type: 'text/vtt' });
+    return URL.createObjectURL(blob);
+  }, [subtitles, subtitleDelay]);
+
+  // Revoke subtitle blob URL on unmount or when activeVttUrl changes
+  useEffect(() => {
+    return () => {
+      if (activeVttUrl) {
+        try { URL.revokeObjectURL(activeVttUrl); } catch (e) {}
+      }
+    };
+  }, [activeVttUrl]);
+
+  // Auto-dismiss HUD delay toast after 1.8s
+  useEffect(() => {
+    if (delayToast) {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = setTimeout(() => {
+        setDelayToast(null);
+      }, 1800);
+    }
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    };
+  }, [delayToast]);
+
+  // Click outside listener for Subtitle Settings popover
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showSubtitleSettings && subtitleSettingsRef.current && !subtitleSettingsRef.current.contains(e.target)) {
+        setShowSubtitleSettings(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [showSubtitleSettings]);
+
+  // Control browser native textTrack visibility and timing offset
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid) return;
+
+    const applyTrackMode = () => {
+      if (!vid.textTracks || vid.textTracks.length === 0) return;
+      const trackEl = vid.querySelector('track');
+      const activeTextTrack = trackEl?.track;
+
+      for (let i = 0; i < vid.textTracks.length; i++) {
+        const t = vid.textTracks[i];
+        if (activeTextTrack && t === activeTextTrack) {
+          t.mode = subtitlesVisible ? 'showing' : 'hidden';
+        } else if (!activeTextTrack && i === vid.textTracks.length - 1) {
+          t.mode = subtitlesVisible ? 'showing' : 'hidden';
+        } else {
+          t.mode = 'disabled'; // Disable stale or previous tracks
+        }
+      }
+
+      // In-place real-time cue timestamp adjustment
+      if (activeTextTrack?.cues && activeTextTrack.cues.length > 0 && subtitles?.cues) {
+        for (let i = 0; i < activeTextTrack.cues.length && i < subtitles.cues.length; i++) {
+          const cue = activeTextTrack.cues[i];
+          const orig = subtitles.cues[i];
+          const newStart = Math.max(0, orig.startSec + subtitleDelay);
+          const newEnd = Math.max(newStart + 0.05, orig.endSec + subtitleDelay);
+          cue.startTime = newStart;
+          cue.endTime = newEnd;
+        }
+      }
+    };
+
+    applyTrackMode();
+    const timer = setTimeout(applyTrackMode, 80);
+
+    const trackEl = vid.querySelector('track');
+    if (trackEl) {
+      trackEl.addEventListener('load', applyTrackMode);
+      return () => {
+        clearTimeout(timer);
+        trackEl.removeEventListener('load', applyTrackMode);
+      };
+    }
+    return () => clearTimeout(timer);
+  }, [subtitlesVisible, activeVttUrl, subtitleDelay, subtitles]);
+
   // 2. Register state getter for late-joiner synchronization
   useEffect(() => {
     if (typeof onRegisterStateGetter === 'function') {
@@ -87,11 +203,12 @@ export default function LocalVideoSyncPlayer({
           fileName: fileRef.current?.name || remoteMeta?.fileName || '',
           fileSize: fileRef.current?.size || remoteMeta?.fileSize || 0,
           currentTime: vid ? vid.currentTime : 0,
-          isPlaying: vid ? !vid.paused : false
+          isPlaying: vid ? !vid.paused : false,
+          subtitleInfo: subtitles ? { fileName: subtitles.fileName, vttString: subtitles.vttString } : null
         };
       });
     }
-  }, [onRegisterStateGetter, remoteMeta]);
+  }, [onRegisterStateGetter, remoteMeta, subtitles]);
 
   // 3. Handle incoming remote sync actions from peers
   useEffect(() => {
@@ -101,6 +218,31 @@ export default function LocalVideoSyncPlayer({
     if (action === 'close') {
       onClose();
       return;
+    }
+
+    // Handle remote subtitle file sharing
+    if (action === 'subtitle-share' || remoteAction.subAction === 'share') {
+      if (remoteAction.vttString) {
+        try {
+          const parsed = parseSubtitleString(remoteAction.vttString, remoteAction.fileName || 'synced-subtitles.vtt');
+          if (subtitles?.vttUrl) {
+            try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) {}
+          }
+          setSubtitles(parsed);
+          setSyncStatus(`💬 Subtitles loaded: ${parsed.fileName}`);
+        } catch (e) {
+          console.error('Failed to parse remote subtitles:', e);
+        }
+      }
+      return;
+    }
+
+    // If initial sync state carried subtitle info
+    if (remoteAction.subtitleInfo?.vttString && !subtitles) {
+      try {
+        const parsed = parseSubtitleString(remoteAction.subtitleInfo.vttString, remoteAction.subtitleInfo.fileName || 'synced-subtitles.vtt');
+        setSubtitles(parsed);
+      } catch (e) {}
     }
 
     const vid = videoRef.current;
@@ -143,12 +285,74 @@ export default function LocalVideoSyncPlayer({
   }, [remoteAction, onClose]);
 
   // 4. File drag and drop handlers
+  const handleLoadSubtitleFile = async (subFile) => {
+    if (!subFile) return;
+    try {
+      const parsed = await parseSubtitleFile(subFile);
+      if (subtitles?.vttUrl) {
+        try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) {}
+      }
+      setSubtitles(parsed);
+      setSubtitlesVisible(true);
+      setSyncStatus(`Subtitles loaded: ${parsed.fileName}`);
+
+      // Broadcast subtitle to room peers via WebRTC DataChannel
+      if (typeof onBroadcastAction === 'function') {
+        onBroadcastAction('subtitle-share', {
+          type: 'local-video-action',
+          subAction: 'share',
+          fileName: parsed.fileName,
+          vttString: parsed.vttString
+        });
+      }
+    } catch (err) {
+      console.error('Subtitle file load failed:', err);
+      setSyncStatus('Failed to parse subtitle file');
+    }
+  };
+
+  const handleToggleSubtitles = () => {
+    if (!subtitles) {
+      subtitleFileInputRef.current?.click();
+      return;
+    }
+    setSubtitlesVisible((prev) => !prev);
+  };
+
+  const handleRemoveSubtitles = () => {
+    if (subtitles?.vttUrl) {
+      try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) {}
+    }
+    setSubtitles(null);
+    setSyncStatus('Subtitles removed');
+  };
+
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragOver(false);
+    setDragOverlayType('video');
     const droppedFile = e.dataTransfer?.files?.[0];
     if (droppedFile) {
-      loadNewLocalFile(droppedFile);
+      const name = (droppedFile.name || '').toLowerCase();
+      if (name.endsWith('.srt') || name.endsWith('.vtt')) {
+        handleLoadSubtitleFile(droppedFile);
+      } else {
+        loadNewLocalFile(droppedFile);
+      }
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragOver(true);
+    const items = e.dataTransfer?.items;
+    if (items && items[0]) {
+      const item = items[0];
+      if (item.type?.includes('text') || item.type?.includes('vtt') || item.type?.includes('subrip')) {
+        setDragOverlayType('subtitle');
+      } else {
+        setDragOverlayType('video');
+      }
     }
   };
 
@@ -268,6 +472,10 @@ export default function LocalVideoSyncPlayer({
     const vid = videoRef.current;
     if (!vid || !durationSec) return;
     const target = parseFloat(e.target.value);
+    isScrubbingRef.current = true;
+    setShowBottomBar(true);
+    setIsCursorIdle(false);
+    if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
     vid.currentTime = target;
     setCurrentTimeSec(target);
     setSyncStatus(`Seeked to ${formatTime(target)} (Synced)`);
@@ -295,6 +503,9 @@ export default function LocalVideoSyncPlayer({
   const handleExitVideo = () => {
     if (objectUrl) {
       try { URL.revokeObjectURL(objectUrl); } catch (e) {}
+    }
+    if (typeof onCancelP2PStream === 'function') {
+      onCancelP2PStream();
     }
     setFile(null);
     setObjectUrl(null);
@@ -357,9 +568,18 @@ export default function LocalVideoSyncPlayer({
           clearTimeout(idleTimeoutRef.current);
         }
       } else {
-        // When entering fullscreen, start with bars hidden
-        setShowTopBar(false);
-        setShowBottomBar(false);
+        // When entering fullscreen, show controls with initial visibility grace period
+        setShowTopBar(true);
+        setShowBottomBar(true);
+        setIsCursorIdle(false);
+        if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+        idleTimeoutRef.current = setTimeout(() => {
+          if (!isHoveringBottomRef.current && !isScrubbingRef.current) setShowBottomBar(false);
+          if (!isHoveringTopRef.current) setShowTopBar(false);
+          if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current) {
+            setIsCursorIdle(true);
+          }
+        }, 3500);
       }
     };
 
@@ -379,6 +599,41 @@ export default function LocalVideoSyncPlayer({
     };
   }, []);
 
+  // Global pointerup / mouseup to ensure scrubbing state resets safely anywhere
+  useEffect(() => {
+    const handleGlobalPointerUp = () => {
+      if (isScrubbingRef.current) {
+        isScrubbingRef.current = false;
+        setIsScrubbing(false);
+        if (isFullscreen) {
+          if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+          idleTimeoutRef.current = setTimeout(() => {
+            const isFs = Boolean(
+              document.fullscreenElement ||
+              document.webkitFullscreenElement ||
+              document.mozFullScreenElement ||
+              document.msFullscreenElement
+            );
+            if (isFs) {
+              if (!isHoveringBottomRef.current) setShowBottomBar(false);
+              if (!isHoveringTopRef.current) setShowTopBar(false);
+              if (!isHoveringBottomRef.current && !isHoveringTopRef.current) {
+                setIsCursorIdle(true);
+              }
+            }
+          }, 3500);
+        }
+      }
+    };
+
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('mouseup', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('mouseup', handleGlobalPointerUp);
+    };
+  }, [isFullscreen]);
+
   const handleMouseMove = (e) => {
     if (!isFullscreen) {
       setShowTopBar(true);
@@ -393,16 +648,19 @@ export default function LocalVideoSyncPlayer({
     }
 
     const y = e.clientY;
-    const windowHeight = window.innerHeight;
+    const windowHeight = window.innerHeight || window.screen.height;
 
-    // Show top bar only when cursor is brought to the top (within 85px of top edge or hovering top bar)
-    const nearTop = y <= 85 || isHoveringTopRef.current;
-    // Show bottom controls only when cursor is brought to the bottom (within 95px of bottom edge or hovering bottom bar)
-    const nearBottom = y >= windowHeight - 95 || isHoveringBottomRef.current;
+    // Generous top and bottom zones
+    const inTopZone = y <= 100 || isHoveringTopRef.current;
+    const inBottomZone = y >= windowHeight - 160 || isHoveringBottomRef.current || isScrubbingRef.current;
 
-    setShowTopBar(Boolean(nearTop));
-    setShowBottomBar(Boolean(nearBottom));
+    // In fullscreen: ALWAYS reveal bottom bar and seekbar when user moves the mouse
+    setShowBottomBar(true);
+    if (inTopZone) {
+      setShowTopBar(true);
+    }
 
+    // Schedule smooth auto-hide after user stops moving mouse
     idleTimeoutRef.current = setTimeout(() => {
       const isFs = Boolean(
         document.fullscreenElement ||
@@ -411,20 +669,27 @@ export default function LocalVideoSyncPlayer({
         document.msFullscreenElement
       );
       if (isFs) {
-        if (!isHoveringTopRef.current) setShowTopBar(false);
-        if (!isHoveringBottomRef.current) setShowBottomBar(false);
-        if (!isHoveringTopRef.current && !isHoveringBottomRef.current) {
+        // While user is scrubbing or hovering over bottom controls, NEVER hide bottom controls!
+        if (!isHoveringBottomRef.current && !isScrubbingRef.current) {
+          setShowBottomBar(false);
+        }
+        if (!isHoveringTopRef.current) {
+          setShowTopBar(false);
+        }
+        if (!isHoveringTopRef.current && !isHoveringBottomRef.current && !isScrubbingRef.current) {
           setIsCursorIdle(true);
         }
       }
-    }, (nearTop || nearBottom) ? 3500 : 1200);
+    }, inBottomZone ? 4000 : 2500);
   };
 
-  // Keyboard shortcuts (Space = play/pause, Left = -5s, Right = +5s, M = mute, F = fullscreen)
+  // Keyboard shortcuts (Space = play/pause, Left = -5s, Right = +5s, M = mute, F = fullscreen, C = subtitles, [ / ] = delay offset)
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Don't trigger if user is typing in chat or another input
-      if (['INPUT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+        return;
+      }
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -439,18 +704,47 @@ export default function LocalVideoSyncPlayer({
         toggleMute();
       } else if (e.code === 'KeyF') {
         toggleFullscreen();
+      } else if (e.code === 'KeyC') {
+        e.preventDefault();
+        handleToggleSubtitles();
+      } else if (e.code === 'BracketLeft' || e.key === '[' || e.key === '{') {
+        e.preventDefault();
+        if (!subtitles) {
+          setDelayToast('💬 No subtitles loaded. Drop a .srt or .vtt file to adjust delay');
+          return;
+        }
+        const step = e.shiftKey ? 0.5 : 0.1;
+        setSubtitleDelay((prev) => {
+          const next = Math.round((prev - step) * 10) / 10;
+          setDelayToast(`💬 Subtitle Delay: ${next > 0 ? `+${next.toFixed(1)}` : next.toFixed(1)}s`);
+          return next;
+        });
+      } else if (e.code === 'BracketRight' || e.key === ']' || e.key === '}') {
+        e.preventDefault();
+        if (!subtitles) {
+          setDelayToast('💬 No subtitles loaded. Drop a .srt or .vtt file to adjust delay');
+          return;
+        }
+        const step = e.shiftKey ? 0.5 : 0.1;
+        setSubtitleDelay((prev) => {
+          const next = Math.round((prev + step) * 10) / 10;
+          setDelayToast(`💬 Subtitle Delay: ${next > 0 ? `+${next.toFixed(1)}` : next.toFixed(1)}s`);
+          return next;
+        });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMuted]);
+  }, [isMuted, subtitles, isFullscreen]);
 
-  const activeFileName = file?.name || remoteMeta?.fileName || 'Local Video';
-  const activeFileSize = file?.size || remoteMeta?.fileSize || 0;
+  const activeVideoSrc = streamVideoUrl || objectUrl;
+  const isStreamed = Boolean(streamVideoUrl && !objectUrl);
+  const activeFileName = file?.name || remoteMeta?.fileName || streamProgress?.fileName || 'Local Video';
+  const activeFileSize = file?.size || remoteMeta?.fileSize || streamProgress?.totalBytes || 0;
 
-  // Case A: User has not loaded their copy of the video file yet
-  if (!objectUrl) {
+  // Case A: User has not loaded their copy of the video file yet AND no active stream URL
+  if (!activeVideoSrc) {
     return (
       <div
         className={`local-dropzone-wrapper ${isDragOver ? 'drag-over' : ''}`}
@@ -474,46 +768,156 @@ export default function LocalVideoSyncPlayer({
           </div>
 
           {remoteMeta ? (
-            <>
+            <div className="local-dual-choice-container">
               <div className="local-remote-banner">
                 <span className="local-remote-badge">PEER VIDEO LOADED</span>
                 <h2 className="local-remote-filename">"{remoteMeta.fileName}"</h2>
                 {remoteMeta.fileSize > 0 && (
                   <span className="local-file-size-tag">({formatFileSize(remoteMeta.fileSize)})</span>
                 )}
+                <p className="local-waiting-subtitle">
+                  {remoteMeta.sender || 'A peer'} loaded this video file. Choose how you want to join the watch party:
+                </p>
               </div>
-              <p className="local-waiting-subtitle">
-                A peer in this room is playing this video. Drag & drop your local copy of this file here to join in synchronized playback!
-              </p>
-            </>
+
+              <div className="p2p-stream-options-grid">
+                {/* Option 1: 1.4 WebRTC Direct Video Stream (MSE Chunk Sharing) */}
+                <div className={`stream-option-card card-streaming ${streamProgress ? 'is-streaming' : ''}`}>
+                  <div className="stream-card-badge">OPTION 1 • WEBRTC DIRECT STREAM</div>
+                  <div className="stream-card-icon">
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="#00e676">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                    </svg>
+                  </div>
+                  <h3 className="stream-card-title">Stream from Peer (P2P)</h3>
+                  <p className="stream-card-desc">
+                    Don't have this video on your computer? Stream it directly peer-to-peer from <strong>{remoteMeta.sender || 'Peer'}</strong> with zero server upload.
+                  </p>
+
+                  {!streamProgress ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-stream-action"
+                      onClick={onRequestP2PStream}
+                    >
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                      </svg>
+                      Stream from Peer (P2P)
+                    </button>
+                  ) : (
+                    <div className="p2p-stream-progress-card">
+                      <div className="p2p-stream-prog-header">
+                        <span className="p2p-stream-prog-status">
+                          <span className="p2p-pulse-dot"></span>
+                          {streamProgress.isCompleted
+                            ? '✅ Ready to play!'
+                            : streamProgress.isReady
+                            ? '▶️ Buffered initial chunks!'
+                            : '📡 Receiving chunks...'}
+                        </span>
+                        <span className="p2p-stream-prog-percent">{streamProgress.percent || 0}%</span>
+                      </div>
+                      <div className="p2p-stream-track">
+                        <div
+                          className="p2p-stream-fill"
+                          style={{ width: `${Math.max(4, streamProgress.percent || 0)}%` }}
+                        ></div>
+                      </div>
+                      <div className="p2p-stream-metrics">
+                        <span>
+                          {formatFileSize(streamProgress.receivedBytes || 0)} / {formatFileSize(remoteMeta.fileSize || streamProgress.totalBytes || 0)}
+                        </span>
+                        <span>⚡ {(streamProgress.speedMBs || 0).toFixed(1)} MB/s</span>
+                        {streamProgress.totalChunks > 0 && (
+                          <span>{streamProgress.receivedChunksCount || 0}/{streamProgress.totalChunks} chunks</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm p2p-cancel-btn"
+                        onClick={onCancelP2PStream}
+                      >
+                        ✕ Cancel Stream
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="stream-card-tags">
+                    <span className="stream-mini-tag">⚡ Direct SCTP DataChannel</span>
+                    <span className="stream-mini-tag">🔒 End-to-End P2P</span>
+                  </div>
+                </div>
+
+                {/* Option 2: Current Behavior - Local Video File (0 Bandwidth) */}
+                <div className="stream-option-card card-local-file">
+                  <div className="stream-card-badge">OPTION 2 • ZERO NETWORK BANDWIDTH</div>
+                  <div className="stream-card-icon">
+                    <svg viewBox="0 0 24 24" width="32" height="32" fill="#3ea6ff">
+                      <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+                    </svg>
+                  </div>
+                  <h3 className="stream-card-title">Select Local File (Current)</h3>
+                  <p className="stream-card-desc">
+                    Already have this identical file on your disk? Select or drag & drop it here for instant playback with <strong>0 MB/s network usage</strong>.
+                  </p>
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-file-action"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                    </svg>
+                    Select File from Computer
+                  </button>
+
+                  <div className="stream-card-tags">
+                    <span className="stream-mini-tag">⚡ 0 Network Bandwidth</span>
+                    <span className="stream-mini-tag">📁 Drag & Drop Supported</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="local-action-buttons">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExitVideo}
+                >
+                  Back to Stage
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <h2 className="local-waiting-title">Drag & Drop Any Video File</h2>
               <p className="local-waiting-subtitle">
-                Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files. Video runs 100% locally with <strong>zero server upload</strong>, and playback stays synchronized with all peers.
+                Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files. Video runs 100% locally with <strong>zero server upload</strong>, and peers can either stream it from you peer-to-peer or sync their local copies.
               </p>
+
+              <div className="local-action-buttons">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-lg"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                  </svg>
+                  Select Video from Computer
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleExitVideo}
+                >
+                  Back to Stage
+                </button>
+              </div>
             </>
           )}
-
-          <div className="local-action-buttons">
-            <button
-              type="button"
-              className="btn btn-primary btn-lg"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-              </svg>
-              Select Video from Computer
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleExitVideo}
-            >
-              Back to Stage
-            </button>
-          </div>
 
           <div className="local-privacy-pills">
             <span className="local-pill">⚡ 0 Network Bandwidth</span>
@@ -525,7 +929,7 @@ export default function LocalVideoSyncPlayer({
     );
   }
 
-  // Case B: Local video is ready and playing
+  // Case B: Video is ready and playing (either local file or P2P stream)
   return (
     <div
       ref={playerContainerRef}
@@ -564,23 +968,82 @@ export default function LocalVideoSyncPlayer({
           isHoveringTopRef.current = false;
         }}
       >
-        <div className="local-file-info-pill" title={activeFileName}>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="#3ea6ff">
-            <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
-          </svg>
-          <span className="local-filename-text">{activeFileName}</span>
-          {activeFileSize > 0 && (
-            <span className="local-filesize-text">({formatFileSize(activeFileSize)})</span>
-          )}
-          <button
-            type="button"
-            className="local-replace-btn"
-            onClick={() => fileInputRef.current?.click()}
-            title="Change local video file"
-          >
-            Change
-          </button>
-        </div>
+        {isStreamed ? (
+          <div className="local-file-info-pill is-streamed" title={activeFileName}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#00e676">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+            </svg>
+            <span className="local-stream-badge">📡 P2P STREAM</span>
+            <span className="local-filename-text">{activeFileName}</span>
+            {streamProgress && (
+              <span className="local-filesize-text">
+                ({streamProgress.percent}% {streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`})
+              </span>
+            )}
+            <button
+              type="button"
+              className="local-replace-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title="Switch to playing local copy (0 network bandwidth)"
+            >
+              Use Local File
+            </button>
+          </div>
+        ) : (
+          <div className="local-file-info-pill" title={activeFileName}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#3ea6ff">
+              <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+            </svg>
+            <span className="local-filename-text">{activeFileName}</span>
+            {activeFileSize > 0 && (
+              <span className="local-filesize-text">({formatFileSize(activeFileSize)})</span>
+            )}
+            <button
+              type="button"
+              className="local-replace-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title="Change local video file"
+            >
+              Change
+            </button>
+          </div>
+        )}
+
+        {subtitles && (
+          <div className="local-file-info-pill local-subtitle-pill" title={subtitles.fileName}>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#00e5ff">
+              <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
+            </svg>
+            <span className="local-filename-text">{subtitles.fileName}</span>
+            <button
+              type="button"
+              className="local-replace-btn local-style-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSubtitleSettings((prev) => !prev);
+              }}
+              title="Subtitle Appearance (Font Size, Color, Background) & Timing Offset"
+            >
+              🎨 Style & Timing
+            </button>
+            <button
+              type="button"
+              className="local-replace-btn"
+              onClick={() => subtitleFileInputRef.current?.click()}
+              title="Replace subtitle file"
+            >
+              Replace
+            </button>
+            <button
+              type="button"
+              className="local-replace-btn local-remove-sub-btn"
+              onClick={handleRemoveSubtitles}
+              title="Remove subtitles"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         <div className="yt-stage-top-controls">
           <div className={`yt-sync-pill ${isPlaying ? 'playing' : 'paused'}`}>
@@ -673,6 +1136,19 @@ export default function LocalVideoSyncPlayer({
         </div>
       </div>
 
+      {/* Hidden file input for subtitles (.srt / .vtt) */}
+      <input
+        type="file"
+        ref={subtitleFileInputRef}
+        style={{ display: 'none' }}
+        accept=".srt,.vtt,text/vtt,application/x-subrip"
+        onChange={(e) => {
+          const sel = e.target.files?.[0];
+          if (sel) handleLoadSubtitleFile(sel);
+          e.target.value = '';
+        }}
+      />
+
       {/* Main Video Viewport */}
       <div
         className="local-video-viewport"
@@ -681,31 +1157,70 @@ export default function LocalVideoSyncPlayer({
       >
         <video
           ref={videoRef}
-          src={objectUrl}
+          src={activeVideoSrc}
           playsInline
-          className="local-video-element"
+          className={`local-video-element cue-size-${subtitleFontSize} cue-color-${subtitleColor} cue-bg-${subtitleBg}`}
           onPlay={handleVideoPlay}
           onPause={handleVideoPause}
           onSeeked={handleVideoSeeked}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
-        />
+        >
+          {activeVttUrl && (
+            <track
+              key={subtitles?.fileName || 'sub-track'}
+              kind="subtitles"
+              label={subtitles?.fileName || 'Subtitles'}
+              src={activeVttUrl}
+              srcLang="en"
+              default
+            />
+          )}
+        </video>
+
+        {/* Delay Offset HUD Toast Notification */}
+        {delayToast && (
+          <div className="local-hud-toast" aria-live="polite">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="#3ea6ff">
+              <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+            </svg>
+            <span>{delayToast}</span>
+          </div>
+        )}
 
         {/* Drag-over overlay indicator */}
         {isDragOver && (
-          <div className="local-drag-overlay">
-            <svg viewBox="0 0 24 24" width="64" height="64" fill="#3ea6ff">
-              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
-            </svg>
-            <h2>Drop to replace video</h2>
+          <div className={`local-drag-overlay ${dragOverlayType === 'subtitle' ? 'drop-subtitle' : 'drop-video'}`}>
+            <div className="local-drag-card">
+              <div className="local-drag-icon">
+                {dragOverlayType === 'subtitle' ? (
+                  <svg viewBox="0 0 24 24" width="56" height="56" fill="#00e5ff">
+                    <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24" width="56" height="56" fill="#3ea6ff">
+                    <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
+                  </svg>
+                )}
+              </div>
+              <h3>{dragOverlayType === 'subtitle' ? 'Drop Subtitles (.SRT / .VTT)' : 'Drop Video or Subtitles'}</h3>
+              <p>
+                {dragOverlayType === 'subtitle'
+                  ? 'Release to load subtitles and sync with all room peers'
+                  : 'Drop .mp4, .mkv, .webm to replace video, or .srt, .vtt for subtitles'}
+              </p>
+            </div>
           </div>
         )}
       </div>
 
       {/* Bottom Timeline Scrubber & Player Controls */}
       <div
-        className={`local-bottom-controls ${isFullscreen ? (showBottomBar ? 'visible' : 'hidden') : ''}`}
+        className={`local-bottom-controls ${isFullscreen ? (showBottomBar || isScrubbing ? 'visible' : 'hidden') : ''} ${isScrubbing ? 'is-scrubbing' : ''}`}
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
         onMouseEnter={() => {
           isHoveringBottomRef.current = true;
           if (isFullscreen) {
@@ -714,10 +1229,17 @@ export default function LocalVideoSyncPlayer({
           }
         }}
         onMouseLeave={() => {
-          isHoveringBottomRef.current = false;
+          if (!isScrubbingRef.current) {
+            isHoveringBottomRef.current = false;
+          }
         }}
       >
-        <div className="local-scrubber-wrapper">
+        <div
+          className="local-scrubber-wrapper"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <input
             type="range"
             min="0"
@@ -725,6 +1247,20 @@ export default function LocalVideoSyncPlayer({
             step="0.1"
             value={currentTimeSec}
             onChange={handleScrubberChange}
+            onPointerDown={() => {
+              isScrubbingRef.current = true;
+              setIsScrubbing(true);
+              setShowBottomBar(true);
+              setIsCursorIdle(false);
+              if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+            }}
+            onMouseDown={() => {
+              isScrubbingRef.current = true;
+              setIsScrubbing(true);
+              setShowBottomBar(true);
+              setIsCursorIdle(false);
+              if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+            }}
             className="local-scrubber-slider"
           />
         </div>
@@ -783,6 +1319,267 @@ export default function LocalVideoSyncPlayer({
 
           <div className="local-bottom-right">
             <span className="local-badge-sync">P2P Synced Controls</span>
+
+            {/* Feature 1.5: Subtitles Control Group (Independent Toggle + Appearance & Delay Settings) */}
+            <div className="local-subtitle-control-group" ref={subtitleSettingsRef}>
+              <button
+                type="button"
+                className={`local-icon-button local-cc-button ${subtitles ? (subtitlesVisible ? 'active' : 'off') : 'no-subtitles'}`}
+                onClick={handleToggleSubtitles}
+                title={
+                  subtitles
+                    ? (subtitlesVisible
+                        ? `Subtitles: ON (${subtitles.fileName}) • Click to hide (C)`
+                        : `Subtitles: OFF (${subtitles.fileName}) • Click to show (C)`)
+                    : 'Load Subtitles (.srt / .vtt) by drag & drop or click'
+                }
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
+                </svg>
+                {subtitles && (
+                  <span className={`local-cc-badge ${subtitlesVisible ? 'badge-on' : 'badge-off'}`}>
+                    {subtitlesVisible ? 'ON' : 'OFF'}
+                  </span>
+                )}
+              </button>
+
+              {/* Subtitle Appearance & Timing Settings Button */}
+              <button
+                type="button"
+                className={`local-icon-button local-sub-settings-btn ${showSubtitleSettings ? 'active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSubtitleSettings((prev) => !prev);
+                }}
+                title="Subtitle Appearance (Font Size, Color, Background) & Timing Offset Settings"
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" className="sub-settings-gear-icon">
+                  <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+                </svg>
+                <span className="sub-settings-btn-icon">Aa</span>
+              </button>
+
+              {/* Glassmorphic Subtitle Appearance & Timing Settings Popover Card */}
+              {showSubtitleSettings && (
+                <div
+                  className="sub-settings-popover"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="sub-settings-header">
+                    <div className="sub-settings-title">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="#3ea6ff">
+                        <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
+                      </svg>
+                      <span>Subtitle Appearance & Timing</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="sub-close-btn"
+                      onClick={() => setShowSubtitleSettings(false)}
+                      title="Close settings"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Subtitle File Quick Action / Status */}
+                  {!subtitles ? (
+                    <button
+                      type="button"
+                      className="sub-action-load-btn"
+                      onClick={() => subtitleFileInputRef.current?.click()}
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                      </svg>
+                      Load Subtitle File (.SRT / .VTT)
+                    </button>
+                  ) : (
+                    <div className="sub-file-meta-row">
+                      <span className="sub-file-name" title={subtitles.fileName}>
+                        📄 {subtitles.fileName}
+                      </span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          type="button"
+                          className="sub-mini-btn"
+                          onClick={() => subtitleFileInputRef.current?.click()}
+                          title="Replace subtitle file"
+                        >
+                          Replace
+                        </button>
+                        <button
+                          type="button"
+                          className="sub-mini-btn remove"
+                          onClick={handleRemoveSubtitles}
+                          title="Remove subtitles"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Live Preview of native subtitle styling */}
+                  <div className="sub-preview-box">
+                    <div className="sub-preview-label">Live Preview</div>
+                    <div className={`sub-preview-cue preview-size-${subtitleFontSize} preview-color-${subtitleColor} preview-bg-${subtitleBg}`}>
+                      Sample Subtitle (Live Preview)
+                    </div>
+                  </div>
+
+                  {/* Timing Sync Delay Offset */}
+                  <div className="sub-settings-section">
+                    <div className="sub-section-header">
+                      <span className="sub-section-title">TIMING DELAY OFFSET</span>
+                      <span className={`sub-delay-badge ${subtitleDelay === 0 ? 'zero' : subtitleDelay > 0 ? 'positive' : 'negative'}`}>
+                        {subtitleDelay === 0 ? '0.0s (In Sync)' : subtitleDelay > 0 ? `+${subtitleDelay.toFixed(1)}s` : `${subtitleDelay.toFixed(1)}s`}
+                      </span>
+                    </div>
+                    <div className="sub-offset-steppers">
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev - 1.0) * 10) / 10)}
+                        title="Subtitles 1.0s earlier"
+                      >
+                        -1.0s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev - 0.5) * 10) / 10)}
+                        title="Subtitles 0.5s earlier"
+                      >
+                        -0.5s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev - 0.1) * 10) / 10)}
+                        title="Subtitles 0.1s earlier"
+                      >
+                        -0.1s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn sub-step-reset"
+                        onClick={() => setSubtitleDelay(0)}
+                        title="Reset delay to 0.0s"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev + 0.1) * 10) / 10)}
+                        title="Subtitles 0.1s later"
+                      >
+                        +0.1s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev + 0.5) * 10) / 10)}
+                        title="Subtitles 0.5s later"
+                      >
+                        +0.5s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev + 1.0) * 10) / 10)}
+                        title="Subtitles 1.0s later"
+                      >
+                        +1.0s
+                      </button>
+                    </div>
+                    <div className="sub-hint">
+                      Hotkeys: <kbd>[</kbd> and <kbd>]</kbd> to adjust delay in ±0.1s steps (Shift for ±0.5s)
+                    </div>
+                  </div>
+
+                  {/* Font Size Selector */}
+                  <div className="sub-settings-section">
+                    <div className="sub-setting-row">
+                      <span className="sub-setting-name">Font Size</span>
+                      <div className="sub-option-group">
+                        {[
+                          { id: 'sm', label: 'S' },
+                          { id: 'md', label: 'M' },
+                          { id: 'lg', label: 'L' },
+                          { id: 'xl', label: 'XL' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`sub-opt-btn ${subtitleFontSize === opt.id ? 'active' : ''}`}
+                            onClick={() => setSubtitleFontSize(opt.id)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Text Color Selector */}
+                  <div className="sub-settings-section">
+                    <div className="sub-setting-row">
+                      <span className="sub-setting-name">Text Color</span>
+                      <div className="sub-option-group">
+                        {[
+                          { id: 'white', label: 'White', color: '#ffffff' },
+                          { id: 'yellow', label: 'Yellow', color: '#ffeb3b' },
+                          { id: 'cyan', label: 'Cyan', color: '#00e5ff' },
+                          { id: 'lime', label: 'Lime', color: '#a6e22e' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`sub-opt-btn color-chip ${subtitleColor === opt.id ? 'active' : ''}`}
+                            onClick={() => setSubtitleColor(opt.id)}
+                          >
+                            <span className="chip-circle" style={{ backgroundColor: opt.color }}></span>
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Background Style Selector */}
+                  <div className="sub-settings-section">
+                    <div className="sub-setting-row">
+                      <span className="sub-setting-name">Background</span>
+                      <div className="sub-option-group">
+                        {[
+                          { id: 'semi', label: 'Semi-Dark' },
+                          { id: 'solid', label: 'Solid' },
+                          { id: 'none', label: 'Shadow' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`sub-opt-btn ${subtitleBg === opt.id ? 'active' : ''}`}
+                            onClick={() => setSubtitleBg(opt.id)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="sub-settings-footer">
+                    <span>✓ Default native subtitles • Appearance and delay are local per peer</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               type="button"
               className="local-icon-button"
