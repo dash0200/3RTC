@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 export const LIVE_REACTIONS = [
   { id: 'thumbs', emoji: '👍', key: '1', label: 'Thumbs Up' },
@@ -13,8 +13,11 @@ export default function FloatingReactions({
   reactions = [],
   onSendReaction,
   showDock = true,
-  disabled = false
+  disabled = false,
+  hasMedia = false
 }) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
   // Global hotkeys 1-6 for instant reactions when user is not typing
   const handleKeyDown = useCallback(
     (e) => {
@@ -76,30 +79,51 @@ export default function FloatingReactions({
       {/* Floating Quick Reaction Dock */}
       {showDock && typeof onSendReaction === 'function' && (
         <div
-          className="floating-reaction-dock"
+          className={`floating-reaction-dock ${hasMedia ? 'has-media' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}
           role="toolbar"
           aria-label="Live Reactions (Hotkeys 1 through 6)"
         >
-          <div className="reaction-dock-pill">
-            <span className="reaction-dock-hint" title="Press 1-6 on your keyboard anytime to react">
-              ⚡ React
-            </span>
-            <div className="reaction-dock-buttons">
-              {LIVE_REACTIONS.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  className="reaction-dock-btn"
-                  onClick={() => onSendReaction(r.emoji)}
-                  title={`React ${r.emoji} (${r.label} - Press ${r.key})`}
-                  aria-label={`${r.label} reaction`}
-                >
-                  <span className="dock-emoji">{r.emoji}</span>
-                  <span className="dock-hotkey">{r.key}</span>
-                </button>
-              ))}
+          {isCollapsed ? (
+            <button
+              type="button"
+              className="reaction-dock-collapsed-btn"
+              onClick={() => setIsCollapsed(false)}
+              title="Show live reactions dock (Hotkeys 1-6 still work)"
+            >
+              <span>⚡</span>
+              <span className="collapsed-badge">React (1-6)</span>
+            </button>
+          ) : (
+            <div className="reaction-dock-pill">
+              <span className="reaction-dock-hint" title="Press 1-6 on your keyboard anytime to react">
+                ⚡ React
+              </span>
+              <div className="reaction-dock-buttons">
+                {LIVE_REACTIONS.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className="reaction-dock-btn"
+                    onClick={() => onSendReaction(r.emoji)}
+                    title={`React ${r.emoji} (${r.label} - Press ${r.key})`}
+                    aria-label={`${r.label} reaction`}
+                  >
+                    <span className="dock-emoji">{r.emoji}</span>
+                    <span className="dock-hotkey">{r.key}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className="reaction-dock-collapse-btn"
+                onClick={() => setIsCollapsed(true)}
+                title="Minimize reaction dock (Hotkeys 1-6 still work)"
+                aria-label="Minimize reactions"
+              >
+                ✕
+              </button>
             </div>
-          </div>
+          )}
         </div>
       )}
     </>
