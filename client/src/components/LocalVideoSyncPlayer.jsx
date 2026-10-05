@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { parseSubtitleFile, parseSubtitleString } from '../utils/subtitleParser';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
 
 export function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -53,10 +53,18 @@ export default function LocalVideoSyncPlayer({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const isScrubbingRef = useRef(false);
 
-  // Feature 1.5: Drag & Drop Subtitles (.SRT / .VTT)
+  // Feature 1.5: Drag & Drop Subtitles (.SRT / .VTT), Timing Offset & Appearance
   const [subtitles, setSubtitles] = useState(null); // { fileName, cues, vttUrl, vttString, rawText }
   const [subtitlesVisible, setSubtitlesVisible] = useState(true); // Local toggle: hide & show for individual peer (NOT synced)
   const [dragOverlayType, setDragOverlayType] = useState('video'); // 'video' | 'subtitle'
+  const [subtitleDelay, setSubtitleDelay] = useState(0); // in seconds (+ = delay later, - = earlier)
+  const [subtitleFontSize, setSubtitleFontSize] = useState('md'); // 'sm' | 'md' | 'lg' | 'xl'
+  const [subtitleColor, setSubtitleColor] = useState('white'); // 'white' | 'yellow' | 'cyan' | 'lime'
+  const [subtitleBg, setSubtitleBg] = useState('semi'); // 'semi' | 'solid' | 'none'
+  const [showSubtitleSettings, setShowSubtitleSettings] = useState(false);
+  const [delayToast, setDelayToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
+  const subtitleSettingsRef = useRef(null);
 
   const videoRef = useRef(null);
   const playerContainerRef = useRef(null);
@@ -92,36 +100,98 @@ export default function LocalVideoSyncPlayer({
     }
   }, [initialFile]);
 
-  // Revoke subtitle blob URL on unmount or change
+  // Generate active WebVTT URL with delay offset applied
+  const activeVttUrl = useMemo(() => {
+    if (!subtitles || !subtitles.cues || subtitles.cues.length === 0) return null;
+    const vttString = cuesToWebVTT(subtitles.cues, subtitleDelay);
+    const blob = new Blob([vttString], { type: 'text/vtt' });
+    return URL.createObjectURL(blob);
+  }, [subtitles, subtitleDelay]);
+
+  // Revoke subtitle blob URL on unmount or when activeVttUrl changes
   useEffect(() => {
     return () => {
-      if (subtitles?.vttUrl) {
-        try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) {}
+      if (activeVttUrl) {
+        try { URL.revokeObjectURL(activeVttUrl); } catch (e) {}
       }
     };
-  }, [subtitles]);
+  }, [activeVttUrl]);
 
-  // Control browser native textTrack visibility according to local peer's subtitlesVisible state
+  // Auto-dismiss HUD delay toast after 1.8s
+  useEffect(() => {
+    if (delayToast) {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      toastTimeoutRef.current = setTimeout(() => {
+        setDelayToast(null);
+      }, 1800);
+    }
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    };
+  }, [delayToast]);
+
+  // Click outside listener for Subtitle Settings popover
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showSubtitleSettings && subtitleSettingsRef.current && !subtitleSettingsRef.current.contains(e.target)) {
+        setShowSubtitleSettings(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [showSubtitleSettings]);
+
+  // Control browser native textTrack visibility and timing offset
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
 
     const applyTrackMode = () => {
-      if (vid.textTracks && vid.textTracks.length > 0) {
-        for (let i = 0; i < vid.textTracks.length; i++) {
-          vid.textTracks[i].mode = subtitlesVisible ? 'showing' : 'hidden';
+      if (!vid.textTracks || vid.textTracks.length === 0) return;
+      const trackEl = vid.querySelector('track');
+      const activeTextTrack = trackEl?.track;
+
+      for (let i = 0; i < vid.textTracks.length; i++) {
+        const t = vid.textTracks[i];
+        if (activeTextTrack && t === activeTextTrack) {
+          t.mode = subtitlesVisible ? 'showing' : 'hidden';
+        } else if (!activeTextTrack && i === vid.textTracks.length - 1) {
+          t.mode = subtitlesVisible ? 'showing' : 'hidden';
+        } else {
+          t.mode = 'disabled'; // Disable stale or previous tracks
+        }
+      }
+
+      // In-place real-time cue timestamp adjustment
+      if (activeTextTrack?.cues && activeTextTrack.cues.length > 0 && subtitles?.cues) {
+        for (let i = 0; i < activeTextTrack.cues.length && i < subtitles.cues.length; i++) {
+          const cue = activeTextTrack.cues[i];
+          const orig = subtitles.cues[i];
+          const newStart = Math.max(0, orig.startSec + subtitleDelay);
+          const newEnd = Math.max(newStart + 0.05, orig.endSec + subtitleDelay);
+          cue.startTime = newStart;
+          cue.endTime = newEnd;
         }
       }
     };
 
     applyTrackMode();
+    const timer = setTimeout(applyTrackMode, 80);
 
     const trackEl = vid.querySelector('track');
     if (trackEl) {
       trackEl.addEventListener('load', applyTrackMode);
-      return () => trackEl.removeEventListener('load', applyTrackMode);
+      return () => {
+        clearTimeout(timer);
+        trackEl.removeEventListener('load', applyTrackMode);
+      };
     }
-  }, [subtitlesVisible, subtitles]);
+    return () => clearTimeout(timer);
+  }, [subtitlesVisible, activeVttUrl, subtitleDelay, subtitles]);
 
   // 2. Register state getter for late-joiner synchronization
   useEffect(() => {
@@ -617,7 +687,9 @@ export default function LocalVideoSyncPlayer({
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Don't trigger if user is typing in chat or another input
-      if (['INPUT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
+        return;
+      }
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -635,12 +707,36 @@ export default function LocalVideoSyncPlayer({
       } else if (e.code === 'KeyC') {
         e.preventDefault();
         handleToggleSubtitles();
+      } else if (e.code === 'BracketLeft' || e.key === '[' || e.key === '{') {
+        e.preventDefault();
+        if (!subtitles) {
+          setDelayToast('💬 No subtitles loaded. Drop a .srt or .vtt file to adjust delay');
+          return;
+        }
+        const step = e.shiftKey ? 0.5 : 0.1;
+        setSubtitleDelay((prev) => {
+          const next = Math.round((prev - step) * 10) / 10;
+          setDelayToast(`💬 Subtitle Delay: ${next > 0 ? `+${next.toFixed(1)}` : next.toFixed(1)}s`);
+          return next;
+        });
+      } else if (e.code === 'BracketRight' || e.key === ']' || e.key === '}') {
+        e.preventDefault();
+        if (!subtitles) {
+          setDelayToast('💬 No subtitles loaded. Drop a .srt or .vtt file to adjust delay');
+          return;
+        }
+        const step = e.shiftKey ? 0.5 : 0.1;
+        setSubtitleDelay((prev) => {
+          const next = Math.round((prev + step) * 10) / 10;
+          setDelayToast(`💬 Subtitle Delay: ${next > 0 ? `+${next.toFixed(1)}` : next.toFixed(1)}s`);
+          return next;
+        });
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMuted, subtitles]);
+  }, [isMuted, subtitles, isFullscreen]);
 
   const activeVideoSrc = streamVideoUrl || objectUrl;
   const isStreamed = Boolean(streamVideoUrl && !objectUrl);
@@ -921,6 +1017,17 @@ export default function LocalVideoSyncPlayer({
             <span className="local-filename-text">{subtitles.fileName}</span>
             <button
               type="button"
+              className="local-replace-btn local-style-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowSubtitleSettings((prev) => !prev);
+              }}
+              title="Subtitle Appearance (Font Size, Color, Background) & Timing Offset"
+            >
+              🎨 Style & Timing
+            </button>
+            <button
+              type="button"
               className="local-replace-btn"
               onClick={() => subtitleFileInputRef.current?.click()}
               title="Replace subtitle file"
@@ -1052,24 +1159,34 @@ export default function LocalVideoSyncPlayer({
           ref={videoRef}
           src={activeVideoSrc}
           playsInline
-          className="local-video-element"
+          className={`local-video-element cue-size-${subtitleFontSize} cue-color-${subtitleColor} cue-bg-${subtitleBg}`}
           onPlay={handleVideoPlay}
           onPause={handleVideoPause}
           onSeeked={handleVideoSeeked}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
         >
-          {subtitles?.vttUrl && (
+          {activeVttUrl && (
             <track
-              key={subtitles.vttUrl}
+              key={subtitles?.fileName || 'sub-track'}
               kind="subtitles"
-              label={subtitles.fileName || 'Subtitles'}
-              src={subtitles.vttUrl}
+              label={subtitles?.fileName || 'Subtitles'}
+              src={activeVttUrl}
               srcLang="en"
               default
             />
           )}
         </video>
+
+        {/* Delay Offset HUD Toast Notification */}
+        {delayToast && (
+          <div className="local-hud-toast" aria-live="polite">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="#3ea6ff">
+              <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+            </svg>
+            <span>{delayToast}</span>
+          </div>
+        )}
 
         {/* Drag-over overlay indicator */}
         {isDragOver && (
@@ -1203,28 +1320,265 @@ export default function LocalVideoSyncPlayer({
           <div className="local-bottom-right">
             <span className="local-badge-sync">P2P Synced Controls</span>
 
-            {/* Feature 1.5: Local Subtitle Toggle Button (Independent per peer, NOT synced) */}
-            <button
-              type="button"
-              className={`local-icon-button local-cc-button ${subtitles ? (subtitlesVisible ? 'active' : 'off') : 'no-subtitles'}`}
-              onClick={handleToggleSubtitles}
-              title={
-                subtitles
-                  ? (subtitlesVisible
-                      ? `Subtitles: ON (${subtitles.fileName}) • Click to hide (Local)`
-                      : `Subtitles: OFF (${subtitles.fileName}) • Click to show (Local)`)
-                  : 'Load Subtitles (.srt / .vtt) by drag & drop or click'
-              }
-            >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
-              </svg>
-              {subtitles && (
-                <span className={`local-cc-badge ${subtitlesVisible ? 'badge-on' : 'badge-off'}`}>
-                  {subtitlesVisible ? 'ON' : 'OFF'}
-                </span>
+            {/* Feature 1.5: Subtitles Control Group (Independent Toggle + Appearance & Delay Settings) */}
+            <div className="local-subtitle-control-group" ref={subtitleSettingsRef}>
+              <button
+                type="button"
+                className={`local-icon-button local-cc-button ${subtitles ? (subtitlesVisible ? 'active' : 'off') : 'no-subtitles'}`}
+                onClick={handleToggleSubtitles}
+                title={
+                  subtitles
+                    ? (subtitlesVisible
+                        ? `Subtitles: ON (${subtitles.fileName}) • Click to hide (C)`
+                        : `Subtitles: OFF (${subtitles.fileName}) • Click to show (C)`)
+                    : 'Load Subtitles (.srt / .vtt) by drag & drop or click'
+                }
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
+                </svg>
+                {subtitles && (
+                  <span className={`local-cc-badge ${subtitlesVisible ? 'badge-on' : 'badge-off'}`}>
+                    {subtitlesVisible ? 'ON' : 'OFF'}
+                  </span>
+                )}
+              </button>
+
+              {/* Subtitle Appearance & Timing Settings Button */}
+              <button
+                type="button"
+                className={`local-icon-button local-sub-settings-btn ${showSubtitleSettings ? 'active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSubtitleSettings((prev) => !prev);
+                }}
+                title="Subtitle Appearance (Font Size, Color, Background) & Timing Offset Settings"
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" className="sub-settings-gear-icon">
+                  <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+                </svg>
+                <span className="sub-settings-btn-icon">Aa</span>
+              </button>
+
+              {/* Glassmorphic Subtitle Appearance & Timing Settings Popover Card */}
+              {showSubtitleSettings && (
+                <div
+                  className="sub-settings-popover"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="sub-settings-header">
+                    <div className="sub-settings-title">
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="#3ea6ff">
+                        <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/>
+                      </svg>
+                      <span>Subtitle Appearance & Timing</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="sub-close-btn"
+                      onClick={() => setShowSubtitleSettings(false)}
+                      title="Close settings"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Subtitle File Quick Action / Status */}
+                  {!subtitles ? (
+                    <button
+                      type="button"
+                      className="sub-action-load-btn"
+                      onClick={() => subtitleFileInputRef.current?.click()}
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                      </svg>
+                      Load Subtitle File (.SRT / .VTT)
+                    </button>
+                  ) : (
+                    <div className="sub-file-meta-row">
+                      <span className="sub-file-name" title={subtitles.fileName}>
+                        📄 {subtitles.fileName}
+                      </span>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          type="button"
+                          className="sub-mini-btn"
+                          onClick={() => subtitleFileInputRef.current?.click()}
+                          title="Replace subtitle file"
+                        >
+                          Replace
+                        </button>
+                        <button
+                          type="button"
+                          className="sub-mini-btn remove"
+                          onClick={handleRemoveSubtitles}
+                          title="Remove subtitles"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Live Preview of native subtitle styling */}
+                  <div className="sub-preview-box">
+                    <div className="sub-preview-label">Live Preview</div>
+                    <div className={`sub-preview-cue preview-size-${subtitleFontSize} preview-color-${subtitleColor} preview-bg-${subtitleBg}`}>
+                      Sample Subtitle (Live Preview)
+                    </div>
+                  </div>
+
+                  {/* Timing Sync Delay Offset */}
+                  <div className="sub-settings-section">
+                    <div className="sub-section-header">
+                      <span className="sub-section-title">TIMING DELAY OFFSET</span>
+                      <span className={`sub-delay-badge ${subtitleDelay === 0 ? 'zero' : subtitleDelay > 0 ? 'positive' : 'negative'}`}>
+                        {subtitleDelay === 0 ? '0.0s (In Sync)' : subtitleDelay > 0 ? `+${subtitleDelay.toFixed(1)}s` : `${subtitleDelay.toFixed(1)}s`}
+                      </span>
+                    </div>
+                    <div className="sub-offset-steppers">
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev - 1.0) * 10) / 10)}
+                        title="Subtitles 1.0s earlier"
+                      >
+                        -1.0s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev - 0.5) * 10) / 10)}
+                        title="Subtitles 0.5s earlier"
+                      >
+                        -0.5s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev - 0.1) * 10) / 10)}
+                        title="Subtitles 0.1s earlier"
+                      >
+                        -0.1s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn sub-step-reset"
+                        onClick={() => setSubtitleDelay(0)}
+                        title="Reset delay to 0.0s"
+                      >
+                        Reset
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev + 0.1) * 10) / 10)}
+                        title="Subtitles 0.1s later"
+                      >
+                        +0.1s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev + 0.5) * 10) / 10)}
+                        title="Subtitles 0.5s later"
+                      >
+                        +0.5s
+                      </button>
+                      <button
+                        type="button"
+                        className="sub-step-btn"
+                        onClick={() => setSubtitleDelay((prev) => Math.round((prev + 1.0) * 10) / 10)}
+                        title="Subtitles 1.0s later"
+                      >
+                        +1.0s
+                      </button>
+                    </div>
+                    <div className="sub-hint">
+                      Hotkeys: <kbd>[</kbd> and <kbd>]</kbd> to adjust delay in ±0.1s steps (Shift for ±0.5s)
+                    </div>
+                  </div>
+
+                  {/* Font Size Selector */}
+                  <div className="sub-settings-section">
+                    <div className="sub-setting-row">
+                      <span className="sub-setting-name">Font Size</span>
+                      <div className="sub-option-group">
+                        {[
+                          { id: 'sm', label: 'S' },
+                          { id: 'md', label: 'M' },
+                          { id: 'lg', label: 'L' },
+                          { id: 'xl', label: 'XL' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`sub-opt-btn ${subtitleFontSize === opt.id ? 'active' : ''}`}
+                            onClick={() => setSubtitleFontSize(opt.id)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Text Color Selector */}
+                  <div className="sub-settings-section">
+                    <div className="sub-setting-row">
+                      <span className="sub-setting-name">Text Color</span>
+                      <div className="sub-option-group">
+                        {[
+                          { id: 'white', label: 'White', color: '#ffffff' },
+                          { id: 'yellow', label: 'Yellow', color: '#ffeb3b' },
+                          { id: 'cyan', label: 'Cyan', color: '#00e5ff' },
+                          { id: 'lime', label: 'Lime', color: '#a6e22e' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`sub-opt-btn color-chip ${subtitleColor === opt.id ? 'active' : ''}`}
+                            onClick={() => setSubtitleColor(opt.id)}
+                          >
+                            <span className="chip-circle" style={{ backgroundColor: opt.color }}></span>
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Background Style Selector */}
+                  <div className="sub-settings-section">
+                    <div className="sub-setting-row">
+                      <span className="sub-setting-name">Background</span>
+                      <div className="sub-option-group">
+                        {[
+                          { id: 'semi', label: 'Semi-Dark' },
+                          { id: 'solid', label: 'Solid' },
+                          { id: 'none', label: 'Shadow' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`sub-opt-btn ${subtitleBg === opt.id ? 'active' : ''}`}
+                            onClick={() => setSubtitleBg(opt.id)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="sub-settings-footer">
+                    <span>✓ Default native subtitles • Appearance and delay are local per peer</span>
+                  </div>
+                </div>
               )}
-            </button>
+            </div>
 
             <button
               type="button"

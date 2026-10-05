@@ -5354,4 +5354,504 @@ video::cue {
 .local-remove-sub-btn:hover {
   background: rgba(239, 68, 68, 0.25) !important;
   color: #fff !important;
+}
+
+/* ==========================================================================
+   FEATURE 1.5: NATIVE HTML5 SUBTITLES APPEARANCE & TIMING STYLING
+   ========================================================================== */
+
+/* Native ::cue Base Styling for Local Video */
+.local-video-element::cue {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  line-height: 1.45 !important;
+  border-radius: 4px !important;
+  padding: 3px 10px !important;
+  letter-spacing: 0.2px !important;
+}
+
+/* Font Size variations (with responsive clamp scaling) */
+.local-video-element.cue-size-sm::cue {
+  font-size: clamp(0.9rem, 1.4vw, 1.15rem) !important;
+}
+.local-video-element.cue-size-md::cue {
+  font-size: clamp(1.12rem, 1.85vw, 1.5rem) !important;
+}
+.local-video-element.cue-size-lg::cue {
+  font-size: clamp(1.4rem, 2.35vw, 2.1rem) !important;
+}
+.local-video-element.cue-size-xl::cue {
+  font-size: clamp(1.75rem, 3.1vw, 2.8rem) !important;
+}
+
+/* Text Color variations */
+.local-video-element.cue-color-white::cue {
+  color: #ffffff !important;
+}
+.local-video-element.cue-color-yellow::cue {
+  color: #ffeb3b !important;
+}
+.local-video-element.cue-color-cyan::cue {
+  color: #00e5ff !important;
+}
+.local-video-element.cue-color-lime::cue {
+  color: #a6e22e !important;
+}
+
+/* Background variations */
+.local-video-element.cue-bg-semi::cue {
+  background-color: rgba(0, 0, 0, 0.78) !important;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9) !important;
+}
+.local-video-element.cue-bg-solid::cue {
+  background-color: #000000 !important;
+  text-shadow: none !important;
+}
+.local-video-element.cue-bg-none::cue {
+  background-color: transparent !important;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.95), 0 0 8px rgba(0, 0, 0, 0.95), -1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000 !important;
+}
+
+/* Delay Offset HUD Toast Notification */
+.local-hud-toast {
+  position: absolute;
+  top: 76px;
+  right: 24px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  background: rgba(13, 20, 36, 0.94);
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  border-radius: 30px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.75), 0 0 20px rgba(0, 229, 255, 0.25);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #f1f5f9;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+  animation: hudToastIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes hudToastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Subtitle Control Group in Bottom Bar */
+.local-subtitle-control-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.local-sub-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 9px;
+  height: 32px;
+  min-width: 44px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.3px;
+  transition: all 0.2s ease;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.local-sub-settings-btn:hover {
+  background: rgba(0, 229, 255, 0.16);
+  border-color: rgba(0, 229, 255, 0.45);
+  color: #00e5ff;
+}
+
+.local-sub-settings-btn.active {
+  background: rgba(0, 229, 255, 0.24);
+  border-color: #00e5ff;
+  color: #00e5ff;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+}
+
+.sub-settings-gear-icon {
+  opacity: 0.85;
+}
+
+.sub-settings-btn-icon {
+  font-family: serif;
+  font-size: 0.92rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.local-style-btn {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.2), rgba(124, 58, 237, 0.2)) !important;
+  border-color: rgba(0, 229, 255, 0.4) !important;
+  color: #00e5ff !important;
+  font-weight: 600 !important;
+}
+
+.local-style-btn:hover {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.35), rgba(124, 58, 237, 0.35)) !important;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.3) !important;
+}
+
+/* Glassmorphic Subtitle Appearance & Timing Popover Card */
+.sub-settings-popover {
+  position: absolute;
+  bottom: 46px;
+  right: 0;
+  width: 336px;
+  max-width: calc(100vw - 32px);
+  background: rgba(11, 18, 33, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 24px rgba(0, 229, 255, 0.16);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  animation: subPopoverIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: auto;
+  user-select: none;
+}
+
+@keyframes subPopoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.sub-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sub-settings-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.sub-close-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.sub-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+/* Subtitle File Quick Action / Status inside Popover */
+.sub-file-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.sub-file-name {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+}
+
+.sub-mini-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sub-mini-btn:hover {
+  background: rgba(0, 229, 255, 0.2);
+  border-color: rgba(0, 229, 255, 0.4);
+  color: #00e5ff;
+}
+
+.sub-mini-btn.remove:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+
+.sub-action-load-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  background: rgba(0, 229, 255, 0.12);
+  border: 1px dashed rgba(0, 229, 255, 0.45);
+  border-radius: 8px;
+  color: #00e5ff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sub-action-load-btn:hover {
+  background: rgba(0, 229, 255, 0.22);
+  border-color: #00e5ff;
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.25);
+}
+
+/* Live Preview Box */
+.sub-preview-box {
+  background: #000000;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-height: 58px;
+  justify-content: center;
+}
+
+.sub-preview-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #64748b;
+  font-weight: 700;
+  align-self: flex-start;
+}
+
+.sub-preview-cue {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  border-radius: 4px;
+  padding: 2px 8px;
+  line-height: 1.4;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+/* Preview size classes */
+.sub-preview-cue.preview-size-sm { font-size: 0.85rem; }
+.sub-preview-cue.preview-size-md { font-size: 1.05rem; }
+.sub-preview-cue.preview-size-lg { font-size: 1.3rem; }
+.sub-preview-cue.preview-size-xl { font-size: 1.55rem; }
+
+/* Preview color classes */
+.sub-preview-cue.preview-color-white { color: #ffffff; }
+.sub-preview-cue.preview-color-yellow { color: #ffeb3b; }
+.sub-preview-cue.preview-color-cyan { color: #00e5ff; }
+.sub-preview-cue.preview-color-lime { color: #a6e22e; }
+
+/* Preview background classes */
+.sub-preview-cue.preview-bg-semi {
+  background-color: rgba(0, 0, 0, 0.78);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+.sub-preview-cue.preview-bg-solid {
+  background-color: #000000;
+  text-shadow: none;
+}
+.sub-preview-cue.preview-bg-none {
+  background-color: transparent;
+  text-shadow: 0 2px 4px rgba(0,0,0,0.95), -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+}
+
+/* Sections & Steppers */
+.sub-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sub-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sub-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.5px;
+}
+
+.sub-delay-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.sub-delay-badge.zero {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.sub-delay-badge.positive,
+.sub-delay-badge.negative {
+  background: rgba(0, 229, 255, 0.15);
+  color: #00e5ff;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+}
+
+.sub-offset-steppers {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.sub-step-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 5px 2px;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+.sub-step-btn:hover {
+  background: rgba(0, 229, 255, 0.18);
+  border-color: rgba(0, 229, 255, 0.4);
+  color: #00e5ff;
+}
+
+.sub-step-btn.sub-step-reset {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+  font-weight: 700;
+}
+
+.sub-hint {
+  font-size: 0.68rem;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.sub-hint kbd {
+  display: inline-block;
+  padding: 1px 4px;
+  font-size: 0.68rem;
+  font-family: inherit;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  color: #00e5ff;
+}
+
+/* Setting Rows & Options */
+.sub-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sub-setting-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  min-width: 70px;
+}
+
+.sub-option-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.sub-opt-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sub-opt-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f1f5f9;
+}
+
+.sub-opt-btn.active {
+  background: rgba(0, 229, 255, 0.18);
+  border-color: #00e5ff;
+  color: #00e5ff;
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.25);
+}
+
+.color-chip .chip-circle {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+
+.sub-settings-footer {
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.67rem;
+  color: #64748b;
+  text-align: center;
 }
