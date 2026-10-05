@@ -3046,53 +3046,168 @@
 
 .local-toggle-panels-btn {
   position: relative;
-  transition: all 0.18s ease;
-}
-
-.local-toggle-panels-btn.pinned {
-  color: #3ea6ff !important;
-  background: rgba(62, 166, 255, 0.18) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  color: #ffffff !important;
+  font-size: 0.76rem !important;
+  font-weight: 600 !important;
+  padding: 4px 10px !important;
+  border-radius: 9999px !important;
+  cursor: pointer !important;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  line-height: 1 !important;
 }
 
 .local-toggle-panels-btn:hover {
+  background: rgba(62, 166, 255, 0.2) !important;
+  border-color: #3ea6ff !important;
+  color: #3ea6ff !important;
+  transform: scale(1.05) !important;
+}
+
+.local-toggle-panels-btn.pinned {
+  background: rgba(62, 166, 255, 0.25) !important;
+  border-color: #3ea6ff !important;
+  color: #3ea6ff !important;
+  box-shadow: 0 0 10px rgba(62, 166, 255, 0.4) !important;
+}
+
+.local-toggle-panels-btn svg {
+  flex-shrink: 0 !important;
+}
+
+.local-toggle-panels-btn span {
+  display: inline-block !important;
+  letter-spacing: 0.2px !important;
+  white-space: nowrap !important;
+}
+
+/* Toolbar Hide Panels Button (in player bottom controls) */
+.local-toolbar-panel-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: #f0f0f0 !important;
+  font-size: 0.78rem !important;
+  font-weight: 600 !important;
+  padding: 6px 12px !important;
+  border-radius: 9999px !important;
+  cursor: pointer !important;
+  transition: all 0.18s ease !important;
+  white-space: nowrap !important;
+  margin-right: 2px !important;
+}
+
+.local-toolbar-panel-btn:hover {
+  background: rgba(62, 166, 255, 0.22) !important;
+  border-color: #3ea6ff !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px rgba(62, 166, 255, 0.4) !important;
+  transform: translateY(-1px) !important;
+}
+
+.local-toolbar-panel-btn:active {
+  transform: scale(0.96) !important;
+}
+
+.local-toolbar-panel-btn svg {
+  flex-shrink: 0 !important;
+  width: 15px !important;
+  height: 15px !important;
+  fill: #3ea6ff !important;
+  transition: fill 0.18s ease !important;
+}
+
+.local-toolbar-panel-btn:hover svg {
+  fill: #00e5ff !important;
+}
+
+.local-toolbar-panel-btn span {
+  display: inline-block !important;
+  letter-spacing: 0.2px !important;
+  white-space: nowrap !important;
+}
+
+/* Floating Restore Panels Button in Cinema View (Stationed at Top-Right) */
+.local-cinema-restore-btn {
+  position: absolute !important;
+  top: 24px !important;
+  right: 24px !important;
+  z-index: 999999 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  background: #141722 !important;
+  border: 1.5px solid #00e5ff !important;
+  color: #ffffff !important;
+  font-size: 0.84rem !important;
+  font-weight: 600 !important;
+  padding: 8px 18px !important;
+  border-radius: 9999px !important;
+  cursor: pointer !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.95), 0 0 20px rgba(0, 229, 255, 0.45) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  user-select: none !important;
+  transition: opacity 0.25s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease !important;
+}
+
+/* Subtle resting state on idle cursor: remains crystal clear, NEVER disappears */
+.local-fullstage-player.hide-cursor .local-cinema-restore-btn {
+  opacity: 0.8 !important;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.85), 0 0 14px rgba(0, 229, 255, 0.35) !important;
+}
+
+.local-cinema-restore-btn:hover,
+.local-fullstage-player.hide-cursor .local-cinema-restore-btn:hover {
+  opacity: 1 !important;
+  background: #1b2131 !important;
+  border-color: #38ef7d !important;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.98), 0 0 28px rgba(0, 229, 255, 0.75) !important;
+  transform: translateY(-2px) scale(1.04) !important;
+}
+
+.local-cinema-restore-btn:active {
+  transform: scale(0.96) !important;
+}
+
+.local-cinema-restore-btn svg {
+  flex-shrink: 0 !important;
+  width: 18px !important;
+  height: 18px !important;
+  fill: #00e5ff !important;
+  display: block !important;
+}
+
+.local-cinema-restore-btn span {
+  color: #ffffff !important;
+  font-size: 0.84rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.2px !important;
+  white-space: nowrap !important;
+}
+
+.local-cinema-restore-btn .local-hotkey-badge {
+  background: rgba(255, 255, 255, 0.16) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  border-radius: 4px !important;
+  padding: 1px 6px !important;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
   color: #00e5ff !important;
-  transform: scale(1.15);
+  margin-left: 2px !important;
 }
 
-/* Floating Corner Panel Toggle Button at Bottom Right (Fullscreen) */
-.local-corner-panel-toggle {
-  position: absolute;
-  bottom: 22px;
-  right: 22px;
-  z-index: 120;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  background: rgba(14, 14, 18, 0.82);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  color: #fff;
-  font-size: 0.78rem;
-  font-weight: 600;
-  padding: 8px 15px;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 14px rgba(62, 166, 255, 0.3);
-  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.local-corner-panel-toggle:hover {
-  background: rgba(22, 22, 30, 0.96);
-  border-color: #3ea6ff;
-  color: #3ea6ff;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.85), 0 0 20px rgba(62, 166, 255, 0.55);
-  transform: translateY(-2px) scale(1.05);
-}
-
-.local-corner-panel-toggle svg {
-  flex-shrink: 0;
+/* Ensure cursor is visible on hover even if hide-cursor is applied */
+.local-fullstage-player.hide-cursor .local-cinema-restore-btn,
+.local-fullstage-player.hide-cursor .local-cinema-restore-btn * {
+  cursor: pointer !important;
 }
 
 .local-volume-slider {
@@ -5143,6 +5258,29 @@
 .stage-canvas.has-video .floating-reaction-dock {
   bottom: 86px;
   right: 20px;
+}
+
+/* In Fullscreen: Synchronize reaction dock with player controls */
+.local-fullstage-player.is-fullscreen .floating-reaction-dock {
+  z-index: 105 !important;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease !important;
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+  pointer-events: auto !important;
+}
+
+/* Auto-hide reaction dock when controls auto-hide or in Cinema View (matches player controls) */
+.local-fullstage-player.is-fullscreen.controls-hidden .floating-reaction-dock,
+.local-fullstage-player.is-fullscreen.panels-hidden .floating-reaction-dock {
+  opacity: 0 !important;
+  transform: translateY(24px) scale(0.95) !important;
+  pointer-events: none !important;
+}
+
+/* Ensure reaction dock is interactive when visible and shows pointer cursor even if hide-cursor is applied */
+.local-fullstage-player.hide-cursor .floating-reaction-dock,
+.local-fullstage-player.hide-cursor .floating-reaction-dock * {
+  cursor: pointer !important;
 }
 
 .reaction-dock-pill {
