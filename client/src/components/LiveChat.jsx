@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { getAvatarColor } from '../utils/sound';
 import { copyToClipboard } from '../utils/clipboard';
 import { extractYouTubeId, fetchYouTubeTitle } from './YouTubeSyncPlayer';
+import { PeerVoicePanel } from './PeerVoiceRoster';
 
 const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
@@ -33,7 +34,14 @@ export default function LiveChat({
   peerCount = 0,
   activeTab: controlledActiveTab,
   onTabChange,
-  onSendReaction
+  onSendReaction,
+  connectedPeers = [],
+  localUser = null,
+  onSetPeerVolume,
+  onToggleMutePeer,
+  onToggleMic,
+  roomId = '',
+  onCopyRoom
 }) {
   const DEFAULT_WIDTH = 380;
   const MIN_WIDTH = 260;
@@ -429,6 +437,19 @@ export default function LiveChat({
             {unreadLogsCount > 0 && activeTab !== 'logs' && (
               <span className="tab-unread-dot logs" title={`${unreadLogsCount} new events`}></span>
             )}
+          </button>
+
+          <button
+            type="button"
+            className={`chat-tab-btn ${activeTab === 'peers' ? 'active' : ''}`}
+            onClick={() => setActiveTab('peers')}
+            title="Voice & Peers Volume"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+              <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+            </svg>
+            <span>Peers</span>
+            {connectedPeers.length > 0 && <span className="tab-badge voice-badge">{connectedPeers.length + 1}</span>}
           </button>
         </div>
 
@@ -828,6 +849,20 @@ export default function LiveChat({
               )}
             </div>
           </div>
+        )}
+
+        {/* TAB 4: Voice & Peer Audio Settings */}
+        {activeTab === 'peers' && (
+          <PeerVoicePanel
+            connectedPeers={connectedPeers}
+            localUser={localUser}
+            onSetPeerVolume={onSetPeerVolume}
+            onToggleMutePeer={onToggleMutePeer}
+            onToggleMic={onToggleMic}
+            onToggleBlockAudio={onToggleBlockAudio}
+            roomId={roomId}
+            onCopyRoom={onCopyRoom}
+          />
         )}
       </aside>
     </>

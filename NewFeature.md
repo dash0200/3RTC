@@ -80,14 +80,22 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ## 2. 🎙️ Voice & Peer Audio Upgrades
 
-### 2.1 Per-Peer Volume Sliders & Speaking Rings
-- **Description**: Visual voice activity detection and individual volume adjustments.
+### 2.1 Per-Peer Volume Sliders & Speaking Rings ✅ `[COMPLETED]`
+- **Description**: Real-time visual voice activity detection (VAD), discrete volume sliders ($0\% - 200\%$) per peer, and one-click peer muting.
 - **Key Capabilities**:
-  - Pulsating green speaking ring around peer badges when voice audio exceeds threshold.
-  - Discrete volume slider $(0\% - 200\%)$ per connected peer to balance loud vs quiet microphones.
-  - One-click mute button for individual noisy peers without muting the entire room.
+  - **Animated Speaking Rings**: Neon-green pulsating aura rings around peer avatars when vocal speech exceeds threshold (`average > 12`).
+  - **Live VU Energy Meters**: Real-time dynamic audio level indicators for both self-mic test and each remote peer.
+  - **Discrete Volume Sliders (0% - 200%)**: Custom gradient range sliders with quick-preset chips ($50\%$, $100\%$, $150\%$, $200\%$) powered by Web Audio `GainNode` for clean amplification up to 200%.
+  - **One-Click "Mute for Me"**: Silence any individual noisy peer without deafening the whole room.
+  - **Dual Placement**:
+    - **Stage Controls Bar**: Compact peer badges with initials and speaking rings; clicking any badge opens an interactive glassmorphic volume popover.
+    - **Sidebar "Peers" Tab**: Dedicated 4th navigation tab in `LiveChat` displaying full user cards, mic test meter, individual volume sliders, and mute toggles.
 - **Implementation Notes**:
-  - Use `AudioContext` with `AnalyserNode` to sample microphone decibel levels in real time.
+  - Components: [PeerVoiceRoster.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/PeerVoiceRoster.jsx) (`PeerVoiceRoster`, `PeerVoiceBadge`, `PeerAudioPopover`, `PeerVoicePanel`).
+  - Web Audio & VAD loop: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx) (`localAnalyserRef`, `peerEntry.analyserNode`, 75ms sampling interval, `peer-identity` handshake).
+  - Stage integration: [Stage.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Stage.jsx).
+  - Sidebar integration: [LiveChat.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LiveChat.jsx).
+  - Glassmorphic styling & keyframe animations: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
