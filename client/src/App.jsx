@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Header from './components/Header';
 import Stage from './components/Stage';
 import LiveChat from './components/LiveChat';
@@ -119,8 +119,15 @@ export default function App() {
     const [isAudioBlocked, setIsAudioBlocked] = useState(false);
     const [peerVoiceStates, setPeerVoiceStates] = useState({});
 
+    // Feature 2.1: Per-Peer Volume Sliders & Speaking Rings State
+    const [peerVolumes, setPeerVolumes] = useState({}); // { [peerId]: number (0.0 to 2.0) }
+    const [localMutedPeers, setLocalMutedPeers] = useState({}); // { [peerId]: boolean }
+    const [peerAudioActivity, setPeerAudioActivity] = useState({}); // { [peerId]: { isSpeaking: boolean, level: number } }
+    const [localAudioActivity, setLocalAudioActivity] = useState({ isSpeaking: false, level: 0 });
+    const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username: string, isHost: boolean, isMuted: boolean } }
+
     // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
-    // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement }>
+    // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement, webAudioSource, webAudioGain, analyserNode }>
     const peersRef = useRef(new Map());
     const wsRef = useRef(null);
     const currentRoomRef = useRef(null);
@@ -134,12 +141,18 @@ export default function App() {
     const localStreamRef = useRef(null);
     const isMicMutedRef = useRef(true);
     const isAudioBlockedRef = useRef(false);
+    const peerVolumesRef = useRef({});
+    const localMutedPeersRef = useRef({});
+    const localAnalyserRef = useRef(null);
+    const localSourceNodeRef = useRef(null);
 
     currentRoomRef.current = roomId;
     isHostRef.current = isHost;
     activeVideoIdRef.current = activeVideoId;
     isMicMutedRef.current = isMicMuted;
     isAudioBlockedRef.current = isAudioBlocked;
+    peerVolumesRef.current = peerVolumes;
+    localMutedPeersRef.current = localMutedPeers;
 
     const showToast = useCallback((msg) => {
         setToastMessage(msg);
@@ -218,9 +231,25 @@ export default function App() {
                     entry.webAudioGain = null;
                 }
             } catch { }
+            try {
+                if (entry.analyserNode) {
+                    entry.analyserNode.disconnect();
+                    entry.analyserNode = null;
+                }
+            } catch { }
             try { entry.dataChannel?.close(); } catch { }
             try { entry.pc?.close(); } catch { }
             peersRef.current.delete(targetPeerId);
+            setPeerMetadata((prev) => {
+                const next = { ...prev };
+                delete next[targetPeerId];
+                return next;
+            });
+            setPeerAudioActivity((prev) => {
+                const next = { ...prev };
+                delete next[targetPeerId];
+                return next;
+            });
             updateP2PStatus();
         }
     }, [updateP2PStatus]);
@@ -248,10 +277,18 @@ export default function App() {
                     entry.webAudioGain = null;
                 }
             } catch { }
+            try {
+                if (entry.analyserNode) {
+                    entry.analyserNode.disconnect();
+                    entry.analyserNode = null;
+                }
+            } catch { }
             try { entry.dataChannel?.close(); } catch { }
             try { entry.pc?.close(); } catch { }
         }
         peersRef.current.clear();
+        setPeerMetadata({});
+        setPeerAudioActivity({});
         setIsP2PConnected(false);
         setP2pStatusText('Waiting for peer to enter 5-digit code...');
         setLocalVideoFile(null);
@@ -557,9 +594,13 @@ export default function App() {
             }
 
             const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+            const isLocalMutedInit = Boolean(localMutedPeersRef.current[targetPeerId]);
+            const peerVolInit = peerVolumesRef.current[targetPeerId] !== undefined ? peerVolumesRef.current[targetPeerId] : 1.0;
+            const effectiveInit = isAudioBlockedRef.current || isLocalMutedInit ? 0 : peerVolInit;
+
             audioEl.srcObject = remoteStream;
-            audioEl.muted = isAudioBlockedRef.current;
-            audioEl.volume = 1.0;
+            audioEl.muted = effectiveInit === 0;
+            audioEl.volume = Math.min(1.0, effectiveInit);
             if (typeof audioEl.setSinkId === 'function') {
                 audioEl.setSinkId('').catch(() => { });
             }
@@ -583,16 +624,31 @@ export default function App() {
                     if (peerEntry.webAudioGain) {
                         try { peerEntry.webAudioGain.disconnect(); } catch { }
                     }
+                    if (peerEntry.analyserNode) {
+                        try { peerEntry.analyserNode.disconnect(); } catch { }
+                    }
 
                     const srcNode = ctx.createMediaStreamSource(stream);
                     const gainNode = ctx.createGain();
-                    gainNode.gain.value = isAudioBlockedRef.current ? 0 : 1.0;
+                    const analyserNode = ctx.createAnalyser();
+                    analyserNode.fftSize = 256;
+                    analyserNode.smoothingTimeConstant = 0.5;
+
+                    const isLocalMuted = Boolean(localMutedPeersRef.current[targetPeerId]);
+                    const currentVol = peerVolumesRef.current[targetPeerId] !== undefined ? peerVolumesRef.current[targetPeerId] : 1.0;
+                    const effectiveGain = isAudioBlockedRef.current || isLocalMuted ? 0 : currentVol;
+
+                    gainNode.gain.value = effectiveGain;
                     srcNode.connect(gainNode);
                     gainNode.connect(ctx.destination);
 
+                    // Connect to analyser for Voice Activity Detection (Speaking Rings & VU meter)
+                    srcNode.connect(analyserNode);
+
                     peerEntry.webAudioSource = srcNode;
                     peerEntry.webAudioGain = gainNode;
-                    logLocalDebug('WEBAUDIO_ROUTED', `Peer: ${targetPeerId} -> Web Audio route connected (ctx: ${ctx.state})`);
+                    peerEntry.analyserNode = analyserNode;
+                    logLocalDebug('WEBAUDIO_ROUTED', `Peer: ${targetPeerId} -> Web Audio route connected (ctx: ${ctx.state}, gain: ${effectiveGain})`);
                 } catch (err) {
                     logLocalDebug('WEBAUDIO_ERR', `AudioContext route error: ${err.message}`);
                 }
@@ -676,10 +732,18 @@ export default function App() {
                 addSystemMessage('Direct Peer-to-Peer DataChannel established. Chat & YouTube Sync is live!');
                 showToast('Direct P2P Connected!');
 
-                // Share initial voice mute status with peer
+                // Share identity and initial voice mute status with peer
                 try {
                     dc.send(JSON.stringify({
+                        type: 'peer-identity',
+                        peerId: peerIdRef.current,
+                        username: username,
+                        isHost: isHostRef.current,
+                        isMuted: isMicMutedRef.current
+                    }));
+                    dc.send(JSON.stringify({
                         type: 'peer-voice-status',
+                        peerId: peerIdRef.current,
                         sender: username,
                         isMuted: isMicMutedRef.current
                     }));
@@ -710,13 +774,42 @@ export default function App() {
 
                 try {
                     const data = JSON.parse(event.data);
-                    if (data.type === 'chat') {
+                    if (data.type === 'peer-identity') {
+                        setPeerMetadata((prev) => ({
+                            ...prev,
+                            [targetPeerId]: {
+                                username: data.username || `User_${targetPeerId.slice(0, 4)}`,
+                                isHost: Boolean(data.isHost),
+                                isMuted: Boolean(data.isMuted)
+                            }
+                        }));
+                        if (!data.isReply) {
+                            try {
+                                dc.send(JSON.stringify({
+                                    type: 'peer-identity',
+                                    peerId: peerIdRef.current,
+                                    username: username,
+                                    isHost: isHostRef.current,
+                                    isMuted: isMicMutedRef.current,
+                                    isReply: true
+                                }));
+                            } catch (e) { }
+                        }
+                    } else if (data.type === 'chat') {
                         setMessages((prev) => [...prev, { ...data, isSelf: false }]);
                         sound.playPop();
                     } else if (data.type === 'peer-voice-status') {
                         setPeerVoiceStates((prev) => ({
                             ...prev,
                             [data.sender]: { isMuted: data.isMuted }
+                        }));
+                        setPeerMetadata((prev) => ({
+                            ...prev,
+                            [targetPeerId]: {
+                                ...(prev[targetPeerId] || {}),
+                                username: data.sender || prev[targetPeerId]?.username || `User_${targetPeerId.slice(0, 4)}`,
+                                isMuted: data.isMuted
+                            }
                         }));
                         // When remote peer un-mutes, ensure their audio element is actively playing
                         if (!data.isMuted) {
@@ -1319,9 +1412,22 @@ export default function App() {
                 } catch { }
                 localStreamRef.current = null;
             }
+            if (localSourceNodeRef.current) {
+                try { localSourceNodeRef.current.disconnect(); } catch { }
+                localSourceNodeRef.current = null;
+            }
+            if (localAnalyserRef.current) {
+                try { localAnalyserRef.current.disconnect(); } catch { }
+                localAnalyserRef.current = null;
+            }
             setIsMicMuted(true);
             setIsAudioBlocked(false);
             setPeerVoiceStates({});
+            setPeerVolumes({});
+            setLocalMutedPeers({});
+            setPeerMetadata({});
+            setPeerAudioActivity({});
+            setLocalAudioActivity({ isSpeaking: false, level: 0 });
             cleanupAllPeers();
             setRoomId(null);
             setIsHost(false);
@@ -1781,6 +1887,33 @@ export default function App() {
                     localStreamRef.current = stream;
                 }
 
+                // Connect local microphone to Web Audio AnalyserNode for Speaking Rings & VU meter
+                try {
+                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                    if (AudioContextClass) {
+                        if (!window.__webrtcAudioCtx) {
+                            window.__webrtcAudioCtx = new AudioContextClass();
+                        }
+                        const ctx = window.__webrtcAudioCtx;
+                        if (ctx.state === 'suspended') {
+                            ctx.resume().catch(() => { });
+                        }
+                        if (localSourceNodeRef.current) {
+                            try { localSourceNodeRef.current.disconnect(); } catch { }
+                        }
+                        if (localAnalyserRef.current) {
+                            try { localAnalyserRef.current.disconnect(); } catch { }
+                        }
+                        const localSrc = ctx.createMediaStreamSource(stream);
+                        const localAnalyser = ctx.createAnalyser();
+                        localAnalyser.fftSize = 256;
+                        localAnalyser.smoothingTimeConstant = 0.5;
+                        localSrc.connect(localAnalyser);
+                        localSourceNodeRef.current = localSrc;
+                        localAnalyserRef.current = localAnalyser;
+                    }
+                } catch { }
+
                 const audioTrack = stream.getAudioTracks()[0];
                 if (audioTrack) {
                     audioTrack.enabled = true;
@@ -1844,6 +1977,7 @@ export default function App() {
             }
             setIsMicMuted(true);
             isMicMutedRef.current = true;
+            setLocalAudioActivity({ isSpeaking: false, level: 0 });
             showToast('🔇 Microphone muted');
             addSystemMessage('🔇 You muted your microphone.');
 
@@ -1867,12 +2001,16 @@ export default function App() {
             isAudioBlockedRef.current = nextVal;
 
             // Mute/unmute all peer audio streams (HTMLMediaElement + Web Audio gain)
-            for (const peer of peersRef.current.values()) {
+            for (const [pId, peer] of peersRef.current.entries()) {
+                const isLocalMuted = Boolean(localMutedPeersRef.current[pId]);
+                const vol = peerVolumesRef.current[pId] !== undefined ? peerVolumesRef.current[pId] : 1.0;
+                const effective = nextVal || isLocalMuted ? 0 : vol;
                 if (peer.audioElement) {
-                    peer.audioElement.muted = nextVal;
+                    peer.audioElement.muted = effective === 0;
+                    peer.audioElement.volume = Math.min(1.0, effective);
                 }
                 if (peer.webAudioGain) {
-                    peer.webAudioGain.gain.value = nextVal ? 0 : 1.0;
+                    peer.webAudioGain.gain.value = effective;
                 }
             }
 
@@ -1885,6 +2023,7 @@ export default function App() {
                 }
                 setIsMicMuted(true);
                 isMicMutedRef.current = true;
+                setLocalAudioActivity({ isSpeaking: false, level: 0 });
 
                 const voiceMsg = {
                     type: 'peer-voice-status',
@@ -1906,6 +2045,178 @@ export default function App() {
             return nextVal;
         });
     }, [addSystemMessage, showToast, username]);
+
+    // Feature 2.1: Real-time Voice Activity Detection (VAD) & Speaking Rings Sampling Loop
+    useEffect(() => {
+        const buffer = new Uint8Array(128); // 128 frequency bins (fftSize = 256)
+        const interval = setInterval(() => {
+            // 1. Local Microphone Activity
+            let localSpeaking = false;
+            let localLevel = 0;
+            if (!isMicMutedRef.current && localAnalyserRef.current) {
+                try {
+                    localAnalyserRef.current.getByteFrequencyData(buffer);
+                    let sum = 0;
+                    for (let i = 0; i < buffer.length; i++) {
+                        sum += buffer[i];
+                    }
+                    const avg = sum / buffer.length;
+                    if (avg > 12) {
+                        localSpeaking = true;
+                    }
+                    localLevel = Math.min(100, Math.round((avg / 70) * 100));
+                } catch { }
+            }
+
+            // 2. Remote Peers Voice Activity
+            const activityMap = {};
+            for (const [peerId, entry] of peersRef.current.entries()) {
+                if (entry.analyserNode) {
+                    try {
+                        entry.analyserNode.getByteFrequencyData(buffer);
+                        let sum = 0;
+                        for (let i = 0; i < buffer.length; i++) {
+                            sum += buffer[i];
+                        }
+                        const avg = sum / buffer.length;
+                        const isSpeaking = avg > 12;
+                        const level = Math.min(100, Math.round((avg / 70) * 100));
+                        activityMap[peerId] = { isSpeaking, level };
+                    } catch {
+                        activityMap[peerId] = { isSpeaking: false, level: 0 };
+                    }
+                } else {
+                    activityMap[peerId] = { isSpeaking: false, level: 0 };
+                }
+            }
+
+            setLocalAudioActivity((prev) => {
+                if (prev.isSpeaking !== localSpeaking || Math.abs(prev.level - localLevel) > 4) {
+                    return { isSpeaking: localSpeaking, level: localLevel };
+                }
+                return prev;
+            });
+
+            setPeerAudioActivity((prev) => {
+                let changed = false;
+                const peerIds = Object.keys(activityMap);
+                if (peerIds.length !== Object.keys(prev).length) {
+                    return activityMap;
+                }
+                for (const pid of peerIds) {
+                    const oldAct = prev[pid];
+                    const newAct = activityMap[pid];
+                    if (!oldAct || oldAct.isSpeaking !== newAct.isSpeaking || Math.abs(oldAct.level - newAct.level) > 5) {
+                        changed = true;
+                        break;
+                    }
+                }
+                return changed ? activityMap : prev;
+            });
+        }, 75);
+
+        return () => clearInterval(interval);
+    }, []);
+
+    // Feature 2.1: Per-Peer Volume Slider Handler (0% - 200%)
+    const handleSetPeerVolume = useCallback((peerId, vol) => {
+        const clamped = Math.max(0, Math.min(2.0, Math.round(vol * 100) / 100));
+        setPeerVolumes((prev) => ({
+            ...prev,
+            [peerId]: clamped
+        }));
+        peerVolumesRef.current[peerId] = clamped;
+
+        // Auto unmute if user adjusts slider while locally muted
+        if (localMutedPeersRef.current[peerId] && clamped > 0) {
+            setLocalMutedPeers((prev) => ({ ...prev, [peerId]: false }));
+            localMutedPeersRef.current[peerId] = false;
+        }
+
+        const entry = peersRef.current.get(peerId);
+        if (entry) {
+            const isLocalMuted = Boolean(localMutedPeersRef.current[peerId]);
+            const effective = isAudioBlockedRef.current || isLocalMuted ? 0 : clamped;
+            if (entry.webAudioGain) {
+                entry.webAudioGain.gain.value = effective;
+            }
+            if (entry.audioElement) {
+                entry.audioElement.volume = Math.min(1.0, effective);
+                entry.audioElement.muted = effective === 0;
+            }
+        }
+    }, []);
+
+    // Feature 2.1: One-Click Peer Mute for Me
+    const handleToggleMutePeer = useCallback((peerId) => {
+        setLocalMutedPeers((prev) => {
+            const nextVal = !prev[peerId];
+            localMutedPeersRef.current[peerId] = nextVal;
+
+            const entry = peersRef.current.get(peerId);
+            if (entry) {
+                const vol = peerVolumesRef.current[peerId] !== undefined ? peerVolumesRef.current[peerId] : 1.0;
+                const effective = isAudioBlockedRef.current || nextVal ? 0 : vol;
+                if (entry.webAudioGain) {
+                    entry.webAudioGain.gain.value = effective;
+                }
+                if (entry.audioElement) {
+                    entry.audioElement.volume = Math.min(1.0, effective);
+                    entry.audioElement.muted = effective === 0;
+                }
+            }
+
+            const pName = peerMetadata[peerId]?.username || 'Peer';
+            if (nextVal) {
+                showToast(`🔇 Muted ${pName} for you`);
+                addSystemMessage(`🔇 You muted ${pName} for yourself.`);
+            } else {
+                showToast(`🔊 Unmuted ${pName}`);
+                addSystemMessage(`🔊 You unmuted ${pName}.`);
+            }
+
+            return { ...prev, [peerId]: nextVal };
+        });
+    }, [addSystemMessage, peerMetadata, showToast]);
+
+    // Construct connected peers list with volume, mute, identity & speaking status
+    const connectedPeers = useMemo(() => {
+        const list = [];
+        for (const [peerId, entry] of peersRef.current.entries()) {
+            if (entry.isConnected || entry.dataChannel?.readyState === 'open') {
+                const meta = peerMetadata[peerId] || {};
+                const voiceState = peerVoiceStates[meta.username] || {};
+                const act = peerAudioActivity[peerId] || { isSpeaking: false, level: 0 };
+                const vol = peerVolumes[peerId] !== undefined ? peerVolumes[peerId] : 1.0;
+                const isLocalMuted = Boolean(localMutedPeers[peerId]);
+
+                list.push({
+                    peerId,
+                    username: meta.username || `Peer ${peerId.slice(0, 4)}`,
+                    isHost: Boolean(meta.isHost),
+                    isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceState.isMuted !== undefined ? voiceState.isMuted : true),
+                    isSpeaking: act.isSpeaking,
+                    audioLevel: act.level,
+                    volume: vol,
+                    isLocalMuted
+                });
+            }
+        }
+        return list;
+    }, [peerMetadata, peerVoiceStates, peerAudioActivity, peerVolumes, localMutedPeers, peerCount, isP2PConnected]);
+
+    const localUser = useMemo(() => {
+        if (!roomId) return null;
+        return {
+            peerId: peerIdRef.current,
+            username: username,
+            isHost: isHost,
+            isMuted: isMicMuted,
+            isSpeaking: localAudioActivity.isSpeaking,
+            audioLevel: localAudioActivity.level,
+            isSelf: true
+        };
+    }, [roomId, username, isHost, isMicMuted, localAudioActivity]);
 
     return (
         <div className="app-container">
@@ -1976,6 +2287,10 @@ export default function App() {
                         username={username}
                         floatingReactions={floatingReactions}
                         onSendReaction={handleSendReaction}
+                        connectedPeers={connectedPeers}
+                        localUser={localUser}
+                        onSetPeerVolume={handleSetPeerVolume}
+                        onToggleMutePeer={handleToggleMutePeer}
                     />
                 </main>
             </div>
@@ -2009,6 +2324,13 @@ export default function App() {
                 activeTab={sidebarTab}
                 onTabChange={setSidebarTab}
                 onSendReaction={handleSendReaction}
+                connectedPeers={connectedPeers}
+                localUser={localUser}
+                onSetPeerVolume={handleSetPeerVolume}
+                onToggleMutePeer={handleToggleMutePeer}
+                onToggleMic={toggleMicrophone}
+                roomId={roomId}
+                onCopyRoom={handleCopyRoom}
             />
 
             {/* Modals */}

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
 import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
 import FloatingReactions from './FloatingReactions';
+import PeerVoiceRoster from './PeerVoiceRoster';
 
 export default function Stage({
   roomId,
@@ -9,6 +10,10 @@ export default function Stage({
   peerCount,
   isP2PConnected,
   p2pStatusText,
+  connectedPeers = [],
+  localUser = null,
+  onSetPeerVolume,
+  onToggleMutePeer,
   onOpenCreate,
   onOpenJoin,
   onCopyRoom,
@@ -232,6 +237,17 @@ export default function Stage({
           <div className={`p2p-badge ${isP2PConnected ? 'active' : ''}`}>
             {isP2PConnected ? 'P2P DIRECT MESH' : 'WAITING PEERS'}
           </div>
+
+          {/* Voice Chat Avatars, Speaking Rings & Per-Peer Volume */}
+          {roomId && (
+            <PeerVoiceRoster
+              connectedPeers={connectedPeers}
+              localUser={localUser}
+              onSetPeerVolume={onSetPeerVolume}
+              onToggleMutePeer={onToggleMutePeer}
+              onToggleMic={onToggleMic}
+            />
+          )}
         </div>
 
         <div className="controls-center">
