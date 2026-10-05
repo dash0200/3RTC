@@ -126,6 +126,9 @@ export default function Stage({
             onRequestP2PStream={onRequestP2PStream}
             onCancelP2PStream={onCancelP2PStream}
             isHost={isHost}
+            floatingReactions={floatingReactions}
+            onSendReaction={onSendReaction}
+            roomId={roomId}
           />
         ) : showTheater ? (
           /* Case 2B: YouTube Player / Watch Party Lobby */
