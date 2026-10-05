@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
+import FloatingReactions from './FloatingReactions';
 
 export function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -34,7 +35,10 @@ export default function LocalVideoSyncPlayer({
   streamVideoUrl = null,
   onRequestP2PStream,
   onCancelP2PStream,
-  isHost = false
+  isHost = false,
+  floatingReactions = [],
+  onSendReaction,
+  roomId = null
 }) {
   const [file, setFile] = useState(initialFile);
   const [objectUrl, setObjectUrl] = useState(null);
@@ -53,6 +57,11 @@ export default function LocalVideoSyncPlayer({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const isScrubbingRef = useRef(false);
 
+  // Toggle All Panels in Fullscreen (Pure Cinema Mode vs Pinned / Visible Controls)
+  const [panelsPinned, setPanelsPinned] = useState(false);
+  const [panelsManuallyHidden, setPanelsManuallyHidden] = useState(false);
+  const allPanelsVisible = (showBottomBar || showTopBar || panelsPinned) && !panelsManuallyHidden;
+
   // Feature 1.5: Drag & Drop Subtitles (.SRT / .VTT), Timing Offset & Appearance
   const [subtitles, setSubtitles] = useState(null); // { fileName, cues, vttUrl, vttString, rawText }
   const [subtitlesVisible, setSubtitlesVisible] = useState(true); // Local toggle: hide & show for individual peer (NOT synced)
@@ -65,6 +74,7 @@ export default function LocalVideoSyncPlayer({
   const [delayToast, setDelayToast] = useState(null);
   const toastTimeoutRef = useRef(null);
   const subtitleSettingsRef = useRef(null);
+  const lastMousePosRef = useRef({ x: 0, y: 0 });
 
   const videoRef = useRef(null);
   const playerContainerRef = useRef(null);
@@ -432,6 +442,11 @@ export default function LocalVideoSyncPlayer({
   const togglePlayPause = () => {
     const vid = videoRef.current;
     if (!vid) return;
+    if (isFullscreen) {
+      setShowTopBar(true);
+      setShowBottomBar(true);
+      setIsCursorIdle(false);
+    }
     if (vid.paused) {
       vid.play().catch(() => {});
     } else {
@@ -551,6 +566,34 @@ export default function LocalVideoSyncPlayer({
     }
   };
 
+  const handleToggleAllPanels = useCallback((e) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    if (allPanelsVisible) {
+      // Hide all panels (Clean Cinema View)
+      setPanelsManuallyHidden(true);
+      setPanelsPinned(false);
+      setShowTopBar(false);
+      setShowBottomBar(false);
+      setShowSubtitleSettings(false);
+      setIsCursorIdle(true);
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+      setDelayToast('👁️ All Panels Hidden (Cinema View)');
+    } else {
+      // Reveal and pin all panels visible
+      setPanelsManuallyHidden(false);
+      setPanelsPinned(true);
+      setShowTopBar(true);
+      setShowBottomBar(true);
+      setIsCursorIdle(false);
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+      setDelayToast('📌 All Panels Shown & Locked');
+    }
+    setTimeout(() => setDelayToast(''), 2200);
+  }, [allPanelsVisible]);
+
   useEffect(() => {
     const handleFullscreenChange = () => {
       const isNowFullscreen = Boolean(
@@ -561,6 +604,8 @@ export default function LocalVideoSyncPlayer({
       );
       setIsFullscreen(isNowFullscreen);
       if (!isNowFullscreen) {
+        setPanelsManuallyHidden(false);
+        setPanelsPinned(false);
         setShowTopBar(true);
         setShowBottomBar(true);
         setIsCursorIdle(false);
@@ -568,15 +613,22 @@ export default function LocalVideoSyncPlayer({
           clearTimeout(idleTimeoutRef.current);
         }
       } else {
-        // When entering fullscreen, show controls with initial visibility grace period
+        // When entering fullscreen, show all controls with initial grace period
+        setPanelsManuallyHidden(false);
         setShowTopBar(true);
         setShowBottomBar(true);
         setIsCursorIdle(false);
         if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
         idleTimeoutRef.current = setTimeout(() => {
-          if (!isHoveringBottomRef.current && !isScrubbingRef.current) setShowBottomBar(false);
-          if (!isHoveringTopRef.current) setShowTopBar(false);
-          if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current) {
+          const isFs = Boolean(
+            document.fullscreenElement ||
+            document.webkitFullscreenElement ||
+            document.mozFullScreenElement ||
+            document.msFullscreenElement
+          );
+          if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings && !panelsPinned) {
+            setShowTopBar(false);
+            setShowBottomBar(false);
             setIsCursorIdle(true);
           }
         }, 3500);
@@ -597,16 +649,28 @@ export default function LocalVideoSyncPlayer({
         clearTimeout(idleTimeoutRef.current);
       }
     };
-  }, []);
+  }, [showSubtitleSettings, panelsPinned]);
 
   // Global pointerup / mouseup to ensure scrubbing state resets safely anywhere
   useEffect(() => {
-    const handleGlobalPointerUp = () => {
+    const handleGlobalPointerUp = (e) => {
       if (isScrubbingRef.current) {
         isScrubbingRef.current = false;
         setIsScrubbing(false);
         if (isFullscreen) {
           if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+          const y = e?.clientY ?? lastMousePosRef.current.y;
+          const windowHeight = window.innerHeight || window.screen.height || 1080;
+          const inBottomZone = y >= windowHeight - 140 || isHoveringBottomRef.current;
+          const inTopZone = y <= 90 || isHoveringTopRef.current;
+
+          // While cursor is in controls zones or settings are open, keep visible
+          if (inBottomZone || inTopZone || showSubtitleSettings || panelsPinned) {
+            setShowTopBar(true);
+            setShowBottomBar(true);
+            return;
+          }
+
           idleTimeoutRef.current = setTimeout(() => {
             const isFs = Boolean(
               document.fullscreenElement ||
@@ -614,12 +678,10 @@ export default function LocalVideoSyncPlayer({
               document.mozFullScreenElement ||
               document.msFullscreenElement
             );
-            if (isFs) {
-              if (!isHoveringBottomRef.current) setShowBottomBar(false);
-              if (!isHoveringTopRef.current) setShowTopBar(false);
-              if (!isHoveringBottomRef.current && !isHoveringTopRef.current) {
-                setIsCursorIdle(true);
-              }
+            if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !showSubtitleSettings && !panelsPinned) {
+              setShowTopBar(false);
+              setShowBottomBar(false);
+              setIsCursorIdle(true);
             }
           }, 3500);
         }
@@ -632,9 +694,14 @@ export default function LocalVideoSyncPlayer({
       window.removeEventListener('pointerup', handleGlobalPointerUp);
       window.removeEventListener('mouseup', handleGlobalPointerUp);
     };
-  }, [isFullscreen]);
+  }, [isFullscreen, showSubtitleSettings, panelsPinned]);
 
-  const handleMouseMove = (e) => {
+  // Fullscreen Mouse Movement & Idle Controls Manager
+  const handleMouseMove = useCallback((e) => {
+    if (e?.clientX !== undefined && e?.clientY !== undefined) {
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    }
+
     if (!isFullscreen) {
       setShowTopBar(true);
       setShowBottomBar(true);
@@ -642,25 +709,53 @@ export default function LocalVideoSyncPlayer({
       return;
     }
 
+    // If user explicitly chose to hide all panels:
+    if (panelsManuallyHidden) {
+      const y = e ? e.clientY : lastMousePosRef.current.y;
+      const x = e ? e.clientX : lastMousePosRef.current.x;
+      const windowHeight = window.innerHeight || window.screen.height || 1080;
+      const windowWidth = window.innerWidth || window.screen.width || 1920;
+      const inCornerZone = y >= windowHeight - 90 && x >= windowWidth - 160;
+      if (inCornerZone) {
+        setIsCursorIdle(false);
+      }
+      return;
+    }
+
+    // If panels are locked/pinned:
+    if (panelsPinned) {
+      setIsCursorIdle(false);
+      setShowTopBar(true);
+      setShowBottomBar(true);
+      return;
+    }
+
+    // Any mouse motion in fullscreen wakes up ALL controls & reveals cursor
     setIsCursorIdle(false);
+    setShowTopBar(true);
+    setShowBottomBar(true);
+
     if (idleTimeoutRef.current) {
       clearTimeout(idleTimeoutRef.current);
     }
 
-    const y = e.clientY;
-    const windowHeight = window.innerHeight || window.screen.height;
+    const y = e ? e.clientY : lastMousePosRef.current.y;
+    const windowHeight = window.innerHeight || window.screen.height || 1080;
 
-    // Generous top and bottom zones
-    const inTopZone = y <= 100 || isHoveringTopRef.current;
-    const inBottomZone = y >= windowHeight - 160 || isHoveringBottomRef.current || isScrubbingRef.current;
+    const inTopZone = y <= 90;
+    const inBottomZone = y >= windowHeight - 140;
 
-    // In fullscreen: ALWAYS reveal bottom bar and seekbar when user moves the mouse
-    setShowBottomBar(true);
-    if (inTopZone) {
-      setShowTopBar(true);
+    isHoveringTopRef.current = inTopZone;
+    isHoveringBottomRef.current = inBottomZone;
+
+    // While cursor is over controls, actively scrubbing, or settings popover is open:
+    // Keep controls visible permanently! Do NOT auto-hide!
+    if (inTopZone || inBottomZone || isScrubbingRef.current || showSubtitleSettings) {
+      return;
     }
 
-    // Schedule smooth auto-hide after user stops moving mouse
+    // While cursor is in middle video viewing area:
+    // Schedule smooth auto-hide after 3.5 seconds of no mouse movement
     idleTimeoutRef.current = setTimeout(() => {
       const isFs = Boolean(
         document.fullscreenElement ||
@@ -669,21 +764,24 @@ export default function LocalVideoSyncPlayer({
         document.msFullscreenElement
       );
       if (isFs) {
-        // While user is scrubbing or hovering over bottom controls, NEVER hide bottom controls!
-        if (!isHoveringBottomRef.current && !isScrubbingRef.current) {
-          setShowBottomBar(false);
-        }
-        if (!isHoveringTopRef.current) {
+        if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings && !panelsPinned) {
           setShowTopBar(false);
-        }
-        if (!isHoveringTopRef.current && !isHoveringBottomRef.current && !isScrubbingRef.current) {
+          setShowBottomBar(false);
           setIsCursorIdle(true);
         }
       }
-    }, inBottomZone ? 4000 : 2500);
-  };
+    }, 3500);
+  }, [isFullscreen, showSubtitleSettings, panelsManuallyHidden, panelsPinned]);
 
-  // Keyboard shortcuts (Space = play/pause, Left = -5s, Right = +5s, M = mute, F = fullscreen, C = subtitles, [ / ] = delay offset)
+  // Window-level mouse listener when in fullscreen to ensure bottom-edge moves are never missed
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onGlobalMouseMove = (e) => handleMouseMove(e);
+    window.addEventListener('mousemove', onGlobalMouseMove, { passive: true });
+    return () => window.removeEventListener('mousemove', onGlobalMouseMove);
+  }, [isFullscreen, handleMouseMove]);
+
+  // Keyboard shortcuts (Space = play/pause, Left = -5s, Right = +5s, M = mute, F = fullscreen, C = subtitles, H = toggle all panels, [ / ] = delay offset)
   useEffect(() => {
     const handleKeyDown = (e) => {
       // Don't trigger if user is typing in chat or another input
@@ -707,6 +805,9 @@ export default function LocalVideoSyncPlayer({
       } else if (e.code === 'KeyC') {
         e.preventDefault();
         handleToggleSubtitles();
+      } else if (e.code === 'KeyH' || e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        handleToggleAllPanels();
       } else if (e.code === 'BracketLeft' || e.key === '[' || e.key === '{') {
         e.preventDefault();
         if (!subtitles) {
@@ -736,7 +837,7 @@ export default function LocalVideoSyncPlayer({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMuted, subtitles, isFullscreen]);
+  }, [isMuted, subtitles, isFullscreen, handleToggleAllPanels]);
 
   const activeVideoSrc = streamVideoUrl || objectUrl;
   const isStreamed = Boolean(streamVideoUrl && !objectUrl);
@@ -929,19 +1030,15 @@ export default function LocalVideoSyncPlayer({
     );
   }
 
+  // Calculate seekbar percentage for CSS gradient progress fill
+  const progressPercent = durationSec > 0 ? Math.min(100, Math.max(0, (currentTimeSec / durationSec) * 100)) : 0;
+
   // Case B: Video is ready and playing (either local file or P2P stream)
   return (
     <div
       ref={playerContainerRef}
       className={`local-fullstage-player ${isFullscreen ? 'is-fullscreen' : ''} ${isCursorIdle && isFullscreen ? 'hide-cursor' : ''}`}
       onMouseMove={handleMouseMove}
-      onMouseLeave={() => {
-        if (isFullscreen) {
-          setShowTopBar(false);
-          setShowBottomBar(false);
-          setIsCursorIdle(true);
-        }
-      }}
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
@@ -961,11 +1058,15 @@ export default function LocalVideoSyncPlayer({
           isHoveringTopRef.current = true;
           if (isFullscreen) {
             setShowTopBar(true);
+            setShowBottomBar(true);
             setIsCursorIdle(false);
+            if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           }
         }}
-        onMouseLeave={() => {
-          isHoveringTopRef.current = false;
+        onMouseLeave={(e) => {
+          if (e.clientY > 90) {
+            isHoveringTopRef.current = false;
+          }
         }}
       >
         {isStreamed ? (
@@ -1217,28 +1318,61 @@ export default function LocalVideoSyncPlayer({
       {/* Bottom Timeline Scrubber & Player Controls */}
       <div
         className={`local-bottom-controls ${isFullscreen ? (showBottomBar || isScrubbing ? 'visible' : 'hidden') : ''} ${isScrubbing ? 'is-scrubbing' : ''}`}
-        onClick={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowTopBar(true);
+          setShowBottomBar(true);
+          setIsCursorIdle(false);
+        }}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          setShowTopBar(true);
+          setShowBottomBar(true);
+          setIsCursorIdle(false);
+        }}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          setShowTopBar(true);
+          setShowBottomBar(true);
+          setIsCursorIdle(false);
+        }}
         onDoubleClick={(e) => e.stopPropagation()}
         onMouseEnter={() => {
           isHoveringBottomRef.current = true;
           if (isFullscreen) {
+            setShowTopBar(true);
             setShowBottomBar(true);
             setIsCursorIdle(false);
+            if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           }
         }}
-        onMouseLeave={() => {
-          if (!isScrubbingRef.current) {
+        onMouseLeave={(e) => {
+          const windowHeight = window.innerHeight || window.screen.height || 1080;
+          if (e.clientY < windowHeight - 140 && !isScrubbingRef.current) {
             isHoveringBottomRef.current = false;
           }
         }}
       >
         <div
           className="local-scrubber-wrapper"
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowTopBar(true);
+            setShowBottomBar(true);
+            setIsCursorIdle(false);
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            setShowTopBar(true);
+            setShowBottomBar(true);
+            setIsCursorIdle(false);
+          }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setShowTopBar(true);
+            setShowBottomBar(true);
+            setIsCursorIdle(false);
+          }}
         >
           <input
             type="range"
@@ -1246,22 +1380,32 @@ export default function LocalVideoSyncPlayer({
             max={durationSec || 100}
             step="0.1"
             value={currentTimeSec}
+            style={{ '--seek-progress': `${progressPercent.toFixed(2)}%` }}
             onChange={handleScrubberChange}
-            onPointerDown={() => {
+            onPointerDown={(e) => {
+              e.stopPropagation();
               isScrubbingRef.current = true;
               setIsScrubbing(true);
+              setShowTopBar(true);
               setShowBottomBar(true);
               setIsCursorIdle(false);
               if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
             }}
-            onMouseDown={() => {
+            onMouseDown={(e) => {
+              e.stopPropagation();
               isScrubbingRef.current = true;
               setIsScrubbing(true);
+              setShowTopBar(true);
               setShowBottomBar(true);
               setIsCursorIdle(false);
               if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
             }}
             className="local-scrubber-slider"
+            aria-label="Video scrubber timeline"
+            aria-valuemin={0}
+            aria-valuemax={durationSec || 100}
+            aria-valuenow={currentTimeSec}
+            aria-valuetext={`${formatTime(currentTimeSec)} of ${formatTime(durationSec)}`}
           />
         </div>
 
@@ -1580,6 +1724,25 @@ export default function LocalVideoSyncPlayer({
               )}
             </div>
 
+            {/* Toggle All Panels Button in Fullscreen / Bottom Toolbar */}
+            <button
+              type="button"
+              className={`local-icon-button local-toggle-panels-btn ${panelsPinned ? 'pinned' : ''}`}
+              onClick={handleToggleAllPanels}
+              title={allPanelsVisible ? 'Hide All Panels (H)' : 'Show All Panels (H)'}
+              aria-label={allPanelsVisible ? 'Hide All Panels' : 'Show All Panels'}
+            >
+              {allPanelsVisible ? (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H5v-4h9v4zm0-6H5V7h9v4zm5 6h-3V7h3v10z"/>
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                </svg>
+              )}
+            </button>
+
             <button
               type="button"
               className="local-icon-button"
@@ -1599,6 +1762,32 @@ export default function LocalVideoSyncPlayer({
           </div>
         </div>
       </div>
+
+      {/* Floating Corner Panel Toggle Button (Always at bottom-right in Fullscreen when panels are hidden) */}
+      {isFullscreen && !allPanelsVisible && (
+        <button
+          type="button"
+          className="local-corner-panel-toggle"
+          onClick={handleToggleAllPanels}
+          title="Show All Panels (H)"
+          aria-label="Show All Panels"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H5v-4h9v4zm0-6H5V7h9v4zm5 6h-3V7h3v10z"/>
+          </svg>
+          <span>Panels</span>
+        </button>
+      )}
+
+      {/* Floating Live Reactions in Fullscreen */}
+      {isFullscreen && allPanelsVisible && typeof onSendReaction === 'function' && (
+        <FloatingReactions
+          reactions={floatingReactions}
+          onSendReaction={onSendReaction}
+          showDock={Boolean(roomId)}
+          hasMedia={true}
+        />
+      )}
     </div>
   );
 }
