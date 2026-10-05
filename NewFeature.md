@@ -6,25 +6,29 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ## 1. 🎬 Media & Watch Party Enhancements
 
-### 1.1 Shared Video Queue & Collaborative Playlist
-- **Description**: Enable peers to paste YouTube links or search queries into an "Up Next" queue.
+### 1.1 Shared Video Queue & Collaborative Playlist ✅ `[COMPLETED]`
+- **Description**: Enable peers to paste YouTube links or presets into an "Up Next" collaborative playlist queue.
 - **Key Capabilities**:
-  - Collaborative queue where peers can add videos and re-order them.
-  - Vote-to-skip mechanism (e.g., $2/3$ peers agree to skip).
-  - Autoplay next video in the queue with synchronized start for all peers.
+  - Collaborative queue where peers can add videos, re-order (move up/down), remove items, or play immediately.
+  - Vote-to-skip mechanism with real-time peer voting and progress bar.
+  - Autoplay next video in the queue with synchronized start for all peers upon video completion (`ENDED` state).
+  - Dedicated Queue tab in sidebar with Now Playing card and animated equalizer bars.
 - **Implementation Notes**:
-  - Broadcast queue state over WebRTC DataChannel via an action payload `{ type: 'QUEUE_UPDATE', queue: [...] }`.
-  - Maintain queue authority on the room host with consensus migration if the host disconnects.
+  - Broadcast queue state over WebRTC DataChannel via action payloads `{ type: 'queue-action', action, ... }`.
+  - Full synchronization on late-join via `yt-request-sync` and `yt-sync-state`.
 
 ---
 
-### 1.2 Floating Live Reactions Over Video Player
+### 1.2 Floating Live Reactions Over Video Player ✅ `[COMPLETED]`
 - **Description**: Animate floating emoji reactions (like YouTube Live / Twitch hearts) that float up the side of the stage when peers click quick reactions (`🔥`, `❤️`, `😂`, `👏`, `👍`, `🎉`) or press hotkeys `1`–`6`.
 - **Key Capabilities**:
-  - Smooth CSS/Canvas particle animations rising and fading along the bottom-right corner of the video.
-  - Zero performance lag using lightweight keyed DOM elements or requestAnimationFrame canvas.
+  - Smooth CSS particle animations rising, drifting organically, and fading along the bottom-right corner of the video.
+  - Sleek translucent floating reaction dock with hotkey tags `[1]` through `[6]` on the video stage.
+  - Global keyboard hotkeys `1`–`6` trigger instant reactions when watching.
+  - Zero performance lag using lightweight hardware-accelerated CSS animations and auto-cleanup.
 - **Implementation Notes**:
-  - Broadcast `{ type: 'REACTION', emoji, sender }` over DataChannel with low latency.
+  - Broadcast `{ type: 'reaction', id, emoji, sender, lane, driftVariant, scale, rot }` over DataChannel with low latency.
+  - Integrated with LiveChat quick reaction chips and sound synthesized popping effect.
 
 ---
 
@@ -38,23 +42,39 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 1.4 WebRTC Direct Video Streaming (MSE Chunk Sharing)
-- **Description**: Eliminate the requirement that both peers possess the identical local video file beforehand.
+### 1.4 WebRTC Direct Video Streaming (MSE Chunk Sharing) ✅ `[COMPLETED]`
+- **Description**: Slices local video files and streams them peer-to-peer over WebRTC DataChannel, while retaining the existing zero-bandwidth local file sync option.
 - **Key Capabilities**:
-  - The host drags and drops any video file (e.g., `.mp4`, `.webm`).
-  - The video file is sliced into chunks and streamed peer-to-peer over the DataChannel.
-  - Peers buffer and play the incoming video stream using browser `MediaSource` Extensions (MSE).
+  - **Dual-Option Interoperability**:
+    - **Option 1 (P2P Streaming)**: Peers who do not have the video file on their device can stream it directly peer-to-peer from the room peer with progressive chunk buffering, live transfer stats (`%`, `MB/s`, `chunks`), and autoplay once buffered.
+    - **Option 2 (Zero-Bandwidth Sync - Current)**: Peers who already possess the identical video file locally can select or drag & drop their local file for zero network bandwidth usage.
+  - Slices video files into 60 KB binary chunks with backpressure flow control (`bufferedAmountHigh: 512KB`, `bufferedAmountLow: 128KB`).
+  - Full WebRTC playback synchronization (play, pause, seek, restart, sync pulse) works seamlessly across both streamed and local-file peers.
 - **Implementation Notes**:
-  - High performance chunking with backpressure control over WebRTC `bufferedAmount`.
+  - `P2PStreamSender` & `P2PStreamReceiver` in [p2pStreamer.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/p2pStreamer.js).
+  - Dual-option waiting UI and topbar streaming status pills in [LocalVideoSyncPlayer.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LocalVideoSyncPlayer.jsx).
+  - Binary DataChannel routing (`dc.binaryType = 'arraybuffer'`) and lifecycle handlers in [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx).
 
 ---
 
-### 1.5 Drag & Drop Subtitles (.SRT / .VTT) for Local Video
-- **Description**: Support external subtitle files for the local video player.
+### 1.5 Drag & Drop Subtitles (.SRT / .VTT) for Local Video ✅ `[COMPLETED]`
+- **Description**: Seamlessly load and synchronize external subtitle files (.SRT / .VTT) on the local video player, styled to perfection and auto-shared across peers.
 - **Key Capabilities**:
-  - Drop `.srt` or `.vtt` file directly onto the player.
-  - Real-time subtitle parser converting cues to WebVTT `<track>`.
-  - Custom subtitle styling (font size, background opacity, vertical position offset, and subtitle delay synchronization $\pm 0.5\text{s}$).
+  - **Drag & Drop Subtitles**: Drag and drop any `.srt` or `.vtt` file directly onto the local video player (or browse via the CC menu) with dynamic visual drop indicators.
+  - **Parser Engine**: Converts SubRip (`.srt`) and WebVTT (`.vtt`) files into normalized cues with BOM stripping, CRLF normalization, and live WebVTT `<track>` Blob URL generation.
+  - **Synchronized Subtitle Overlay**: Real-time cue matching against `currentTimeSec` with custom styling and hardware-accelerated animations.
+  - **CC Settings Menu (Glassmorphic Popover)**: Dedicated CC button in player toolbar with active glow indicator opening:
+    - Master Subtitles Toggle (`ON` / `OFF`).
+    - Active Subtitle File card (filename, cue count, replace & remove actions).
+    - Timing Sync Offset Steppers ($-1.0\text{s}$, $-0.5\text{s}$, $-0.1\text{s}$, Reset, $+0.1\text{s}$, $+0.5\text{s}$, $+1.0\text{s}$).
+    - Appearance customization: Font Size (`S`, `M`, `L`, `XL`), Colors (`White`, `Yellow`, `Cyan`, `Lime`), Background Box (`Semi-Dark`, `Solid`, `Outline/Shadow`), and Position (`Bottom`, `Elevated`, `Top`).
+  - **P2P Subtitle Synchronization**: Automatically broadcasts loaded subtitle files over WebRTC DataChannel (`action: 'subtitle-share'`) so all room peers enjoy synchronized subtitles without needing to manually find the file. Late-joiners receive active subtitles via room sync state.
+  - **Keyboard Hotkeys**: `C` (toggle subtitles / open CC menu), `[` (delay -0.1s), `]` (delay +0.1s).
+- **Implementation Notes**:
+  - `subtitleParser.js`: [subtitleParser.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/subtitleParser.js).
+  - Player overlay, controls, and CC popover: [LocalVideoSyncPlayer.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LocalVideoSyncPlayer.jsx).
+  - WebRTC DataChannel subtitle routing and late-joiner state: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx).
+  - Glassmorphic menu and cue styling: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
