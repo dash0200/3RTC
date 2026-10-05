@@ -133,11 +133,13 @@ export function parseVtt(vttContent) {
 /**
  * Converts array of cue objects to a standard WebVTT string
  */
-export function cuesToWebVTT(cues) {
+export function cuesToWebVTT(cues, delaySec = 0) {
   let vtt = 'WEBVTT\n\n';
   cues.forEach((cue, idx) => {
+    const start = Math.max(0, cue.startSec + delaySec);
+    const end = Math.max(start + 0.05, cue.endSec + delaySec);
     vtt += `${idx + 1}\n`;
-    vtt += `${secondsToVttTimestamp(cue.startSec)} --> ${secondsToVttTimestamp(cue.endSec)}\n`;
+    vtt += `${secondsToVttTimestamp(start)} --> ${secondsToVttTimestamp(end)}\n`;
     vtt += `${cue.text}\n\n`;
   });
   return vtt;
