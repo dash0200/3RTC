@@ -22,7 +22,9 @@ export default function Header({
   isPttActive = false,
   // Feature 4.1: Real-Time P2P Network HUD
   networkStats = null,
-  onOpenNetworkHud
+  onOpenNetworkHud,
+  // Feature 4.3: QR Code for Instant Mobile Join
+  onOpenQrCode
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -92,6 +94,22 @@ export default function Header({
               </button>
               {copied && <span className="chip-copied-text">Copied!</span>}
             </div>
+
+            {/* Feature 4.3: Instant Mobile Join QR Code Button */}
+            {typeof onOpenQrCode === 'function' && (
+              <button
+                type="button"
+                className="header-qr-btn"
+                onClick={onOpenQrCode}
+                title="Instant Mobile Join QR Code (Press [Q])"
+                aria-label="Open Mobile Join QR Code"
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M4 4h6v6H4zm2 2v2h2V6zm8-2h6v6h-6zm2 2v2h2V6zM4 14h6v6H4zm2 2v2h2v-2zm10 0h2v2h-2zm-2 2h2v2h-2zm4 0h2v2h-2zm0-4h2v2h-2zm-4-2h2v2h-2zm2 2h2v2h-2z" />
+                </svg>
+                <span className="header-qr-text">QR</span>
+              </button>
+            )}
 
             {/* Direct P2P Status Chip / Network HUD Trigger */}
             <button

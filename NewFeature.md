@@ -217,13 +217,39 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ## 4. ⚡ Connectivity, Performance & Diagnostics
 
-### 4.1 Real-Time P2P Network HUD (Ping & Latency)
-- **Description**: Transparent diagnostic HUD for enthusiasts and troubleshooters.
+### 4.1 Real-Time P2P Network HUD (Ping & Latency) ✅ `[COMPLETED]`
+- **Description**: Transparent diagnostic HUD and real-time telemetry engine for enthusiasts and troubleshooters, measuring round-trip latency, connection topologies, sync drift, jitter, packet loss, and live bandwidth.
 - **Key Capabilities**:
-  - Real-time round-trip latency (RTT / Ping in ms).
-  - WebRTC connection type: `Direct P2P (Host/STUN)` vs `Relay (TURN)`.
-  - Video synchronization drift metric (e.g., `Synced within 14ms`).
-  - Packet loss and bitrate indicators.
+  - **Dual Latency Measurement Engine**:
+    - **DataChannel Ping/Pong Probing**: Periodic `net-ping` / `net-pong` heartbeats over WebRTC SCTP data channels measuring true application-layer round-trip time (RTT in ms).
+    - **Native WebRTC `RTCPeerConnection.getStats()`**: Low-level transport telemetry querying active candidate pair `currentRoundTripTime` with fallback calculations.
+    - Rolling 15-sample latency buffer with min, max, and rolling average latency calculations.
+    - On-demand "Ping Now" pulse probe to trigger instant diagnostic sampling.
+  - **WebRTC Connection Topology & Candidate Inspection**:
+    - Automatic detection of connection modes: `Direct LAN (Host)`, `Direct P2P (STUN)`, or `Relay (TURN)`.
+    - Active ICE candidate pair inspection extracting local and remote candidate protocols, types, and connection state.
+    - WebRTC health scoring grade ($A+$, $A$, $B$, $C$) with dynamic status indicators (`Excellent`, `Good`, `Fair`, `Poor / High Latency`).
+  - **Video Synchronization Drift Tracking**:
+    - Live divergence measurement comparing local and remote playback timestamps.
+    - Synchronized sync drift badge (e.g., `±14ms`, `Strict Sync`) calibrated against the 800ms desync threshold.
+  - **Audio Stream Telemetry & Throughput Rates**:
+    - Audio packet loss percentage calculation from inbound RTP reports.
+    - WebRTC audio buffer jitter measurement (ms).
+    - Real-time download and upload throughput speed counters (KB/s).
+  - **Interactive Dual Trigger Pills**:
+    - **Stage Controls Bar**: Interactive `.p2p-badge-btn` showing live RTT and connection mode (`28ms • DIRECT P2P`), pulsing green dot, and hover glow.
+    - **Header Room Group**: Clickable `.header-p2p-chip` displaying live RTT and direct mesh mode with hover state.
+  - **Cyber-Glassmorphism Diagnostic HUD Modal**:
+    - 4 primary metric tiles: RTT Latency (with health grade), Connection Mode (Direct Mesh), Playback Sync Drift, and Network Bandwidth (live upload/download rates).
+    - **SVG Latency Sparkline Graph**: Real-time smooth SVG path visualization of the last 15 ping samples with gradient area fills, data point dots, and instant probe trigger.
+    - **Per-Peer Telemetry Breakdown**: Card list of all room peers detailing individual RTT, packet loss, audio jitter, protocols, bandwidth rates, and ICE candidate pairs.
+    - **One-Click Diagnostic Markdown Report**: Generates and copies a structured diagnostic markdown report directly to clipboard for debugging or sharing.
+- **Implementation Notes**:
+  - Telemetry Collection Engine: [networkMonitor.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/networkMonitor.js) (`extractPeerConnectionStats`, `parseCandidateConnectionType`, `getNetworkHealthGrade`, `generateDiagnosticReport`).
+  - HUD Modal Component: [NetworkDiagnosticsModal.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/NetworkDiagnosticsModal.jsx).
+  - WebRTC Probing & DataChannel Handlers: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx) (`net-ping`/`net-pong` demuxing, 2.5s polling loop, `recordPeerPing`, state integration).
+  - Stage & Header Integration: [Stage.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Stage.jsx), [Header.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Header.jsx).
+  - Cyber-Glassmorphic Styling & Sparklines: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
@@ -235,11 +261,36 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 4.3 QR Code for Instant Mobile Join
-- **Description**: Effortless mobile onboarding.
+### 4.3 QR Code for Instant Mobile Join ✅ `[COMPLETED]`
+- **Description**: Zero-dependency, effortless mobile onboarding allowing friends to join 3RTC watch party rooms instantly via smartphone camera scanning with zero app installations.
 - **Key Capabilities**:
-  - Clicking the room code or a "Share" icon generates an instant QR code.
-  - Friends in the room can scan the code using their smartphone camera to immediately open and join the room.
+  - **Zero-Dependency ISO/IEC 18004 QR Generator Engine**:
+    - Pure JavaScript client-side QR encoder with Galois Field $GF(2^8)$ arithmetic and Reed-Solomon polynomial error correction (Level M - 15% redundancy).
+    - 100% offline, zero external CDN requests, zero tracking or third-party room leaks.
+    - Automatic optimal version selection (Versions 1–10) with 8-mask penalty scoring optimization.
+    - High-contrast module matrix rendering to HTML5 Canvas and SVG paths.
+  - **Cyber-Glassmorphism Modal (`QrCodeModal.jsx`)**:
+    - High-contrast scannable QR card with cybernetic corner brackets and central 3RTC badge.
+    - Large 5-digit Room PIN callout badge (`ROOM: 48291 • No app installation required`).
+    - One-click shareable join URL box with instant clipboard copy (`Copied!`).
+    - **Localhost / LAN IP Helper**: Automatically detects local testing (`localhost` / `127.0.0.1`) and provides an accordion to input PC Wi-Fi LAN IP (e.g. `192.168.1.15:5173`) with live real-time QR regeneration.
+    - 💾 **Download QR Image**: Saves rendered QR code as a high-resolution PNG (`3RTC-Room-12345-QR.png`) for sharing or printing.
+    - 📱 **Native Web Share API**: Directly triggers the device's native OS share sheet on supported mobile browsers.
+  - **Universal Trigger Access**:
+    - **Header Room Chip**: Dedicated `[📱 QR]` pill button in the top navigation bar.
+    - **Stage Waiting Card**: Prominent `📱 Mobile QR Code` button next to "Copy 5-Digit Code".
+    - **Sidebar Live Chat**: Mini `[QR]` button in chat header toolbar for instant mid-session sharing.
+    - **Global Keyboard Hotkey**: Pressing `Q` anywhere in the app (when not typing in chat) opens the QR Code modal.
+  - **Seamless Mobile Onboarding Experience**:
+    - Scanning opens URL with `?room=12345` query parameter.
+    - `JoinRoomModal` automatically detects the PIN, pre-fills the 5-digit inputs, and displays an animated mobile invite welcome banner (`📱 Instant Mobile Join • Room 12345 detected`).
+- **Implementation Notes**:
+  - Pure JS QR Generator Engine: [qrCode.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/qrCode.js) (`generateQrMatrix`, `drawQrToCanvas`, `getMobileJoinUrl`).
+  - QR Code Modal Component: [QrCodeModal.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/QrCodeModal.jsx).
+  - Mobile Welcome Banner: [JoinRoomModal.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/JoinRoomModal.jsx).
+  - App State & Global Shortcut: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx) (`showQrModal`, `Q` hotkey, modal mounting).
+  - Header, Stage & Sidebar Triggers: [Header.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Header.jsx), [Stage.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Stage.jsx), [LiveChat.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LiveChat.jsx).
+  - Cyber-Glassmorphic Styling: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
