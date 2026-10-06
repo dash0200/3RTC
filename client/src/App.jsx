@@ -12,6 +12,7 @@ import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
 import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
+import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
@@ -579,6 +580,72 @@ export default function App() {
         addSystemMessage(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
     }, [addSystemMessage, showToast]);
 
+    // Feature 3.3: Handle incoming P2P image transfer start
+    const handleIncomingImageStart = useCallback((data) => {
+        p2pImageReceiver.handleStart(data);
+        setMessages((prev) => [
+            ...prev,
+            {
+                type: 'chat',
+                id: data.id,
+                transferId: data.transferId,
+                sender: data.sender,
+                isHost: data.isHost,
+                text: data.caption || '',
+                imageTransfer: {
+                    transferId: data.transferId,
+                    isTransferring: true,
+                    percent: 0,
+                    fileName: data.fileName,
+                    fileSize: data.fileSize
+                },
+                isSelf: false,
+                timestamp: data.timestamp || Date.now()
+            }
+        ]);
+        sound.playChime();
+    }, []);
+
+    // Feature 3.3: Handle incoming binary chunk for P2P image transfer
+    const handleIncomingImageChunk = useCallback((arrayBuffer) => {
+        p2pImageReceiver.handleChunk(arrayBuffer, {
+            onProgress: (transferId, percent) => {
+                setMessages((prev) =>
+                    prev.map((m) => {
+                        if (m.transferId === transferId && m.imageTransfer) {
+                            return {
+                                ...m,
+                                imageTransfer: { ...m.imageTransfer, percent }
+                            };
+                        }
+                        return m;
+                    })
+                );
+            },
+            onComplete: (transferId, result) => {
+                setMessages((prev) =>
+                    prev.map((m) => {
+                        if (m.transferId === transferId) {
+                            return {
+                                ...m,
+                                imageTransfer: null,
+                                image: {
+                                    url: result.objectUrl,
+                                    name: result.fileName,
+                                    size: result.fileSize,
+                                    mimeType: result.mimeType,
+                                    blob: result.blob
+                                }
+                            };
+                        }
+                        return m;
+                    })
+                );
+                sound.playPop();
+            }
+        });
+    }, []);
+
     // Create or get peer connection in mesh
     const getOrCreatePeerConnection = useCallback((targetPeerId, isInitiator) => {
         if (peersRef.current.has(targetPeerId)) {
@@ -808,19 +875,29 @@ export default function App() {
             };
 
             dc.onmessage = async (event) => {
-                // Binary Chunk over WebRTC DataChannel (Feature 1.4: P2P Video Streaming)
+                let arrayBuffer = null;
                 if (event.data instanceof ArrayBuffer) {
-                    if (streamReceiverRef.current) {
-                        streamReceiverRef.current.handleChunk(event.data);
-                    }
-                    return;
+                    arrayBuffer = event.data;
                 } else if (event.data instanceof Blob) {
                     try {
-                        const buf = await event.data.arrayBuffer();
-                        if (streamReceiverRef.current) {
-                            streamReceiverRef.current.handleChunk(buf);
-                        }
+                        arrayBuffer = await event.data.arrayBuffer();
                     } catch (e) { }
+                }
+
+                if (arrayBuffer) {
+                    // Feature 3.3: Check magic bytes for Direct P2P Image Chunk
+                    if (arrayBuffer.byteLength >= 4) {
+                        const magic = new DataView(arrayBuffer).getUint32(0, false);
+                        if (magic === 0x494D4731) { // 'IMG1'
+                            handleIncomingImageChunk(arrayBuffer);
+                            return;
+                        }
+                    }
+
+                    // Feature 1.4: P2P Video Streaming
+                    if (streamReceiverRef.current) {
+                        streamReceiverRef.current.handleChunk(arrayBuffer);
+                    }
                     return;
                 }
 
@@ -850,6 +927,8 @@ export default function App() {
                     } else if (data.type === 'chat') {
                         setMessages((prev) => [...prev, { ...data, isSelf: false }]);
                         sound.playPop();
+                    } else if (data.type === 'p2p-image-start') {
+                        handleIncomingImageStart(data);
                     } else if (data.type === 'peer-voice-status') {
                         setPeerVoiceStates((prev) => ({
                             ...prev,
@@ -1092,7 +1171,7 @@ export default function App() {
         }
 
         return peerEntry;
-    }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
+    }, [addSystemMessage, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
 
     // Handle incoming signaling messages
     const handleSignalingMessage = useCallback(async (msg) => {
@@ -1549,6 +1628,99 @@ export default function App() {
             showToast('Waiting for peer to connect before sending');
         }
     };
+
+    // Feature 3.3: Direct P2P Image & Screenshot Sharing
+    const handleSendImage = useCallback((file, caption = '') => {
+        if (!file) return;
+
+        if (file.size > 15 * 1024 * 1024) {
+            showToast('Image exceeds 15 MB limit. Please select a smaller file.');
+            return;
+        }
+
+        const activeChannels = [];
+        for (const peer of peersRef.current.values()) {
+            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+                activeChannels.push(peer.dataChannel);
+            }
+        }
+
+        if (activeChannels.length === 0) {
+            showToast('Waiting for peer to connect before sending image');
+            return;
+        }
+
+        const messageId = crypto.randomUUID();
+        const transferId = crypto.randomUUID();
+        const localUrl = URL.createObjectURL(file);
+
+        // Optimistically display image in chat with local thumbnail & sending progress
+        setMessages((prev) => [
+            ...prev,
+            {
+                type: 'chat',
+                id: messageId,
+                transferId,
+                sender: username,
+                isHost: isHostRef.current,
+                text: caption,
+                image: {
+                    url: localUrl,
+                    name: file.name || 'screenshot.png',
+                    size: file.size,
+                    mimeType: file.type || 'image/png',
+                    blob: file
+                },
+                imageTransfer: {
+                    transferId,
+                    isTransferring: true,
+                    percent: 0,
+                    fileName: file.name || 'screenshot.png',
+                    fileSize: file.size
+                },
+                isSelf: true,
+                timestamp: Date.now()
+            }
+        ]);
+        sound.playPop();
+
+        const sender = new P2PImageSender(file, () => activeChannels, {
+            id: messageId,
+            transferId,
+            sender: username,
+            isHost: isHostRef.current,
+            caption,
+            onProgress: ({ percent }) => {
+                setMessages((prev) =>
+                    prev.map((m) => {
+                        if (m.transferId === transferId && m.imageTransfer) {
+                            return {
+                                ...m,
+                                imageTransfer: { ...m.imageTransfer, percent }
+                            };
+                        }
+                        return m;
+                    })
+                );
+            },
+            onComplete: () => {
+                setMessages((prev) =>
+                    prev.map((m) => {
+                        if (m.transferId === transferId) {
+                            return { ...m, imageTransfer: null };
+                        }
+                        return m;
+                    })
+                );
+            },
+            onError: (err) => {
+                addSystemMessage(`❌ Image transfer failed: ${err.message}`);
+                showToast(`Image send failed: ${err.message}`);
+            }
+        });
+
+        sender.start();
+    }, [addSystemMessage, showToast, username]);
 
     // Feature 1.2: Floating Live Reactions Over Video Player
     const handleSendReaction = useCallback((emoji) => {
@@ -2728,6 +2900,7 @@ export default function App() {
                 messages={messages}
                 systemLogs={systemLogs}
                 onSendMessage={handleSendMessage}
+                onSendImage={handleSendImage}
                 onClearLogs={handleClearLogs}
                 onTestSound={handleTestSound}
                 isP2PConnected={isP2PConnected}

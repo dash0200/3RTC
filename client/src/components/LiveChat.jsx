@@ -4,6 +4,8 @@ import { copyToClipboard } from '../utils/clipboard';
 import { extractYouTubeId, fetchYouTubeTitle } from './YouTubeSyncPlayer';
 import { PeerVoicePanel } from './PeerVoiceRoster';
 import SoundboardTray from './SoundboardTray';
+import ImageLightboxModal from './ImageLightboxModal';
+import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 
 const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
@@ -11,6 +13,7 @@ export default function LiveChat({
   messages = [],
   systemLogs = [],
   onSendMessage,
+  onSendImage,
   onClearLogs,
   onTestSound,
   isP2PConnected,
@@ -158,6 +161,97 @@ export default function LiveChat({
   const [showScrollPill, setShowScrollPill] = useState(false);
   const [logsCopied, setLogsCopied] = useState(false);
 
+  // Feature 3.3: Direct P2P Image & Screenshot states
+  const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const handleClearPendingImage = () => {
+    if (pendingImage?.previewUrl) {
+      URL.revokeObjectURL(pendingImage.previewUrl);
+    }
+    setPendingImage(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (pendingImage?.previewUrl) {
+        URL.revokeObjectURL(pendingImage.previewUrl);
+      }
+    };
+  }, [pendingImage]);
+
+  const handleSelectImageFile = (file) => {
+    if (!file || !isImageFile(file)) return;
+    if (pendingImage?.previewUrl) {
+      URL.revokeObjectURL(pendingImage.previewUrl);
+    }
+    const previewUrl = URL.createObjectURL(file);
+    setPendingImage({ file, previewUrl });
+    setActiveTab('chat');
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  };
+
+  const handleFileInputChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleSelectImageFile(file);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.startsWith('image/')) {
+        const file = items[i].getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleSelectImageFile(file);
+          break;
+        }
+      }
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragOver) setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        if (isImageFile(files[i])) {
+          handleSelectImageFile(files[i]);
+          break;
+        }
+      }
+    }
+  };
+
   // Collaborative queue states
   const [queueInput, setQueueInput] = useState('');
   const [queueError, setQueueError] = useState('');
@@ -290,7 +384,26 @@ export default function LiveChat({
 
   const handleSend = () => {
     const clean = inputText.trim();
-    if (clean && isP2PConnected) {
+    if (!isP2PConnected) return;
+
+    if (pendingImage) {
+      if (typeof onSendImage === 'function') {
+        onSendImage(pendingImage.file, clean);
+      }
+      handleClearPendingImage();
+      setInputText('');
+      setActiveTab('chat');
+      setUnreadChatCount(0);
+      if (chatContainerRef.current) {
+        chatContainerRef.current.scrollTop = 0;
+      }
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+      return;
+    }
+
+    if (clean) {
       onSendMessage(clean);
       setInputText('');
       setActiveTab('chat');
@@ -338,9 +451,22 @@ export default function LiveChat({
         aria-hidden="true"
       />
       <aside
-        className={`chat-section ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''}`}
+        className={`chat-section ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
         style={isOpen ? { width: `${sidebarWidth}px` } : undefined}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
+        {/* Drag & Drop Visual Overlay */}
+        {isDragOver && (
+          <div className="chat-drag-overlay" role="alert">
+            <div className="drag-overlay-card">
+              <div className="drag-icon-pulse">🖼️</div>
+              <div className="drag-overlay-title">Drop image to share</div>
+              <div className="drag-overlay-subtitle">Direct peer-to-peer file transfer</div>
+            </div>
+          </div>
+        )}
         {/* Sidebar resize handle on the left edge (desktop) */}
         {isOpen && (
           <div
@@ -528,7 +654,67 @@ export default function LiveChat({
                           <span className="yt-timestamp">{timeStr}</span>
                           <span className={`yt-author ${authorClass}`}>{msg.sender}</span>
                           {msg.isHost && <span className="yt-badge">HOST</span>}
-                          <span className="yt-text">{msg.text}</span>
+
+                          {/* Image Transfer in Progress */}
+                          {msg.imageTransfer && (
+                            <div className="chat-image-transfer-card">
+                              <div className="transfer-header">
+                                <span className="transfer-icon">🖼️</span>
+                                <div className="transfer-details">
+                                  <span className="transfer-filename" title={msg.imageTransfer.fileName}>
+                                    {msg.imageTransfer.fileName}
+                                  </span>
+                                  <span className="transfer-status">
+                                    {msg.isSelf ? 'Sending' : 'Receiving'} • {msg.imageTransfer.percent || 0}% ({formatFileSize(msg.imageTransfer.fileSize)})
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="transfer-progress-track">
+                                <div
+                                  className="transfer-progress-fill"
+                                  style={{ width: `${Math.max(4, msg.imageTransfer.percent || 0)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Completed Image Thumbnail */}
+                          {msg.image?.url && (
+                            <div
+                              className="chat-image-card"
+                              onClick={() => {
+                                setLightboxImage({
+                                  url: msg.image.url,
+                                  name: msg.image.name,
+                                  size: msg.image.size,
+                                  sender: msg.sender,
+                                  timestamp: msg.timestamp,
+                                  caption: msg.text,
+                                  blob: msg.image.blob
+                                });
+                                setIsLightboxOpen(true);
+                              }}
+                              title="Click to view image in high resolution"
+                            >
+                              <img
+                                src={msg.image.url}
+                                alt={msg.image.name || 'Shared Image'}
+                                className="chat-image-thumb"
+                                loading="lazy"
+                              />
+                              <div className="chat-image-hover-overlay">
+                                <span className="chat-image-meta-pill">
+                                  <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                                    <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+                                  </svg>
+                                  {formatFileSize(msg.image.size)}
+                                </span>
+                                <span className="chat-image-action-label">Preview</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {msg.text && <span className="yt-text">{msg.text}</span>}
                         </div>
                       </div>
                     );
@@ -563,16 +749,68 @@ export default function LiveChat({
                 ))}
               </div>
 
+              {/* Pending Image Attachment Preview Card */}
+              {pendingImage && (
+                <div className="chat-pending-image-card">
+                  <div className="pending-image-thumb-wrap">
+                    <img src={pendingImage.previewUrl} alt="Pending upload preview" className="pending-image-thumb" />
+                  </div>
+                  <div className="pending-image-info">
+                    <span className="pending-image-name" title={pendingImage.file.name}>{pendingImage.file.name}</span>
+                    <span className="pending-image-size">{formatFileSize(pendingImage.file.size)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="pending-image-cancel-btn"
+                    onClick={handleClearPendingImage}
+                    title="Remove attached image"
+                    aria-label="Remove attached image"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
               <div className="chat-input-bar">
+                {/* Hidden File Input for Image Attachments */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={handleFileInputChange}
+                />
+
+                {/* Attach Image Button */}
+                <button
+                  type="button"
+                  className="attach-file-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!isP2PConnected}
+                  title="Attach image or paste screenshot (Ctrl+V)"
+                  aria-label="Attach image"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                    <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" />
+                  </svg>
+                </button>
+
                 <textarea
                   ref={textareaRef}
                   className="chat-textarea"
                   rows={1}
                   maxLength={200}
-                  placeholder={isP2PConnected ? 'Chat in room...' : 'Waiting for connection...'}
+                  placeholder={
+                    !isP2PConnected
+                      ? 'Waiting for connection...'
+                      : pendingImage
+                      ? 'Add a caption (optional)...'
+                      : 'Chat or paste screenshot (Ctrl+V)...'
+                  }
                   value={inputText}
                   onChange={handleTextareaChange}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   disabled={!isP2PConnected}
                 />
                 {inputText.length > 0 && (
@@ -582,7 +820,7 @@ export default function LiveChat({
                   type="button"
                   className="send-btn-compact"
                   onClick={handleSend}
-                  disabled={!isP2PConnected || inputText.trim().length === 0}
+                  disabled={!isP2PConnected || (!pendingImage && inputText.trim().length === 0)}
                   title="Send message (Enter)"
                   aria-label="Send message"
                 >
@@ -913,6 +1151,13 @@ export default function LiveChat({
           </div>
         )}
       </aside>
+
+      {/* Feature 3.3: High-Resolution Image Lightbox Modal */}
+      <ImageLightboxModal
+        isOpen={isLightboxOpen}
+        image={lightboxImage}
+        onClose={() => setIsLightboxOpen(false)}
+      />
     </>
   );
 }

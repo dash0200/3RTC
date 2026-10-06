@@ -182,12 +182,36 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 3.3 Direct P2P Image & Screenshot Sharing
-- **Description**: Share images or paste screenshots directly into chat without an upload server.
+### 3.3 Direct P2P Image & Screenshot Sharing ✅ `[COMPLETED]`
+- **Description**: Share images or paste screenshots directly into chat with zero upload servers, transferring raw binary blobs directly peer-to-peer over WebRTC DataChannels.
 - **Key Capabilities**:
-  - Paste clipboard image (`Ctrl+V`) or drag & drop image into the chat input bar.
-  - Transfer binary blobs directly through WebRTC DataChannel.
-  - Lightbox preview modal for viewing shared images in high resolution.
+  - **Zero-Server Direct Binary Transfer**:
+    - Raw image binary files sliced into 60 KB SCTP-safe chunks.
+    - Unique packet magic header (`0x494D4731` / `'IMG1'`) to seamlessly demux image slices from video stream chunks over the same DataChannel.
+    - Backpressure flow control checking `dc.bufferedAmount` to prevent buffer congestion.
+    - Progressive binary slice assembly directly into browser `Blob` and memory `objectUrl`.
+    - Supports PNG, JPEG, WebP, GIF, SVG, and BMP images up to 15 MB.
+  - **Effortless Screenshot & Image Ingestion**:
+    - **Clipboard Paste (`Ctrl+V`)**: Instant ingestion of desktop screenshots (via `PrtScn` or `Win+Shift+S`) or copied images into chat.
+    - **Drag & Drop**: Dragging any image file over the chat area triggers a glowing cyber-glassmorphism drop overlay (`Drop image to share`).
+    - **File Attachment Button**: Dedicated camera/image button in the chat input bar opening native file selection.
+    - **Pre-Send Preview Pill**: Shows thumbnail preview, filename, file size, and dismiss (✕) button with optional text captioning.
+  - **Inline Message Progress & Cards**:
+    - In-flight upload/download progress bar displaying live percentage and file size.
+    - Completed thumbnail card with hover zoom icon, file size pill, and caption display.
+  - **High-Resolution Lightbox Viewer Modal**:
+    - Full-resolution preview modal with frosted backdrop blur (`rgba(6, 8, 16, 0.93)`).
+    - Interactive zoom controls (Zoom In `+`, Zoom Out `-`, Reset `1x`, Double-click toggle).
+    - 💾 **Save / Download**: Instant download with original filename.
+    - 📋 **Copy to Clipboard**: Copies raw image blob directly to clipboard using `navigator.clipboard.write([new ClipboardItem(...)])`.
+    - File metadata header (filename, size, sender, timestamp) and bottom caption bar.
+    - Keyboard navigation (`Escape` to close, `+`/`-` to zoom, `0` to reset).
+- **Implementation Notes**:
+  - Binary Chunking & Reassembly: [p2pImageShare.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/p2pImageShare.js) (`P2PImageSender`, `P2PImageReceiver`, `IMAGE_CHUNK_SIZE`, `MAGIC_IMG1`).
+  - High-Resolution Lightbox Modal: [ImageLightboxModal.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/ImageLightboxModal.jsx).
+  - DataChannel Chunk Demuxing & Broadcasting: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx) (`handleIncomingImageStart`, `handleIncomingImageChunk`, `handleSendImage`, `dc.onmessage` demuxer).
+  - Chat Ingestion & Inline Rendering: [LiveChat.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LiveChat.jsx) (Clipboard paste, drag-and-drop, attachment button, progress cards, lightbox triggers).
+  - Cyber-Glassmorphic Styling: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
