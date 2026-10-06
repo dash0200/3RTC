@@ -4111,6 +4111,7 @@
   .controls-right {
     display: flex;
     align-items: center;
+    gap: 10px;
   }
 
   /* 4. Live Chat: Native Slide-Up Bottom Sheet Drawer */
@@ -5241,6 +5242,136 @@
     opacity: 0;
     transform: translate3d(-4px, -410px, 0) scale(0.7) rotate(calc(var(--rot, 0deg) * 1.4));
   }
+}
+
+/* Stage Vertical React Panel (Left of Open Live Chat button) */
+.stage-react-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.react-toggle-btn {
+  color: var(--text-secondary);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.react-toggle-btn:hover {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 4px 14px rgba(251, 191, 36, 0.2);
+}
+
+.react-toggle-btn.react-active {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.2);
+  border-color: #fbbf24;
+  box-shadow: 0 0 16px rgba(251, 191, 36, 0.35);
+}
+
+/* Vertical Popover Panel opening upwards */
+.stage-react-vertical-panel {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  padding: 8px 6px;
+  background: rgba(16, 18, 26, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 28px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 0 20px rgba(251, 191, 36, 0.12);
+  animation: stageVerticalReactPop 0.22s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Invisible bridge so mouse gliding between button and panel does not trigger mouseleave */
+.stage-react-vertical-panel::after {
+  content: '';
+  position: absolute;
+  bottom: -14px;
+  left: -8px;
+  right: -8px;
+  height: 16px;
+  background: transparent;
+}
+
+@keyframes stageVerticalReactPop {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px) scale(0.85);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+.stage-vertical-react-list {
+  display: flex;
+  flex-direction: column-reverse; /* Vertically stacked with 1 closest to button */
+  align-items: center;
+  gap: 7px;
+}
+
+.stage-vertical-react-btn {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.18s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.stage-vertical-react-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(251, 191, 36, 0.5);
+  transform: scale(1.22);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.stage-vertical-react-btn:active {
+  transform: scale(0.92);
+}
+
+.stage-vertical-react-btn .react-btn-emoji {
+  font-size: 1.25rem;
+  line-height: 1;
+  user-select: none;
+  pointer-events: none;
+}
+
+.stage-vertical-react-btn .react-btn-hotkey {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  font-size: 0.58rem;
+  font-weight: 800;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  padding: 0 3px;
+  line-height: 1.1;
+  pointer-events: none;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.stage-vertical-react-btn:hover .react-btn-hotkey {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.6);
+  background: rgba(15, 23, 42, 1);
 }
 
 /* Floating Quick Reaction Dock */

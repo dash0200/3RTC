@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
 import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
-import FloatingReactions from './FloatingReactions';
+import FloatingReactions, { LIVE_REACTIONS } from './FloatingReactions';
 import PeerVoiceRoster from './PeerVoiceRoster';
 
 export default function Stage({
@@ -60,6 +60,60 @@ export default function Stage({
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
   const [hasEnteredTheater, setHasEnteredTheater] = useState(false);
+  const [isReactOpen, setIsReactOpen] = useState(false);
+  const reactLeaveTimeoutRef = useRef(null);
+  const reactContainerRef = useRef(null);
+
+  const handleToggleReact = () => {
+    if (reactLeaveTimeoutRef.current) {
+      clearTimeout(reactLeaveTimeoutRef.current);
+      reactLeaveTimeoutRef.current = null;
+    }
+    setIsReactOpen((prev) => !prev);
+  };
+
+  const handleReactMouseEnter = () => {
+    if (reactLeaveTimeoutRef.current) {
+      clearTimeout(reactLeaveTimeoutRef.current);
+      reactLeaveTimeoutRef.current = null;
+    }
+  };
+
+  const handleReactMouseLeave = () => {
+    if (reactLeaveTimeoutRef.current) {
+      clearTimeout(reactLeaveTimeoutRef.current);
+    }
+    reactLeaveTimeoutRef.current = setTimeout(() => {
+      setIsReactOpen(false);
+      reactLeaveTimeoutRef.current = null;
+    }, 180);
+  };
+
+  const handleSelectReaction = (emoji) => {
+    if (typeof onSendReaction === 'function') {
+      onSendReaction(emoji);
+    }
+  };
+
+  // Close when clicking outside
+  useEffect(() => {
+    if (!isReactOpen) return;
+    const handleClickOutside = (e) => {
+      if (reactContainerRef.current && !reactContainerRef.current.contains(e.target)) {
+        setIsReactOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
+  }, [isReactOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (reactLeaveTimeoutRef.current) {
+        clearTimeout(reactLeaveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!roomId) {
@@ -223,11 +277,11 @@ export default function Stage({
           </div>
         )}
 
-        {/* Floating Live Reactions Overlay & Reaction Dock */}
+        {/* Floating Live Reactions Overlay */}
         <FloatingReactions
           reactions={floatingReactions}
           onSendReaction={onSendReaction}
-          showDock={Boolean(roomId)}
+          showDock={false}
           hasMedia={isMediaActive}
         />
       </div>
@@ -359,6 +413,53 @@ export default function Stage({
         </div>
 
         <div className="controls-right">
+          {/* Reaction Panel Trigger & Vertical Flyout Menu */}
+          {roomId && typeof onSendReaction === 'function' && (
+            <div
+              className="stage-react-container"
+              ref={reactContainerRef}
+              onMouseEnter={handleReactMouseEnter}
+              onMouseLeave={handleReactMouseLeave}
+            >
+              {isReactOpen && (
+                <div
+                  className="stage-react-vertical-panel"
+                  role="menu"
+                  aria-label="Live Reactions (Hotkeys 1-6)"
+                >
+                  <div className="stage-vertical-react-list">
+                    {LIVE_REACTIONS.map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className="stage-vertical-react-btn"
+                        onClick={() => handleSelectReaction(r.emoji)}
+                        title={`React ${r.emoji} (${r.label} - Press [${r.key}])`}
+                        aria-label={`${r.label} reaction`}
+                      >
+                        <span className="react-btn-emoji">{r.emoji}</span>
+                        <span className="react-btn-hotkey">{r.key}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                className={`control-btn react-toggle-btn ${isReactOpen ? 'react-active' : ''}`}
+                onClick={handleToggleReact}
+                title={isReactOpen ? "Close Reactions" : "Reactions (Click to open, Press 1-6)"}
+                aria-label={isReactOpen ? "Close Reactions" : "Open Reactions"}
+                aria-expanded={isReactOpen}
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/>
+                </svg>
+              </button>
+            </div>
+          )}
+
           <button
             type="button"
             className={`control-btn chat-toggle-btn ${isChatOpen ? 'chat-active' : ''} ${!isChatOpen && (unreadChatCount || chatCount) > 0 ? 'has-unread' : ''}`}
