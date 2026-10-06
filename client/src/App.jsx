@@ -135,6 +135,7 @@ export default function App() {
     const audioSettingsRef = useRef(audioSettings);
     const isPttActiveRef = useRef(false);
     const pttReleaseTimerRef = useRef(null);
+    const isAudioUpdatingRef = useRef(false);
 
     // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
     // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement, webAudioSource, webAudioGain, analyserNode }>
@@ -1888,12 +1889,29 @@ export default function App() {
             try {
                 let stream = localStreamRef.current;
                 const currentTrack = stream?.getAudioTracks()[0];
-                if (!currentTrack || currentTrack.readyState === 'ended') {
+                const currentSettings = currentTrack?.getSettings ? currentTrack.getSettings() : {};
+                const settingsMatch = currentTrack &&
+                    currentTrack.readyState === 'live' &&
+                    Boolean(currentSettings.echoCancellation) === Boolean(audioSettingsRef.current?.echoCancellation) &&
+                    Boolean(currentSettings.noiseSuppression) === Boolean(audioSettingsRef.current?.noiseSuppression) &&
+                    Boolean(currentSettings.autoGainControl) === Boolean(audioSettingsRef.current?.autoGainControl);
+
+                if (!settingsMatch) {
+                    if (stream) {
+                        try { stream.getTracks().forEach((t) => t.stop()); } catch { }
+                    }
+                    if (localSourceNodeRef.current) {
+                        try { localSourceNodeRef.current.disconnect(); } catch { }
+                        localSourceNodeRef.current = null;
+                    }
+                    await new Promise((r) => setTimeout(r, 60));
+
                     const constraints = {
                         audio: {
                             echoCancellation: Boolean(audioSettingsRef.current?.echoCancellation),
                             noiseSuppression: Boolean(audioSettingsRef.current?.noiseSuppression),
-                            autoGainControl: Boolean(audioSettingsRef.current?.autoGainControl)
+                            autoGainControl: Boolean(audioSettingsRef.current?.autoGainControl),
+                            ...(currentSettings?.deviceId ? { deviceId: { ideal: currentSettings.deviceId } } : {})
                         }
                     };
                     stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -2024,66 +2042,133 @@ export default function App() {
 
         // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
         if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
-            setMicrophoneMuted(true, true);
+            await setMicrophoneMuted(true, true);
+            return;
         }
 
-        // Apply updated DSP constraints to active microphone stream
-        if (localStreamRef.current) {
-            const tracks = localStreamRef.current.getAudioTracks();
-            if (tracks.length > 0 && tracks[0].readyState === 'live') {
-                const oldTrack = tracks[0];
-                try {
-                    await oldTrack.applyConstraints({
-                        echoCancellation: Boolean(newSettings.echoCancellation),
-                        noiseSuppression: Boolean(newSettings.noiseSuppression),
-                        autoGainControl: Boolean(newSettings.autoGainControl)
-                    });
-                } catch { }
+        // Concurrency guard to prevent rapid toggle collisions
+        if (isAudioUpdatingRef.current) {
+            return;
+        }
+        isAudioUpdatingRef.current = true;
 
-                try {
-                    const wasMuted = isMicMutedRef.current;
-                    const newStream = await navigator.mediaDevices.getUserMedia({
-                        audio: {
-                            echoCancellation: Boolean(newSettings.echoCancellation),
-                            noiseSuppression: Boolean(newSettings.noiseSuppression),
-                            autoGainControl: Boolean(newSettings.autoGainControl)
-                        }
-                    });
-                    const newTrack = newStream.getAudioTracks()[0];
-                    newTrack.enabled = !wasMuted;
+        try {
+            const wasMuted = isMicMutedRef.current;
+            const currentStream = localStreamRef.current;
+            const currentTrack = currentStream?.getAudioTracks()[0];
+            const deviceId = currentTrack?.getSettings?.()?.deviceId;
 
-                    if (window.__webrtcAudioCtx && localAnalyserRef.current) {
-                        if (localSourceNodeRef.current) {
-                            try { localSourceNodeRef.current.disconnect(); } catch { }
-                        }
-                        const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
-                        newSource.connect(localAnalyserRef.current);
-                        localSourceNodeRef.current = newSource;
-                    }
-
-                    for (const peer of peersRef.current.values()) {
-                        if (peer.pc) {
-                            const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                            for (const t of transceivers) {
-                                if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                                    t.sender.replaceTrack(newTrack).catch(() => { });
-                                }
-                            }
-                            const senders = peer.pc.getSenders ? peer.pc.getSenders() : [];
-                            for (const s of senders) {
-                                if (!s.track || s.track.kind === 'audio') {
-                                    s.replaceTrack(newTrack).catch(() => { });
-                                }
-                            }
-                        }
-                    }
-
-                    try { oldTrack.stop(); } catch { }
-                    localStreamRef.current = newStream;
-                } catch { }
+            // Disconnect old Web Audio node
+            if (localSourceNodeRef.current) {
+                try { localSourceNodeRef.current.disconnect(); } catch { }
+                localSourceNodeRef.current = null;
             }
+
+            // CRITICAL CHROMIUM FIX: Stop existing tracks BEFORE requesting a new stream.
+            // In Chromium / WASAPI, calling getUserMedia while an old track is live reuses the
+            // existing capture session and corrupts the native WebRTC Audio Processing Module (AEC3).
+            if (currentStream) {
+                try {
+                    currentStream.getTracks().forEach((t) => t.stop());
+                } catch { }
+                localStreamRef.current = null;
+            }
+
+            // If the microphone is currently muted, do not open hardware capture while muted.
+            // Null out sender tracks so peers receive silence.
+            // When user later un-mutes, setMicrophoneMuted will acquire a fresh stream with newSettings.
+            if (wasMuted) {
+                for (const peer of peersRef.current.values()) {
+                    if (peer.pc && peer.pc.connectionState !== 'closed') {
+                        const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
+                        for (const t of transceivers) {
+                            if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
+                                try { await t.sender.replaceTrack(null); } catch { }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            // If microphone is actively unmuted, re-acquire the stream with new DSP constraints.
+            // Brief 80ms delay to ensure the OS/browser hardware capture session is fully released.
+            await new Promise((resolve) => setTimeout(resolve, 80));
+
+            const constraints = {
+                audio: {
+                    echoCancellation: Boolean(newSettings.echoCancellation),
+                    noiseSuppression: Boolean(newSettings.noiseSuppression),
+                    autoGainControl: Boolean(newSettings.autoGainControl),
+                    ...(deviceId ? { deviceId: { ideal: deviceId } } : {})
+                }
+            };
+
+            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const newTrack = newStream.getAudioTracks()[0];
+            if (!newTrack) {
+                throw new Error('No audio track returned from microphone');
+            }
+            newTrack.enabled = true;
+            localStreamRef.current = newStream;
+
+            const appliedSettings = newTrack.getSettings ? newTrack.getSettings() : {};
+            logLocalDebug(
+                'AUDIO_DSP_RECONFIGURED',
+                `AEC: ${appliedSettings.echoCancellation}, NS: ${appliedSettings.noiseSuppression}, AGC: ${appliedSettings.autoGainControl}`
+            );
+
+            // Reconnect local analyser for speaking indicator & VU meter
+            if (window.__webrtcAudioCtx && localAnalyserRef.current) {
+                try {
+                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
+                    newSource.connect(localAnalyserRef.current);
+                    localSourceNodeRef.current = newSource;
+                } catch (err) {
+                    logLocalDebug('ANALYSER_RECONNECT_ERR', err.message);
+                }
+            }
+
+            // Replace audio track cleanly in each peer connection
+            const replacePromises = [];
+            for (const [peerId, peer] of peersRef.current.entries()) {
+                if (peer.pc && peer.pc.connectionState !== 'closed') {
+                    let replaced = false;
+                    const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
+                    for (const t of transceivers) {
+                        const isValid = t.mid !== null || transceivers.length === 1;
+                        if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
+                            t.direction = 'sendrecv';
+                            replacePromises.push(
+                                t.sender.replaceTrack(newTrack)
+                                    .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced`))
+                                    .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`))
+                            );
+                            replaced = true;
+                        }
+                    }
+                    if (!replaced) {
+                        const senders = peer.pc.getSenders ? peer.pc.getSenders() : [];
+                        for (const s of senders) {
+                            if (!s.track || s.track.kind === 'audio') {
+                                replacePromises.push(
+                                    s.replaceTrack(newTrack)
+                                        .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} sender track replaced`))
+                                        .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`))
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            await Promise.all(replacePromises);
+        } catch (err) {
+            logLocalDebug('AUDIO_SETTINGS_UPDATE_ERR', err.message);
+            showToast('⚠️ Could not update audio settings: ' + err.message);
+        } finally {
+            isAudioUpdatingRef.current = false;
         }
-    }, [setMicrophoneMuted]);
+    }, [logLocalDebug, setMicrophoneMuted, showToast]);
 
     // Push-to-Talk (PTT) Mouse Handlers for button hold
     const handlePttPressStart = useCallback(() => {
