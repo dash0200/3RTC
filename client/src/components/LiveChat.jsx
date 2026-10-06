@@ -3,6 +3,7 @@ import { getAvatarColor } from '../utils/sound';
 import { copyToClipboard } from '../utils/clipboard';
 import { extractYouTubeId, fetchYouTubeTitle } from './YouTubeSyncPlayer';
 import { PeerVoicePanel } from './PeerVoiceRoster';
+import SoundboardTray from './SoundboardTray';
 
 const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
@@ -47,7 +48,13 @@ export default function LiveChat({
   onOpenAudioSettings,
   isPttActive = false,
   onPttPressStart,
-  onPttPressEnd
+  onPttPressEnd,
+  soundboardSettings = null,
+  activeSoundboardSfx = null,
+  activeSfxCooldowns = {},
+  onPlaySoundboardClip,
+  onSoundboardVolumeChange,
+  onToggleSoundboardMute
 }) {
   const DEFAULT_WIDTH = 380;
   const MIN_WIDTH = 260;
@@ -456,6 +463,19 @@ export default function LiveChat({
             </svg>
             <span>Peers</span>
             {connectedPeers.length > 0 && <span className="tab-badge voice-badge">{connectedPeers.length + 1}</span>}
+          </button>
+
+          <button
+            type="button"
+            className={`chat-tab-btn ${activeTab === 'sfx' ? 'active' : ''}`}
+            onClick={() => setActiveTab('sfx')}
+            title="Synchronized Soundboard SFX"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+            </svg>
+            <span>SFX</span>
+            {activeSoundboardSfx && <span className="tab-unread-dot sfx-pulse" title="Sound playing" />}
           </button>
         </div>
 
@@ -875,6 +895,22 @@ export default function LiveChat({
             onPttPressStart={onPttPressStart}
             onPttPressEnd={onPttPressEnd}
           />
+        )}
+
+        {/* TAB 5: Synchronized Soundboard (Mini SFX Tray) */}
+        {activeTab === 'sfx' && (
+          <div className="sidebar-soundboard-tab-wrapper">
+            <SoundboardTray
+              variant="embedded"
+              volume={soundboardSettings?.volume ?? 0.75}
+              isMuted={Boolean(soundboardSettings?.muted)}
+              onVolumeChange={onSoundboardVolumeChange}
+              onToggleMute={onToggleSoundboardMute}
+              activeSfx={activeSoundboardSfx}
+              activeCooldowns={activeSfxCooldowns}
+              onPlayClip={onPlaySoundboardClip}
+            />
+          </div>
         )}
       </aside>
     </>

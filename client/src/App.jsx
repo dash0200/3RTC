@@ -11,6 +11,7 @@ import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
 import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField } from './utils/audioSettings';
+import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
@@ -137,6 +138,15 @@ export default function App() {
     const pttReleaseTimerRef = useRef(null);
     const isAudioUpdatingRef = useRef(false);
 
+    // Feature 2.3: Synchronized Soundboard (Mini SFX Tray)
+    const [soundboardSettings, setSoundboardSettings] = useState(() => loadSoundboardSettings());
+    const soundboardSettingsRef = useRef(soundboardSettings);
+    const [activeSoundboardSfx, setActiveSoundboardSfx] = useState(null);
+    const [activeSfxCooldowns, setActiveSfxCooldowns] = useState({});
+    const activeSfxTimerRef = useRef(null);
+    const lastSfxTimestampRef = useRef(0);
+    const lastRemoteSfxTimestampRef = useRef(0);
+
     // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
     // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement, webAudioSource, webAudioGain, analyserNode }>
     const peersRef = useRef(new Map());
@@ -166,6 +176,7 @@ export default function App() {
     localMutedPeersRef.current = localMutedPeers;
     audioSettingsRef.current = audioSettings;
     isPttActiveRef.current = isPttActive;
+    soundboardSettingsRef.current = soundboardSettings;
 
     const showToast = useCallback((msg) => {
         setToastMessage(msg);
@@ -540,6 +551,34 @@ export default function App() {
         }, 2600);
     }, []);
 
+    // Feature 2.3: Handle incoming remote Soundboard SFX
+    const handleRemoteSoundboardSfx = useCallback((data) => {
+        if (!data || !data.soundId) return;
+        const now = Date.now();
+        // Rate limit protection: ignore rapid bursts
+        if (now - lastRemoteSfxTimestampRef.current < 350) return;
+        lastRemoteSfxTimestampRef.current = now;
+
+        const effectiveVol = soundboardSettingsRef.current?.muted ? 0 : (soundboardSettingsRef.current?.volume ?? 0.75);
+        if (!isAudioBlockedRef.current && effectiveVol > 0) {
+            soundboard.play(data.soundId, effectiveVol);
+        }
+
+        const sfxInfo = {
+            soundId: data.soundId,
+            soundName: data.soundName || data.soundId,
+            emoji: data.emoji || '🎵',
+            sender: data.sender || 'Peer',
+            timestamp: now
+        };
+        setActiveSoundboardSfx(sfxInfo);
+        if (activeSfxTimerRef.current) clearTimeout(activeSfxTimerRef.current);
+        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 2500);
+
+        showToast(`🔊 ${data.sender || 'Peer'} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
+        addSystemMessage(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
+    }, [addSystemMessage, showToast]);
+
     // Create or get peer connection in mesh
     const getOrCreatePeerConnection = useCallback((targetPeerId, isInitiator) => {
         if (peersRef.current.has(targetPeerId)) {
@@ -840,6 +879,8 @@ export default function App() {
                         handleRemoteQueueAction(data);
                     } else if (data.type === 'reaction') {
                         handleRemoteReaction(data);
+                    } else if (data.type === 'soundboard-sfx') {
+                        handleRemoteSoundboardSfx(data);
                     } else if (data.type === 'p2p-stream-request') {
                         // Remote peer requests to stream the local video file
                         if (localVideoFileRef.current && peerEntry.dataChannel) {
@@ -1051,7 +1092,7 @@ export default function App() {
         }
 
         return peerEntry;
-    }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
+    }, [addSystemMessage, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, sendSignal, showToast, updateP2PStatus, username]);
 
     // Handle incoming signaling messages
     const handleSignalingMessage = useCallback(async (msg) => {
@@ -1559,6 +1600,74 @@ export default function App() {
             }
         }
     }, [username]);
+
+    // Feature 2.3: Trigger local soundboard clip and synchronize over DataChannel
+    const handlePlaySoundboardClip = useCallback((clip) => {
+        if (!clip || !clip.id) return;
+        const now = Date.now();
+        if (now - lastSfxTimestampRef.current < 350) return;
+        lastSfxTimestampRef.current = now;
+
+        // Set cooldown on this clip for 2.2 seconds
+        setActiveSfxCooldowns((prev) => ({ ...prev, [clip.id]: true }));
+        setTimeout(() => {
+            setActiveSfxCooldowns((prev) => {
+                const next = { ...prev };
+                delete next[clip.id];
+                return next;
+            });
+        }, 2200);
+
+        // Play locally if not muted
+        const effectiveVol = soundboardSettingsRef.current?.muted ? 0 : (soundboardSettingsRef.current?.volume ?? 0.75);
+        if (!isAudioBlockedRef.current && effectiveVol > 0) {
+            soundboard.play(clip.id, effectiveVol);
+        }
+
+        const sfxInfo = {
+            soundId: clip.id,
+            soundName: clip.name,
+            emoji: clip.emoji,
+            sender: username,
+            timestamp: now
+        };
+        setActiveSoundboardSfx(sfxInfo);
+        if (activeSfxTimerRef.current) clearTimeout(activeSfxTimerRef.current);
+        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 2500);
+
+        // Broadcast to all connected peers via DataChannel
+        const sfxMsg = {
+            type: 'soundboard-sfx',
+            soundId: clip.id,
+            soundName: clip.name,
+            emoji: clip.emoji,
+            sender: username,
+            timestamp: now
+        };
+        for (const peer of peersRef.current.values()) {
+            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+                try { peer.dataChannel.send(JSON.stringify(sfxMsg)); } catch { }
+            }
+        }
+    }, [username]);
+
+    const handleSoundboardVolumeChange = useCallback((newVol) => {
+        setSoundboardSettings((prev) => {
+            const updated = { ...prev, volume: newVol };
+            soundboardSettingsRef.current = updated;
+            saveSoundboardSettings(updated.volume, updated.muted);
+            return updated;
+        });
+    }, []);
+
+    const handleToggleSoundboardMute = useCallback(() => {
+        setSoundboardSettings((prev) => {
+            const updated = { ...prev, muted: !prev.muted };
+            soundboardSettingsRef.current = updated;
+            saveSoundboardSettings(updated.volume, updated.muted);
+            return updated;
+        });
+    }, []);
 
     const handleApplyServer = (newUrl) => {
         setSignalUrl(newUrl);
@@ -2605,6 +2714,12 @@ export default function App() {
                         isPttActive={isPttActive}
                         onPttPressStart={handlePttPressStart}
                         onPttPressEnd={handlePttPressEnd}
+                        soundboardSettings={soundboardSettings}
+                        activeSoundboardSfx={activeSoundboardSfx}
+                        activeSfxCooldowns={activeSfxCooldowns}
+                        onPlaySoundboardClip={handlePlaySoundboardClip}
+                        onSoundboardVolumeChange={handleSoundboardVolumeChange}
+                        onToggleSoundboardMute={handleToggleSoundboardMute}
                     />
                 </main>
             </div>
@@ -2651,6 +2766,12 @@ export default function App() {
                 isPttActive={isPttActive}
                 onPttPressStart={handlePttPressStart}
                 onPttPressEnd={handlePttPressEnd}
+                soundboardSettings={soundboardSettings}
+                activeSoundboardSfx={activeSoundboardSfx}
+                activeSfxCooldowns={activeSfxCooldowns}
+                onPlaySoundboardClip={handlePlaySoundboardClip}
+                onSoundboardVolumeChange={handleSoundboardVolumeChange}
+                onToggleSoundboardMute={handleToggleSoundboardMute}
             />
 
             {/* Floating Push-to-Talk HUD Indicator */}

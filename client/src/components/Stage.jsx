@@ -3,6 +3,7 @@ import YouTubeSyncPlayer from './YouTubeSyncPlayer';
 import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
 import FloatingReactions, { LIVE_REACTIONS } from './FloatingReactions';
 import PeerVoiceRoster from './PeerVoiceRoster';
+import SoundboardTray from './SoundboardTray';
 
 export default function Stage({
   roomId,
@@ -55,7 +56,14 @@ export default function Stage({
   onOpenAudioSettings,
   isPttActive = false,
   onPttPressStart,
-  onPttPressEnd
+  onPttPressEnd,
+  // Feature 2.3: Synchronized Soundboard (Mini SFX Tray)
+  soundboardSettings = null,
+  activeSoundboardSfx = null,
+  activeSfxCooldowns = {},
+  onPlaySoundboardClip,
+  onSoundboardVolumeChange,
+  onToggleSoundboardMute
 }) {
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
@@ -63,6 +71,8 @@ export default function Stage({
   const [isReactOpen, setIsReactOpen] = useState(false);
   const reactLeaveTimeoutRef = useRef(null);
   const reactContainerRef = useRef(null);
+  const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
+  const soundboardContainerRef = useRef(null);
 
   const handleToggleReact = () => {
     if (reactLeaveTimeoutRef.current) {
@@ -106,6 +116,18 @@ export default function Stage({
     document.addEventListener('pointerdown', handleClickOutside);
     return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [isReactOpen]);
+
+  // Close soundboard popover when clicking outside
+  useEffect(() => {
+    if (!isSoundboardOpen) return;
+    const handleClickOutside = (e) => {
+      if (soundboardContainerRef.current && !soundboardContainerRef.current.contains(e.target)) {
+        setIsSoundboardOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
+  }, [isSoundboardOpen]);
 
   useEffect(() => {
     return () => {
@@ -286,6 +308,30 @@ export default function Stage({
         />
       </div>
 
+      {/* Live Synchronized SFX HUD Banner on Stage */}
+      {activeSoundboardSfx && (
+        <div className="stage-soundboard-hud" role="status" aria-live="polite">
+          <div className="sfx-hud-icon-wrap">
+            <span className="sfx-hud-emoji">{activeSoundboardSfx.emoji || '🔊'}</span>
+            <span className="sfx-hud-pulse-ring" />
+          </div>
+          <div className="sfx-hud-content">
+            <div className="sfx-hud-label-row">
+              <span className="sfx-hud-sender">{activeSoundboardSfx.sender || 'Peer'}</span>
+              <span className="sfx-hud-action">played</span>
+              <span className="sfx-hud-name">{activeSoundboardSfx.soundName}</span>
+            </div>
+            <div className="sfx-hud-visualizer">
+              <span className="hud-eq-bar bar-1" />
+              <span className="hud-eq-bar bar-2" />
+              <span className="hud-eq-bar bar-3" />
+              <span className="hud-eq-bar bar-4" />
+              <span className="hud-eq-bar bar-5" />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bottom Stage Controls Bar */}
       <div className="stage-controls">
         <div className="controls-left">
@@ -440,6 +486,43 @@ export default function Stage({
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                   <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" />
                 </svg>
+              </button>
+            </div>
+          )}
+
+          {/* Soundboard (Mini SFX Tray) Trigger & Floating Popover */}
+          {roomId && (
+            <div className="stage-soundboard-container" ref={soundboardContainerRef}>
+              {isSoundboardOpen && (
+                <div className="stage-soundboard-floating-wrapper" role="dialog" aria-label="Soundboard SFX Tray">
+                  <SoundboardTray
+                    variant="floating"
+                    volume={soundboardSettings?.volume ?? 0.75}
+                    isMuted={Boolean(soundboardSettings?.muted)}
+                    onVolumeChange={onSoundboardVolumeChange}
+                    onToggleMute={onToggleSoundboardMute}
+                    activeSfx={activeSoundboardSfx}
+                    activeCooldowns={activeSfxCooldowns}
+                    onPlayClip={onPlaySoundboardClip}
+                    onClose={() => setIsSoundboardOpen(false)}
+                  />
+                </div>
+              )}
+
+              <button
+                type="button"
+                className={`control-btn soundboard-toggle-btn ${isSoundboardOpen ? 'soundboard-active' : ''} ${activeSoundboardSfx ? 'has-active-sfx' : ''}`}
+                onClick={() => setIsSoundboardOpen((prev) => !prev)}
+                title={isSoundboardOpen ? "Close Soundboard SFX" : "Soundboard SFX (Airhorn, Ba-Dum-Tss, Tada...)"}
+                aria-label={isSoundboardOpen ? "Close Soundboard" : "Open Soundboard"}
+                aria-expanded={isSoundboardOpen}
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+                </svg>
+                {activeSoundboardSfx && (
+                  <span className="control-badge sfx-playing-dot" title="SFX Playing" />
+                )}
               </button>
             </div>
           )}
