@@ -66,7 +66,9 @@ export default function Stage({
   onToggleSoundboardMute,
   // Feature 4.1: Real-Time P2P Network HUD
   networkStats = null,
-  onOpenNetworkHud
+  onOpenNetworkHud,
+  // Feature 4.3: QR Code for Instant Mobile Join
+  onOpenQrCode
 }) {
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
@@ -271,12 +273,26 @@ export default function Stage({
                       <span key={i} className="digit-box">{d}</span>
                     ))}
                   </div>
-                  <button className="btn btn-subtle" onClick={() => onCopyRoom(String(roomId))}>
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                      <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
-                    </svg>
-                    Copy 5-Digit Code
-                  </button>
+                  <div className="code-banner-actions">
+                    <button className="btn btn-subtle" onClick={() => onCopyRoom(String(roomId))}>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
+                      </svg>
+                      Copy 5-Digit Code
+                    </button>
+                    {typeof onOpenQrCode === 'function' && (
+                      <button
+                        className="btn btn-qr-scan"
+                        onClick={onOpenQrCode}
+                        title="Display QR Code for instant mobile scanning (Press [Q])"
+                      >
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                          <path d="M4 4h6v6H4zm2 2v2h2V6zm8-2h6v6h-6zm2 2v2h2V6zM4 14h6v6H4zm2 2v2h2v-2zm10 0h2v2h-2zm-2 2h2v2h-2zm4 0h2v2h-2zm0-4h2v2h-2zm-4-2h2v2h-2zm2 2h2v2h-2z" />
+                        </svg>
+                        Mobile QR Code
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className={`p2p-status-card ${isP2PConnected ? 'connected' : ''}`}>

@@ -15,6 +15,7 @@ import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './ut
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES } from './utils/networkMonitor';
+import QrCodeModal from './components/QrCodeModal';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
@@ -117,6 +118,7 @@ export default function App() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showJoinModal, setShowJoinModal] = useState(false);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const [showQrModal, setShowQrModal] = useState(false);
     const [initialJoinPin, setInitialJoinPin] = useState('');
     const [toastMessage, setToastMessage] = useState('');
 
@@ -2738,6 +2740,12 @@ export default function App() {
                     e.preventDefault();
                     toggleMicrophone();
                 }
+            } else if (roomId && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                // Feature 4.3: 'Q' shortcut to show Mobile Join QR Code
+                if (!localVideoFile && !streamVideoUrl && !remoteLocalVideoMeta) {
+                    e.preventDefault();
+                    setShowQrModal(true);
+                }
             }
         };
 
@@ -3048,6 +3056,7 @@ export default function App() {
                     isPttActive={isPttActive}
                     networkStats={networkStats}
                     onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                    onOpenQrCode={() => setShowQrModal(true)}
                 />
 
                 <main className="main-container">
@@ -3115,6 +3124,7 @@ export default function App() {
                         onToggleSoundboardMute={handleToggleSoundboardMute}
                         networkStats={networkStats}
                         onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                        onOpenQrCode={() => setShowQrModal(true)}
                     />
                 </main>
             </div>
@@ -3168,6 +3178,7 @@ export default function App() {
                 onPlaySoundboardClip={handlePlaySoundboardClip}
                 onSoundboardVolumeChange={handleSoundboardVolumeChange}
                 onToggleSoundboardMute={handleToggleSoundboardMute}
+                onOpenQrCode={() => setShowQrModal(true)}
             />
 
             {/* Floating Push-to-Talk HUD Indicator */}
@@ -3234,6 +3245,14 @@ export default function App() {
                 roomId={roomId}
                 username={username}
                 onTriggerPing={handleTriggerPing}
+            />
+
+            {/* Feature 4.3: QR Code for Instant Mobile Join Modal */}
+            <QrCodeModal
+                isOpen={showQrModal}
+                onClose={() => setShowQrModal(false)}
+                roomId={roomId}
+                username={username}
             />
 
             {/* Toast Notification */}

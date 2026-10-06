@@ -89,9 +89,19 @@ export default function JoinRoomModal({ isOpen, onClose, onConfirm, currentUsern
           <button className="modal-close-btn" onClick={onClose}>&times;</button>
         </div>
         <div className="modal-body">
-          <p className="modal-desc">
-            Enter the 5-digit numeric code provided by your peer to initiate the direct WebRTC handshake.
-          </p>
+          {initialPin && /^\d{5}$/.test(initialPin) ? (
+            <div className="mobile-qr-welcome-banner">
+              <span className="welcome-banner-icon">📱</span>
+              <div className="welcome-banner-text">
+                <span className="welcome-banner-title">Instant Mobile Join</span>
+                <span className="welcome-banner-sub">Room PIN <strong>{initialPin}</strong> detected. Choose your display name and tap Join!</span>
+              </div>
+            </div>
+          ) : (
+            <p className="modal-desc">
+              Enter the 5-digit numeric code provided by your peer to initiate the direct WebRTC handshake.
+            </p>
+          )}
 
           <div className="form-group">
             <label className="form-label" htmlFor="joinUsernameInput">Your Display Name</label>
