@@ -63,7 +63,10 @@ export default function Stage({
   activeSfxCooldowns = {},
   onPlaySoundboardClip,
   onSoundboardVolumeChange,
-  onToggleSoundboardMute
+  onToggleSoundboardMute,
+  // Feature 4.1: Real-Time P2P Network HUD
+  networkStats = null,
+  onOpenNetworkHud
 }) {
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
@@ -341,9 +344,29 @@ export default function Stage({
             </svg>
             <span>{peerCount} / 3 in Room</span>
           </div>
-          <div className={`p2p-badge ${isP2PConnected ? 'active' : ''}`}>
-            {isP2PConnected ? 'P2P DIRECT MESH' : 'WAITING PEERS'}
-          </div>
+          <button
+            type="button"
+            className={`p2p-badge-btn ${isP2PConnected ? 'active' : ''}`}
+            onClick={typeof onOpenNetworkHud === 'function' ? onOpenNetworkHud : undefined}
+            title={
+              isP2PConnected
+                ? `P2P Mesh Active (${networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined ? `${networkStats.avgPingMs}ms • ` : ''}${networkStats?.overallConnectionType || 'Direct P2P'}) - Click for Real-Time Network HUD`
+                : 'Waiting for room peers - Click for Network Diagnostics'
+            }
+            aria-label="Open Network Diagnostics HUD"
+          >
+            <span className="p2p-badge-dot" />
+            <span className="p2p-badge-text">
+              {isP2PConnected
+                ? (networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined
+                    ? `${networkStats.avgPingMs}ms • ${networkStats.overallConnectionType || 'DIRECT P2P'}`
+                    : 'P2P DIRECT MESH')
+                : 'WAITING PEERS'}
+            </span>
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" className="p2p-badge-icon">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+            </svg>
+          </button>
 
           {/* Voice Chat Avatars, Speaking Rings & Per-Peer Volume */}
           {roomId && (
