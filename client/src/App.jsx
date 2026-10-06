@@ -5,10 +5,12 @@ import LiveChat from './components/LiveChat';
 import CreateRoomModal from './components/CreateRoomModal';
 import JoinRoomModal from './components/JoinRoomModal';
 import ServerSettingsModal from './components/ServerSettingsModal';
+import AudioSettingsModal from './components/AudioSettingsModal';
 import { fetchYouTubeTitle } from './components/YouTubeSyncPlayer';
 import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
+import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField } from './utils/audioSettings';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
@@ -126,6 +128,14 @@ export default function App() {
     const [localAudioActivity, setLocalAudioActivity] = useState({ isSpeaking: false, level: 0 });
     const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username: string, isHost: boolean, isMuted: boolean } }
 
+    // Feature 2.2: Audio Processing Toggles (Noise Suppression & Echo Cancellation) & Push-to-Talk (PTT)
+    const [audioSettings, setAudioSettings] = useState(() => loadAudioSettings());
+    const [showAudioSettingsModal, setShowAudioSettingsModal] = useState(false);
+    const [isPttActive, setIsPttActive] = useState(false);
+    const audioSettingsRef = useRef(audioSettings);
+    const isPttActiveRef = useRef(false);
+    const pttReleaseTimerRef = useRef(null);
+
     // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
     // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement, webAudioSource, webAudioGain, analyserNode }>
     const peersRef = useRef(new Map());
@@ -153,6 +163,8 @@ export default function App() {
     isAudioBlockedRef.current = isAudioBlocked;
     peerVolumesRef.current = peerVolumes;
     localMutedPeersRef.current = localMutedPeers;
+    audioSettingsRef.current = audioSettings;
+    isPttActiveRef.current = isPttActive;
 
     const showToast = useCallback((msg) => {
         setToastMessage(msg);
@@ -1852,10 +1864,10 @@ export default function App() {
         }
     }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
 
-    // Voice Chat: Toggle Microphone Mute/Unmute
-    const toggleMicrophone = useCallback(async () => {
+    // Voice Chat: Set Microphone Mute/Unmute
+    const setMicrophoneMuted = useCallback(async (shouldMute, isPtt = false) => {
         // If incoming audio is currently blocked, unmuting microphone also unblocks audio
-        if (isAudioBlockedRef.current) {
+        if (!shouldMute && isAudioBlockedRef.current) {
             setIsAudioBlocked(false);
             isAudioBlockedRef.current = false;
             for (const peer of peersRef.current.values()) {
@@ -1872,18 +1884,19 @@ export default function App() {
             window.__webrtcAudioCtx.resume().catch(() => { });
         }
 
-        if (isMicMutedRef.current) {
+        if (!shouldMute) {
             try {
                 let stream = localStreamRef.current;
                 const currentTrack = stream?.getAudioTracks()[0];
                 if (!currentTrack || currentTrack.readyState === 'ended') {
-                    stream = await navigator.mediaDevices.getUserMedia({
+                    const constraints = {
                         audio: {
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true
+                            echoCancellation: Boolean(audioSettingsRef.current?.echoCancellation),
+                            noiseSuppression: Boolean(audioSettingsRef.current?.noiseSuppression),
+                            autoGainControl: Boolean(audioSettingsRef.current?.autoGainControl)
                         }
-                    });
+                    };
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
                     localStreamRef.current = stream;
                 }
 
@@ -1952,9 +1965,11 @@ export default function App() {
 
                 setIsMicMuted(false);
                 isMicMutedRef.current = false;
-                sound.playPop();
-                showToast('🎙️ Microphone unmuted (Live)');
-                addSystemMessage('🎙️ You unmuted your microphone (Voice Chat Active).');
+                if (!isPtt) {
+                    sound.playPop();
+                    showToast('🎙️ Microphone unmuted (Live)');
+                    addSystemMessage('🎙️ You unmuted your microphone (Voice Chat Active).');
+                }
 
                 const voiceMsg = {
                     type: 'peer-voice-status',
@@ -1978,8 +1993,10 @@ export default function App() {
             setIsMicMuted(true);
             isMicMutedRef.current = true;
             setLocalAudioActivity({ isSpeaking: false, level: 0 });
-            showToast('🔇 Microphone muted');
-            addSystemMessage('🔇 You muted your microphone.');
+            if (!isPtt) {
+                showToast('🔇 Microphone muted');
+                addSystemMessage('🔇 You muted your microphone.');
+            }
 
             const voiceMsg = {
                 type: 'peer-voice-status',
@@ -1993,6 +2010,210 @@ export default function App() {
             }
         }
     }, [addSystemMessage, logLocalDebug, showToast, username]);
+
+    // Voice Chat: Toggle Microphone Mute/Unmute
+    const toggleMicrophone = useCallback(() => {
+        setMicrophoneMuted(!isMicMutedRef.current, false);
+    }, [setMicrophoneMuted]);
+
+    // Feature 2.2: Apply Updated Audio Processing Settings & Reconfigure MediaStream
+    const handleUpdateAudioSettings = useCallback(async (newSettings) => {
+        setAudioSettings(newSettings);
+        audioSettingsRef.current = newSettings;
+        saveAudioSettings(newSettings);
+
+        // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
+        if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
+            setMicrophoneMuted(true, true);
+        }
+
+        // Apply updated DSP constraints to active microphone stream
+        if (localStreamRef.current) {
+            const tracks = localStreamRef.current.getAudioTracks();
+            if (tracks.length > 0 && tracks[0].readyState === 'live') {
+                const oldTrack = tracks[0];
+                try {
+                    await oldTrack.applyConstraints({
+                        echoCancellation: Boolean(newSettings.echoCancellation),
+                        noiseSuppression: Boolean(newSettings.noiseSuppression),
+                        autoGainControl: Boolean(newSettings.autoGainControl)
+                    });
+                } catch { }
+
+                try {
+                    const wasMuted = isMicMutedRef.current;
+                    const newStream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            echoCancellation: Boolean(newSettings.echoCancellation),
+                            noiseSuppression: Boolean(newSettings.noiseSuppression),
+                            autoGainControl: Boolean(newSettings.autoGainControl)
+                        }
+                    });
+                    const newTrack = newStream.getAudioTracks()[0];
+                    newTrack.enabled = !wasMuted;
+
+                    if (window.__webrtcAudioCtx && localAnalyserRef.current) {
+                        if (localSourceNodeRef.current) {
+                            try { localSourceNodeRef.current.disconnect(); } catch { }
+                        }
+                        const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
+                        newSource.connect(localAnalyserRef.current);
+                        localSourceNodeRef.current = newSource;
+                    }
+
+                    for (const peer of peersRef.current.values()) {
+                        if (peer.pc) {
+                            const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
+                            for (const t of transceivers) {
+                                if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
+                                    t.sender.replaceTrack(newTrack).catch(() => { });
+                                }
+                            }
+                            const senders = peer.pc.getSenders ? peer.pc.getSenders() : [];
+                            for (const s of senders) {
+                                if (!s.track || s.track.kind === 'audio') {
+                                    s.replaceTrack(newTrack).catch(() => { });
+                                }
+                            }
+                        }
+                    }
+
+                    try { oldTrack.stop(); } catch { }
+                    localStreamRef.current = newStream;
+                } catch { }
+            }
+        }
+    }, [setMicrophoneMuted]);
+
+    // Push-to-Talk (PTT) Mouse Handlers for button hold
+    const handlePttPressStart = useCallback(() => {
+        if (audioSettings.inputMode !== 'ptt') return;
+        if (pttReleaseTimerRef.current) {
+            clearTimeout(pttReleaseTimerRef.current);
+            pttReleaseTimerRef.current = null;
+        }
+        if (!isPttActiveRef.current) {
+            isPttActiveRef.current = true;
+            setIsPttActive(true);
+            if (audioSettings.pttChime) sound.playPttOn();
+            setMicrophoneMuted(false, true);
+        }
+    }, [audioSettings, setMicrophoneMuted]);
+
+    const handlePttPressEnd = useCallback(() => {
+        if (audioSettings.inputMode !== 'ptt') return;
+        if (isPttActiveRef.current) {
+            const delay = Math.max(0, audioSettings.pttReleaseDelay || 0);
+            if (delay > 0) {
+                if (pttReleaseTimerRef.current) clearTimeout(pttReleaseTimerRef.current);
+                pttReleaseTimerRef.current = setTimeout(() => {
+                    isPttActiveRef.current = false;
+                    setIsPttActive(false);
+                    if (audioSettings.pttChime) sound.playPttOff();
+                    setMicrophoneMuted(true, true);
+                    pttReleaseTimerRef.current = null;
+                }, delay);
+            } else {
+                isPttActiveRef.current = false;
+                setIsPttActive(false);
+                if (audioSettings.pttChime) sound.playPttOff();
+                setMicrophoneMuted(true, true);
+            }
+        }
+    }, [audioSettings, setMicrophoneMuted]);
+
+    // Feature 2.2: Push-to-Talk (PTT) Global Key Handlers & Hotkeys
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (isTypingInField(e)) return;
+
+            // 1. Push-to-Talk key handler
+            if (audioSettings.inputMode === 'ptt' && matchesPttKey(e, audioSettings.pttKey)) {
+                if (e.code === 'Space') {
+                    e.preventDefault();
+                }
+                if (e.repeat) return;
+
+                if (pttReleaseTimerRef.current) {
+                    clearTimeout(pttReleaseTimerRef.current);
+                    pttReleaseTimerRef.current = null;
+                }
+
+                if (!isPttActiveRef.current) {
+                    isPttActiveRef.current = true;
+                    setIsPttActive(true);
+                    if (audioSettings.pttChime) {
+                        sound.playPttOn();
+                    }
+                    setMicrophoneMuted(false, true);
+                }
+            } else if (audioSettings.inputMode === 'open' && (e.code === 'KeyM' || e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                // 'M' shortcut to toggle microphone mute in Open Mic mode (when not playing local video)
+                if (!localVideoFile && !streamVideoUrl && !remoteLocalVideoMeta) {
+                    e.preventDefault();
+                    toggleMicrophone();
+                }
+            }
+        };
+
+        const handleKeyUp = (e) => {
+            if (audioSettings.inputMode === 'ptt' && matchesPttKey(e, audioSettings.pttKey)) {
+                if (e.code === 'Space') {
+                    e.preventDefault();
+                }
+
+                if (isPttActiveRef.current) {
+                    const delay = Math.max(0, audioSettings.pttReleaseDelay || 0);
+                    if (delay > 0) {
+                        if (pttReleaseTimerRef.current) {
+                            clearTimeout(pttReleaseTimerRef.current);
+                        }
+                        pttReleaseTimerRef.current = setTimeout(() => {
+                            isPttActiveRef.current = false;
+                            setIsPttActive(false);
+                            if (audioSettings.pttChime) {
+                                sound.playPttOff();
+                            }
+                            setMicrophoneMuted(true, true);
+                            pttReleaseTimerRef.current = null;
+                        }, delay);
+                    } else {
+                        isPttActiveRef.current = false;
+                        setIsPttActive(false);
+                        if (audioSettings.pttChime) {
+                            sound.playPttOff();
+                        }
+                        setMicrophoneMuted(true, true);
+                    }
+                }
+            }
+        };
+
+        const handleBlur = () => {
+            if (isPttActiveRef.current) {
+                if (pttReleaseTimerRef.current) {
+                    clearTimeout(pttReleaseTimerRef.current);
+                    pttReleaseTimerRef.current = null;
+                }
+                isPttActiveRef.current = false;
+                setIsPttActive(false);
+                if (audioSettings.pttChime) {
+                    sound.playPttOff();
+                }
+                setMicrophoneMuted(true, true);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        window.addEventListener('blur', handleBlur);
+
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+            window.removeEventListener('blur', handleBlur);
+        };
+    }, [audioSettings, localVideoFile, remoteLocalVideoMeta, setMicrophoneMuted, streamVideoUrl, toggleMicrophone]);
 
     // Voice Chat: Toggle Block Incoming Audio (Deafen) - blocks incoming audio AND microphone
     const toggleBlockAudio = useCallback(() => {
@@ -2237,6 +2458,9 @@ export default function App() {
                     isChatOpen={isChatOpen}
                     unreadChatCount={unreadChatCount}
                     onToggleChat={() => setIsChatOpen((prev) => !prev)}
+                    audioSettings={audioSettings}
+                    onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+                    isPttActive={isPttActive}
                 />
 
                 <main className="main-container">
@@ -2291,6 +2515,11 @@ export default function App() {
                         localUser={localUser}
                         onSetPeerVolume={handleSetPeerVolume}
                         onToggleMutePeer={handleToggleMutePeer}
+                        audioSettings={audioSettings}
+                        onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+                        isPttActive={isPttActive}
+                        onPttPressStart={handlePttPressStart}
+                        onPttPressEnd={handlePttPressEnd}
                     />
                 </main>
             </div>
@@ -2331,7 +2560,35 @@ export default function App() {
                 onToggleMic={toggleMicrophone}
                 roomId={roomId}
                 onCopyRoom={handleCopyRoom}
+                audioSettings={audioSettings}
+                onUpdateAudioSettings={handleUpdateAudioSettings}
+                onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+                isPttActive={isPttActive}
+                onPttPressStart={handlePttPressStart}
+                onPttPressEnd={handlePttPressEnd}
             />
+
+            {/* Floating Push-to-Talk HUD Indicator */}
+            {isPttActive && (
+                <div className="ptt-floating-hud">
+                    <div className="ptt-hud-icon-wrap">
+                        <span className="ptt-hud-wave-ring" />
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="#22c55e">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                        </svg>
+                    </div>
+                    <div className="ptt-hud-details">
+                        <span className="ptt-hud-title">TRANSMITTING VOICE</span>
+                        <span className="ptt-hud-subtitle">Release [{audioSettings?.pttKeyLabel || 'Space'}] or mouse to mute</span>
+                    </div>
+                    <div className="ptt-hud-equalizer">
+                        <span className="ptt-eq-bar bar-1" />
+                        <span className="ptt-eq-bar bar-2" />
+                        <span className="ptt-eq-bar bar-3" />
+                        <span className="ptt-eq-bar bar-4" />
+                    </div>
+                </div>
+            )}
 
             {/* Modals */}
             <CreateRoomModal
@@ -2354,6 +2611,16 @@ export default function App() {
                 onClose={() => setShowSettingsModal(false)}
                 currentUrl={signalUrl}
                 onApply={handleApplyServer}
+            />
+
+            <AudioSettingsModal
+                isOpen={showAudioSettingsModal}
+                onClose={() => setShowAudioSettingsModal(false)}
+                audioSettings={audioSettings}
+                onUpdateAudioSettings={handleUpdateAudioSettings}
+                localAudioLevel={localAudioActivity.level}
+                isMicMuted={isMicMuted}
+                isPttActive={isPttActive}
             />
 
             {/* Toast Notification */}

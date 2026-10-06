@@ -257,19 +257,27 @@ export default function PeerVoiceRoster({
   localUser = null,
   onSetPeerVolume,
   onToggleMutePeer,
-  onToggleMic
+  onToggleMic,
+  audioSettings = null,
+  onOpenAudioSettings,
+  isPttActive = false
 }) {
   const [selectedPeerId, setSelectedPeerId] = useState(null);
 
   const selectedPeer = connectedPeers.find((p) => p.peerId === selectedPeerId);
+  const isPttMode = audioSettings?.inputMode === 'ptt';
 
   return (
     <div className="stage-peer-voice-roster">
       {/* Local User Badge */}
       {localUser && (
         <PeerVoiceBadge
-          peer={localUser}
-          onClick={onToggleMic}
+          peer={{
+            ...localUser,
+            isSpeaking: isPttMode ? (isPttActive && localUser.isSpeaking) : localUser.isSpeaking,
+            isMuted: isPttMode ? !isPttActive : localUser.isMuted
+          }}
+          onClick={isPttMode && typeof onOpenAudioSettings === 'function' ? onOpenAudioSettings : onToggleMic}
           showVolumeTag={false}
         />
       )}
@@ -309,8 +317,32 @@ export function PeerVoicePanel({
   onToggleMic,
   onToggleBlockAudio,
   roomId = '',
-  onCopyRoom
+  onCopyRoom,
+  audioSettings = null,
+  onUpdateAudioSettings,
+  onOpenAudioSettings,
+  isPttActive = false,
+  onPttPressStart,
+  onPttPressEnd
 }) {
+  const isPttMode = audioSettings?.inputMode === 'ptt';
+
+  const handleToggleDsp = (key) => {
+    if (!audioSettings || typeof onUpdateAudioSettings !== 'function') return;
+    onUpdateAudioSettings({
+      ...audioSettings,
+      [key]: !audioSettings[key]
+    });
+  };
+
+  const handleToggleMode = () => {
+    if (!audioSettings || typeof onUpdateAudioSettings !== 'function') return;
+    onUpdateAudioSettings({
+      ...audioSettings,
+      inputMode: isPttMode ? 'open' : 'ptt'
+    });
+  };
+
   return (
     <div className="peer-voice-panel">
       {/* Panel Header */}
@@ -322,18 +354,33 @@ export function PeerVoicePanel({
             </svg>
             <h3>Voice & Audio Levels</h3>
           </div>
-          <span className="voice-peers-count-pill">
-            {connectedPeers.length + 1} in Room
-          </span>
+          <div className="voice-panel-actions">
+            {typeof onOpenAudioSettings === 'function' && (
+              <button
+                type="button"
+                className="btn-voice-settings-gear"
+                onClick={onOpenAudioSettings}
+                title="Open Audio Processing & PTT Settings"
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                  <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+                </svg>
+                <span>Settings</span>
+              </button>
+            )}
+            <span className="voice-peers-count-pill">
+              {connectedPeers.length + 1} in Room
+            </span>
+          </div>
         </div>
         <p className="voice-panel-desc">
-          Green pulsating rings indicate real-time speech. Adjust volume sliders $(0\% - 200\%)$ individually to balance quiet or loud microphones.
+          Green pulsating rings indicate real-time speech. Individual volume sliders $(0\% - 200\%)$ balance quiet or loud microphones.
         </p>
       </div>
 
       {/* Your Microphone Card */}
       {localUser && (
-        <div className={`voice-user-card self-card ${localUser.isSpeaking ? 'speaking-active' : ''}`}>
+        <div className={`voice-user-card self-card ${localUser.isSpeaking ? 'speaking-active' : ''} ${isPttActive ? 'ptt-active' : ''}`}>
           <div className="card-top-row">
             <div className="user-avatar-meta">
               <div className="avatar-ring-container">
@@ -348,21 +395,43 @@ export function PeerVoicePanel({
                   <span className="self-tag">YOU</span>
                   {localUser.isHost && <span className="host-tag">HOST</span>}
                 </div>
-                <span className={`card-status-pill ${localUser.isSpeaking ? 'speaking' : localUser.isMuted ? 'muted' : 'ready'}`}>
-                  {localUser.isSpeaking ? '🎙️ Speaking' : localUser.isMuted ? '🔇 Mic Muted' : '🟢 Ready / Silent'}
+                <span className={`card-status-pill ${localUser.isSpeaking ? 'speaking' : isPttActive ? 'speaking' : isPttMode ? 'ptt-idle' : localUser.isMuted ? 'muted' : 'ready'}`}>
+                  {isPttMode
+                    ? isPttActive
+                      ? '🎙️ PTT LIVE'
+                      : `📻 PTT [${audioSettings?.pttKeyLabel || 'Space'}]`
+                    : localUser.isSpeaking
+                      ? '🎙️ Speaking'
+                      : localUser.isMuted
+                        ? '🔇 Mic Muted'
+                        : '🟢 Ready / Silent'}
                 </span>
               </div>
             </div>
 
             <div className="card-quick-actions">
-              <button
-                type="button"
-                className={`card-mic-btn ${localUser.isMuted ? 'is-muted' : 'is-live'}`}
-                onClick={onToggleMic}
-                title={localUser.isMuted ? 'Unmute microphone' : 'Mute microphone'}
-              >
-                {localUser.isMuted ? 'Unmute Mic' : 'Mute Mic'}
-              </button>
+              {isPttMode ? (
+                <button
+                  type="button"
+                  className={`card-mic-btn card-ptt-btn ${isPttActive ? 'is-transmitting' : 'is-idle'}`}
+                  onMouseDown={onPttPressStart}
+                  onMouseUp={onPttPressEnd}
+                  onTouchStart={onPttPressStart}
+                  onTouchEnd={onPttPressEnd}
+                  title={`Hold to transmit voice or press [${audioSettings?.pttKeyLabel || 'Space'}]`}
+                >
+                  {isPttActive ? 'Transmitting' : `Hold [${audioSettings?.pttKeyLabel || 'Space'}]`}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={`card-mic-btn ${localUser.isMuted ? 'is-muted' : 'is-live'}`}
+                  onClick={onToggleMic}
+                  title={localUser.isMuted ? 'Unmute microphone' : 'Mute microphone'}
+                >
+                  {localUser.isMuted ? 'Unmute Mic' : 'Mute Mic'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -376,6 +445,89 @@ export function PeerVoicePanel({
               />
             </div>
             <span className="meter-reading">{localUser.isSpeaking ? `${localUser.audioLevel}%` : '0%'}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Audio Processing Toggles & PTT Quick Card */}
+      {audioSettings && (
+        <div className="voice-audio-settings-card">
+          <div className="settings-card-header">
+            <div className="settings-card-title-group">
+              <span className="settings-card-badge">HARDWARE DSP</span>
+              <span className="settings-card-title">Audio Processing & Mode</span>
+            </div>
+            {typeof onOpenAudioSettings === 'function' && (
+              <button
+                type="button"
+                className="btn-gear-icon-only"
+                onClick={onOpenAudioSettings}
+                title="Configure full audio settings"
+              >
+                ⚙️
+              </button>
+            )}
+          </div>
+
+          {/* 3 Browser Native DSP Toggles */}
+          <div className="dsp-chips-container">
+            <button
+              type="button"
+              className={`dsp-chip ${audioSettings.noiseSuppression ? 'active' : ''}`}
+              onClick={() => handleToggleDsp('noiseSuppression')}
+              title="Noise Suppression: Filters out fan hums and keyboard clicks"
+            >
+              <span className="dsp-dot" />
+              <span className="dsp-name">NS</span>
+              <span className="dsp-label">Noise Suppression</span>
+            </button>
+
+            <button
+              type="button"
+              className={`dsp-chip ${audioSettings.echoCancellation ? 'active' : ''}`}
+              onClick={() => handleToggleDsp('echoCancellation')}
+              title="Echo Cancellation: Prevents speaker audio leaking back into microphone"
+            >
+              <span className="dsp-dot" />
+              <span className="dsp-name">AEC</span>
+              <span className="dsp-label">Echo Cancel</span>
+            </button>
+
+            <button
+              type="button"
+              className={`dsp-chip ${audioSettings.autoGainControl ? 'active' : ''}`}
+              onClick={() => handleToggleDsp('autoGainControl')}
+              title="Auto Gain Control: Normalizes vocal volume automatically"
+            >
+              <span className="dsp-dot" />
+              <span className="dsp-name">AGC</span>
+              <span className="dsp-label">Auto Gain</span>
+            </button>
+          </div>
+
+          {/* Voice Mode Quick Bar */}
+          <div className="voice-mode-quick-bar">
+            <div className="mode-quick-info">
+              <span className="mode-quick-label">Mode:</span>
+              <button
+                type="button"
+                className={`mode-quick-pill ${isPttMode ? 'ptt' : 'open'}`}
+                onClick={handleToggleMode}
+                title="Click to toggle between Open Mic and Push-to-Talk"
+              >
+                {isPttMode ? `📻 Push-to-Talk [${audioSettings.pttKeyLabel || 'Space'}]` : '🎙️ Open Mic / Toggle'}
+              </button>
+            </div>
+
+            {typeof onOpenAudioSettings === 'function' && (
+              <button
+                type="button"
+                className="btn-configure-audio"
+                onClick={onOpenAudioSettings}
+              >
+                Configure
+              </button>
+            )}
           </div>
         </div>
       )}

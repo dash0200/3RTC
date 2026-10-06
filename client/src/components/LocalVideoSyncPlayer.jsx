@@ -38,7 +38,8 @@ export default function LocalVideoSyncPlayer({
   isHost = false,
   floatingReactions = [],
   onSendReaction,
-  roomId = null
+  roomId = null,
+  isPttSpaceActive = false
 }) {
   const [file, setFile] = useState(initialFile);
   const [objectUrl, setObjectUrl] = useState(null);
@@ -785,6 +786,10 @@ export default function LocalVideoSyncPlayer({
       }
 
       if (e.code === 'Space') {
+        if (isPttSpaceActive) {
+          // Space is reserved for Push-to-Talk voice transmission
+          return;
+        }
         e.preventDefault();
         togglePlayPause();
       } else if (e.code === 'ArrowLeft') {
@@ -832,7 +837,7 @@ export default function LocalVideoSyncPlayer({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMuted, subtitles, isFullscreen, handleToggleAllPanels]);
+  }, [isMuted, subtitles, isFullscreen, handleToggleAllPanels, isPttSpaceActive]);
 
   const activeVideoSrc = streamVideoUrl || objectUrl;
   const isStreamed = Boolean(streamVideoUrl && !objectUrl);

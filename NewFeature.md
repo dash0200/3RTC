@@ -99,11 +99,33 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ---
 
-### 2.2 Audio Processing Toggles (Noise Suppression & Echo Cancellation)
-- **Description**: Fine-grained audio settings for optimal voice clarity in varied environments.
+### 2.2 Audio Processing Toggles (Noise Suppression & Echo Cancellation) ✅ `[COMPLETED]`
+- **Description**: Fine-grained audio settings for optimal voice clarity in varied environments, native browser WebRTC DSP filter control, and low-latency Push-to-Talk (PTT).
 - **Key Capabilities**:
-  - Toggle browser native `noiseSuppression`, `echoCancellation`, and `autoGainControl`.
-  - Push-to-Talk (PTT) mode with customizable hotkey (e.g., `Space` or `Ctrl`).
+  - **Browser Native DSP Audio Filters**:
+    - 🎧 **Echo Cancellation (`echoCancellation`)**: Eliminates acoustic feedback from room speakers leaking back into the mic.
+    - 🔇 **Noise Suppression (`noiseSuppression`)**: Suppresses background ambient noise (fans, mechanical keyboards, AC).
+    - 🎚️ **Automatic Gain Control (`autoGainControl`)**: Automatically normalizes vocal volume across quiet whisperers and loud speakers.
+    - Dynamic track constraint updates via `applyConstraints()` and seamless hardware pipeline re-acquisition without WebRTC call renegotiation.
+    - Persistent configuration saved across sessions in `localStorage`.
+  - **Push-to-Talk (PTT) Mode**:
+    - **Dual Input Modes**: Seamlessly switch between **Open Mic / Voice Activation** (toggle mute) and **Push-to-Talk (PTT)** (held transmission).
+    - **Customizable PTT Hotkey**: Choose popular presets (`Space`, `Ctrl`, `Alt`, `V`, `T`, `~`) or click "Record Key" to bind any keyboard key.
+    - **Smart Hotkey Isolation**: Prevents key triggering while typing in chat, room PIN, or form fields. Intelligent coordination with `LocalVideoSyncPlayer` prevents `Space` hotkey from inadvertently pausing video playback during transmission.
+    - **Release Delay (Grace Period)**: Configurable hold-open grace delay ($0\text{ms} - 500\text{ms}$, default $200\text{ms}$) to prevent cutting off the final syllable.
+    - **Tactile Radio Sound Effects (Chirps)**: Web Audio synthesized ascending chirp on key press and descending chirp on release.
+    - **Mouse Push-to-Talk**: Holding down the stage or panel mic button with mouse or touch transmits audio for non-keyboard users.
+    - **Floating Transmission HUD**: Glowing green HUD pill with animated audio equalizer soundwaves and real-time live transmission status.
+  - **Dedicated Settings UI**:
+    - **Glassmorphic Audio Settings Modal**: Accessible from Header, Stage, and Sidebar with real-time VU meter test bar.
+    - **Sidebar "Peers" Tab Integration**: Inline DSP chips (`NS`, `AEC`, `AGC`), mode selector, and quick configure action.
+- **Implementation Notes**:
+  - Configuration & Key Helpers: [audioSettings.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/audioSettings.js).
+  - Web Audio PTT Chirps: [sound.js](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/utils/sound.js).
+  - Modal: [AudioSettingsModal.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/AudioSettingsModal.jsx).
+  - WebRTC Track re-acquisition & global PTT loop: [App.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.jsx).
+  - UI integrations: [PeerVoiceRoster.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/PeerVoiceRoster.jsx), [Stage.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Stage.jsx), [Header.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/Header.jsx), [LiveChat.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LiveChat.jsx), [LocalVideoSyncPlayer.jsx](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/components/LocalVideoSyncPlayer.jsx).
+  - Cyber glass styling & keyframe animations: [App.css](file:///c:/Users/dvana/Documents/WebRTCUsers/client/src/App.css).
 
 ---
 
