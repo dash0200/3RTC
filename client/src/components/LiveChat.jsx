@@ -41,7 +41,13 @@ export default function LiveChat({
   onToggleMutePeer,
   onToggleMic,
   roomId = '',
-  onCopyRoom
+  onCopyRoom,
+  audioSettings = null,
+  onUpdateAudioSettings,
+  onOpenAudioSettings,
+  isPttActive = false,
+  onPttPressStart,
+  onPttPressEnd
 }) {
   const DEFAULT_WIDTH = 380;
   const MIN_WIDTH = 260;
@@ -862,6 +868,12 @@ export default function LiveChat({
             onToggleBlockAudio={onToggleBlockAudio}
             roomId={roomId}
             onCopyRoom={onCopyRoom}
+            audioSettings={audioSettings}
+            onUpdateAudioSettings={onUpdateAudioSettings}
+            onOpenAudioSettings={onOpenAudioSettings}
+            isPttActive={isPttActive}
+            onPttPressStart={onPttPressStart}
+            onPttPressEnd={onPttPressEnd}
           />
         )}
       </aside>

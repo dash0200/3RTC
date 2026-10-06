@@ -50,8 +50,14 @@ export default function Stage({
   streamProgress = null,
   streamVideoUrl = null,
   onRequestP2PStream,
-  onCancelP2PStream
+  onCancelP2PStream,
+  audioSettings = null,
+  onOpenAudioSettings,
+  isPttActive = false,
+  onPttPressStart,
+  onPttPressEnd
 }) {
+  const isPttMode = audioSettings?.inputMode === 'ptt';
   const digits = roomId ? String(roomId).padStart(5, '0').split('') : [];
   const [hasEnteredTheater, setHasEnteredTheater] = useState(false);
 
@@ -134,6 +140,7 @@ export default function Stage({
             floatingReactions={floatingReactions}
             onSendReaction={onSendReaction}
             roomId={roomId}
+            isPttSpaceActive={isPttMode && (audioSettings?.pttKey === 'Space' || audioSettings?.pttKey === ' ')}
           />
         ) : showTheater ? (
           /* Case 2B: YouTube Player / Watch Party Lobby */
@@ -246,28 +253,49 @@ export default function Stage({
               onSetPeerVolume={onSetPeerVolume}
               onToggleMutePeer={onToggleMutePeer}
               onToggleMic={onToggleMic}
+              audioSettings={audioSettings}
+              onOpenAudioSettings={onOpenAudioSettings}
+              isPttActive={isPttActive}
             />
           )}
         </div>
 
         <div className="controls-center">
-          {/* Microphone Mute/Unmute Button */}
+          {/* Microphone Mute/Unmute Button (with PTT mode support) */}
           <button
             type="button"
-            className={`control-btn ${!roomId ? 'disabled' : isMicMuted ? 'mic-muted' : 'mic-live'}`}
-            onClick={roomId ? onToggleMic : undefined}
+            className={`control-btn ${!roomId ? 'disabled' : isPttMode ? (isPttActive ? 'mic-live ptt-transmitting' : 'mic-muted ptt-ready') : isMicMuted ? 'mic-muted' : 'mic-live'}`}
+            onClick={roomId ? (!isPttMode ? onToggleMic : onOpenAudioSettings) : undefined}
+            onMouseDown={roomId && isPttMode ? onPttPressStart : undefined}
+            onMouseUp={roomId && isPttMode ? onPttPressEnd : undefined}
+            onTouchStart={roomId && isPttMode ? onPttPressStart : undefined}
+            onTouchEnd={roomId && isPttMode ? onPttPressEnd : undefined}
             title={
               !roomId
                 ? "Join a room to use microphone"
                 : isAudioBlocked
                   ? "Microphone blocked (Audio is blocked. Click to unblock and speak)"
-                  : isMicMuted
-                    ? "Unmute Microphone (Click to speak)"
-                    : "Mute Microphone (Microphone is live)"
+                  : isPttMode
+                    ? isPttActive
+                      ? "🎙️ PTT Transmitting Live! Release key/mouse to mute"
+                      : `📻 Push-to-Talk Mode: Hold [${audioSettings?.pttKeyLabel || 'Space'}] or hold this button to transmit`
+                    : isMicMuted
+                      ? "Unmute Microphone (Click to speak)"
+                      : "Mute Microphone (Microphone is live)"
             }
             disabled={!roomId}
           >
-            {isMicMuted ? (
+            {isPttMode ? (
+              isPttActive ? (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+                </svg>
+              )
+            ) : isMicMuted ? (
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                 <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
               </svg>
@@ -276,7 +304,8 @@ export default function Stage({
                 <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
               </svg>
             )}
-            {!isMicMuted && <span className="mic-pulse-wave"></span>}
+            {((!isPttMode && !isMicMuted) || (isPttMode && isPttActive)) && <span className="mic-pulse-wave"></span>}
+            {isPttMode && <span className="stage-ptt-tag">{isPttActive ? 'LIVE' : (audioSettings?.pttKeyLabel || 'PTT')}</span>}
           </button>
 
           {/* Block Incoming Audio / Deafen Button */}
@@ -303,6 +332,22 @@ export default function Stage({
               </svg>
             )}
           </button>
+
+          {/* Audio Processing & Voice Settings Button */}
+          {roomId && typeof onOpenAudioSettings === 'function' && (
+            <button
+              type="button"
+              className="control-btn audio-settings-btn"
+              onClick={onOpenAudioSettings}
+              title="Audio Processing & PTT Settings (Echo Cancellation, Noise Suppression, Auto Gain)"
+              aria-label="Audio & Voice Settings"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+              </svg>
+              <span className="audio-dsp-active-dot" title="Hardware Audio DSP Active" />
+            </button>
+          )}
 
           {roomId && (
             <button className="control-btn danger" onClick={onLeaveRoom} title="Leave Room">
