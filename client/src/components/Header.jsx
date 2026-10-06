@@ -19,7 +19,10 @@ export default function Header({
   onToggleChat,
   audioSettings = null,
   onOpenAudioSettings,
-  isPttActive = false
+  isPttActive = false,
+  // Feature 4.1: Real-Time P2P Network HUD
+  networkStats = null,
+  onOpenNetworkHud
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -90,14 +93,27 @@ export default function Header({
               {copied && <span className="chip-copied-text">Copied!</span>}
             </div>
 
-            {/* Direct P2P Status Chip */}
-            <div
+            {/* Direct P2P Status Chip / Network HUD Trigger */}
+            <button
+              type="button"
               className={`header-p2p-chip ${isP2PConnected ? 'connected' : ''}`}
-              title={p2pStatusText || (isP2PConnected ? 'WebRTC Direct P2P Mesh Connected' : 'Waiting for peers...')}
+              onClick={typeof onOpenNetworkHud === 'function' ? onOpenNetworkHud : undefined}
+              title={
+                isP2PConnected
+                  ? `WebRTC Direct Mesh (${networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined ? `${networkStats.avgPingMs}ms • ` : ''}${networkStats?.overallConnectionType || 'Direct P2P'}) - Click for Real-Time Network HUD`
+                  : (p2pStatusText || 'Waiting for peers... Click for Diagnostics')
+              }
+              aria-label="Open Real-Time Network HUD"
             >
               <span className="p2p-chip-dot"></span>
-              <span className="p2p-chip-text">{p2pStatusText || (isP2PConnected ? 'Direct P2P Active' : 'Waiting for peers...')}</span>
-            </div>
+              <span className="p2p-chip-text">
+                {isP2PConnected
+                  ? (networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined
+                      ? `${networkStats.avgPingMs}ms • ${networkStats.overallConnectionType || 'Direct P2P'}`
+                      : 'Direct P2P Active')
+                  : (p2pStatusText || 'Waiting for peers...')}
+              </span>
+            </button>
 
             {audioSettings?.inputMode === 'ptt' ? (
               <button
