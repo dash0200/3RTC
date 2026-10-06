@@ -8252,4 +8252,657 @@ video::cue {
     padding: 8px 14px;
   }
 }
+
+/* ==========================================================================
+   FEATURE 2.3: SYNCHRONIZED SOUNDBOARD (MINI SFX TRAY)
+   ========================================================================== */
+
+/* 1. Stage Soundboard Container & Trigger Button */
+.stage-soundboard-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.soundboard-toggle-btn {
+  color: var(--text-secondary);
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+.soundboard-toggle-btn:hover {
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.45);
+  background: rgba(192, 132, 252, 0.12);
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.24);
+}
+
+.soundboard-toggle-btn.soundboard-active {
+  color: #e879f9;
+  background: rgba(168, 85, 247, 0.22);
+  border-color: #a855f7;
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.4);
+}
+
+.soundboard-toggle-btn.has-active-sfx {
+  animation: sfxButtonPulse 1.2s infinite ease-in-out;
+}
+
+@keyframes sfxButtonPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(168, 85, 247, 0);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(192, 132, 252, 0.55);
+    border-color: #c084fc;
+  }
+}
+
+.sfx-playing-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  background: #ec4899;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #ec4899;
+  animation: sfxDotPing 0.9s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes sfxDotPing {
+  0% { transform: scale(0.9); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.8; }
+  100% { transform: scale(0.9); opacity: 1; }
+}
+
+/* 2. Stage Floating Soundboard Popover */
+.stage-soundboard-floating-wrapper {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  right: -50px;
+  width: 370px;
+  max-width: calc(100vw - 32px);
+  z-index: 130;
+  animation: stageSoundboardPop 0.24s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes stageSoundboardPop {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 3. Soundboard Container (Shared for Floating & Embedded) */
+.soundboard-container {
+  display: flex;
+  flex-direction: column;
+  background: rgba(14, 16, 25, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-sizing: border-box;
+  color: var(--text-primary, #ffffff);
+  font-family: inherit;
+}
+
+.soundboard-container.is-floating {
+  border-radius: 18px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.75), 0 0 28px rgba(168, 85, 247, 0.18);
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.soundboard-container.is-embedded {
+  border: none;
+  background: transparent;
+  padding: 14px 14px 20px;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.sidebar-soundboard-tab-wrapper {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 4. Soundboard Header */
+.soundboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.soundboard-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.soundboard-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.3), rgba(236, 72, 153, 0.25));
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  color: #e879f9;
+  box-shadow: 0 2px 10px rgba(168, 85, 247, 0.25);
+}
+
+.soundboard-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.soundboard-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: #f8fafc;
+}
+
+.soundboard-sync-badge {
+  font-size: 0.62rem;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.soundboard-subtitle {
+  margin: 2px 0 0;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.soundboard-close-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  font-size: 0.82rem;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+}
+
+.soundboard-close-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  transform: scale(1.08);
+}
+
+/* Header Live Equalizer */
+.soundboard-equalizer-live {
+  display: flex;
+  align-items: flex-end;
+  gap: 2.5px;
+  height: 16px;
+  padding: 0 4px;
+}
+
+.soundboard-equalizer-live .eq-bar {
+  width: 2.5px;
+  background: #e879f9;
+  border-radius: 2px;
+  animation: sfxEqBounce 0.6s ease-in-out infinite alternate;
+}
+
+.soundboard-equalizer-live .bar-1 { height: 10px; animation-delay: 0.05s; }
+.soundboard-equalizer-live .bar-2 { height: 15px; animation-delay: 0.22s; }
+.soundboard-equalizer-live .bar-3 { height: 8px; animation-delay: 0.38s; }
+.soundboard-equalizer-live .bar-4 { height: 13px; animation-delay: 0.15s; }
+
+@keyframes sfxEqBounce {
+  0% { transform: scaleY(0.25); opacity: 0.4; }
+  100% { transform: scaleY(1); opacity: 1; }
+}
+
+/* 5. Soundboard Toolbar: Volume & Categories */
+.soundboard-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  margin-bottom: 12px;
+}
+
+.soundboard-vol-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 5px 10px;
+}
+
+.soundboard-mute-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border-radius: 6px;
+  transition: all 0.18s ease;
+}
+
+.soundboard-mute-btn:hover {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.soundboard-mute-btn.muted {
+  color: #f87171;
+}
+
+.soundboard-slider-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.soundboard-volume-slider {
+  width: 100%;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.soundboard-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #c084fc;
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.7);
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.soundboard-volume-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.25);
+  background: #e879f9;
+}
+
+.soundboard-vol-percent {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Category Filter Pills */
+.soundboard-category-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.soundboard-category-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.category-pill {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.category-pill:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f1f5f9;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.category-pill.active {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(236, 72, 153, 0.22));
+  color: #fdf4ff;
+  border-color: rgba(168, 85, 247, 0.5);
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.2);
+}
+
+/* 6. Soundboard Grid & SFX Cards */
+.soundboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.sfx-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+.sfx-card:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(192, 132, 252, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), 0 0 12px rgba(168, 85, 247, 0.15);
+}
+
+.sfx-card:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+.sfx-card.is-playing {
+  border-color: #e879f9;
+  background: rgba(168, 85, 247, 0.15);
+  box-shadow: 0 0 16px rgba(232, 121, 249, 0.35);
+}
+
+.sfx-card.is-cooldown {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sfx-icon-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+
+.sfx-emoji {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.sfx-ping-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 12px;
+  border: 2px solid;
+  animation: sfxPingRingAnim 0.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes sfxPingRingAnim {
+  0% { transform: scale(0.9); opacity: 1; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+
+.sfx-info {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+}
+
+.sfx-name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sfx-category {
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #94a3b8;
+  margin-top: 1px;
+}
+
+.sfx-cooldown-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.sfx-cooldown-spin {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #c084fc;
+  border-radius: 50%;
+  animation: sfxSpin 0.7s linear infinite;
+}
+
+@keyframes sfxSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* 7. Active SFX Status Banner inside Soundboard */
+.soundboard-active-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  font-size: 0.74rem;
+  color: #fdf4ff;
+}
+
+.banner-pulse {
+  animation: bannerPulseAnim 0.7s infinite alternate;
+}
+
+@keyframes bannerPulseAnim {
+  0% { transform: scale(0.9); }
+  100% { transform: scale(1.2); }
+}
+
+.banner-name {
+  color: #e879f9;
+  font-weight: 700;
+}
+
+/* 8. Soundboard Footer */
+.soundboard-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.footer-hint-text {
+  font-size: 0.67rem;
+  color: #94a3b8;
+  display: block;
+  text-align: center;
+}
+
+/* 9. Live SFX HUD Banner on Stage */
+.stage-soundboard-hud {
+  position: absolute;
+  bottom: 84px;
+  right: 28px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(15, 17, 28, 0.94);
+  border: 1px solid rgba(192, 132, 252, 0.45);
+  border-radius: 50px;
+  padding: 8px 16px 8px 10px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65), 0 0 24px rgba(168, 85, 247, 0.3);
+  z-index: 110;
+  animation: stageSfxHudPop 0.28s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  pointer-events: none;
+}
+
+@keyframes stageSfxHudPop {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.85);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.sfx-hud-icon-wrap {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.35), rgba(236, 72, 153, 0.35));
+  border: 1px solid rgba(192, 132, 252, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sfx-hud-emoji {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.sfx-hud-pulse-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid rgba(232, 121, 249, 0.7);
+  animation: sfxPingRingAnim 0.75s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.sfx-hud-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sfx-hud-label-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: #f1f5f9;
+}
+
+.sfx-hud-sender {
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.sfx-hud-action {
+  font-weight: 500;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.sfx-hud-name {
+  font-weight: 800;
+  color: #e879f9;
+}
+
+.sfx-hud-visualizer {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 10px;
+}
+
+.hud-eq-bar {
+  width: 3px;
+  background: #c084fc;
+  border-radius: 2px;
+  animation: sfxHudBounce 0.55s ease-in-out infinite alternate;
+}
+
+.hud-eq-bar.bar-1 { height: 6px; animation-delay: 0.05s; }
+.hud-eq-bar.bar-2 { height: 10px; animation-delay: 0.18s; }
+.hud-eq-bar.bar-3 { height: 4px; animation-delay: 0.32s; }
+.hud-eq-bar.bar-4 { height: 9px; animation-delay: 0.12s; }
+.hud-eq-bar.bar-5 { height: 7px; animation-delay: 0.25s; }
+
+@keyframes sfxHudBounce {
+  0% { transform: scaleY(0.25); }
+  100% { transform: scaleY(1); }
+}
+
+/* 10. Sidebar SFX Tab Nav Pulse */
+.tab-unread-dot.sfx-pulse {
+  background: #c084fc;
+  box-shadow: 0 0 8px #c084fc;
+  animation: sfxDotPing 0.7s infinite alternate;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .stage-soundboard-floating-wrapper {
+    right: -10px;
+    width: 320px;
+  }
+  .stage-soundboard-hud {
+    bottom: 78px;
+    right: 12px;
+    padding: 6px 12px 6px 8px;
+  }
+}
 
