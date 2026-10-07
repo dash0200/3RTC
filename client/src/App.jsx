@@ -151,6 +151,7 @@ export default function App() {
     const activeSfxTimerRef = useRef(null);
     const lastSfxTimestampRef = useRef(0);
     const lastRemoteSfxTimestampRef = useRef(0);
+    const lastRemoteSfxToastRef = useRef(0);
 
     // Feature 4.1: Real-Time P2P Network HUD (Ping & Latency)
     const [showNetworkHudModal, setShowNetworkHudModal] = useState(false);
@@ -577,8 +578,8 @@ export default function App() {
     const handleRemoteSoundboardSfx = useCallback((data) => {
         if (!data || !data.soundId) return;
         const now = Date.now();
-        // Rate limit protection: ignore rapid bursts
-        if (now - lastRemoteSfxTimestampRef.current < 350) return;
+        // Allow rapid spamming while guarding against recursive flood loops
+        if (now - lastRemoteSfxTimestampRef.current < 40) return;
         lastRemoteSfxTimestampRef.current = now;
 
         const effectiveVol = soundboardSettingsRef.current?.muted ? 0 : (soundboardSettingsRef.current?.volume ?? 0.75);
@@ -595,10 +596,14 @@ export default function App() {
         };
         setActiveSoundboardSfx(sfxInfo);
         if (activeSfxTimerRef.current) clearTimeout(activeSfxTimerRef.current);
-        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 2500);
+        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 1800);
 
-        showToast(`🔊 ${data.sender || 'Peer'} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
-        addSystemMessage(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
+        // Throttle chat notifications so rapid spam clicks play audio every time without flooding chat
+        if (now - lastRemoteSfxToastRef.current > 1200) {
+            lastRemoteSfxToastRef.current = now;
+            showToast(`🔊 ${data.sender || 'Peer'} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
+            addSystemMessage(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
+        }
     }, [addSystemMessage, showToast]);
 
     // Feature 3.3: Handle incoming P2P image transfer start
@@ -1998,20 +2003,11 @@ export default function App() {
     const handlePlaySoundboardClip = useCallback((clip) => {
         if (!clip || !clip.id) return;
         const now = Date.now();
-        if (now - lastSfxTimestampRef.current < 350) return;
+        // Allow rapid continuous spamming like Discord while guarding against accidental double-event quirks
+        if (now - lastSfxTimestampRef.current < 30) return;
         lastSfxTimestampRef.current = now;
 
-        // Set cooldown on this clip for 2.2 seconds
-        setActiveSfxCooldowns((prev) => ({ ...prev, [clip.id]: true }));
-        setTimeout(() => {
-            setActiveSfxCooldowns((prev) => {
-                const next = { ...prev };
-                delete next[clip.id];
-                return next;
-            });
-        }, 2200);
-
-        // Play locally if not muted
+        // Play locally if not muted (cancels any playing sound and restarts immediately)
         const effectiveVol = soundboardSettingsRef.current?.muted ? 0 : (soundboardSettingsRef.current?.volume ?? 0.75);
         if (!isAudioBlockedRef.current && effectiveVol > 0) {
             soundboard.play(clip.id, effectiveVol);
@@ -2026,7 +2022,7 @@ export default function App() {
         };
         setActiveSoundboardSfx(sfxInfo);
         if (activeSfxTimerRef.current) clearTimeout(activeSfxTimerRef.current);
-        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 2500);
+        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 1800);
 
         // Broadcast to all connected peers via DataChannel
         const sfxMsg = {
