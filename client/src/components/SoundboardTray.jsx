@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { SOUNDBOARD_CLIPS } from '../utils/soundboard';
 
 export default function SoundboardTray({
@@ -12,13 +12,6 @@ export default function SoundboardTray({
   variant = 'floating', // 'floating' | 'embedded'
   onClose
 }) {
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const categories = ['All', 'Hype', 'Crowd', 'Comedy', 'Victory'];
-
-  const filteredClips = selectedCategory === 'All'
-    ? SOUNDBOARD_CLIPS
-    : SOUNDBOARD_CLIPS.filter((c) => c.category === selectedCategory);
-
   const isFloating = variant === 'floating';
 
   return (
@@ -113,24 +106,11 @@ export default function SoundboardTray({
           </span>
         </div>
 
-        {/* Category Filter Pills */}
-        <div className="soundboard-category-tabs">
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              type="button"
-              className={`category-pill ${selectedCategory === cat ? 'active' : ''}`}
-              onClick={() => setSelectedCategory(cat)}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Grid of Sound Clips */}
       <div className="soundboard-grid">
-        {filteredClips.map((clip) => {
+        {SOUNDBOARD_CLIPS.map((clip) => {
           const isCoolingDown = Boolean(activeCooldowns[clip.id]);
           const isPlayingThis = activeSfx?.soundId === clip.id;
 
