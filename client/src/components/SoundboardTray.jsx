@@ -13,7 +13,7 @@ export default function SoundboardTray({
   onClose
 }) {
   const [selectedCategory, setSelectedCategory] = useState('All');
-  const categories = ['All', 'Hype', 'Crowd', 'Comedy', 'Victory'];
+  const categories = ['All', ...Array.from(new Set(SOUNDBOARD_CLIPS.map((c) => c.category)))];
 
   const filteredClips = selectedCategory === 'All'
     ? SOUNDBOARD_CLIPS
@@ -131,18 +131,14 @@ export default function SoundboardTray({
       {/* Grid of Sound Clips */}
       <div className="soundboard-grid">
         {filteredClips.map((clip) => {
-          const isCoolingDown = Boolean(activeCooldowns[clip.id]);
           const isPlayingThis = activeSfx?.soundId === clip.id;
 
           return (
             <button
               key={clip.id}
               type="button"
-              className={`sfx-card ${isCoolingDown ? 'is-cooldown' : ''} ${isPlayingThis ? 'is-playing' : ''}`}
-              onClick={() => {
-                if (!isCoolingDown) onPlayClip(clip);
-              }}
-              disabled={isCoolingDown}
+              className={`sfx-card ${isPlayingThis ? 'is-playing' : ''}`}
+              onClick={() => onPlayClip(clip)}
               title={`${clip.name}: ${clip.description}`}
               aria-label={`Play sound effect: ${clip.name}`}
             >
@@ -161,12 +157,6 @@ export default function SoundboardTray({
                 <span className="sfx-name">{clip.name}</span>
                 <span className="sfx-category">{clip.category}</span>
               </div>
-
-              {isCoolingDown && (
-                <div className="sfx-cooldown-overlay">
-                  <span className="sfx-cooldown-spin" />
-                </div>
-              )}
             </button>
           );
         })}

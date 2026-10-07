@@ -327,13 +327,6 @@ export function PeerVoicePanel({
 }) {
   const isPttMode = audioSettings?.inputMode === 'ptt';
 
-  const handleToggleDsp = (key) => {
-    if (!audioSettings || typeof onUpdateAudioSettings !== 'function') return;
-    onUpdateAudioSettings({
-      ...audioSettings,
-      [key]: !audioSettings[key]
-    });
-  };
 
   const handleToggleMode = () => {
     if (!audioSettings || typeof onUpdateAudioSettings !== 'function') return;
