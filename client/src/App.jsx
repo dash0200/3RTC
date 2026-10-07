@@ -3005,6 +3005,7 @@ export default function App() {
                 const isLocalMuted = Boolean(localMutedPeers[peerId]);
 
                 list.push({
+                    id: peerId,
                     peerId,
                     username: meta.username || `Peer ${peerId.slice(0, 4)}`,
                     isHost: Boolean(meta.isHost),
@@ -3022,6 +3023,7 @@ export default function App() {
     const localUser = useMemo(() => {
         if (!roomId) return null;
         return {
+            id: peerIdRef.current,
             peerId: peerIdRef.current,
             username: username,
             isHost: isHost,
@@ -3054,6 +3056,8 @@ export default function App() {
                     audioSettings={audioSettings}
                     onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
                     isPttActive={isPttActive}
+                    peerCount={connectedPeers.length + 1}
+                    onOpenSettings={() => setShowSettingsModal(true)}
                     networkStats={networkStats}
                     onOpenNetworkHud={() => setShowNetworkHudModal(true)}
                     onOpenQrCode={() => setShowQrModal(true)}
