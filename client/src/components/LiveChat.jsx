@@ -9,6 +9,56 @@ import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 
 const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
+const EMOJI_CATEGORIES = [
+  {
+    id: 'smileys',
+    name: 'Smileys',
+    icon: '😀',
+    emojis: [
+      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '🥹', '😊',
+      '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙',
+      '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎',
+      '🥸', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁',
+      '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😮‍💨', '😤',
+      '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰',
+      '😥', '😓', '🤗', '🫡', '🤔', '🫣', '🤭', '🫢', '🤫', '🫠'
+    ]
+  },
+  {
+    id: 'gestures',
+    name: 'Gestures',
+    icon: '👋',
+    emojis: [
+      '👋', '🤚', '🖐️', '✋', '🖖', '🫱', '🫲', '🫳', '🫴', '👌',
+      '🤌', '🤏', '✌️', '🤞', '🫰', '🤟', '🤘', '🤙', '👈', '👉',
+      '👆', '🖕', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜',
+      '👏', '🙌', '🫶', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳',
+      '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '👀', '👁️'
+    ]
+  },
+  {
+    id: 'hearts',
+    name: 'Hearts & Vibes',
+    icon: '❤️',
+    emojis: [
+      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔',
+      '❤️‍🔥', '❤️‍🩹', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝',
+      '💟', '✨', '🌟', '⭐', '💫', '🔥', '💥', '⚡', '🎉', '🎊',
+      '🎈', '🎁', '🏆', '🥇', '👑', '💎', '💯', '💢', '💬', '🗯️'
+    ]
+  },
+  {
+    id: 'fun',
+    name: 'Fun & Food',
+    icon: '🎮',
+    emojis: [
+      '🎮', '🕹️', '🎲', '🎯', '🎳', '🎧', '🎵', '🎶', '🎤', '🎬',
+      '🍿', '🍕', '🍔', '🍟', '🌭', '🍣', '🍦', '🍩', '🍪', '🍫',
+      '🍻', '🥂', '🍾', '☕', '🧃', '🥤', '🚀', '🛸', '🏎️', '🛵'
+    ]
+  }
+];
+
 export default function LiveChat({
   messages = [],
   systemLogs = [],
@@ -161,6 +211,41 @@ export default function LiveChat({
   const [inputText, setInputText] = useState('');
   const [showScrollPill, setShowScrollPill] = useState(false);
   const [logsCopied, setLogsCopied] = useState(false);
+
+  // Emoji Picker States (Smiley button popover)
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
+  const [activeEmojiCategory, setActiveEmojiCategory] = useState('smileys');
+  const [emojiSearch, setEmojiSearch] = useState('');
+  const emojiPickerRef = useRef(null);
+  const smileyBtnRef = useRef(null);
+
+  // Close emoji picker when clicking outside
+  useEffect(() => {
+    if (!isEmojiPickerOpen) return;
+    const handleClickOutside = (e) => {
+      if (
+        emojiPickerRef.current &&
+        !emojiPickerRef.current.contains(e.target) &&
+        !smileyBtnRef.current?.contains(e.target)
+      ) {
+        setIsEmojiPickerOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
+  }, [isEmojiPickerOpen]);
+
+  const handleInsertEmoji = (emoji) => {
+    setInputText((prev) => prev + emoji);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  };
+
+  const currentCategoryObj = EMOJI_CATEGORIES.find((c) => c.id === activeEmojiCategory) || EMOJI_CATEGORIES[0];
+  const displayedEmojis = emojiSearch.trim()
+    ? EMOJI_CATEGORIES.flatMap((c) => c.emojis).filter((emoji, idx, self) => self.indexOf(emoji) === idx)
+    : currentCategoryObj.emojis;
 
   // Feature 3.3: Direct P2P Image & Screenshot states
   const [pendingImage, setPendingImage] = useState(null); // { file, previewUrl }
@@ -521,21 +606,6 @@ export default function LiveChat({
               </button>
             )}
 
-            {roomId && typeof onOpenQrCode === 'function' && (
-              <button
-                type="button"
-                className="sidebar-qr-btn"
-                onClick={onOpenQrCode}
-                title="Instant Mobile Join QR Code (Press [Q])"
-                aria-label="Show Mobile Join QR Code"
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                  <path d="M4 4h6v6H4zm2 2v2h2V6zm8-2h6v6h-6zm2 2v2h2V6zM4 14h6v6H4zm2 2v2h2v-2zm10 0h2v2h-2zm-2 2h2v2h-2zm4 0h2v2h-2zm0-4h2v2h-2zm-4-2h2v2h-2zm2 2h2v2h-2z" />
-                </svg>
-                <span className="sidebar-qr-label">QR</span>
-              </button>
-            )}
-
             <button className="header-icon-btn close-sidebar-btn" onClick={onClose} title="Close Sidebar" aria-label="Close Sidebar">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                 <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
@@ -544,7 +614,7 @@ export default function LiveChat({
           </div>
         </div>
 
-        {/* Tabs: Chat vs Queue vs Room Logs */}
+        {/* Tabs: Chat vs Queue vs Peers */}
         <div className="chat-nav-tabs">
           <button
             type="button"
@@ -554,13 +624,12 @@ export default function LiveChat({
               setUnreadChatCount(0);
             }}
           >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
             </svg>
             <span>Chat</span>
-            {messages.length > 0 && <span className="tab-badge">{messages.length}</span>}
-            {unreadChatCount > 0 && activeTab !== 'chat' && (
-              <span className="tab-unread-dot" title={`${unreadChatCount} new messages`}></span>
+            {(messages.length > 0 || unreadChatCount > 0) && (
+              <span className="tab-badge chat-badge">{unreadChatCount || messages.length}</span>
             )}
           </button>
 
@@ -569,7 +638,7 @@ export default function LiveChat({
             className={`chat-tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
             onClick={() => setActiveTab('queue')}
           >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
               <path d="M4 10h12v2H4zm0-4h12v2H4zm0 8h8v2H4zm10 0v6l5-3z" />
             </svg>
             <span>Queue</span>
@@ -578,46 +647,15 @@ export default function LiveChat({
 
           <button
             type="button"
-            className={`chat-tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('logs');
-              setUnreadLogsCount(0);
-            }}
-          >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-              <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z" />
-            </svg>
-            <span>Logs</span>
-            {displayLogs.length > 0 && <span className="tab-badge secondary">{displayLogs.length}</span>}
-            {unreadLogsCount > 0 && activeTab !== 'logs' && (
-              <span className="tab-unread-dot logs" title={`${unreadLogsCount} new events`}></span>
-            )}
-          </button>
-
-          <button
-            type="button"
             className={`chat-tab-btn ${activeTab === 'peers' ? 'active' : ''}`}
             onClick={() => setActiveTab('peers')}
-            title="Voice & Peers Volume"
+            title="Peers & Voice Status"
           >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
               <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
             </svg>
             <span>Peers</span>
-            {connectedPeers.length > 0 && <span className="tab-badge voice-badge">{connectedPeers.length + 1}</span>}
-          </button>
-
-          <button
-            type="button"
-            className={`chat-tab-btn ${activeTab === 'sfx' ? 'active' : ''}`}
-            onClick={() => setActiveTab('sfx')}
-            title="Synchronized Soundboard SFX"
-          >
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-            </svg>
-            <span>SFX</span>
-            {activeSoundboardSfx && <span className="tab-unread-dot sfx-pulse" title="Sound playing" />}
+            <span className="tab-badge peers-badge">{connectedPeers.length + 1}</span>
           </button>
         </div>
 
@@ -667,9 +705,11 @@ export default function LiveChat({
                           {msgInitial}
                         </div>
                         <div className="yt-message-content">
-                          <span className="yt-timestamp">{timeStr}</span>
-                          <span className={`yt-author ${authorClass}`}>{msg.sender}</span>
-                          {msg.isHost && <span className="yt-badge">HOST</span>}
+                          <div className="yt-message-header">
+                            <span className={`yt-author ${authorClass}`} style={{ color: msgAvatarBg }}>{msg.sender}</span>
+                            {msg.isHost && <span className="yt-badge host-badge">HOST</span>}
+                            <span className="yt-timestamp">{timeStr}</span>
+                          </div>
 
                           {/* Image Transfer in Progress */}
                           {msg.imageTransfer && (
@@ -748,23 +788,8 @@ export default function LiveChat({
               )}
             </div>
 
-            {/* Ultra-compact Chat Footer */}
+            {/* Chat Footer with Input Pill & Reactions Dock (Matching Screenshot) */}
             <div className="chat-footer">
-              <div className="quick-reactions-bar">
-                <span className="reaction-label">React:</span>
-                {QUICK_REACTIONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className="reaction-chip"
-                    onClick={() => handleReactionClick(emoji)}
-                    title={`Send ${emoji}`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-
               {/* Pending Image Attachment Preview Card */}
               {pendingImage && (
                 <div className="chat-pending-image-card">
@@ -787,41 +812,99 @@ export default function LiveChat({
                 </div>
               )}
 
-              <div className="chat-input-bar">
-                {/* Hidden File Input for Image Attachments */}
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={handleFileInputChange}
-                />
+              {/* Emoji Picker Popover Window */}
+              {isEmojiPickerOpen && (
+                <div className="chat-emoji-picker-window" ref={emojiPickerRef} role="dialog" aria-label="Emoji Picker">
+                  <div className="emoji-picker-header">
+                    <span className="emoji-picker-title">Emojis</span>
+                    <div className="emoji-category-tabs">
+                      {EMOJI_CATEGORIES.map((cat) => (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          className={`emoji-cat-tab-btn ${activeEmojiCategory === cat.id && !emojiSearch ? 'active' : ''}`}
+                          onClick={() => {
+                            setActiveEmojiCategory(cat.id);
+                            setEmojiSearch('');
+                          }}
+                          title={cat.name}
+                        >
+                          {cat.icon}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="emoji-picker-close-btn"
+                      onClick={() => setIsEmojiPickerOpen(false)}
+                      title="Close emoji picker"
+                    >
+                      ✕
+                    </button>
+                  </div>
 
-                {/* Attach Image Button */}
+                  <div className="emoji-picker-search-bar">
+                    <input
+                      type="text"
+                      className="emoji-picker-search-input"
+                      placeholder="Search emojis..."
+                      value={emojiSearch}
+                      onChange={(e) => setEmojiSearch(e.target.value)}
+                    />
+                    {emojiSearch && (
+                      <button
+                        type="button"
+                        className="emoji-search-clear-btn"
+                        onClick={() => setEmojiSearch('')}
+                        title="Clear search"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="emoji-picker-grid">
+                    {displayedEmojis.map((emoji, idx) => (
+                      <button
+                        key={`${emoji}-${idx}`}
+                        type="button"
+                        className="emoji-grid-item"
+                        onClick={() => handleInsertEmoji(emoji)}
+                        title={`Insert ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Input Pill Container */}
+              <div className="chat-input-pill-container">
+                {/* Smiley Button (Opens All Emojis Window) */}
                 <button
                   type="button"
-                  className="attach-file-btn"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={!isP2PConnected}
-                  title="Attach image or paste screenshot (Ctrl+V)"
-                  aria-label="Attach image"
+                  ref={smileyBtnRef}
+                  className={`chat-pill-smiley-btn ${isEmojiPickerOpen ? 'active' : ''}`}
+                  onClick={() => setIsEmojiPickerOpen((prev) => !prev)}
+                  title={isEmojiPickerOpen ? "Close emoji window" : "Open all emojis"}
+                  aria-label="Open emojis"
+                  aria-expanded={isEmojiPickerOpen}
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                    <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" />
+                    <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" />
                   </svg>
                 </button>
 
                 <textarea
                   ref={textareaRef}
-                  className="chat-textarea"
+                  className="chat-pill-textarea"
                   rows={1}
                   maxLength={200}
                   placeholder={
                     !isP2PConnected
                       ? 'Waiting for connection...'
-                      : pendingImage
-                      ? 'Add a caption (optional)...'
-                      : 'Chat or paste screenshot (Ctrl+V)...'
+                      : 'Type a message...'
                   }
                   value={inputText}
                   onChange={handleTextareaChange}
@@ -829,14 +912,12 @@ export default function LiveChat({
                   onPaste={handlePaste}
                   disabled={!isP2PConnected}
                 />
-                {inputText.length > 0 && (
-                  <span className="char-count-inline">{inputText.length}/200</span>
-                )}
+
                 <button
                   type="button"
-                  className="send-btn-compact"
+                  className="chat-pill-send-btn"
                   onClick={handleSend}
-                  disabled={!isP2PConnected || (!pendingImage && inputText.trim().length === 0)}
+                  disabled={!isP2PConnected || inputText.trim().length === 0}
                   title="Send message (Enter)"
                   aria-label="Send message"
                 >
@@ -844,6 +925,21 @@ export default function LiveChat({
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                   </svg>
                 </button>
+              </div>
+
+              {/* Quick Reactions Dock Directly Below Input */}
+              <div className="chat-quick-reactions-dock">
+                {QUICK_REACTIONS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className="quick-reaction-dock-btn"
+                    onClick={() => handleReactionClick(emoji)}
+                    title={`Send ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
               </div>
             </div>
           </>

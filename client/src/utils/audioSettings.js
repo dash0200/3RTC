@@ -35,7 +35,10 @@ export function loadAudioSettings() {
       const parsed = JSON.parse(raw);
       return {
         ...DEFAULT_AUDIO_SETTINGS,
-        ...parsed
+        ...parsed,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
       };
     }
   } catch {
@@ -45,11 +48,17 @@ export function loadAudioSettings() {
 }
 
 /**
- * Save audio settings to localStorage
+ * Save audio settings to localStorage (keeps hardware DSP filters always active)
  */
 export function saveAudioSettings(settings) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    const enforced = {
+      ...settings,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(enforced));
   } catch {
     // Ignore storage errors
   }
