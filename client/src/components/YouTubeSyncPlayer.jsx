@@ -120,13 +120,28 @@ export default function YouTubeSyncPlayer({
   const [inputError, setInputError] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [durationSec, setDurationSec] = useState(0);
+  const [volume, setVolume] = useState(100);
+  const [isMuted, setIsMuted] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [hoverPreview, setHoverPreview] = useState(null);
   const [isDropOver, setIsDropOver] = useState(false);
+  const [activeSourceTab, setActiveSourceTab] = useState('youtube'); // 'youtube' | 'local'
 
   const playerRef = useRef(null);
+  const fullstageRef = useRef(null);
+  const iframeContainerRef = useRef(null);
+  const scrubberRef = useRef(null);
+  const settingsRef = useRef(null);
   const localFileInputRef = useRef(null);
   const isRemoteActionRef = useRef(false);
+  const isScrubbingRef = useRef(false);
   const lastStateRef = useRef(-1);
   const lastReportedTimeRef = useRef(0);
+  const durationSecRef = useRef(0);
   const currentVideoIdRef = useRef(videoId);
   currentVideoIdRef.current = videoId;
 
@@ -171,6 +186,8 @@ export default function YouTubeSyncPlayer({
       setPlayerReady(false);
       setIsPlaying(false);
       setCurrentTimeSec(0);
+      setDurationSec(0);
+      durationSecRef.current = 0;
       return;
     }
 
@@ -178,35 +195,51 @@ export default function YouTubeSyncPlayer({
 
     const initPlayer = () => {
       if (!window.YT || !window.YT.Player) return false;
-      const element = document.getElementById('yt-iframe-placeholder');
-      if (!element) return false;
+      const container = iframeContainerRef.current || document.querySelector('.yt-stage-canvas-viewport');
+      if (!container) return false;
 
-      // If player already exists, load the new video directly
-      if (playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
-        isRemoteActionRef.current = true;
-        playerRef.current.loadVideoById(videoId);
-        setSyncStatus('Loaded new video');
-        setTimeout(() => {
-          isRemoteActionRef.current = false;
-        }, 1200);
-        return true;
+      // Always clean up existing instance to guarantee controls: 0 is strictly applied
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+        try {
+          playerRef.current.destroy();
+        } catch (e) { }
+        playerRef.current = null;
+      }
+
+      // Ensure fresh placeholder DOM element exists inside container
+      let element = document.getElementById('yt-iframe-placeholder');
+      if (!element) {
+        element = document.createElement('div');
+        element.id = 'yt-iframe-placeholder';
+        container.appendChild(element);
       }
 
       try {
-        playerRef.current = new window.YT.Player('yt-iframe-placeholder', {
+        playerRef.current = new window.YT.Player(element, {
           videoId: videoId,
           playerVars: {
             autoplay: 1,
-            enablejsapi: 1,
-            origin: window.location.origin,
+            controls: 1, // Enable YouTube native controls so video quality settings, captions, and more videos cards are accessible
             rel: 0,
-            modestbranding: 1
+            modestbranding: 1,
+            playsinline: 1,
+            enablejsapi: 1,
+            origin: window.location.origin
           },
           events: {
             onReady: (e) => {
               setPlayerReady(true);
               setSyncStatus('Synced with peers');
               try {
+                const dur = e.target.getDuration?.() || 0;
+                if (dur > 0) {
+                  setDurationSec(dur);
+                  durationSecRef.current = dur;
+                }
+                const vol = e.target.getVolume?.();
+                if (typeof vol === 'number') setVolume(vol);
+                const muted = e.target.isMuted?.();
+                if (typeof muted === 'boolean') setIsMuted(muted);
                 e.target.playVideo();
                 setIsPlaying(true);
               } catch (err) { }
@@ -258,6 +291,12 @@ export default function YouTubeSyncPlayer({
     if (!playerRef.current) return;
     const state = event.data;
 
+    const dur = typeof playerRef.current.getDuration === 'function' ? playerRef.current.getDuration() : 0;
+    if (dur > 0 && Math.abs(dur - durationSecRef.current) > 0.5) {
+      durationSecRef.current = dur;
+      setDurationSec(dur);
+    }
+
     // Ignore state changes triggered programmatically by incoming remote actions
     if (isRemoteActionRef.current) {
       return;
@@ -267,7 +306,9 @@ export default function YouTubeSyncPlayer({
       ? playerRef.current.getCurrentTime()
       : 0;
     lastReportedTimeRef.current = curTime;
-    setCurrentTimeSec(curTime);
+    if (!isScrubbingRef.current) {
+      setCurrentTimeSec(curTime);
+    }
 
     if (state === window.YT.PlayerState.PLAYING && lastStateRef.current !== window.YT.PlayerState.PLAYING) {
       setSyncStatus('Playing (Synced)');
@@ -292,7 +333,7 @@ export default function YouTubeSyncPlayer({
     lastStateRef.current = state;
   };
 
-  // 5. Polling interval to detect manual timeline scrubbing (seeking) inside YouTube player
+  // 5. Polling interval to track time and detect timeline scrubbing
   useEffect(() => {
     if (!playerReady) return;
     const interval = setInterval(() => {
@@ -301,12 +342,19 @@ export default function YouTubeSyncPlayer({
         if (typeof playerRef.current.getCurrentTime !== 'function') return;
         const curTime = playerRef.current.getCurrentTime();
         const state = playerRef.current.getPlayerState?.();
+        const dur = playerRef.current.getDuration?.() || 0;
+        if (dur > 0 && Math.abs(dur - durationSecRef.current) > 0.5) {
+          durationSecRef.current = dur;
+          setDurationSec(dur);
+        }
 
-        setCurrentTimeSec(curTime);
+        if (!isScrubbingRef.current) {
+          setCurrentTimeSec(curTime);
+        }
         if (state === 1) setIsPlaying(true);
         else if (state === 2) setIsPlaying(false);
 
-        // If time jumped forward or backward by > 2.0s without remote action
+        // If time jumped forward or backward by > 2.2s without remote action
         const delta = Math.abs(curTime - lastReportedTimeRef.current);
         if (lastReportedTimeRef.current > 0 && delta > 2.2 && (state === 1 || state === 2 || state === 3)) {
           if (isP2PConnected) {
@@ -316,7 +364,7 @@ export default function YouTubeSyncPlayer({
         }
         lastReportedTimeRef.current = curTime;
       } catch (e) { }
-    }, 400);
+    }, 350);
 
     return () => clearInterval(interval);
   }, [playerReady, isP2PConnected, onBroadcastAction]);
@@ -337,6 +385,8 @@ export default function YouTubeSyncPlayer({
       setPlayerReady(false);
       setIsPlaying(false);
       setCurrentTimeSec(0);
+      setDurationSec(0);
+      durationSecRef.current = 0;
       setSyncStatus('Ready');
       currentVideoIdRef.current = null;
       onVideoChange(null);
@@ -382,6 +432,7 @@ export default function YouTubeSyncPlayer({
         if (currentTime !== undefined && typeof playerRef.current.seekTo === 'function') {
           playerRef.current.seekTo(currentTime, true);
           lastReportedTimeRef.current = currentTime;
+          setCurrentTimeSec(currentTime);
         }
       }
     } catch (err) {
@@ -393,6 +444,60 @@ export default function YouTubeSyncPlayer({
     }
   }, [remoteAction]);
 
+  // Fullscreen change listener
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    document.addEventListener('webkitfullscreenchange', handleFsChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFsChange);
+      document.removeEventListener('webkitfullscreenchange', handleFsChange);
+    };
+  }, []);
+
+  // Click outside listener for Settings Menu
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showSettings && settingsRef.current && !settingsRef.current.contains(e.target)) {
+        setShowSettings(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSettings]);
+
+  // Keyboard hotkeys (Space to toggle, M to mute, F to fullscreen, Left/Right to seek)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) {
+        return;
+      }
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlayPause();
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        toggleMute();
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        toggleFullscreen();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handleSeekDelta(-5);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleSeekDelta(5);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlaying, isMuted, volume, durationSec]);
+
   // 7. Load or Queue YouTube URL
   const handleLoadUrl = async (e) => {
     if (e) e.preventDefault();
@@ -402,7 +507,6 @@ export default function YouTubeSyncPlayer({
       return;
     }
     setInputError('');
-    const inputVal = urlInput;
     setUrlInput('');
     const title = await fetchYouTubeTitle(id);
     onVideoChange(id, title);
@@ -429,8 +533,6 @@ export default function YouTubeSyncPlayer({
     const pool = category.videos;
     if (!pool || pool.length === 0) return;
 
-    // Filter out the currently active video ID if pool has more than 1 video,
-    // so it always chooses a fresh/different track every time!
     const activeId = currentVideoIdRef.current || videoId;
     const available = pool.filter((v) => v.id !== activeId);
     const candidateList = available.length > 0 ? available : pool;
@@ -440,14 +542,13 @@ export default function YouTubeSyncPlayer({
     onBroadcastAction('load', { newVideoId: randomChoice.id, title: randomChoice.title });
   };
 
-  // 8. Manual UI Controls
+  // 8. Playback & Player Controls
   const handleTogglePlayPause = () => {
     if (!playerRef.current) return;
     const cur = playerRef.current.getCurrentTime?.() || 0;
     const state = playerRef.current.getPlayerState?.();
 
     if (state === 1) {
-      // Pause
       isRemoteActionRef.current = true;
       playerRef.current.pauseVideo?.();
       setIsPlaying(false);
@@ -455,7 +556,6 @@ export default function YouTubeSyncPlayer({
       onBroadcastAction('pause', { currentTime: cur });
       setSyncStatus('Paused (Synced)');
     } else {
-      // Play
       isRemoteActionRef.current = true;
       playerRef.current.playVideo?.();
       setIsPlaying(true);
@@ -513,20 +613,154 @@ export default function YouTubeSyncPlayer({
     setPlayerReady(false);
     setIsPlaying(false);
     setCurrentTimeSec(0);
+    setDurationSec(0);
+    durationSecRef.current = 0;
     setSyncStatus('Ready');
     currentVideoIdRef.current = null;
     onVideoChange(null);
     onBroadcastAction('close', {});
   };
 
+  const handleVolumeChange = (e) => {
+    const val = Number(e.target.value);
+    setVolume(val);
+    if (val === 0) {
+      setIsMuted(true);
+      playerRef.current?.mute?.();
+    } else {
+      if (isMuted) {
+        setIsMuted(false);
+        playerRef.current?.unMute?.();
+      }
+      playerRef.current?.setVolume?.(val);
+    }
+  };
+
+  const toggleMute = () => {
+    if (!playerRef.current) {
+      setIsMuted(!isMuted);
+      return;
+    }
+    if (isMuted) {
+      playerRef.current.unMute?.();
+      setIsMuted(false);
+      if (volume === 0) {
+        setVolume(80);
+        playerRef.current.setVolume?.(80);
+      }
+    } else {
+      playerRef.current.mute?.();
+      setIsMuted(true);
+    }
+  };
+
+  const toggleFullscreen = () => {
+    const container = fullstageRef.current;
+    if (!container) return;
+    if (!document.fullscreenElement) {
+      if (container.requestFullscreen) {
+        container.requestFullscreen();
+      } else if (container.webkitRequestFullscreen) {
+        container.webkitRequestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  const handleSetPlaybackRate = (rate) => {
+    setPlaybackRate(rate);
+    if (playerRef.current?.setPlaybackRate) {
+      playerRef.current.setPlaybackRate(rate);
+    }
+    setShowSettings(false);
+    setSyncStatus(`Speed: ${rate}x`);
+  };
+
+  // 9. Interactive Scrubber Seek Logic
+  const calculateTimeFromEvent = (e) => {
+    if (!scrubberRef.current || !durationSec || durationSec <= 0) return 0;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return ratio * durationSec;
+  };
+
+  const handleScrubberMouseDown = (e) => {
+    if (!durationSec || durationSec <= 0) return;
+    isScrubbingRef.current = true;
+    const targetTime = calculateTimeFromEvent(e);
+    setCurrentTimeSec(targetTime);
+
+    if (playerRef.current?.seekTo) {
+      isRemoteActionRef.current = true;
+      playerRef.current.seekTo(targetTime, true);
+      lastReportedTimeRef.current = targetTime;
+    }
+
+    const handleMouseMove = (moveEvt) => {
+      if (!isScrubbingRef.current) return;
+      const time = calculateTimeFromEvent(moveEvt);
+      setCurrentTimeSec(time);
+      if (playerRef.current?.seekTo) {
+        playerRef.current.seekTo(time, true);
+        lastReportedTimeRef.current = time;
+      }
+    };
+
+    const handleMouseUp = (upEvt) => {
+      if (!isScrubbingRef.current) return;
+      isScrubbingRef.current = false;
+      const finalTime = calculateTimeFromEvent(upEvt);
+      setCurrentTimeSec(finalTime);
+      if (playerRef.current?.seekTo) {
+        playerRef.current.seekTo(finalTime, true);
+        lastReportedTimeRef.current = finalTime;
+      }
+      setTimeout(() => { isRemoteActionRef.current = false; }, 800);
+      if (isP2PConnected) {
+        onBroadcastAction('seek', { currentTime: finalTime });
+      }
+      setSyncStatus(`Seeked to ${formatTime(finalTime)} (Synced)`);
+
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('touchmove', handleMouseMove);
+      window.removeEventListener('touchend', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('touchmove', handleMouseMove);
+    window.addEventListener('touchend', handleMouseUp);
+  };
+
+  const handleScrubberMouseMove = (e) => {
+    if (!scrubberRef.current || !durationSec || durationSec <= 0) return;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setHoverPreview({ time: ratio * durationSec, percent: ratio * 100 });
+  };
+
+  const handleScrubberMouseLeave = () => {
+    setHoverPreview(null);
+  };
+
+  const progressPercent = durationSec > 0 ? Math.min(100, Math.max(0, (currentTimeSec / durationSec) * 100)) : 0;
   const totalParticipants = peerCount + 1;
   const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
   const hasVotedSkip = skipVotes.includes(username);
 
+  // CASE 1: Video is Active and Playing
   if (videoId) {
     return (
-      <div className="yt-fullstage-player">
-        {/* Compact Top Bar to switch URL or monitor sync */}
+      <div
+        className={`yt-fullstage-player ${isFullscreen ? 'is-fullscreen' : ''}`}
+        ref={fullstageRef}
+      >
+        {/* Sleek, Clean Top Bar */}
         <div className="yt-stage-topbar">
           <form className="yt-stage-url-form" onSubmit={handleLoadUrl}>
             <div className="yt-input-wrapper compact">
@@ -555,7 +789,7 @@ export default function YouTubeSyncPlayer({
               )}
             </div>
             <button type="submit" className="btn btn-primary yt-load-btn compact" title="Play immediately for all">
-              Load for All
+              Load
             </button>
             <button
               type="button"
@@ -568,264 +802,236 @@ export default function YouTubeSyncPlayer({
           </form>
 
           <div className="yt-stage-top-controls">
+            {activeVideoTitle && (
+              <span className="yt-active-title" title={activeVideoTitle}>
+                {activeVideoTitle}
+              </span>
+            )}
+
             <div className={`yt-sync-pill ${isPlaying ? 'playing' : 'paused'}`}>
               <span className="yt-sync-dot"></span>
               <span>{syncStatus}</span>
             </div>
-            <span className="yt-time-display">{formatTime(currentTimeSec)}</span>
 
-            <div className="yt-controls-toolbar">
+            {/* Vote to Skip (shown if peers are present) */}
+            {totalParticipants > 1 && (
               <button
                 type="button"
-                className="yt-ctrl-btn"
-                onClick={handleTogglePlayPause}
-                title={isPlaying ? 'Pause for all' : 'Play for all'}
-              >
-                {isPlaying ? (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                )}
-                <span>{isPlaying ? 'Pause' : 'Play'}</span>
-              </button>
-
-              <button
-                type="button"
-                className="yt-ctrl-btn"
-                onClick={() => handleSeekDelta(-5)}
-                title="Seek back 5 seconds for all"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
-                </svg>
-                <span>-5s</span>
-              </button>
-
-              <button
-                type="button"
-                className="yt-ctrl-btn"
-                onClick={() => handleSeekDelta(5)}
-                title="Seek forward 5 seconds for all"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
-                </svg>
-                <span>+5s</span>
-              </button>
-
-              <button
-                type="button"
-                className="yt-ctrl-btn"
-                onClick={handleRestart}
-                title="Restart video from 0:00 for all"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
-                </svg>
-                <span>Restart</span>
-              </button>
-
-              <button
-                type="button"
-                className="yt-ctrl-btn sync-btn"
-                onClick={handleForceSync}
-                title="Force broadcast sync timestamp to all peers"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
-                </svg>
-                <span>Sync Now</span>
-              </button>
-
-              {/* Next in Queue */}
-              <button
-                type="button"
-                className={`yt-ctrl-btn next-queue-btn ${queue.length > 0 ? 'has-items' : ''}`}
-                onClick={onPlayNextInQueue}
-                disabled={queue.length === 0}
-                title={queue.length > 0 ? `Play next queued: "${queue[0].title}"` : 'Queue is empty'}
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                  <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
-                </svg>
-                <span>Next ({queue.length})</span>
-              </button>
-
-              {/* Vote to Skip */}
-              <button
-                type="button"
-                className={`yt-ctrl-btn vote-skip-btn ${hasVotedSkip ? 'voted' : ''}`}
+                className={`yt-ctrl-btn vote-skip-btn compact ${hasVotedSkip ? 'voted' : ''}`}
                 onClick={onVoteSkip}
-                title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} votes needed)`}
+                title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} needed)`}
               >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                   <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
                 </svg>
-                <span>{hasVotedSkip ? 'Voted' : 'Skip'} ({skipVotes.length}/{requiredVotes})</span>
+                <span>Skip ({skipVotes.length}/{requiredVotes})</span>
               </button>
+            )}
 
-              {/* Open Queue in Sidebar Shortcut */}
-              {typeof onOpenQueue === 'function' && (
-                <button
-                  type="button"
-                  className="yt-ctrl-btn queue-drawer-btn"
-                  onClick={onOpenQueue}
-                  title="View and edit queue in sidebar"
-                >
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                    <path d="M4 10h12v2H4zm0-4h12v2H4zm0 8h8v2H4zm10 0v6l5-3z" />
-                  </svg>
-                  <span>Queue {queue.length > 0 ? `(${queue.length})` : ''}</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                className="yt-ctrl-btn exit-video-btn"
-                onClick={handleCloseVideo}
-                title="Exit video and return to watch party stage"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-                <span>Exit</span>
-              </button>
-            </div>
+            {/* Exit video button */}
+            <button
+              type="button"
+              className="yt-ctrl-btn exit-video-btn compact"
+              onClick={handleCloseVideo}
+              title="Exit video and return to watch party stage"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+              </svg>
+              <span>Exit</span>
+            </button>
           </div>
         </div>
 
-        {/* Full Stage Video Viewport occupying the entire stageCanvas */}
-        <div className="yt-stage-canvas-viewport">
+        {/* Video Viewport occupying full space */}
+        <div className="yt-stage-canvas-viewport" ref={iframeContainerRef}>
           <div id="yt-iframe-placeholder"></div>
         </div>
+
       </div>
     );
   }
 
+  // CASE 2: Idle Screen (Lobby / Presets)
   return (
-    <div className="yt-sync-wrapper">
-      <div className="yt-screen-card">
-        {/* Center Hero Card */}
-        <div className="yt-hero-center">
-          <div className="yt-hero-icon-box">
-            <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
-              <path d="M8 5v14l11-7z" />
+    <div className="yt-screen-card" ref={fullstageRef}>
+      {/* Center Hero Card */}
+      <div className="yt-hero-center">
+        {/* Source Selector Tabs: YouTube & Local Video */}
+        <div className="stage-source-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSourceTab === 'youtube'}
+            className={`stage-source-tab ${activeSourceTab === 'youtube' ? 'active tab-yt' : ''}`}
+            onClick={() => setActiveSourceTab('youtube')}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
             </svg>
-          </div>
-          <h2 className="yt-hero-title">P2P Synchronized YouTube Watch Party</h2>
-          <p className="yt-hero-subtitle">
-            Paste any YouTube link or select a quick watch preset. The video will immediately load for all peers, and <strong>Play, Pause &amp; Seek</strong> will stay synchronized in real time.
-          </p>
+            <span>YouTube Video</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSourceTab === 'local'}
+            className={`stage-source-tab ${activeSourceTab === 'local' ? 'active tab-local' : ''}`}
+            onClick={() => setActiveSourceTab('local')}
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+              <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z" />
+            </svg>
+            <span>Local Video File</span>
+          </button>
+        </div>
 
-          {/* Clean URL Input Bar */}
-          <form className="yt-hero-form" onSubmit={handleLoadUrl}>
-            <div className="yt-hero-input-wrap">
-              <div className="yt-hero-input-icon">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0033">
-                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+        {activeSourceTab === 'youtube' ? (
+          <>
+            <div className="yt-hero-icon-box">
+              <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </div>
+            <h2 className="yt-hero-title">P2P Synchronized YouTube Watch Party</h2>
+            <p className="yt-hero-subtitle">
+              Paste any YouTube link or select a quick watch preset. The video will immediately load for all peers, and <strong>Play, Pause &amp; Seek</strong> will stay synchronized in real time.
+            </p>
+
+            {/* Clean URL Input Bar */}
+            <form className="yt-hero-form" onSubmit={handleLoadUrl}>
+              <div className="yt-hero-input-wrap">
+                <div className="yt-hero-input-icon">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0033">
+                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                  </svg>
+                </div>
+                <input
+                  type="text"
+                  className="yt-hero-input"
+                  placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...) or ID"
+                  value={urlInput}
+                  onChange={(e) => {
+                    setUrlInput(e.target.value);
+                    if (inputError) setInputError('');
+                  }}
+                />
+                {urlInput && (
+                  <button
+                    type="button"
+                    className="yt-clear-btn"
+                    onClick={() => setUrlInput('')}
+                    title="Clear input"
+                  >
+                    &times;
+                  </button>
+                )}
+              </div>
+              <button type="submit" className="yt-hero-load-btn" title="Play immediately for all">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+                <span>Load for All</span>
+              </button>
+            </form>
+            {inputError && <div className="yt-url-error">{inputError}</div>}
+
+            {/* Quick Presets Row */}
+            <div className="yt-hero-presets-row">
+              <span className="yt-hero-presets-tag">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="#f59e0b">
+                  <path d="M7 2v11h3v9l7-12h-4l4-8z" />
+                </svg>
+                Quick Watch
+              </span>
+              {PRESET_CATEGORIES.map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  className="yt-hero-preset-btn"
+                  onClick={() => handleSelectPreset(cat)}
+                  title={`Play ${cat.name}`}
+                >
+                  {cat.name}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="yt-hero-icon-box local">
+              <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
+                <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z" />
+              </svg>
+            </div>
+            <h2 className="yt-hero-title">P2P Synchronized Local Video Watch Party</h2>
+            <p className="yt-hero-subtitle">
+              Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files with zero server upload. Peers directly sync playback in real time or stream P2P.
+            </p>
+
+            {/* Local Video Dropzone & Browse Button */}
+            <div
+              className={`yt-hero-local-dropzone ${isDropOver ? 'drag-over' : ''}`}
+              onClick={() => localFileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setIsDropOver(true); }}
+              onDragLeave={() => setIsDropOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDropOver(false);
+                const files = e.dataTransfer?.files;
+                if (files && files.length > 0) {
+                  onLocalFileSelect?.(files[0]);
+                }
+              }}
+            >
+              <div className="local-drop-cloud-icon">
+                <svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor">
+                  <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" />
                 </svg>
               </div>
-              <input
-                type="text"
-                className="yt-hero-input"
-                placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...) or ID"
-                value={urlInput}
-                onChange={(e) => {
-                  setUrlInput(e.target.value);
-                  if (inputError) setInputError('');
-                }}
-              />
-              {urlInput && (
-                <button
-                  type="button"
-                  className="yt-clear-btn"
-                  onClick={() => setUrlInput('')}
-                  title="Clear input"
-                >
-                  &times;
-                </button>
-              )}
-            </div>
-            <button type="submit" className="yt-hero-load-btn" title="Play immediately for all">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              <span>Load for All</span>
-            </button>
-          </form>
-          {inputError && <div className="yt-url-error">{inputError}</div>}
-
-          {/* Quick Presets Row */}
-          <div className="yt-hero-presets-row">
-            <span className="yt-hero-presets-tag">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="#f59e0b">
-                <path d="M7 2v11h3v9l7-12h-4l4-8z" />
-              </svg>
-              Quick Watch
-            </span>
-            {PRESET_CATEGORIES.map((cat) => (
+              <div className="local-drop-text-group">
+                <div className="local-drop-main-text">
+                  <span>Click to Select Video</span> or Drag &amp; Drop Here
+                </div>
+                <div className="local-drop-sub-text">
+                  Supports MP4, MKV, WebM, MOV • 100% Private Peer-to-Peer
+                </div>
+              </div>
               <button
-                key={cat.id}
                 type="button"
-                className="yt-hero-preset-btn"
-                onClick={() => handleSelectPreset(cat)}
-                title={`Play ${cat.name}`}
+                className="btn-browse-file"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  localFileInputRef.current?.click();
+                }}
               >
-                {cat.name}
+                Browse File
               </button>
-            ))}
-          </div>
-        </div>
+            </div>
 
-        {/* Bottom Scrubber & Controls Bar */}
-        <div className="yt-screen-controls-bar">
-          <div className="yt-screen-ctrls-left">
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Play">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Next">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Volume">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
-              </svg>
-            </button>
-          </div>
+            <input
+              ref={localFileInputRef}
+              type="file"
+              accept="video/*,.mkv,.mp4,.webm,.mov,.avi,.m4v"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  onLocalFileSelect?.(f);
+                }
+                e.target.value = '';
+              }}
+            />
 
-          <div className="yt-screen-scrubber-track">
-            <div className="yt-screen-scrubber-fill" style={{ width: '18%' }} />
-            <div className="yt-screen-scrubber-thumb" style={{ left: '18%' }} />
-          </div>
-
-          <div className="yt-screen-ctrls-right">
-            <span className="yt-screen-time-text">0:00 / 0:00</span>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Settings">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Theater Mode">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm0 14H5V6h14v12z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Fullscreen">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+            <div className="yt-hero-presets-row">
+              <span className="yt-hero-presets-tag">⚡ Local Direct</span>
+              <span className="yt-hero-info-pill">0 Network Upload</span>
+              <span className="yt-hero-info-pill">100% Private Playback</span>
+              <span className="yt-hero-info-pill">Subtitles Supported</span>
+            </div>
+          </>
+        )}
       </div>
+
     </div>
   );
 }

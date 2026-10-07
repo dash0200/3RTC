@@ -194,9 +194,9 @@ export default function Stage({
 
   return (
     <section className="stage-section">
-      {/* Main Canvas Area (Drag-and-Drop Video Target) */}
+      {/* Main Canvas Area (Drag-and-Drop Video Target & Stage Canvas) */}
       <div
-        className={`stage-canvas ${isMediaActive ? 'has-video' : ''} ${isStageDragOver ? 'stage-drag-active' : ''}`}
+        className={`stage-canvas yt-sync-wrapper ${isMediaActive ? 'has-video' : ''} ${isStageDragOver ? 'stage-drag-active' : ''}`}
         onDragOver={handleStageDragOver}
         onDragEnter={handleStageDragOver}
         onDragLeave={handleStageDragLeave}
@@ -380,8 +380,8 @@ export default function Stage({
                   isPttMode
                     ? `PTT Mode: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
                     : isMicMuted
-                    ? "Microphone is muted. Click to speak"
-                    : "Microphone is live. Click to mute"
+                      ? "Microphone is muted. Click to speak"
+                      : "Microphone is live. Click to mute"
                 }
               >
                 <div className="voice-chip-avatar" style={{ background: '#f59e0b' }}>
@@ -475,14 +475,14 @@ export default function Stage({
               !roomId
                 ? "Join a room to use microphone"
                 : isAudioBlocked
-                ? "Audio & mic are blocked. Click to unblock"
-                : isPttMode
-                ? isPttActive
-                  ? "🎙️ PTT Live! Release key/mouse to mute"
-                  : `📻 Push-to-Talk: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
-                : isMicMuted
-                ? "Unmute Microphone"
-                : "Mute Microphone"
+                  ? "Audio & mic are blocked. Click to unblock"
+                  : isPttMode
+                    ? isPttActive
+                      ? "🎙️ PTT Live! Release key/mouse to mute"
+                      : `📻 Push-to-Talk: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
+                    : isMicMuted
+                      ? "Unmute Microphone"
+                      : "Mute Microphone"
             }
             disabled={!roomId}
           >
@@ -506,8 +506,8 @@ export default function Stage({
               !roomId
                 ? "Join a room to manage audio"
                 : isAudioBlocked
-                ? "Audio & mic are blocked. Click to unblock"
-                : "Block Audio & Mic (Deafen)"
+                  ? "Audio & mic are blocked. Click to unblock"
+                  : "Block Audio & Mic (Deafen)"
             }
             disabled={!roomId}
           >

@@ -116,7 +116,7 @@ export default function AudioSettingsModal({
             </div>
             <div>
               <div className="modal-title" id="audio-settings-title">Audio & Voice Settings</div>
-              <div className="modal-subtitle">Configure browser DSP audio filters and voice input modes</div>
+              <div className="modal-subtitle">Configure voice transmission modes, push-to-talk hotkeys, and mic levels</div>
             </div>
           </div>
           <button className="modal-close-btn" onClick={onClose} title="Close settings" aria-label="Close settings">
@@ -126,115 +126,7 @@ export default function AudioSettingsModal({
 
         {/* Modal Body */}
         <div className="modal-body audio-settings-body">
-          {/* Section 1: Audio Processing Toggles */}
-          <div className="settings-section">
-            <div className="section-header-row">
-              <div className="section-title-wrap">
-                <span className="section-tag-badge">HARDWARE DSP</span>
-                <h4 className="settings-section-title">Browser Audio Processing</h4>
-              </div>
-              <span className="active-filters-count">
-                {[audioSettings.echoCancellation, audioSettings.noiseSuppression, audioSettings.autoGainControl].filter(Boolean).length} of 3 Active
-              </span>
-            </div>
-            <p className="settings-section-desc">
-              Native browser WebRTC filters applied directly to your microphone input for crystal clear voice clarity.
-            </p>
-
-            <div className="audio-toggles-grid">
-              {/* Noise Suppression */}
-              <div className={`audio-toggle-card ${audioSettings.noiseSuppression ? 'is-enabled' : ''}`}>
-                <div className="toggle-card-left">
-                  <div className="toggle-icon-wrap ns">
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                      <path d="M3.27 1.44L2 2.72l4.33 4.33C6.12 7.6 6 8.28 6 9v2c0 3.31 2.69 6 6 6 .62 0 1.21-.11 1.77-.28l4.95 4.95 1.27-1.27L3.27 1.44zM12 15c-2.21 0-4-1.79-4-4V9.66l4 4V15zm5-4c0-.34-.04-.67-.11-.99l1.49-1.49c.4.78.62 1.63.62 2.48h-2zm-2-6c0-.55-.45-1-1-1s-1 .45-1 1v.78l2 2V5z" />
-                    </svg>
-                  </div>
-                  <div className="toggle-card-text">
-                    <div className="toggle-title-row">
-                      <span className="toggle-card-title">Noise Suppression</span>
-                      <span className="toggle-dsp-pill">NS</span>
-                    </div>
-                    <span className="toggle-card-desc">
-                      Filters background noise such as mechanical keyboards, laptop fans, and AC hums.
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className={`switch-track ${audioSettings.noiseSuppression ? 'checked' : ''}`}
-                  onClick={() => handleToggle('noiseSuppression')}
-                  role="switch"
-                  aria-checked={audioSettings.noiseSuppression}
-                  aria-label="Toggle Noise Suppression"
-                >
-                  <span className="switch-thumb" />
-                </button>
-              </div>
-
-              {/* Echo Cancellation */}
-              <div className={`audio-toggle-card ${audioSettings.echoCancellation ? 'is-enabled' : ''}`}>
-                <div className="toggle-card-left">
-                  <div className="toggle-icon-wrap aec">
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                      <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-                    </svg>
-                  </div>
-                  <div className="toggle-card-text">
-                    <div className="toggle-title-row">
-                      <span className="toggle-card-title">Echo Cancellation</span>
-                      <span className="toggle-dsp-pill">AEC</span>
-                    </div>
-                    <span className="toggle-card-desc">
-                      Prevents watch party video sound and peer voices leaking back through your microphone.
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className={`switch-track ${audioSettings.echoCancellation ? 'checked' : ''}`}
-                  onClick={() => handleToggle('echoCancellation')}
-                  role="switch"
-                  aria-checked={audioSettings.echoCancellation}
-                  aria-label="Toggle Echo Cancellation"
-                >
-                  <span className="switch-thumb" />
-                </button>
-              </div>
-
-              {/* Auto Gain Control */}
-              <div className={`audio-toggle-card ${audioSettings.autoGainControl ? 'is-enabled' : ''}`}>
-                <div className="toggle-card-left">
-                  <div className="toggle-icon-wrap agc">
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                      <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
-                    </svg>
-                  </div>
-                  <div className="toggle-card-text">
-                    <div className="toggle-title-row">
-                      <span className="toggle-card-title">Auto Gain Control</span>
-                      <span className="toggle-dsp-pill">AGC</span>
-                    </div>
-                    <span className="toggle-card-desc">
-                      Automatically normalizes voice volume so quiet whisperers are boosted and loud speakers aren't clipping.
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className={`switch-track ${audioSettings.autoGainControl ? 'checked' : ''}`}
-                  onClick={() => handleToggle('autoGainControl')}
-                  role="switch"
-                  aria-checked={audioSettings.autoGainControl}
-                  aria-label="Toggle Auto Gain Control"
-                >
-                  <span className="switch-thumb" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 2: Input Mode (Open Mic vs Push-to-Talk) */}
+          {/* Voice Transmission Mode (Open Mic vs Push-to-Talk) */}
           <div className="settings-section">
             <div className="section-header-row">
               <div className="section-title-wrap">

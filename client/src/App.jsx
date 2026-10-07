@@ -2394,9 +2394,9 @@ export default function App() {
                 const currentSettings = currentTrack?.getSettings ? currentTrack.getSettings() : {};
                 const settingsMatch = currentTrack &&
                     currentTrack.readyState === 'live' &&
-                    Boolean(currentSettings.echoCancellation) === Boolean(audioSettingsRef.current?.echoCancellation) &&
-                    Boolean(currentSettings.noiseSuppression) === Boolean(audioSettingsRef.current?.noiseSuppression) &&
-                    Boolean(currentSettings.autoGainControl) === Boolean(audioSettingsRef.current?.autoGainControl);
+                    Boolean(currentSettings.echoCancellation) === true &&
+                    Boolean(currentSettings.noiseSuppression) === true &&
+                    Boolean(currentSettings.autoGainControl) === true;
 
                 if (!settingsMatch) {
                     if (stream) {
@@ -2410,9 +2410,9 @@ export default function App() {
 
                     const constraints = {
                         audio: {
-                            echoCancellation: Boolean(audioSettingsRef.current?.echoCancellation),
-                            noiseSuppression: Boolean(audioSettingsRef.current?.noiseSuppression),
-                            autoGainControl: Boolean(audioSettingsRef.current?.autoGainControl),
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
                             ...(currentSettings?.deviceId ? { deviceId: { ideal: currentSettings.deviceId } } : {})
                         }
                     };
@@ -2538,9 +2538,15 @@ export default function App() {
 
     // Feature 2.2: Apply Updated Audio Processing Settings & Reconfigure MediaStream
     const handleUpdateAudioSettings = useCallback(async (newSettings) => {
-        setAudioSettings(newSettings);
-        audioSettingsRef.current = newSettings;
-        saveAudioSettings(newSettings);
+        const enforcedSettings = {
+            ...newSettings,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+        };
+        setAudioSettings(enforcedSettings);
+        audioSettingsRef.current = enforcedSettings;
+        saveAudioSettings(enforcedSettings);
 
         // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
         if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
@@ -2599,9 +2605,9 @@ export default function App() {
 
             const constraints = {
                 audio: {
-                    echoCancellation: Boolean(newSettings.echoCancellation),
-                    noiseSuppression: Boolean(newSettings.noiseSuppression),
-                    autoGainControl: Boolean(newSettings.autoGainControl),
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
                     ...(deviceId ? { deviceId: { ideal: deviceId } } : {})
                 }
             };
