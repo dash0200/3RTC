@@ -118,11 +118,8 @@ export default function SoundboardTray({
             <button
               key={clip.id}
               type="button"
-              className={`sfx-card ${isCoolingDown ? 'is-cooldown' : ''} ${isPlayingThis ? 'is-playing' : ''}`}
-              onClick={() => {
-                if (!isCoolingDown) onPlayClip(clip);
-              }}
-              disabled={isCoolingDown}
+              className={`sfx-card ${isPlayingThis ? 'is-playing' : ''}`}
+              onClick={() => onPlayClip(clip)}
               title={`${clip.name}: ${clip.description}`}
               aria-label={`Play sound effect: ${clip.name}`}
             >
@@ -141,12 +138,6 @@ export default function SoundboardTray({
                 <span className="sfx-name">{clip.name}</span>
                 <span className="sfx-category">{clip.category}</span>
               </div>
-
-              {isCoolingDown && (
-                <div className="sfx-cooldown-overlay">
-                  <span className="sfx-cooldown-spin" />
-                </div>
-              )}
             </button>
           );
         })}

@@ -1,75 +1,92 @@
 /**
- * Synchronized Soundboard (Mini SFX Tray) - Web Audio Synthesis Engine
- * Provides instant, zero-latency, high-fidelity sound clips synthesized natively via Web Audio API.
+ * Synchronized Soundboard (Mini SFX Tray) - Web Audio Engine
+ * Plays authentic, high-fidelity Discord soundboard audio clips and classic Discord SFX.
+ * Preloads and decodes into Web Audio buffers for instant 0-latency playback.
  * Synchronized across WebRTC DataChannel peers.
  */
 
 export const SOUNDBOARD_CLIPS = [
+  // --- Discord Official Soundboard Defaults ---
+  {
+    id: 'quack',
+    name: 'Quack',
+    emoji: '🦆',
+    color: '#eab308',
+    category: 'Soundboard',
+    url: '/sounds/quack.mp3',
+    description: 'Official Discord rubber duck quack'
+  },
   {
     id: 'airhorn',
     name: 'Airhorn',
     emoji: '📢',
     color: '#ef4444',
-    category: 'Hype',
-    description: 'Iconic DJ reggae airhorn triple blast'
+    category: 'Soundboard',
+    url: '/sounds/airhorn.mp3',
+    description: 'Official Discord DJ reggae airhorn blast'
   },
   {
-    id: 'applause',
-    name: 'Applause',
+    id: 'cricket',
+    name: 'Crickets',
+    emoji: '🦗',
+    color: '#10b981',
+    category: 'Soundboard',
+    url: '/sounds/cricket.mp3',
+    description: 'Official Discord awkward silence crickets'
+  },
+  {
+    id: 'golfclap',
+    name: 'Golf Clap',
     emoji: '👏',
     color: '#f59e0b',
-    category: 'Crowd',
-    description: 'Enthusiastic audience clapping and cheers'
+    category: 'Soundboard',
+    url: '/sounds/golfclap.mp3',
+    description: 'Official Discord polite golf clapping'
   },
   {
-    id: 'drumroll',
-    name: 'Drumroll',
-    emoji: '🥁',
-    color: '#8b5cf6',
-    category: 'Drama',
-    description: 'Suspenseful roll with cymbal crash'
+    id: 'sadhorn',
+    name: 'Sad Horn',
+    emoji: '🎺',
+    color: '#64748b',
+    category: 'Soundboard',
+    url: '/sounds/sadhorn.mp3',
+    description: 'Official Discord fail sad horn (womp womp)'
   },
   {
     id: 'badumtss',
     name: 'Ba-Dum-Tss',
-    emoji: '💥',
+    emoji: '🥁',
     color: '#ec4899',
-    category: 'Comedy',
-    description: 'Classic punchline comedy rimshot'
+    category: 'Soundboard',
+    url: '/sounds/badumtss.mp3',
+    description: 'Official Discord punchline comedy rimshot'
   },
+
+  // --- Discord Signature SFX ---
   {
-    id: 'tada',
-    name: 'Tada Fanfare',
-    emoji: '🎺',
-    color: '#eab308',
-    category: 'Victory',
-    description: 'Triumphant brass fanfare victory chords'
-  },
-  {
-    id: 'cheering',
-    name: 'Cheering',
-    emoji: '🎉',
-    color: '#10b981',
-    category: 'Crowd',
-    description: 'Excited party crowd cheering and whistles'
-  },
-  {
-    id: 'laughter',
-    name: 'Laugh Track',
-    emoji: '😂',
-    color: '#06b6d4',
-    category: 'Comedy',
-    description: 'Bouncy contagious giggles and laughter'
-  },
-  {
-    id: 'wompwomp',
-    name: 'Sad Trombone',
-    emoji: '🎺',
-    color: '#64748b',
-    category: 'Fail',
-    description: 'Hilarious fail wah-wah-wah-waaah'
+    id: 'discord_ping',
+    name: 'Discord Ping',
+    emoji: '🔔',
+    color: '#5865f2',
+    category: 'Discord SFX',
+    url: '/sounds/discord_ping.mp3',
+    description: 'Official Discord message ping notification'
   }
 ];
+
+export const SOUND_URL_MAP = {
+  quack: '/sounds/quack.mp3',
+  airhorn: '/sounds/airhorn.mp3',
+  cricket: '/sounds/cricket.mp3',
+  golfclap: '/sounds/golfclap.mp3',
+  sadhorn: '/sounds/sadhorn.mp3',
+  badumtss: '/sounds/badumtss.mp3',
+  discord_ping: '/sounds/discord_ping.mp3',
+  // Backwards compatibility aliases
+  wompwomp: '/sounds/sadhorn.mp3',
+  applause: '/sounds/golfclap.mp3',
+  drumroll: '/sounds/badumtss.mp3'
+};
 
 const STORAGE_KEY_VOLUME = '3rtc_soundboard_volume';
 const STORAGE_KEY_MUTED = '3rtc_soundboard_muted';
@@ -101,6 +118,34 @@ export function saveSoundboardSettings(volume, muted) {
 class SoundboardEngine {
   constructor() {
     this.ctx = null;
+    this.audioBufferCache = new Map();
+    this.loadingPromises = new Map();
+    this.hasInitPreload = false;
+    this.activeSourceNode = null;
+    this.activeAudioElement = null;
+
+    // Auto-setup interaction listeners to unlock AudioContext and preload assets
+    if (typeof window !== 'undefined') {
+      const unlockAudio = () => {
+        this.getAudioContext();
+        if (!this.hasInitPreload) {
+          this.preloadAll();
+        }
+        window.removeEventListener('click', unlockAudio);
+        window.removeEventListener('keydown', unlockAudio);
+        window.removeEventListener('touchstart', unlockAudio);
+      };
+      window.addEventListener('click', unlockAudio, { passive: true });
+      window.addEventListener('keydown', unlockAudio, { passive: true });
+      window.addEventListener('touchstart', unlockAudio, { passive: true });
+
+      // Preload early when browser is idle or shortly after load
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(() => this.preloadAll());
+      } else {
+        setTimeout(() => this.preloadAll(), 1000);
+      }
+    }
   }
 
   getAudioContext() {
@@ -116,11 +161,134 @@ class SoundboardEngine {
     return this.ctx;
   }
 
+  stopCurrent() {
+    if (this.activeSourceNode) {
+      try {
+        this.activeSourceNode.stop();
+        this.activeSourceNode.disconnect();
+      } catch (e) {}
+      this.activeSourceNode = null;
+    }
+    if (this.activeAudioElement) {
+      try {
+        this.activeAudioElement.pause();
+        this.activeAudioElement.currentTime = 0;
+      } catch (e) {}
+      this.activeAudioElement = null;
+    }
+  }
+
+  async loadAudioBuffer(soundId, url) {
+    if (this.audioBufferCache.has(soundId)) {
+      return this.audioBufferCache.get(soundId);
+    }
+    if (this.loadingPromises.has(soundId)) {
+      return this.loadingPromises.get(soundId);
+    }
+
+    const loadPromise = (async () => {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const arrayBuffer = await response.arrayBuffer();
+        const ctx = this.getAudioContext();
+        if (!ctx) throw new Error('No AudioContext');
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        this.audioBufferCache.set(soundId, audioBuffer);
+        return audioBuffer;
+      } catch (err) {
+        console.warn(`[Soundboard] Could not decode audio for ${soundId}:`, err);
+        return null;
+      } finally {
+        this.loadingPromises.delete(soundId);
+      }
+    })();
+
+    this.loadingPromises.set(soundId, loadPromise);
+    return loadPromise;
+  }
+
+  preloadAll() {
+    this.hasInitPreload = true;
+    for (const [id, url] of Object.entries(SOUND_URL_MAP)) {
+      if (!this.audioBufferCache.has(id)) {
+        this.loadAudioBuffer(id, url).catch(() => {});
+      }
+    }
+  }
+
   play(soundId, volumeScale = 1.0) {
     if (volumeScale <= 0) return;
+
+    // Immediately stop and cancel any currently playing sound on every click (Discord spam behavior)
+    this.stopCurrent();
+
+    const resolvedId = (soundId || '').toLowerCase();
+    const url = SOUND_URL_MAP[resolvedId];
+    const ctx = this.getAudioContext();
+
+    // 1. Instant 0-latency playback from cached Web Audio buffer
+    if (ctx && this.audioBufferCache.has(resolvedId)) {
+      try {
+        const buffer = this.audioBufferCache.get(resolvedId);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(Math.min(1.0, Math.max(0, volumeScale)), ctx.currentTime);
+
+        source.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        source.onended = () => {
+          if (this.activeSourceNode === source) {
+            this.activeSourceNode = null;
+          }
+        };
+
+        this.activeSourceNode = source;
+        source.start(0);
+        return;
+      } catch (err) {
+        console.warn(`[Soundboard] Error playing cached buffer ${resolvedId}:`, err);
+      }
+    }
+
+    // 2. If sound has a dedicated URL, play with HTMLAudio and trigger background buffer decode
+    if (url) {
+      try {
+        const audio = new Audio(url);
+        audio.volume = Math.min(1.0, Math.max(0, volumeScale));
+        this.activeAudioElement = audio;
+
+        audio.onended = () => {
+          if (this.activeAudioElement === audio) {
+            this.activeAudioElement = null;
+          }
+        };
+
+        audio.play().catch((err) => {
+          console.warn(`[Soundboard] HTMLAudioElement error for ${resolvedId}:`, err);
+          this.playSynthFallback(resolvedId, volumeScale);
+        });
+
+        // Preload into buffer cache for instantaneous subsequent plays
+        if (ctx && !this.audioBufferCache.has(resolvedId)) {
+          this.loadAudioBuffer(resolvedId, url).catch(() => {});
+        }
+        return;
+      } catch (e) {
+        console.warn(`[Soundboard] Audio element failed for ${resolvedId}:`, e);
+      }
+    }
+
+    // 3. Synthesis fallback if no file or audio playback fails
+    this.playSynthFallback(resolvedId, volumeScale);
+  }
+
+  playSynthFallback(soundId, volumeScale) {
     const ctx = this.getAudioContext();
     if (!ctx) return;
-
     const masterGain = ctx.createGain();
     masterGain.gain.setValueAtTime(Math.min(1.0, Math.max(0, volumeScale)), ctx.currentTime);
     masterGain.connect(ctx.destination);
@@ -130,11 +298,10 @@ class SoundboardEngine {
         this.synthAirhorn(ctx, masterGain);
         break;
       case 'applause':
+      case 'golfclap':
         this.synthApplause(ctx, masterGain);
         break;
       case 'drumroll':
-        this.synthDrumroll(ctx, masterGain);
-        break;
       case 'badumtss':
         this.synthBaDumTss(ctx, masterGain);
         break;
@@ -148,6 +315,7 @@ class SoundboardEngine {
         this.synthLaughter(ctx, masterGain);
         break;
       case 'wompwomp':
+      case 'sadhorn':
         this.synthSadTrombone(ctx, masterGain);
         break;
       default:
