@@ -151,6 +151,7 @@ export default function App() {
     const activeSfxTimerRef = useRef(null);
     const lastSfxTimestampRef = useRef(0);
     const lastRemoteSfxTimestampRef = useRef(0);
+    const lastRemoteSfxToastRef = useRef(0);
 
     // Feature 4.1: Real-Time P2P Network HUD (Ping & Latency)
     const [showNetworkHudModal, setShowNetworkHudModal] = useState(false);
@@ -577,8 +578,8 @@ export default function App() {
     const handleRemoteSoundboardSfx = useCallback((data) => {
         if (!data || !data.soundId) return;
         const now = Date.now();
-        // Rate limit protection: ignore rapid bursts
-        if (now - lastRemoteSfxTimestampRef.current < 350) return;
+        // Allow rapid spamming while guarding against recursive flood loops
+        if (now - lastRemoteSfxTimestampRef.current < 40) return;
         lastRemoteSfxTimestampRef.current = now;
 
         const effectiveVol = soundboardSettingsRef.current?.muted ? 0 : (soundboardSettingsRef.current?.volume ?? 0.75);
@@ -595,10 +596,14 @@ export default function App() {
         };
         setActiveSoundboardSfx(sfxInfo);
         if (activeSfxTimerRef.current) clearTimeout(activeSfxTimerRef.current);
-        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 2500);
+        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 1800);
 
-        showToast(`🔊 ${data.sender || 'Peer'} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
-        addSystemMessage(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
+        // Throttle chat notifications so rapid spam clicks play audio every time without flooding chat
+        if (now - lastRemoteSfxToastRef.current > 1200) {
+            lastRemoteSfxToastRef.current = now;
+            showToast(`🔊 ${data.sender || 'Peer'} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
+            addSystemMessage(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
+        }
     }, [addSystemMessage, showToast]);
 
     // Feature 3.3: Handle incoming P2P image transfer start
@@ -1998,20 +2003,11 @@ export default function App() {
     const handlePlaySoundboardClip = useCallback((clip) => {
         if (!clip || !clip.id) return;
         const now = Date.now();
-        if (now - lastSfxTimestampRef.current < 350) return;
+        // Allow rapid continuous spamming like Discord while guarding against accidental double-event quirks
+        if (now - lastSfxTimestampRef.current < 30) return;
         lastSfxTimestampRef.current = now;
 
-        // Set cooldown on this clip for 2.2 seconds
-        setActiveSfxCooldowns((prev) => ({ ...prev, [clip.id]: true }));
-        setTimeout(() => {
-            setActiveSfxCooldowns((prev) => {
-                const next = { ...prev };
-                delete next[clip.id];
-                return next;
-            });
-        }, 2200);
-
-        // Play locally if not muted
+        // Play locally if not muted (cancels any playing sound and restarts immediately)
         const effectiveVol = soundboardSettingsRef.current?.muted ? 0 : (soundboardSettingsRef.current?.volume ?? 0.75);
         if (!isAudioBlockedRef.current && effectiveVol > 0) {
             soundboard.play(clip.id, effectiveVol);
@@ -2026,7 +2022,7 @@ export default function App() {
         };
         setActiveSoundboardSfx(sfxInfo);
         if (activeSfxTimerRef.current) clearTimeout(activeSfxTimerRef.current);
-        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 2500);
+        activeSfxTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), 1800);
 
         // Broadcast to all connected peers via DataChannel
         const sfxMsg = {
@@ -2394,9 +2390,9 @@ export default function App() {
                 const currentSettings = currentTrack?.getSettings ? currentTrack.getSettings() : {};
                 const settingsMatch = currentTrack &&
                     currentTrack.readyState === 'live' &&
-                    Boolean(currentSettings.echoCancellation) === Boolean(audioSettingsRef.current?.echoCancellation) &&
-                    Boolean(currentSettings.noiseSuppression) === Boolean(audioSettingsRef.current?.noiseSuppression) &&
-                    Boolean(currentSettings.autoGainControl) === Boolean(audioSettingsRef.current?.autoGainControl);
+                    Boolean(currentSettings.echoCancellation) === true &&
+                    Boolean(currentSettings.noiseSuppression) === true &&
+                    Boolean(currentSettings.autoGainControl) === true;
 
                 if (!settingsMatch) {
                     if (stream) {
@@ -2410,9 +2406,9 @@ export default function App() {
 
                     const constraints = {
                         audio: {
-                            echoCancellation: Boolean(audioSettingsRef.current?.echoCancellation),
-                            noiseSuppression: Boolean(audioSettingsRef.current?.noiseSuppression),
-                            autoGainControl: Boolean(audioSettingsRef.current?.autoGainControl),
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
                             ...(currentSettings?.deviceId ? { deviceId: { ideal: currentSettings.deviceId } } : {})
                         }
                     };
@@ -2538,9 +2534,15 @@ export default function App() {
 
     // Feature 2.2: Apply Updated Audio Processing Settings & Reconfigure MediaStream
     const handleUpdateAudioSettings = useCallback(async (newSettings) => {
-        setAudioSettings(newSettings);
-        audioSettingsRef.current = newSettings;
-        saveAudioSettings(newSettings);
+        const enforcedSettings = {
+            ...newSettings,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+        };
+        setAudioSettings(enforcedSettings);
+        audioSettingsRef.current = enforcedSettings;
+        saveAudioSettings(enforcedSettings);
 
         // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
         if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
@@ -2599,9 +2601,9 @@ export default function App() {
 
             const constraints = {
                 audio: {
-                    echoCancellation: Boolean(newSettings.echoCancellation),
-                    noiseSuppression: Boolean(newSettings.noiseSuppression),
-                    autoGainControl: Boolean(newSettings.autoGainControl),
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
                     ...(deviceId ? { deviceId: { ideal: deviceId } } : {})
                 }
             };
@@ -3005,6 +3007,7 @@ export default function App() {
                 const isLocalMuted = Boolean(localMutedPeers[peerId]);
 
                 list.push({
+                    id: peerId,
                     peerId,
                     username: meta.username || `Peer ${peerId.slice(0, 4)}`,
                     isHost: Boolean(meta.isHost),
@@ -3022,6 +3025,7 @@ export default function App() {
     const localUser = useMemo(() => {
         if (!roomId) return null;
         return {
+            id: peerIdRef.current,
             peerId: peerIdRef.current,
             username: username,
             isHost: isHost,
@@ -3054,6 +3058,8 @@ export default function App() {
                     audioSettings={audioSettings}
                     onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
                     isPttActive={isPttActive}
+                    peerCount={connectedPeers.length + 1}
+                    onOpenSettings={() => setShowSettingsModal(true)}
                     networkStats={networkStats}
                     onOpenNetworkHud={() => setShowNetworkHudModal(true)}
                     onOpenQrCode={() => setShowQrModal(true)}
