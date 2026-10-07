@@ -708,152 +708,122 @@ export default function YouTubeSyncPlayer({
 
   return (
     <div className="yt-sync-wrapper">
-      {/* Top Input Bar: YouTube URL Loader */}
-      <div className="yt-url-bar">
-        <form className="yt-url-form" onSubmit={handleLoadUrl}>
-          <div className="yt-input-wrapper">
-            <svg className="yt-input-icon" viewBox="0 0 24 24" width="22" height="22" fill="#FF0033">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-            </svg>
-            <input
-              type="text"
-              className="yt-url-input"
-              placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...) or ID"
-              value={urlInput}
-              onChange={(e) => {
-                setUrlInput(e.target.value);
-                if (inputError) setInputError('');
-              }}
-            />
-            {urlInput && (
-              <button
-                type="button"
-                className="yt-clear-btn"
-                onClick={() => setUrlInput('')}
-                title="Clear input"
-              >
-                &times;
-              </button>
-            )}
-          </div>
-          <button type="submit" className="btn btn-primary yt-load-btn" title="Play immediately for all">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+      <div className="yt-screen-card">
+        {/* Center Hero Card */}
+        <div className="yt-hero-center">
+          <div className="yt-hero-icon-box">
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
               <path d="M8 5v14l11-7z" />
             </svg>
-            Load for All
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary yt-queue-add-btn"
-            onClick={handleQueueUrl}
-            title="Add video to collaborative queue"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z" />
-            </svg>
-            + Add to Queue
-          </button>
-        </form>
-
-        {inputError && <div className="yt-url-error">{inputError}</div>}
-
-        {/* Quick Presets */}
-        <div className="yt-presets-bar">
-          <span className="yt-presets-label" title="Click any category to play a random track from that genre">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style={{ verticalAlign: 'middle', marginRight: 4 }}>
-              <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.42l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.12z" />
-            </svg>
-            Quick Watch (Random):
-          </span>
-          {PRESET_CATEGORIES.map((cat) => {
-            const isCategoryActive = cat.videos.some((v) => v.id === videoId);
-            return (
-              <div key={cat.id} className="yt-preset-chip-wrapper">
-                <button
-                  type="button"
-                  className={`yt-preset-chip ${isCategoryActive ? 'active' : ''}`}
-                  onClick={() => handleSelectPreset(cat)}
-                  title={`Play a random ${cat.name} video now`}
-                >
-                  {cat.name}
-                </button>
-                <button
-                  type="button"
-                  className="yt-preset-queue-mini"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const choice = cat.videos[Math.floor(Math.random() * cat.videos.length)];
-                    if (typeof onAddToQueue === 'function') {
-                      onAddToQueue({ videoId: choice.id, title: choice.title });
-                    }
-                  }}
-                  title={`Queue a random ${cat.name} video`}
-                >
-                  +
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="lobby-options-container">
-        {/* Local Video Drag & Drop Zone */}
-        <div
-          className={`local-lobby-dropzone ${isDropOver ? 'active' : ''}`}
-          onDragOver={(e) => { e.preventDefault(); setIsDropOver(true); }}
-          onDragLeave={() => setIsDropOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDropOver(false);
-            const dropped = e.dataTransfer?.files?.[0];
-            if (dropped && typeof onLocalFileSelect === 'function') {
-              onLocalFileSelect(dropped);
-            }
-          }}
-          onClick={() => localFileInputRef.current?.click()}
-        >
-          <input
-            type="file"
-            ref={localFileInputRef}
-            style={{ display: 'none' }}
-            accept="video/*,.mkv,.mp4,.webm,.mov,.avi,.m4v"
-            onChange={(e) => {
-              const selected = e.target.files?.[0];
-              if (selected && typeof onLocalFileSelect === 'function') {
-                onLocalFileSelect(selected);
-              }
-            }}
-          />
-
-          <div className="local-drop-icon">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="#3ea6ff">
-              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" />
-            </svg>
           </div>
-          <div className="local-drop-content">
-            <h3 className="local-drop-title">Drag & Drop Any Local Video (.mp4, .mkv, .webm)</h3>
-            <p className="local-drop-subtitle">
-              Play local files with <strong>100% privacy & zero bandwidth</strong>. Synced play, pause & seek between all peers.
-            </p>
-          </div>
-          <button type="button" className="btn btn-secondary btn-sm local-browse-btn">
-            Browse File
-          </button>
-        </div>
-
-        {/* YouTube Watch Party Card */}
-        <div className="yt-placeholder-card">
-          <div className="yt-placeholder-icon">
-            <svg viewBox="0 0 24 24" width="36" height="36" fill="#FF0033">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-            </svg>
-          </div>
-          <h2 className="yt-placeholder-title">P2P Synchronized YouTube Watch Party</h2>
-          <p className="yt-placeholder-subtitle">
-            Paste any YouTube video link or select a quick watch preset above.
-            The video will immediately load for all peers, and <strong>Play, Pause & Seek</strong> will stay synchronized in real time.
+          <h2 className="yt-hero-title">P2P Synchronized YouTube Watch Party</h2>
+          <p className="yt-hero-subtitle">
+            Paste any YouTube link or select a quick watch preset. The video will immediately load for all peers, and <strong>Play, Pause &amp; Seek</strong> will stay synchronized in real time.
           </p>
+
+          {/* Clean URL Input Bar */}
+          <form className="yt-hero-form" onSubmit={handleLoadUrl}>
+            <div className="yt-hero-input-wrap">
+              <div className="yt-hero-input-icon">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0033">
+                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+                </svg>
+              </div>
+              <input
+                type="text"
+                className="yt-hero-input"
+                placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...) or ID"
+                value={urlInput}
+                onChange={(e) => {
+                  setUrlInput(e.target.value);
+                  if (inputError) setInputError('');
+                }}
+              />
+              {urlInput && (
+                <button
+                  type="button"
+                  className="yt-clear-btn"
+                  onClick={() => setUrlInput('')}
+                  title="Clear input"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+            <button type="submit" className="yt-hero-load-btn" title="Play immediately for all">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              <span>Load for All</span>
+            </button>
+          </form>
+          {inputError && <div className="yt-url-error">{inputError}</div>}
+
+          {/* Quick Presets Row */}
+          <div className="yt-hero-presets-row">
+            <span className="yt-hero-presets-tag">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="#f59e0b">
+                <path d="M7 2v11h3v9l7-12h-4l4-8z" />
+              </svg>
+              Quick Watch
+            </span>
+            {PRESET_CATEGORIES.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                className="yt-hero-preset-btn"
+                onClick={() => handleSelectPreset(cat)}
+                title={`Play ${cat.name}`}
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Bottom Scrubber & Controls Bar */}
+        <div className="yt-screen-controls-bar">
+          <div className="yt-screen-ctrls-left">
+            <button type="button" className="yt-screen-ctrl-icon" disabled title="Play">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </button>
+            <button type="button" className="yt-screen-ctrl-icon" disabled title="Next">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+              </svg>
+            </button>
+            <button type="button" className="yt-screen-ctrl-icon" disabled title="Volume">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="yt-screen-scrubber-track">
+            <div className="yt-screen-scrubber-fill" style={{ width: '18%' }} />
+            <div className="yt-screen-scrubber-thumb" style={{ left: '18%' }} />
+          </div>
+
+          <div className="yt-screen-ctrls-right">
+            <span className="yt-screen-time-text">0:00 / 0:00</span>
+            <button type="button" className="yt-screen-ctrl-icon" disabled title="Settings">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+              </svg>
+            </button>
+            <button type="button" className="yt-screen-ctrl-icon" disabled title="Theater Mode">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm0 14H5V6h14v12z" />
+              </svg>
+            </button>
+            <button type="button" className="yt-screen-ctrl-icon" disabled title="Fullscreen">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </div>

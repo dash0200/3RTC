@@ -20,6 +20,8 @@ export default function Header({
   audioSettings = null,
   onOpenAudioSettings,
   isPttActive = false,
+  peerCount = 1,
+  onOpenSettings,
   // Feature 4.1: Real-Time P2P Network HUD
   networkStats = null,
   onOpenNetworkHud,
@@ -44,24 +46,22 @@ export default function Header({
 
   return (
     <header className="app-header">
+      {/* Left: Brand Logo & Room Chip */}
       <div className="header-left">
-        <div className="brand-logo">
-          <svg className="yt-icon" viewBox="0 0 24 24" width="28" height="28" fill="#FF0033">
-            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-          </svg>
-          <span className="brand-title">3RTC<span className="brand-badge">LIVE</span></span>
+        <div className="brand-logo" title="3RTC Watch Party Studio">
+          <div className="yt-icon-box">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="#ffffff">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </div>
+          <span className="brand-title">3RTC</span>
+          <span className="brand-badge">LIVE</span>
         </div>
-        <div className={`live-pill ${isLive ? 'active' : ''}`}>
-          <span className="live-dot"></span>
-          <span>{isLive ? 'LIVE' : 'OFFLINE'}</span>
-        </div>
-      </div>
 
-      <div className="header-center">
         {roomId && (
-          <div className="header-room-group">
+          <div className="header-room-pill-wrap">
             <div
-              className={`room-status-chip ${copied ? 'copied' : ''}`}
+              className={`header-room-chip ${copied ? 'copied' : ''}`}
               onClick={handleCopyClick}
               title="Click to copy 5-digit Room ID"
               role="button"
@@ -73,163 +73,122 @@ export default function Header({
                 }
               }}
             >
-              <span className="chip-label">ROOM:</span>
-              <span className="chip-code">{roomId}</span>
-              <button
-                type="button"
-                className="chip-copy-btn"
-                title="Copy Room ID"
-                tabIndex={-1}
-                onClick={handleCopyClick}
-              >
+              <span className="room-green-dot" />
+              <span className="room-label-text">Room:</span>
+              <span className="room-code-digits">{roomId}</span>
+              <span className="room-copy-icon">
                 {copied ? (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="#00e676">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="#00e676">
                     <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
                   </svg>
                 ) : (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                     <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
                   </svg>
                 )}
-              </button>
-              {copied && <span className="chip-copied-text">Copied!</span>}
+              </span>
+              {copied && <span className="room-copied-tag">Copied!</span>}
             </div>
+          </div>
+        )}
+      </div>
 
-            {/* Feature 4.3: Instant Mobile Join QR Code Button */}
-            {typeof onOpenQrCode === 'function' && (
-              <button
-                type="button"
-                className="header-qr-btn"
-                onClick={onOpenQrCode}
-                title="Instant Mobile Join QR Code (Press [Q])"
-                aria-label="Open Mobile Join QR Code"
-              >
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                  <path d="M4 4h6v6H4zm2 2v2h2V6zm8-2h6v6h-6zm2 2v2h2V6zM4 14h6v6H4zm2 2v2h2v-2zm10 0h2v2h-2zm-2 2h2v2h-2zm4 0h2v2h-2zm0-4h2v2h-2zm-4-2h2v2h-2zm2 2h2v2h-2z" />
-                </svg>
-                <span className="header-qr-text">QR</span>
-              </button>
-            )}
+      {/* Center Spacer */}
+      <div className="header-center" />
 
-            {/* Direct P2P Status Chip / Network HUD Trigger */}
+      {/* Right: Network, Mic, Leave, Peer Counter, Settings */}
+      <div className="header-right">
+        {roomId && (
+          <>
+            {/* Network Latency & Topology Pill */}
             <button
               type="button"
-              className={`header-p2p-chip ${isP2PConnected ? 'connected' : ''}`}
+              className={`header-net-chip ${isP2PConnected ? 'connected' : ''}`}
               onClick={typeof onOpenNetworkHud === 'function' ? onOpenNetworkHud : undefined}
               title={
                 isP2PConnected
-                  ? `WebRTC Direct Mesh (${networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined ? `${networkStats.avgPingMs}ms • ` : ''}${networkStats?.overallConnectionType || 'Direct P2P'}) - Click for Real-Time Network HUD`
+                  ? `WebRTC Direct Mesh (${networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined ? `${networkStats.avgPingMs}ms • ` : ''}${networkStats?.overallConnectionType || 'Direct P2P'}) - Click for Diagnostics HUD`
                   : (p2pStatusText || 'Waiting for peers... Click for Diagnostics')
               }
-              aria-label="Open Real-Time Network HUD"
+              aria-label="Open Network Diagnostics HUD"
             >
-              <span className="p2p-chip-dot"></span>
-              <span className="p2p-chip-text">
+              <span className="net-status-dot" />
+              <span className="net-status-text">
                 {isP2PConnected
                   ? (networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined
-                      ? `${networkStats.avgPingMs}ms • ${networkStats.overallConnectionType || 'Direct P2P'}`
-                      : 'Direct P2P Active')
-                  : (p2pStatusText || 'Waiting for peers...')}
+                    ? `${networkStats.avgPingMs}ms • ${networkStats.overallConnectionType || 'Direct P2P'}`
+                    : '1ms • Direct P2P')
+                  : (p2pStatusText || 'Direct P2P')}
               </span>
             </button>
 
+            {/* Microphone Toggle Pill */}
             {audioSettings?.inputMode === 'ptt' ? (
               <button
                 type="button"
-                className={`header-voice-chip ${isPttActive ? 'live ptt-live' : 'muted ptt-idle'}`}
+                className={`header-ctrl-pill ${isPttActive ? 'live ptt-live' : 'muted ptt-idle'}`}
                 onClick={typeof onOpenAudioSettings === 'function' ? onOpenAudioSettings : onToggleMic}
                 title={
                   isAudioBlocked
-                    ? "Microphone is blocked (Audio is blocked. Click to unblock and speak)"
+                    ? "Microphone is blocked"
                     : isPttActive
                       ? "PTT Transmitting Live! Release key to mute"
-                      : `Push-to-Talk Mode: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit. Click to configure audio.`
+                      : `Push-to-Talk: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
                 }
               >
-                <span className={`voice-chip-dot ${isPttActive ? 'live' : 'muted'}`}></span>
-                <span>{isAudioBlocked ? 'Mic Blocked' : isPttActive ? 'PTT LIVE' : `PTT: ${audioSettings?.pttKeyLabel || 'Space'}`}</span>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                  {isPttActive ? (
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                  ) : (
+                    <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+                  )}
+                </svg>
+                <span>{isAudioBlocked ? 'Mic Blocked' : isPttActive ? 'PTT Live' : `PTT [${audioSettings?.pttKeyLabel || 'Space'}]`}</span>
               </button>
             ) : (
               <button
                 type="button"
-                className={`header-voice-chip ${isMicMuted ? 'muted' : 'live'}`}
+                className={`header-ctrl-pill ${isMicMuted ? 'muted' : 'live'}`}
                 onClick={onToggleMic}
-                title={
-                  isAudioBlocked
-                    ? "Microphone is blocked (Audio is blocked. Click to unblock and speak)"
-                    : isMicMuted
-                      ? "Microphone muted. Click to speak"
-                      : "Microphone live. Click to mute"
-                }
+                title={isMicMuted ? "Microphone is muted. Click to speak" : "Microphone is live. Click to mute"}
               >
-                <span className={`voice-chip-dot ${isMicMuted ? 'muted' : 'live'}`}></span>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                  {isMicMuted ? (
+                    <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+                  ) : (
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                  )}
+                </svg>
                 <span>{isAudioBlocked ? 'Mic Blocked' : isMicMuted ? 'Mic Off' : 'Mic Live'}</span>
               </button>
             )}
 
-            {isAudioBlocked && (
-              <button
-                type="button"
-                className="header-voice-chip blocked"
-                onClick={onToggleBlockAudio}
-                title="Incoming audio & microphone blocked (Text Chat only). Click to unblock."
-              >
-                <span className="voice-chip-dot blocked"></span>
-                <span>Audio Blocked</span>
-              </button>
-            )}
-
-            {isMediaActive && typeof onExitVideo === 'function' && (
-              <button
-                type="button"
-                className="header-action-btn exit-video"
-                onClick={onExitVideo}
-                title="Exit video and return to watch party stage"
-              >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-                <span>Exit Video</span>
-              </button>
-            )}
-
+            {/* Leave Room Pill */}
             {typeof onLeaveRoom === 'function' && (
               <button
                 type="button"
-                className="header-action-btn leave-room"
+                className="header-leave-btn"
                 onClick={onLeaveRoom}
                 title="Leave room"
               >
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
                   <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
                 </svg>
                 <span>Leave</span>
               </button>
             )}
-          </div>
-        )}
-      </div>
 
-      <div className="header-right">
-        {typeof onToggleChat === 'function' && (
-          <button
-            type="button"
-            className={`header-sidebar-toggle-btn ${isChatOpen ? 'active' : ''} ${!isChatOpen && unreadChatCount > 0 ? 'has-unread' : ''}`}
-            onClick={onToggleChat}
-            title={isChatOpen ? "Close sidebar" : `Open sidebar${unreadChatCount > 0 ? ` (${unreadChatCount} new)` : ''}`}
-            aria-label={isChatOpen ? "Close sidebar" : "Open sidebar"}
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-              <line x1="15" y1="3" x2="15" y2="21" />
-            </svg>
-            <span>{isChatOpen ? 'Close Sidebar' : 'Open Sidebar'}</span>
-            {!isChatOpen && unreadChatCount > 0 && (
-              <span className="header-sidebar-badge">
-                {unreadChatCount > 99 ? '99+' : unreadChatCount}
-              </span>
-            )}
-          </button>
+            {/* Subtle Divider */}
+            <div className="header-v-divider" />
+
+            {/* Peers in Room Counter */}
+            <div className="header-peers-chip" title={`${peerCount} connected in room`}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
+              </svg>
+              <span>{peerCount} / 3</span>
+            </div>
+          </>
         )}
       </div>
     </header>
