@@ -3,10 +3,19 @@
  * Handles Echo Cancellation, Noise Suppression, Auto Gain Control & Push-to-Talk (PTT)
  */
 
-export const DEFAULT_AUDIO_SETTINGS = {
+/**
+ * Browser's built-in WebRTC mic processing (same as a plain getUserMedia({ audio: true })).
+ * Set all three to false for a completely raw mic (only sensible if everyone wears headphones,
+ * otherwise speakers echo back into the call).
+ */
+export const MIC_PROCESSING = {
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: true,
+  autoGainControl: true
+};
+
+export const DEFAULT_AUDIO_SETTINGS = {
+  ...MIC_PROCESSING,
   inputMode: 'open', // 'open' (Open Mic / Toggle) | 'ptt' (Push-to-Talk)
   pttKey: 'Space',   // KeyboardEvent code or key identifier
   pttKeyLabel: 'Space',
@@ -36,9 +45,7 @@ export function loadAudioSettings() {
       return {
         ...DEFAULT_AUDIO_SETTINGS,
         ...parsed,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
+        ...MIC_PROCESSING
       };
     }
   } catch {
@@ -48,20 +55,59 @@ export function loadAudioSettings() {
 }
 
 /**
- * Save audio settings to localStorage (keeps hardware DSP filters always active)
+ * Save audio settings to localStorage (mic processing always follows MIC_PROCESSING)
  */
 export function saveAudioSettings(settings) {
   try {
     const enforced = {
       ...settings,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
+      ...MIC_PROCESSING
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(enforced));
   } catch {
     // Ignore storage errors
   }
+}
+
+/**
+ * getUserMedia constraints for voice chat: just the mic, with the browser's standard processing.
+ */
+export function buildMicConstraints(deviceId) {
+  return {
+    audio: {
+      ...MIC_PROCESSING,
+      ...(deviceId ? { deviceId: { ideal: deviceId } } : {})
+    }
+  };
+}
+
+/**
+ * Confirm the browser actually applied MIC_PROCESSING to the mic (constraints are only a
+ * request). Re-applies it once if it came back different.
+ * Returns { echoCancellation, noiseSuppression, autoGainControl, ok }; a value of
+ * undefined means the browser doesn't report it.
+ */
+export async function ensureMicProcessing(track) {
+  const read = () => (track?.getSettings ? track.getSettings() : {});
+  const mismatched = (settings) => Object.keys(MIC_PROCESSING)
+    .some((key) => settings[key] !== undefined && settings[key] !== MIC_PROCESSING[key]);
+  let settings = read();
+
+  if (track && mismatched(settings)) {
+    try {
+      await track.applyConstraints({ ...MIC_PROCESSING });
+    } catch {
+      // Device/browser refused; report what we have
+    }
+    settings = read();
+  }
+
+  return {
+    echoCancellation: settings.echoCancellation,
+    noiseSuppression: settings.noiseSuppression,
+    autoGainControl: settings.autoGainControl,
+    ok: !mismatched(settings)
+  };
 }
 
 /**

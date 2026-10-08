@@ -10,7 +10,8 @@ import { fetchYouTubeTitle } from './components/YouTubeSyncPlayer';
 import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
-import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField } from './utils/audioSettings';
+import { voiceGate } from './utils/voiceGate';
+import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, MIC_PROCESSING } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
@@ -45,6 +46,52 @@ function extractAudioSdp(sdp) {
         }
     }
     return audioBlock.join(' | ');
+}
+
+/**
+ * Raises the Opus bitrate (browser default is ~32 kbps) so voice is crisp.
+ * - maxaveragebitrate=128000
+ * - useinbandfec=1 (Forward Error Correction against packet drops)
+ * Everything else stays at the browser's defaults.
+ */
+function tuneSdpForDiscordAudio(sdp) {
+    if (!sdp) return sdp;
+    const match = sdp.match(/a=rtpmap:(\d+)\s+opus\/48000/i);
+    if (!match) return sdp;
+    const pt = match[1];
+    const opusParams = 'useinbandfec=1;maxaveragebitrate=128000';
+
+    const fmtpRegex = new RegExp(`a=fmtp:${pt}\\s+(.*)`, 'i');
+    if (fmtpRegex.test(sdp)) {
+        return sdp.replace(fmtpRegex, (line, existingParams) => {
+            const filtered = existingParams
+                .split(';')
+                .map((s) => s.trim())
+                .filter((p) => !p.match(/^(maxaveragebitrate|useinbandfec)=/i))
+                .join(';');
+            return `a=fmtp:${pt} ${filtered ? filtered + ';' : ''}${opusParams}`;
+        });
+    } else {
+        return sdp.replace(
+            new RegExp(`(a=rtpmap:${pt}\\s+opus\\/48000(?:\\/2)?)`, 'i'),
+            `$1\r\na=fmtp:${pt} ${opusParams}`
+        );
+    }
+}
+
+function tuneAudioSender(pc) {
+    if (!pc || !pc.getSenders) return;
+    try {
+        const senders = pc.getSenders();
+        const audioSender = senders.find((s) => s.track && s.track.kind === 'audio');
+        if (audioSender && audioSender.getParameters && audioSender.setParameters) {
+            const params = audioSender.getParameters();
+            if (params && params.encodings && params.encodings.length > 0) {
+                params.encodings[0].maxBitrate = 128000;
+                audioSender.setParameters(params).catch(() => { });
+            }
+        }
+    } catch { }
 }
 
 export default function App() {
@@ -807,26 +854,18 @@ export default function App() {
                     }
 
                     const srcNode = ctx.createMediaStreamSource(stream);
-                    const gainNode = ctx.createGain();
                     const analyserNode = ctx.createAnalyser();
                     analyserNode.fftSize = 256;
                     analyserNode.smoothingTimeConstant = 0.5;
 
-                    const isLocalMuted = Boolean(localMutedPeersRef.current[targetPeerId]);
-                    const currentVol = peerVolumesRef.current[targetPeerId] !== undefined ? peerVolumesRef.current[targetPeerId] : 1.0;
-                    const effectiveGain = isAudioBlockedRef.current || isLocalMuted ? 0 : currentVol;
-
-                    gainNode.gain.value = effectiveGain;
-                    srcNode.connect(gainNode);
-                    gainNode.connect(ctx.destination);
-
-                    // Connect to analyser for Voice Activity Detection (Speaking Rings & VU meter)
+                    // Connect solely to AnalyserNode for Speaking Rings & VU meter.
+                    // DO NOT route to ctx.destination: audioEl is the sole speaker output.
+                    // Playing through both simultaneously caused acoustic comb filtering (hollow room echo).
                     srcNode.connect(analyserNode);
 
                     peerEntry.webAudioSource = srcNode;
-                    peerEntry.webAudioGain = gainNode;
                     peerEntry.analyserNode = analyserNode;
-                    logLocalDebug('WEBAUDIO_ROUTED', `Peer: ${targetPeerId} -> Web Audio route connected (ctx: ${ctx.state}, gain: ${effectiveGain})`);
+                    logLocalDebug('WEBAUDIO_ANALYSER_ROUTED', `Peer: ${targetPeerId} -> Web Audio analyser connected (ctx: ${ctx.state})`);
                 } catch (err) {
                     logLocalDebug('WEBAUDIO_ERR', `AudioContext route error: ${err.message}`);
                 }
@@ -1216,17 +1255,20 @@ export default function App() {
                 bindDataChannel(dc);
 
                 pc.createOffer().then((offer) => {
-                    return pc.setLocalDescription(offer).then(() => {
-                        const audioSdp = extractAudioSdp(offer.sdp);
-                        const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'pending'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
+                    const tunedSdp = tuneSdpForDiscordAudio(offer.sdp);
+                    const tunedOffer = { type: offer.type, sdp: tunedSdp };
+                    return pc.setLocalDescription(tunedOffer).then(() => {
+                        tuneAudioSender(pc);
+                        const audioSdp = extractAudioSdp(tunedOffer.sdp);
+                        const tInfo = pc.getTransceivers ? pc.getTransceivers().map((t) => `${t.mid || 'pending'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
                         logLocalDebug('OFFER_SENT', `To: ${targetPeerId} | SDP: ${audioSdp} | Transceivers: ${tInfo}`);
 
                         sendSignal({
                             type: 'offer',
                             targetId: targetPeerId,
                             offer: {
-                                type: offer.type,
-                                sdp: offer.sdp
+                                type: tunedOffer.type,
+                                sdp: tunedOffer.sdp
                             }
                         });
                     });
@@ -1295,7 +1337,11 @@ export default function App() {
                     const offerAudioSdp = extractAudioSdp(msg.offer?.sdp);
                     logLocalDebug('OFFER_RECEIVED', `From: ${senderId} | Offer SDP: ${offerAudioSdp}`);
 
-                    await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
+                    const tunedOfferSdp = tuneSdpForDiscordAudio(msg.offer?.sdp);
+                    await pc.setRemoteDescription(new RTCSessionDescription({
+                        type: msg.offer.type,
+                        sdp: tunedOfferSdp
+                    }));
 
                     // Ensure the negotiated audio transceiver on the answerer is active and set to sendrecv
                     if (pc.getTransceivers) {
@@ -1323,18 +1369,21 @@ export default function App() {
                     }
 
                     const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
+                    const tunedAnswerSdp = tuneSdpForDiscordAudio(answer.sdp);
+                    const tunedAnswer = { type: answer.type, sdp: tunedAnswerSdp };
+                    await pc.setLocalDescription(tunedAnswer);
+                    tuneAudioSender(pc);
 
-                    const answerAudioSdp = extractAudioSdp(answer.sdp);
-                    const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
+                    const answerAudioSdp = extractAudioSdp(tunedAnswer.sdp);
+                    const tInfo = pc.getTransceivers ? pc.getTransceivers().map((t) => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
                     logLocalDebug('ANSWER_SENT', `To: ${senderId} | Answer SDP: ${answerAudioSdp} | Transceivers: ${tInfo}`);
 
                     sendSignal({
                         type: 'answer',
                         targetId: senderId,
                         answer: {
-                            type: answer.type,
-                            sdp: answer.sdp
+                            type: tunedAnswer.type,
+                            sdp: tunedAnswer.sdp
                         }
                     });
                 } catch (err) {
@@ -1349,7 +1398,12 @@ export default function App() {
                     const peerEntry = peersRef.current.get(senderId);
                     if (peerEntry && peerEntry.pc) {
                         const pc = peerEntry.pc;
-                        await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+                        const tunedAnswerSdp = tuneSdpForDiscordAudio(msg.answer?.sdp);
+                        await pc.setRemoteDescription(new RTCSessionDescription({
+                            type: msg.answer.type,
+                            sdp: tunedAnswerSdp
+                        }));
+                        tuneAudioSender(pc);
 
                         const answerAudioSdp = extractAudioSdp(msg.answer?.sdp);
                         const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
@@ -1609,6 +1663,7 @@ export default function App() {
             if (roomId) {
                 sendSignal({ type: 'leave' });
             }
+            voiceGate.stop();
             if (localStreamRef.current) {
                 try {
                     localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -2363,6 +2418,39 @@ export default function App() {
         }
     }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
 
+    // Voice Chat: confirm echo cancellation / noise suppression really took effect on a fresh mic track
+    const verifyMicProcessing = useCallback(async (track) => {
+        const status = await ensureMicProcessing(track);
+        // Logged directly (logLocalDebug is a no-op) so the applied mic processing can be checked in DevTools
+        console.info(
+            `[3RTC] AUDIO_DSP_APPLIED AEC: ${status.echoCancellation}, NS: ${status.noiseSuppression}, AGC: ${status.autoGainControl} | Mic: "${track?.label}"`
+        );
+        if (!status.ok) {
+            const missing = [
+                status.echoCancellation === false ? 'echo cancellation' : null,
+                status.noiseSuppression === false ? 'noise suppression' : null
+            ].filter(Boolean).join(' & ');
+            showToast(`⚠️ Your browser/mic refused ${missing}. Use headphones to avoid echo.`);
+        }
+        return status;
+    }, [showToast]);
+
+    // Voice Chat: Voice Activity gate. In open-mic mode the mic only transmits while you're talking
+    // (like Discord's automatic input sensitivity), so room/air noise isn't sent during silence.
+    const applyVoiceGate = useCallback(() => {
+        const track = localStreamRef.current?.getAudioTracks()[0];
+        if (!track || track !== voiceGate.track) return;
+        const gateClosed = audioSettingsRef.current?.inputMode !== 'ptt' && !voiceGate.isOpen;
+        track.enabled = !isMicMutedRef.current && !gateClosed;
+    }, []);
+
+    useEffect(() => {
+        voiceGate.onChange = applyVoiceGate;
+        return () => {
+            voiceGate.onChange = null;
+        };
+    }, [applyVoiceGate]);
+
     // Voice Chat: Set Microphone Mute/Unmute
     const setMicrophoneMuted = useCallback(async (shouldMute, isPtt = false) => {
         // If incoming audio is currently blocked, unmuting microphone also unblocks audio
@@ -2390,11 +2478,12 @@ export default function App() {
                 const currentSettings = currentTrack?.getSettings ? currentTrack.getSettings() : {};
                 const settingsMatch = currentTrack &&
                     currentTrack.readyState === 'live' &&
-                    Boolean(currentSettings.echoCancellation) === true &&
-                    Boolean(currentSettings.noiseSuppression) === true &&
-                    Boolean(currentSettings.autoGainControl) === true;
+                    Boolean(currentSettings.echoCancellation) === MIC_PROCESSING.echoCancellation &&
+                    Boolean(currentSettings.noiseSuppression) === MIC_PROCESSING.noiseSuppression &&
+                    Boolean(currentSettings.autoGainControl) === MIC_PROCESSING.autoGainControl;
 
                 if (!settingsMatch) {
+                    voiceGate.stop();
                     if (stream) {
                         try { stream.getTracks().forEach((t) => t.stop()); } catch { }
                     }
@@ -2404,16 +2493,9 @@ export default function App() {
                     }
                     await new Promise((r) => setTimeout(r, 60));
 
-                    const constraints = {
-                        audio: {
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                            ...(currentSettings?.deviceId ? { deviceId: { ideal: currentSettings.deviceId } } : {})
-                        }
-                    };
-                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(currentSettings?.deviceId));
                     localStreamRef.current = stream;
+                    await verifyMicProcessing(stream.getAudioTracks()[0]);
                 }
 
                 // Connect local microphone to Web Audio AnalyserNode for Speaking Rings & VU meter
@@ -2433,7 +2515,12 @@ export default function App() {
                         if (localAnalyserRef.current) {
                             try { localAnalyserRef.current.disconnect(); } catch { }
                         }
-                        const localSrc = ctx.createMediaStreamSource(stream);
+                        const micTrack = stream.getAudioTracks()[0];
+                        if (micTrack && voiceGate.track !== micTrack) {
+                            await voiceGate.start(ctx, micTrack);
+                        }
+                        // Meter reads the gate's clone so it keeps working while the gate is closed
+                        const localSrc = ctx.createMediaStreamSource(voiceGate.analysisStream || stream);
                         const localAnalyser = ctx.createAnalyser();
                         localAnalyser.fftSize = 256;
                         localAnalyser.smoothingTimeConstant = 0.5;
@@ -2481,6 +2568,7 @@ export default function App() {
 
                 setIsMicMuted(false);
                 isMicMutedRef.current = false;
+                applyVoiceGate();
                 if (!isPtt) {
                     sound.playPop();
                     showToast('🎙️ Microphone unmuted (Live)');
@@ -2525,7 +2613,7 @@ export default function App() {
                 }
             }
         }
-    }, [addSystemMessage, logLocalDebug, showToast, username]);
+    }, [addSystemMessage, applyVoiceGate, logLocalDebug, showToast, username, verifyMicProcessing]);
 
     // Voice Chat: Toggle Microphone Mute/Unmute
     const toggleMicrophone = useCallback(() => {
@@ -2536,13 +2624,12 @@ export default function App() {
     const handleUpdateAudioSettings = useCallback(async (newSettings) => {
         const enforcedSettings = {
             ...newSettings,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+            ...MIC_PROCESSING
         };
         setAudioSettings(enforcedSettings);
         audioSettingsRef.current = enforcedSettings;
         saveAudioSettings(enforcedSettings);
+        applyVoiceGate();
 
         // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
         if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
@@ -2571,6 +2658,7 @@ export default function App() {
             // CRITICAL CHROMIUM FIX: Stop existing tracks BEFORE requesting a new stream.
             // In Chromium / WASAPI, calling getUserMedia while an old track is live reuses the
             // existing capture session and corrupts the native WebRTC Audio Processing Module (AEC3).
+            voiceGate.stop();
             if (currentStream) {
                 try {
                     currentStream.getTracks().forEach((t) => t.stop());
@@ -2599,16 +2687,7 @@ export default function App() {
             // Brief 80ms delay to ensure the OS/browser hardware capture session is fully released.
             await new Promise((resolve) => setTimeout(resolve, 80));
 
-            const constraints = {
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    ...(deviceId ? { deviceId: { ideal: deviceId } } : {})
-                }
-            };
-
-            const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(deviceId));
             const newTrack = newStream.getAudioTracks()[0];
             if (!newTrack) {
                 throw new Error('No audio track returned from microphone');
@@ -2616,16 +2695,15 @@ export default function App() {
             newTrack.enabled = true;
             localStreamRef.current = newStream;
 
-            const appliedSettings = newTrack.getSettings ? newTrack.getSettings() : {};
-            logLocalDebug(
-                'AUDIO_DSP_RECONFIGURED',
-                `AEC: ${appliedSettings.echoCancellation}, NS: ${appliedSettings.noiseSuppression}, AGC: ${appliedSettings.autoGainControl}`
-            );
+            await verifyMicProcessing(newTrack);
+            if (window.__webrtcAudioCtx) {
+                await voiceGate.start(window.__webrtcAudioCtx, newTrack);
+            }
 
             // Reconnect local analyser for speaking indicator & VU meter
             if (window.__webrtcAudioCtx && localAnalyserRef.current) {
                 try {
-                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
+                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(voiceGate.analysisStream || newStream);
                     newSource.connect(localAnalyserRef.current);
                     localSourceNodeRef.current = newSource;
                 } catch (err) {
@@ -2672,7 +2750,7 @@ export default function App() {
         } finally {
             isAudioUpdatingRef.current = false;
         }
-    }, [logLocalDebug, setMicrophoneMuted, showToast]);
+    }, [applyVoiceGate, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
 
     // Push-to-Talk (PTT) Mouse Handlers for button hold
     const handlePttPressStart = useCallback(() => {
@@ -2877,9 +2955,8 @@ export default function App() {
                         sum += buffer[i];
                     }
                     const avg = sum / buffer.length;
-                    if (avg > 12) {
-                        localSpeaking = true;
-                    }
+                    const gateDecides = voiceGate.isDetecting && audioSettingsRef.current?.inputMode !== 'ptt';
+                    localSpeaking = gateDecides ? voiceGate.isOpen : avg > 12;
                     localLevel = Math.min(100, Math.round((avg / 70) * 100));
                 } catch { }
             }
