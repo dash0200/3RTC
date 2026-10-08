@@ -108,6 +108,8 @@ This document tracks planned features, architectural improvements, and quality-o
     - 🎚️ **Automatic Gain Control (`autoGainControl`)**: Automatically normalizes vocal volume across quiet whisperers and loud speakers.
     - Dynamic track constraint updates via `applyConstraints()` and seamless hardware pipeline re-acquisition without WebRTC call renegotiation.
     - Persistent configuration saved across sessions in `localStorage`.
+  - **Voice Activity Gate (Open Mic)**: Discord-style automatic input sensitivity. The mic only transmits while you talk, so leftover fan/air noise isn't sent during silence. It measures the speech band, learns the room noise's peak level from silent stretches, and opens only when speech stays clearly above it (40 ms), so noise can't flutter it open. It runs on the audio thread and only switches the mic track on/off; the sent audio is never processed. [voiceGate.js](client/src/utils/voiceGate.js).
+  - **Voice Isolation Toggle** (Audio Settings → Voice Processing, off by default): uses the browser/OS `voiceIsolation` constraint where available (ChromeOS, Apple). Elsewhere (e.g. Chrome on Windows) it falls back to in-app **RNNoise** neural noise removal ([voiceIsolation.js](client/src/utils/voiceIsolation.js), `@sapphi-red/web-noise-suppressor`, 48 kHz AudioWorklet, runs on-device). The settings modal shows which one is active.
   - **Push-to-Talk (PTT) Mode**:
     - **Dual Input Modes**: Seamlessly switch between **Open Mic / Voice Activation** (toggle mute) and **Push-to-Talk (PTT)** (held transmission).
     - **Customizable PTT Hotkey**: Choose popular presets (`Space`, `Ctrl`, `Alt`, `V`, `T`, `~`) or click "Record Key" to bind any keyboard key.
@@ -296,12 +298,20 @@ This document tracks planned features, architectural improvements, and quality-o
 
 ## 5. 📱 PWA & Platform Polish
 
-### 5.1 Progressive Web App (PWA) Installability
+### 5.1 Progressive Web App (PWA) Installability ✅ `[COMPLETED]`
 - **Description**: Enable 3RTC to run as an installed desktop or mobile app.
 - **Key Capabilities**:
   - Web App Manifest + Service Worker caching for instant loading.
-  - "Install App" prompt in browser bar.
+  - Install prompt in the browser bar (browser-native).
   - Launches in a clean, standalone, borderless native window on Windows, macOS, Android, and iOS.
+- **Implementation Notes**:
+  - **Zero-dependency service worker**: build-time Vite plugin (`pwaServiceWorker` in [vite.config.js](client/vite.config.js)) turns the template [sw.js](client/src/pwa/sw.js) into `dist/sw.js`, with a precache list of every emitted file + `public/` and a content-hash version, so each deploy installs a fresh worker and removes old caches.
+    - App shell (index.html, hashed JS/CSS, icons, soundboard SFX) is cache-first, so launches are instant and the app opens offline, including `?room=` deep links.
+    - Google Fonts use stale-while-revalidate. The signaling WebSocket, YouTube, P2P media and Range requests are never intercepted.
+    - Registered in production builds only; dev (`vite`) is unaffected.
+  - **Manifest**: [manifest.webmanifest](client/public/manifest.webmanifest) with `standalone` display, theme/background colors, and 192/512 `any` + 512 `maskable` PNG icons in [public/icons/](client/public/icons/), rendered from `favicon.svg`. 180px `apple-touch-icon` and iOS web-app meta tags are in [index.html](client/index.html).
+  - **Installing**: uses the browser's own install UI (install icon in the Chrome/Edge address bar, "Add to Home Screen" on Android/iOS). [registerServiceWorker.js](client/src/pwa/registerServiceWorker.js) only registers the worker and deliberately does not intercept `beforeinstallprompt`.
+  - **Hosting**: both `vercel.json` files send `no-cache` for `/sw.js`, `/index.html` and the manifest (served as `application/manifest+json`) so updates are picked up.
 
 ---
 

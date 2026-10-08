@@ -16,6 +16,7 @@ export const MIC_PROCESSING = {
 
 export const DEFAULT_AUDIO_SETTINGS = {
   ...MIC_PROCESSING,
+  voiceIsolation: false, // Browser/OS voice isolation (stronger than noise suppression), user toggle
   inputMode: 'open', // 'open' (Open Mic / Toggle) | 'ptt' (Push-to-Talk)
   pttKey: 'Space',   // KeyboardEvent code or key identifier
   pttKeyLabel: 'Space',
@@ -70,12 +71,31 @@ export function saveAudioSettings(settings) {
 }
 
 /**
- * getUserMedia constraints for voice chat: just the mic, with the browser's standard processing.
+ * Whether this browser understands the `voiceIsolation` constraint at all. Even when it does,
+ * the OS/mic may not provide it; check the track's settings after capture.
  */
-export function buildMicConstraints(deviceId) {
+export function isVoiceIsolationSupported() {
+  try {
+    return navigator.mediaDevices?.getSupportedConstraints?.().voiceIsolation === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Extra constraints on top of MIC_PROCESSING for the user's optional processing toggles. */
+export function getOptionalMicConstraints({ voiceIsolation = false } = {}) {
+  return voiceIsolation && isVoiceIsolationSupported() ? { voiceIsolation: true } : {};
+}
+
+/**
+ * getUserMedia constraints for voice chat: just the mic, with the browser's standard processing
+ * plus voice isolation when the user turned it on.
+ */
+export function buildMicConstraints(deviceId, options = {}) {
   return {
     audio: {
       ...MIC_PROCESSING,
+      ...getOptionalMicConstraints(options),
       ...(deviceId ? { deviceId: { ideal: deviceId } } : {})
     }
   };
@@ -84,10 +104,10 @@ export function buildMicConstraints(deviceId) {
 /**
  * Confirm the browser actually applied MIC_PROCESSING to the mic (constraints are only a
  * request). Re-applies it once if it came back different.
- * Returns { echoCancellation, noiseSuppression, autoGainControl, ok }; a value of
+ * Returns { echoCancellation, noiseSuppression, autoGainControl, voiceIsolation, ok }; a value of
  * undefined means the browser doesn't report it.
  */
-export async function ensureMicProcessing(track) {
+export async function ensureMicProcessing(track, optionalConstraints = {}) {
   const read = () => (track?.getSettings ? track.getSettings() : {});
   const mismatched = (settings) => Object.keys(MIC_PROCESSING)
     .some((key) => settings[key] !== undefined && settings[key] !== MIC_PROCESSING[key]);
@@ -95,7 +115,8 @@ export async function ensureMicProcessing(track) {
 
   if (track && mismatched(settings)) {
     try {
-      await track.applyConstraints({ ...MIC_PROCESSING });
+      // applyConstraints replaces all constraints, so keep the optional ones (voice isolation)
+      await track.applyConstraints({ ...MIC_PROCESSING, ...optionalConstraints });
     } catch {
       // Device/browser refused; report what we have
     }
@@ -106,6 +127,7 @@ export async function ensureMicProcessing(track) {
     echoCancellation: settings.echoCancellation,
     noiseSuppression: settings.noiseSuppression,
     autoGainControl: settings.autoGainControl,
+    voiceIsolation: settings.voiceIsolation,
     ok: !mismatched(settings)
   };
 }

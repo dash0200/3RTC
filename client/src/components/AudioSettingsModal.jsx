@@ -9,7 +9,9 @@ export default function AudioSettingsModal({
   onUpdateAudioSettings,
   localAudioLevel = 0,
   isMicMuted = true,
-  isPttActive = false
+  isPttActive = false,
+  voiceIsolationSupported = false,
+  voiceIsolationStatus = null
 }) {
   const [isRecordingKey, setIsRecordingKey] = useState(false);
   const [isTestPressed, setIsTestPressed] = useState(false);
@@ -86,6 +88,7 @@ export default function AudioSettingsModal({
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
+      voiceIsolation: false,
       inputMode: 'open',
       pttKey: 'Space',
       pttKeyLabel: 'Space',
@@ -102,6 +105,21 @@ export default function AudioSettingsModal({
   };
 
   const isPttMode = audioSettings.inputMode === 'ptt';
+
+  let voiceIsolationNote = null;
+  if (!voiceIsolationSupported) {
+    voiceIsolationNote = { tone: 'muted', text: 'Not supported in this browser.' };
+  } else if (audioSettings.voiceIsolation) {
+    if (voiceIsolationStatus === 'active') {
+      voiceIsolationNote = { tone: 'ok', text: '✓ Active (built into your device)' };
+    } else if (voiceIsolationStatus === 'rnnoise') {
+      voiceIsolationNote = { tone: 'ok', text: '✓ Active (AI noise removal running on this device)' };
+    } else if (voiceIsolationStatus === 'unavailable') {
+      voiceIsolationNote = { tone: 'warn', text: "Couldn't start voice isolation. Standard noise suppression is still on." };
+    } else {
+      voiceIsolationNote = { tone: 'muted', text: 'Takes effect when your microphone is on.' };
+    }
+  }
 
   return (
     <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="audio-settings-title">
@@ -336,6 +354,44 @@ export default function AudioSettingsModal({
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Voice Processing: optional voice isolation (echo cancellation, noise suppression & AGC are always on) */}
+          <div className="settings-section">
+            <div className="section-header-row">
+              <div className="section-title-wrap">
+                <span className="section-tag-badge">PROCESSING</span>
+                <h4 className="settings-section-title">Voice Processing</h4>
+              </div>
+            </div>
+
+            <div className="ptt-setting-block ptt-sound-block">
+              <div className="ptt-sound-left">
+                <div className="ptt-block-title">Voice Isolation</div>
+                <div className="ptt-block-sub">
+                  Filters out everything except your voice: fans, keyboard, people talking nearby. Stronger than standard noise suppression.
+                </div>
+                {voiceIsolationNote && (
+                  <div className={`voice-iso-status ${voiceIsolationNote.tone}`}>{voiceIsolationNote.text}</div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className={`switch-track ${audioSettings.voiceIsolation ? 'checked' : ''}`}
+                onClick={() => handleToggle('voiceIsolation')}
+                role="switch"
+                aria-checked={Boolean(audioSettings.voiceIsolation)}
+                aria-label="Toggle Voice Isolation"
+                disabled={!voiceIsolationSupported}
+              >
+                <span className="switch-thumb" />
+              </button>
+            </div>
+
+            <div className="ptt-block-sub voice-processing-always-on">
+              Always on: Echo cancellation · Noise suppression · Automatic gain control
+            </div>
           </div>
         </div>
 

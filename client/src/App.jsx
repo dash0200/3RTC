@@ -11,7 +11,8 @@ import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
 import { voiceGate } from './utils/voiceGate';
-import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, MIC_PROCESSING } from './utils/audioSettings';
+import { voiceIsolation } from './utils/voiceIsolation';
+import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, getOptionalMicConstraints, isVoiceIsolationSupported, MIC_PROCESSING } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
@@ -183,6 +184,11 @@ export default function App() {
 
     // Feature 2.2: Audio Processing Toggles (Noise Suppression & Echo Cancellation) & Push-to-Talk (PTT)
     const [audioSettings, setAudioSettings] = useState(() => loadAudioSettings());
+    // Voice isolation on the live mic: null (mic not opened yet) | 'off' | 'active' (browser/OS)
+    // | 'rnnoise' (in-app noise removal) | 'unavailable'
+    const [voiceIsolationStatus, setVoiceIsolationStatus] = useState(null);
+    // Whether the current mic stream was opened with voice isolation requested
+    const micIsolationRequestedRef = useRef(false);
     const [showAudioSettingsModal, setShowAudioSettingsModal] = useState(false);
     const [isPttActive, setIsPttActive] = useState(false);
     const audioSettingsRef = useRef(audioSettings);
@@ -786,7 +792,7 @@ export default function App() {
                 logLocalDebug('TRANSCEIVER_INIT', `Role: HOST/OFFERER -> Peer: ${targetPeerId} | Transceiver mid: ${audioTransceiver?.mid || 'pending'} | direction: ${audioTransceiver?.direction}`);
 
                 if (localStreamRef.current) {
-                    const audioTrack = localStreamRef.current.getAudioTracks()[0];
+                    const audioTrack = voiceIsolation.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
                     if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
                         audioTransceiver.sender.replaceTrack(audioTrack).catch(() => { });
                     }
@@ -1351,7 +1357,7 @@ export default function App() {
                             if (isValid && (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio')) {
                                 t.direction = 'sendrecv';
                                 if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
-                                    const audioTrack = localStreamRef.current.getAudioTracks()[0];
+                                    const audioTrack = voiceIsolation.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
                                     if (audioTrack) {
                                         t.sender.replaceTrack(audioTrack).catch(() => { });
                                     }
@@ -1664,6 +1670,7 @@ export default function App() {
                 sendSignal({ type: 'leave' });
             }
             voiceGate.stop();
+            voiceIsolation.detach();
             if (localStreamRef.current) {
                 try {
                     localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -2419,11 +2426,11 @@ export default function App() {
     }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
 
     // Voice Chat: confirm echo cancellation / noise suppression really took effect on a fresh mic track
-    const verifyMicProcessing = useCallback(async (track) => {
-        const status = await ensureMicProcessing(track);
+    const verifyMicProcessing = useCallback(async (track, isolationRequested = false) => {
+        const status = await ensureMicProcessing(track, getOptionalMicConstraints({ voiceIsolation: isolationRequested }));
         // Logged directly (logLocalDebug is a no-op) so the applied mic processing can be checked in DevTools
         console.info(
-            `[3RTC] AUDIO_DSP_APPLIED AEC: ${status.echoCancellation}, NS: ${status.noiseSuppression}, AGC: ${status.autoGainControl} | Mic: "${track?.label}"`
+            `[3RTC] AUDIO_DSP_APPLIED AEC: ${status.echoCancellation}, NS: ${status.noiseSuppression}, AGC: ${status.autoGainControl}, Voice isolation: ${status.voiceIsolation} | Mic: "${track?.label}"`
         );
         if (!status.ok) {
             const missing = [
@@ -2442,6 +2449,23 @@ export default function App() {
         if (!track || track !== voiceGate.track) return;
         const gateClosed = audioSettingsRef.current?.inputMode !== 'ptt' && !voiceGate.isOpen;
         track.enabled = !isMicMutedRef.current && !gateClosed;
+    }, []);
+
+    // Voice Chat: track to send to peers. With Voice Isolation on and no native (browser/OS) support,
+    // the mic is cleaned by in-app RNNoise noise removal; otherwise the mic track is sent untouched.
+    const getSendTrack = useCallback(async (stream) => {
+        const rawTrack = stream?.getAudioTracks()[0] || null;
+        const wantIsolation = micIsolationRequestedRef.current;
+        const nativeIsolation = rawTrack?.getSettings?.().voiceIsolation === true;
+        if (!rawTrack || !wantIsolation || nativeIsolation) {
+            voiceIsolation.detach();
+            setVoiceIsolationStatus(!wantIsolation ? 'off' : nativeIsolation ? 'active' : 'unavailable');
+            return rawTrack;
+        }
+        const cleanedTrack = await voiceIsolation.attach(stream);
+        setVoiceIsolationStatus(cleanedTrack ? 'rnnoise' : 'unavailable');
+        console.info(`[3RTC] VOICE_ISOLATION ${cleanedTrack ? 'in-app RNNoise active' : 'could not start, sending mic as-is'}`);
+        return cleanedTrack || rawTrack;
     }, []);
 
     useEffect(() => {
@@ -2480,10 +2504,12 @@ export default function App() {
                     currentTrack.readyState === 'live' &&
                     Boolean(currentSettings.echoCancellation) === MIC_PROCESSING.echoCancellation &&
                     Boolean(currentSettings.noiseSuppression) === MIC_PROCESSING.noiseSuppression &&
-                    Boolean(currentSettings.autoGainControl) === MIC_PROCESSING.autoGainControl;
+                    Boolean(currentSettings.autoGainControl) === MIC_PROCESSING.autoGainControl &&
+                    micIsolationRequestedRef.current === Boolean(audioSettingsRef.current?.voiceIsolation);
 
                 if (!settingsMatch) {
                     voiceGate.stop();
+                    voiceIsolation.detach();
                     if (stream) {
                         try { stream.getTracks().forEach((t) => t.stop()); } catch { }
                     }
@@ -2493,9 +2519,11 @@ export default function App() {
                     }
                     await new Promise((r) => setTimeout(r, 60));
 
-                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(currentSettings?.deviceId));
+                    const wantIsolation = Boolean(audioSettingsRef.current?.voiceIsolation);
+                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(currentSettings?.deviceId, { voiceIsolation: wantIsolation }));
                     localStreamRef.current = stream;
-                    await verifyMicProcessing(stream.getAudioTracks()[0]);
+                    micIsolationRequestedRef.current = wantIsolation;
+                    await verifyMicProcessing(stream.getAudioTracks()[0], wantIsolation);
                 }
 
                 // Connect local microphone to Web Audio AnalyserNode for Speaking Rings & VU meter
@@ -2533,6 +2561,7 @@ export default function App() {
                 const audioTrack = stream.getAudioTracks()[0];
                 if (audioTrack) {
                     audioTrack.enabled = true;
+                    const sendTrack = await getSendTrack(stream);
                     logLocalDebug('MIC_UNMUTE', `User "${username}" unmuting mic. Track: "${audioTrack.label}", ID: ${audioTrack.id}, state: ${audioTrack.readyState}`);
 
                     for (const [peerId, peer] of peersRef.current.entries()) {
@@ -2545,7 +2574,7 @@ export default function App() {
                                 const isValid = t.mid !== null || transceivers.length === 1;
                                 if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
                                     t.direction = 'sendrecv';
-                                    t.sender.replaceTrack(audioTrack)
+                                    t.sender.replaceTrack(sendTrack)
                                         .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced on transceiver mid: ${t.mid}!`))
                                         .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`));
                                     replaced = true;
@@ -2556,7 +2585,7 @@ export default function App() {
                                 const senders = peer.pc.getSenders();
                                 for (const s of senders) {
                                     if (!s.track || s.track.kind === 'audio') {
-                                        s.replaceTrack(audioTrack)
+                                        s.replaceTrack(sendTrack)
                                             .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} track replaced on sender`))
                                             .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`));
                                     }
@@ -2613,7 +2642,7 @@ export default function App() {
                 }
             }
         }
-    }, [addSystemMessage, applyVoiceGate, logLocalDebug, showToast, username, verifyMicProcessing]);
+    }, [addSystemMessage, applyVoiceGate, getSendTrack, logLocalDebug, showToast, username, verifyMicProcessing]);
 
     // Voice Chat: Toggle Microphone Mute/Unmute
     const toggleMicrophone = useCallback(() => {
@@ -2659,6 +2688,7 @@ export default function App() {
             // In Chromium / WASAPI, calling getUserMedia while an old track is live reuses the
             // existing capture session and corrupts the native WebRTC Audio Processing Module (AEC3).
             voiceGate.stop();
+            voiceIsolation.detach();
             if (currentStream) {
                 try {
                     currentStream.getTracks().forEach((t) => t.stop());
@@ -2687,15 +2717,17 @@ export default function App() {
             // Brief 80ms delay to ensure the OS/browser hardware capture session is fully released.
             await new Promise((resolve) => setTimeout(resolve, 80));
 
-            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(deviceId));
+            const wantIsolation = Boolean(enforcedSettings.voiceIsolation);
+            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(deviceId, { voiceIsolation: wantIsolation }));
             const newTrack = newStream.getAudioTracks()[0];
             if (!newTrack) {
                 throw new Error('No audio track returned from microphone');
             }
             newTrack.enabled = true;
             localStreamRef.current = newStream;
+            micIsolationRequestedRef.current = wantIsolation;
 
-            await verifyMicProcessing(newTrack);
+            await verifyMicProcessing(newTrack, wantIsolation);
             if (window.__webrtcAudioCtx) {
                 await voiceGate.start(window.__webrtcAudioCtx, newTrack);
             }
@@ -2711,6 +2743,8 @@ export default function App() {
                 }
             }
 
+            const sendTrack = await getSendTrack(newStream);
+
             // Replace audio track cleanly in each peer connection
             const replacePromises = [];
             for (const [peerId, peer] of peersRef.current.entries()) {
@@ -2722,7 +2756,7 @@ export default function App() {
                         if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
                             t.direction = 'sendrecv';
                             replacePromises.push(
-                                t.sender.replaceTrack(newTrack)
+                                t.sender.replaceTrack(sendTrack)
                                     .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced`))
                                     .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`))
                             );
@@ -2734,7 +2768,7 @@ export default function App() {
                         for (const s of senders) {
                             if (!s.track || s.track.kind === 'audio') {
                                 replacePromises.push(
-                                    s.replaceTrack(newTrack)
+                                    s.replaceTrack(sendTrack)
                                         .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} sender track replaced`))
                                         .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`))
                                 );
@@ -2750,7 +2784,7 @@ export default function App() {
         } finally {
             isAudioUpdatingRef.current = false;
         }
-    }, [applyVoiceGate, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
+    }, [applyVoiceGate, getSendTrack, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
 
     // Push-to-Talk (PTT) Mouse Handlers for button hold
     const handlePttPressStart = useCallback(() => {
@@ -3317,6 +3351,8 @@ export default function App() {
                 localAudioLevel={localAudioActivity.level}
                 isMicMuted={isMicMuted}
                 isPttActive={isPttActive}
+                voiceIsolationSupported={isVoiceIsolationSupported() || voiceIsolation.isSupported}
+                voiceIsolationStatus={voiceIsolationStatus}
             />
 
             {/* Feature 4.1: Real-Time P2P Network HUD Modal */}
