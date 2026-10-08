@@ -7831,6 +7831,34 @@ video::cue {
   color: #38bdf8;
 }
 
+/* Voice Processing (voice isolation toggle) */
+.voice-iso-status {
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.voice-iso-status.ok {
+  color: #4ade80;
+}
+
+.voice-iso-status.warn {
+  color: #fbbf24;
+}
+
+.voice-iso-status.muted {
+  color: #64748b;
+}
+
+.voice-processing-always-on {
+  margin-top: 8px;
+}
+
+.switch-track:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* PTT Sound Block */
 .ptt-sound-block {
   flex-direction: row;
