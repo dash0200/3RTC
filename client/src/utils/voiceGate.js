@@ -100,6 +100,14 @@ class VoiceGateProcessor extends AudioWorkletProcessor {
     };
   }
 
+  effectiveNoiseDb() {
+    return this.noiseDb === null ? MIN_OPEN_DB - OPEN_ABOVE_NOISE_DB : this.noiseDb;
+  }
+
+  openThreshold() {
+    return Math.max(this.effectiveNoiseDb() + OPEN_ABOVE_NOISE_DB, MIN_OPEN_DB);
+  }
+
   detect(channel) {
     const frames = channel.length;
     const dt = frames / sampleRate;
@@ -132,21 +140,23 @@ class VoiceGateProcessor extends AudioWorkletProcessor {
       }
       this.wasLearning = learning;
 
-      if (learning || !this.isOpen) {
+      // While closed, learn only sounds below the open threshold: anything louder may be the
+      // start of speech and must never be taken for room noise
+      if (learning || (!this.isOpen && levelDb <= this.openThreshold())) {
         this.noiseFrames.push(levelDb);
         if (this.noiseFrames.length > NOISE_WINDOW_SEC / FRAME_SEC) this.noiseFrames.shift();
         this.noiseDb = percentile(this.noiseFrames, NOISE_PERCENTILE);
       } else if (this.recentFrames.length >= RELEARN_WINDOW_SEC / FRAME_SEC) {
         let recentMin = Infinity;
         for (const v of this.recentFrames) if (v < recentMin) recentMin = v;
-        if (recentMin > this.noiseDb + CLOSE_ABOVE_NOISE_DB) {
+        if (recentMin > this.effectiveNoiseDb() + CLOSE_ABOVE_NOISE_DB) {
           this.noiseFrames = this.recentFrames.slice(-NOISE_WINDOW_SEC / FRAME_SEC);
           this.noiseDb = percentile(this.noiseFrames, NOISE_PERCENTILE);
         }
       }
     }
-    if (this.noiseDb === null && !isDigitalSilence) this.noiseDb = levelDb;
-    const noiseDb = this.noiseDb === null ? MIN_OPEN_DB : this.noiseDb;
+    // Noise level not measured yet (mic gave pure digital silence so far): treat the room as quiet
+    const noiseDb = this.effectiveNoiseDb();
 
     const openDb = Math.max(noiseDb + OPEN_ABOVE_NOISE_DB, MIN_OPEN_DB);
     const closeDb = Math.max(noiseDb + CLOSE_ABOVE_NOISE_DB, MIN_OPEN_DB - 6);
