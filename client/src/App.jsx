@@ -9,7 +9,7 @@ import AudioSettingsModal from './components/AudioSettingsModal';
 import { fetchYouTubeTitle } from './components/YouTubeSyncPlayer';
 import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
-import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
+import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver, detectOnDemandStreaming } from './utils/p2pStreamer';
 import { voiceGate } from './utils/voiceGate';
 import { micPipeline } from './utils/micPipeline';
 import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, getOptionalMicConstraints, isVoiceIsolationSupported, MIC_PROCESSING } from './utils/audioSettings';
@@ -148,6 +148,8 @@ export default function App() {
     const [streamVideoUrl, setStreamVideoUrl] = useState(null);
     const streamReceiverRef = useRef(null);
     const getOrCreatePeerConnectionRef = useRef(null);
+    // Host: stream number of the file currently offered for on-demand streaming
+    const hostStreamRef = useRef({ file: null, streamNo: 0 });
     const activeStreamSendersRef = useRef(new Map());
     const localVideoFileRef = useRef(null);
     localVideoFileRef.current = localVideoFile;
@@ -1247,7 +1249,23 @@ export default function App() {
                         const streamChannel = peerEntry.bulkChannel?.readyState === 'open'
                             ? peerEntry.bulkChannel
                             : peerEntry.dataChannel;
-                        if (localVideoFileRef.current && streamChannel) {
+                        if (localVideoFileRef.current && streamChannel && data.supportsRange) {
+                            // On-demand: serve only the parts the peer's player asks for
+                            const file = localVideoFileRef.current;
+                            if (hostStreamRef.current.file !== file) {
+                                hostStreamRef.current = { file, streamNo: (Math.random() * 0xffffffff) >>> 0 };
+                            }
+                            activeStreamSendersRef.current.get(targetPeerId)?.abort();
+                            const sender = new P2PRangeSender(file, streamChannel, {
+                                streamNo: hostStreamRef.current.streamNo,
+                                senderName: username,
+                                onError: (err) => addSystemMessage(`❌ Stream error: ${err.message}`)
+                            });
+                            activeStreamSendersRef.current.set(targetPeerId, sender);
+                            sender.start();
+                            addSystemMessage(`📡 Streaming "${file.name}" on demand to ${data.requester || 'peer'}.`);
+                            showToast(`Streaming video to ${data.requester || 'peer'}...`);
+                        } else if (localVideoFileRef.current && streamChannel) {
                             addSystemMessage(`📡 Peer "${data.requester || 'User'}" requested video stream. Slicing and streaming chunks...`);
                             showToast(`Streaming video to ${data.requester || 'peer'}...`);
 
@@ -1266,6 +1284,63 @@ export default function App() {
                             activeStreamSendersRef.current.set(targetPeerId, sender);
                             sender.start();
                         }
+                    } else if (data.type === 'p2p-range-request' || data.type === 'p2p-range-cancel') {
+                        let sender = activeStreamSendersRef.current.get(targetPeerId);
+                        const file = localVideoFileRef.current;
+                        const hostStream = hostStreamRef.current;
+                        if ((!sender || sender.isAborted || sender.streamNo !== data.streamNo) &&
+                            data.type === 'p2p-range-request' && file && hostStream.file === file &&
+                            hostStream.streamNo === data.streamNo) {
+                            // Connection was rebuilt mid-stream: keep serving on the new channel
+                            const channel = peerEntry.bulkChannel?.readyState === 'open' ? peerEntry.bulkChannel : peerEntry.dataChannel;
+                            if (channel) {
+                                sender = new P2PRangeSender(file, channel, { streamNo: hostStream.streamNo, senderName: username });
+                                activeStreamSendersRef.current.set(targetPeerId, sender);
+                            }
+                        }
+                        if (sender && sender.handleRequest && sender.streamNo === data.streamNo) {
+                            if (data.type === 'p2p-range-request') sender.handleRequest(data);
+                            else sender.handleCancel(data);
+                        }
+                    } else if (data.type === 'p2p-stream-header' && data.mode === 'range') {
+                        // On-demand stream: the player starts right away and fetches what it needs
+                        if (streamReceiverRef.current) {
+                            streamReceiverRef.current.abort();
+                        }
+                        const receiver = new P2PRangeReceiver(data, {
+                            sendControl: (controlMsg) => {
+                                const host = peersRef.current.get(targetPeerId);
+                                const channel = host?.bulkChannel?.readyState === 'open' ? host.bulkChannel : host?.dataChannel;
+                                if (channel?.readyState === 'open') {
+                                    try { channel.send(JSON.stringify(controlMsg)); } catch { }
+                                }
+                            },
+                            onProgress: (prog) => {
+                                if (streamReceiverRef.current !== receiver) return;
+                                setStreamProgress((prev) => ({ ...(prev || {}), ...prog }));
+                            },
+                            // Where playback is, so the player is only fed ~10 s ahead
+                            getPlaybackInfo: () => {
+                                const video = [...document.querySelectorAll('video')]
+                                    .find((v) => (v.currentSrc || '').includes(receiver.url));
+                                if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return null;
+                                const bytesPerSec = receiver.fileSize / video.duration;
+                                return { byte: video.currentTime * bytesPerSec, bytesPerSec };
+                            }
+                        });
+                        streamReceiverRef.current = receiver;
+                        setStreamProgress({
+                            percent: 0,
+                            speedMBs: 0,
+                            receivedBytes: 0,
+                            totalBytes: data.fileSize,
+                            receivedChunksCount: 0,
+                            totalChunks: receiver.totalBlocks,
+                            fileName: data.fileName,
+                            isReady: true
+                        });
+                        setStreamVideoUrl(receiver.url);
+                        addSystemMessage(`📡 Streaming "${data.fileName}" from ${data.sender || 'peer'} (plays while it loads).`);
                     } else if (data.type === 'p2p-stream-header') {
                         // Incoming P2P video stream header
                         addSystemMessage(`📡 Receiving video stream from ${data.sender || 'Peer'}: "${data.fileName}" (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB)`);
@@ -1883,6 +1958,25 @@ export default function App() {
             }
         };
     }, [signalUrl, showToast, addSystemMessage]);
+    // On-demand P2P stream: the service worker forwards each byte range the video player asks for
+    useEffect(() => {
+        const sw = navigator.serviceWorker;
+        if (!sw) return undefined;
+        const handleWorkerMessage = (event) => {
+            const msg = event.data || {};
+            if (msg.type !== 'p2p-range-open' || !event.ports[0]) return;
+            const port = event.ports[0];
+            const receiver = streamReceiverRef.current;
+            if (receiver && typeof receiver.serve === 'function' && String(receiver.streamNo) === String(msg.streamNo)) {
+                receiver.serve(port, msg.start, msg.end);
+            } else {
+                port.postMessage({ type: 'meta', ok: false });
+            }
+        };
+        sw.addEventListener('message', handleWorkerMessage);
+        return () => sw.removeEventListener('message', handleWorkerMessage);
+    }, []);
+
     // Ensure AudioContext is resumed on any user interaction anywhere on the window
     useEffect(() => {
         const resumeAudioCtx = () => {
@@ -2634,12 +2728,14 @@ export default function App() {
         addSystemMessage(`📁 You exited the local video`);
     }, [streamVideoUrl, addSystemMessage]);
 
-    const handleRequestP2PStream = useCallback(() => {
+    const handleRequestP2PStream = useCallback(async () => {
         if (!remoteLocalVideoMeta) return;
         const reqMsg = {
             type: 'p2p-stream-request',
             requester: username,
             fileName: remoteLocalVideoMeta.fileName,
+            // On-demand streaming needs this page's service worker; otherwise the host sends the whole file
+            supportsRange: await detectOnDemandStreaming(),
             timestamp: Date.now()
         };
         for (const peer of peersRef.current.values()) {
