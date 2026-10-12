@@ -1,19 +1,23 @@
 /**
- * Discord-style "Voice Activity" gate with automatic input sensitivity.
+ * Discord-style "Voice Activity" gate with automatic input sensitivity, without clipping speech.
  *
- * The audio sent to peers is never processed: the gate listens to a clone of the mic track
- * and only switches the real track on (talking) or off (silence), so background air/fan
- * noise isn't transmitted between words.
+ * The gate runs IN the audio path (an AudioWorklet node on the send pipeline, see micPipeline.js):
  *
- * Detection runs in an AudioWorklet (audio thread), so it keeps reacting instantly even when
- * the tab is in the background, where main-thread timers get throttled.
+ *   mic -> [RNNoise] -> voice gate (lookahead delay + smooth gain) -> track sent to peers
  *
- * It measures the speech band only, learns the room noise's peak (90th percentile) level from
- * silent stretches, and needs speech to stay clearly above that for 40 ms before opening, so
+ * Why in-path instead of toggling `track.enabled` from the page:
+ * - Lookahead: the audio is delayed by LOOKAHEAD_SEC while the detector listens ahead, so by the
+ *   time speech has been confirmed the first syllable hasn't been sent yet and goes out intact.
+ * - Smooth gain ramps instead of hard on/off switching: no clicks, no "pumping" background.
+ * - Decisions take effect on the audio thread, so a busy page (video playback, React renders)
+ *   can't delay the gate opening.
+ *
+ * Detection measures the speech band only, learns the room noise's peak (90th percentile) level
+ * from silent stretches, and needs speech to stay clearly above that before opening, so
  * fluctuating fan/air noise left over after noise suppression can't flutter the mic open.
  */
 
-const VAD_WORKLET_SOURCE = `
+const VOICE_GATE_WORKLET_SOURCE = `
 // Levels are measured in the speech band only (fan hum / rumble below, hiss above count less)
 const BAND_LOW_HZ = 200;
 const BAND_HIGH_HZ = 4000;
@@ -22,10 +26,16 @@ const LEVEL_SMOOTH_SEC = 0.025;    // power averaging so momentary noise blips d
 // Gate decisions, relative to the room noise's PEAK level (90th percentile), so ordinary
 // noise swings and bursts stay below the threshold and only real speech opens the gate
 const OPEN_ABOVE_NOISE_DB = 8;     // speech must be this far above the noise peaks...
-const OPEN_SUSTAIN_SEC = 0.04;     // ...for this long (rejects short noise bursts)
-const CLOSE_ABOVE_NOISE_DB = 3;   // below this counts as silence again
+const OPEN_SUSTAIN_SEC = 0.03;     // ...for this long (rejects short noise bursts)
+const CLOSE_ABOVE_NOISE_DB = 3;    // below this counts as silence again
 const HOLD_SEC = 0.5;              // keep open after speech so word endings aren't cut
 const MIN_OPEN_DB = -60;           // never open for anything quieter than this (dBFS)
+const DIGITAL_SILENCE_DB = -100;   // muted mic (track disabled): not room noise, don't learn it
+
+// Output shaping
+const LOOKAHEAD_SEC = 0.04;        // > sustain + detection time, so speech onsets are never cut
+const ATTACK_SEC = 0.003;          // fade-in once open (fast, but click-free)
+const RELEASE_SEC = 0.06;          // fade-out after the hold expires
 
 // Noise learning (only from silence)
 const NOISE_PERCENTILE = 0.9;
@@ -60,7 +70,7 @@ function runBiquad(f, x) {
   return y;
 }
 
-class VoiceActivityProcessor extends AudioWorkletProcessor {
+class VoiceGateProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.highpass = biquad('highpass', BAND_LOW_HZ);
@@ -77,12 +87,20 @@ class VoiceActivityProcessor extends AudioWorkletProcessor {
     this.sustainTotal = Math.round(OPEN_SUSTAIN_SEC * sampleRate);
     this.recentFrames = [];
     this.wasLearning = true;
+
+    this.delay = new Float32Array(Math.max(1, Math.round(LOOKAHEAD_SEC * sampleRate)));
+    this.delayIndex = 0;
+    this.gain = 1;
+    this.attackCoef = 1 - Math.exp(-1 / (ATTACK_SEC * sampleRate));
+    this.releaseCoef = 1 - Math.exp(-1 / (RELEASE_SEC * sampleRate));
+    this.bypass = false;
+
+    this.port.onmessage = (event) => {
+      if (event.data && typeof event.data.bypass === 'boolean') this.bypass = event.data.bypass;
+    };
   }
 
-  process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (!channel) return true;
-
+  detect(channel) {
     const frames = channel.length;
     const dt = frames / sampleRate;
     let sum = 0;
@@ -97,15 +115,16 @@ class VoiceActivityProcessor extends AudioWorkletProcessor {
     const levelDb = toDb(this.power);
     this.elapsed += dt;
     const learning = this.elapsed < LEARN_SEC;
+    const isDigitalSilence = levelDb < DIGITAL_SILENCE_DB;
 
     // Learn the noise level from silent stretches (and the startup learning window)
     this.frameElapsed += dt;
-    if (this.frameElapsed >= FRAME_SEC) {
+    if (this.frameElapsed >= FRAME_SEC && !isDigitalSilence) {
       this.frameElapsed = 0;
       this.recentFrames.push(levelDb);
       if (this.recentFrames.length > RELEARN_WINDOW_SEC / FRAME_SEC) this.recentFrames.shift();
 
-      if (this.wasLearning && !learning) {
+      if (this.wasLearning && !learning && this.noiseFrames.length) {
         // Drop startup frames that were the user talking, keep the room noise
         const quiet = percentile(this.noiseFrames, 0.2);
         this.noiseFrames = this.noiseFrames.filter((v) => v <= quiet + LEARN_SPEECH_REJECT_DB);
@@ -126,10 +145,11 @@ class VoiceActivityProcessor extends AudioWorkletProcessor {
         }
       }
     }
-    if (this.noiseDb === null) this.noiseDb = levelDb;
+    if (this.noiseDb === null && !isDigitalSilence) this.noiseDb = levelDb;
+    const noiseDb = this.noiseDb === null ? MIN_OPEN_DB : this.noiseDb;
 
-    const openDb = Math.max(this.noiseDb + OPEN_ABOVE_NOISE_DB, MIN_OPEN_DB);
-    const closeDb = Math.max(this.noiseDb + CLOSE_ABOVE_NOISE_DB, MIN_OPEN_DB - 6);
+    const openDb = Math.max(noiseDb + OPEN_ABOVE_NOISE_DB, MIN_OPEN_DB);
+    const closeDb = Math.max(noiseDb + CLOSE_ABOVE_NOISE_DB, MIN_OPEN_DB - 6);
     const wasOpen = this.isOpen;
 
     if (levelDb > openDb) {
@@ -153,20 +173,48 @@ class VoiceActivityProcessor extends AudioWorkletProcessor {
     }
 
     if (this.isOpen !== wasOpen) {
-      this.port.postMessage({ open: this.isOpen, levelDb, noiseDb: this.noiseDb });
+      this.port.postMessage({ open: this.isOpen, levelDb, noiseDb });
     }
+  }
+
+  process(inputs, outputs) {
+    const input = inputs[0] && inputs[0][0];
+    const output = outputs[0] && outputs[0][0];
+    if (!output) return true;
+    if (!input) {
+      output.fill(0);
+      return true;
+    }
+
+    this.detect(input);
+
+    const target = this.bypass || this.isOpen ? 1 : 0;
+    const coef = target > this.gain ? this.attackCoef : this.releaseCoef;
+    const delay = this.delay;
+    const size = delay.length;
+    let index = this.delayIndex;
+    let gain = this.gain;
+    for (let i = 0; i < input.length; i++) {
+      const delayed = delay[index];
+      delay[index] = input[i];
+      index = index + 1 === size ? 0 : index + 1;
+      gain += (target - gain) * coef;
+      output[i] = delayed * gain;
+    }
+    this.delayIndex = index;
+    this.gain = gain;
     return true;
   }
 }
 
-registerProcessor('voice-activity', VoiceActivityProcessor);
+registerProcessor('voice-gate', VoiceGateProcessor);
 `;
 
 const loadedContexts = new WeakMap();
 
 function loadWorklet(ctx) {
   if (!loadedContexts.has(ctx)) {
-    const url = URL.createObjectURL(new Blob([VAD_WORKLET_SOURCE], { type: 'application/javascript' }));
+    const url = URL.createObjectURL(new Blob([VOICE_GATE_WORKLET_SOURCE], { type: 'application/javascript' }));
     const promise = ctx.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
     promise.catch(() => loadedContexts.delete(ctx));
     loadedContexts.set(ctx, promise);
@@ -176,61 +224,67 @@ function loadWorklet(ctx) {
 
 class VoiceGate {
   constructor() {
-    this.track = null;           // the real mic track being gated
-    this.analysisStream = null;  // clone of the mic, always enabled (use for meters)
-    this.isOpen = true;
+    this.isOpen = true;     // speech detected (also drives the local speaking indicator)
     this.onChange = null;
+    this.bypass = false;    // push-to-talk: pass everything through, PTT decides when you talk
     this.ctx = null;
-    this.clone = null;
-    this.source = null;
     this.node = null;
-    this.sink = null;
     this.handleStateChange = null;
   }
 
-  /** True when the worklet is actually running and making open/close decisions. */
+  /** True when the gate node is actually running and making open/close decisions. */
   get isDetecting() {
     return Boolean(this.node && this.ctx && this.ctx.state === 'running');
   }
 
-  async start(ctx, track) {
-    this.stop();
-    if (!track) return;
-    this.track = track;
-    this.clone = track.clone();
-    this.clone.enabled = true;
-    this.analysisStream = new MediaStream([this.clone]);
-
-    if (!ctx || !ctx.audioWorklet || typeof AudioWorkletNode === 'undefined') return;
+  /**
+   * Create the in-path gate node on `ctx` (mono in, mono out). Returns the node, or null if this
+   * browser can't run it (caller then sends audio ungated).
+   */
+  async attach(ctx) {
+    this.detach();
+    if (!ctx || !ctx.audioWorklet || typeof AudioWorkletNode === 'undefined') return null;
     try {
       await loadWorklet(ctx);
-      if (this.track !== track) return; // stopped or restarted while loading
-
-      this.ctx = ctx;
-      this.source = ctx.createMediaStreamSource(this.analysisStream);
-      this.node = new AudioWorkletNode(ctx, 'voice-activity', { numberOfInputs: 1, numberOfOutputs: 1 });
-      // Silent sink so the browser keeps pulling audio through the detector
-      this.sink = ctx.createGain();
-      this.sink.gain.value = 0;
-      this.source.connect(this.node);
-      this.node.connect(this.sink);
-      this.sink.connect(ctx.destination);
-
-      this.node.port.onmessage = (event) => {
-        if (this.track !== track) return;
+      const node = new AudioWorkletNode(ctx, 'voice-gate', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        channelCount: 1,
+        channelCountMode: 'explicit'
+      });
+      node.port.onmessage = (event) => {
+        if (this.node !== node) return;
         const { open, levelDb, noiseDb } = event.data || {};
         // Verbose level in DevTools: shows why the gate opened/closed when tuning
         console.debug(`[3RTC] voice gate ${open ? 'OPEN ' : 'closed'} level ${levelDb?.toFixed(1)} dB, room noise ${noiseDb?.toFixed(1)} dB`);
         this.setOpen(Boolean(open));
       };
-      // If audio processing stops (context suspended), never leave the mic stuck closed
+      node.port.postMessage({ bypass: this.bypass });
+
+      // If audio processing stops (context suspended), try to get it going again and never
+      // leave the speaking indicator stuck closed
       this.handleStateChange = () => {
+        if (ctx.state === 'suspended') ctx.resume().catch(() => { });
         if (ctx.state !== 'running') this.setOpen(true);
       };
       ctx.addEventListener('statechange', this.handleStateChange);
+
+      this.ctx = ctx;
+      this.node = node;
+      this.setOpen(true); // starts open while it learns the room
+      return node;
     } catch {
-      this.teardownNodes();
-      this.setOpen(true);
+      this.detach();
+      return null;
+    }
+  }
+
+  /** Push-to-talk mode passes all audio through; open mic mode gates it. */
+  setBypass(bypass) {
+    this.bypass = Boolean(bypass);
+    if (this.node) {
+      try { this.node.port.postMessage({ bypass: this.bypass }); } catch { }
     }
   }
 
@@ -240,36 +294,17 @@ class VoiceGate {
     if (this.onChange) this.onChange(open);
   }
 
-  teardownNodes() {
+  detach() {
     if (this.node) {
       this.node.port.onmessage = null;
       try { this.node.disconnect(); } catch { }
-    }
-    if (this.source) {
-      try { this.source.disconnect(); } catch { }
-    }
-    if (this.sink) {
-      try { this.sink.disconnect(); } catch { }
     }
     if (this.ctx && this.handleStateChange) {
       this.ctx.removeEventListener('statechange', this.handleStateChange);
     }
     this.node = null;
-    this.source = null;
-    this.sink = null;
     this.ctx = null;
     this.handleStateChange = null;
-  }
-
-  /** Stop detecting and release the cloned mic track (call whenever the real mic is stopped). */
-  stop() {
-    this.teardownNodes();
-    if (this.clone) {
-      try { this.clone.stop(); } catch { }
-    }
-    this.clone = null;
-    this.analysisStream = null;
-    this.track = null;
     this.isOpen = true;
   }
 }

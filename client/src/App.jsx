@@ -11,7 +11,7 @@ import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
 import { voiceGate } from './utils/voiceGate';
-import { voiceIsolation } from './utils/voiceIsolation';
+import { micPipeline } from './utils/micPipeline';
 import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, getOptionalMicConstraints, isVoiceIsolationSupported, MIC_PROCESSING } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
@@ -80,15 +80,27 @@ function tuneSdpForDiscordAudio(sdp) {
     }
 }
 
+/**
+ * Sender settings for the voice track: 128 kbps ceiling and HIGH priority, so voice keeps its
+ * bandwidth (and gets DSCP "expedited" marking) when it competes with P2P video/file transfer.
+ * Finds the audio sender through its transceiver, so it works even before the mic is attached;
+ * the settings persist across replaceTrack.
+ */
 function tuneAudioSender(pc) {
-    if (!pc || !pc.getSenders) return;
+    if (!pc) return;
     try {
-        const senders = pc.getSenders();
-        const audioSender = senders.find((s) => s.track && s.track.kind === 'audio');
+        const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+        const audioTransceiver = transceivers.find((t) =>
+            t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio'
+        );
+        const audioSender = audioTransceiver?.sender ||
+            (pc.getSenders ? pc.getSenders().find((s) => s.track && s.track.kind === 'audio') : null);
         if (audioSender && audioSender.getParameters && audioSender.setParameters) {
             const params = audioSender.getParameters();
             if (params && params.encodings && params.encodings.length > 0) {
                 params.encodings[0].maxBitrate = 128000;
+                params.encodings[0].priority = 'high';
+                params.encodings[0].networkPriority = 'high';
                 audioSender.setParameters(params).catch(() => { });
             }
         }
@@ -792,7 +804,7 @@ export default function App() {
                 logLocalDebug('TRANSCEIVER_INIT', `Role: HOST/OFFERER -> Peer: ${targetPeerId} | Transceiver mid: ${audioTransceiver?.mid || 'pending'} | direction: ${audioTransceiver?.direction}`);
 
                 if (localStreamRef.current) {
-                    const audioTrack = voiceIsolation.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
+                    const audioTrack = micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
                     if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
                         audioTransceiver.sender.replaceTrack(audioTrack).catch(() => { });
                     }
@@ -1357,7 +1369,7 @@ export default function App() {
                             if (isValid && (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio')) {
                                 t.direction = 'sendrecv';
                                 if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
-                                    const audioTrack = voiceIsolation.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
+                                    const audioTrack = micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
                                     if (audioTrack) {
                                         t.sender.replaceTrack(audioTrack).catch(() => { });
                                     }
@@ -1669,8 +1681,7 @@ export default function App() {
             if (roomId) {
                 sendSignal({ type: 'leave' });
             }
-            voiceGate.stop();
-            voiceIsolation.detach();
+            micPipeline.teardown();
             if (localStreamRef.current) {
                 try {
                     localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -2444,36 +2455,36 @@ export default function App() {
 
     // Voice Chat: Voice Activity gate. In open-mic mode the mic only transmits while you're talking
     // (like Discord's automatic input sensitivity), so room/air noise isn't sent during silence.
+    // The gate runs inside the send pipeline (lookahead, smooth fades, see voiceGate.js); the mic
+    // track itself only follows mute. Push-to-talk bypasses the gate.
     const applyVoiceGate = useCallback(() => {
         const track = localStreamRef.current?.getAudioTracks()[0];
-        if (!track || track !== voiceGate.track) return;
-        const gateClosed = audioSettingsRef.current?.inputMode !== 'ptt' && !voiceGate.isOpen;
-        track.enabled = !isMicMutedRef.current && !gateClosed;
+        if (track) track.enabled = !isMicMutedRef.current;
+        voiceGate.setBypass(audioSettingsRef.current?.inputMode === 'ptt');
     }, []);
 
-    // Voice Chat: track to send to peers. With Voice Isolation on and no native (browser/OS) support,
-    // the mic is cleaned by in-app RNNoise noise removal; otherwise the mic track is sent untouched.
+    // Voice Chat: track to send to peers, from the send pipeline (micPipeline.js): voice gate, plus
+    // in-app RNNoise noise removal when Voice Isolation is on and the browser/OS has no native one.
     const getSendTrack = useCallback(async (stream) => {
         const rawTrack = stream?.getAudioTracks()[0] || null;
-        const wantIsolation = micIsolationRequestedRef.current;
-        const nativeIsolation = rawTrack?.getSettings?.().voiceIsolation === true;
-        if (!rawTrack || !wantIsolation || nativeIsolation) {
-            voiceIsolation.detach();
-            setVoiceIsolationStatus(!wantIsolation ? 'off' : nativeIsolation ? 'active' : 'unavailable');
-            return rawTrack;
+        if (!rawTrack) {
+            micPipeline.teardown();
+            return null;
         }
-        const cleanedTrack = await voiceIsolation.attach(stream);
-        setVoiceIsolationStatus(cleanedTrack ? 'rnnoise' : 'unavailable');
-        console.info(`[3RTC] VOICE_ISOLATION ${cleanedTrack ? 'in-app RNNoise active' : 'could not start, sending mic as-is'}`);
-        return cleanedTrack || rawTrack;
+        const wantIsolation = micIsolationRequestedRef.current;
+        const nativeIsolation = rawTrack.getSettings?.().voiceIsolation === true;
+        const useRnnoise = wantIsolation && !nativeIsolation;
+        const { track, isolationActive } = await micPipeline.build(stream, { isolation: useRnnoise });
+        setVoiceIsolationStatus(!wantIsolation ? 'off' : nativeIsolation ? 'active' : isolationActive ? 'rnnoise' : 'unavailable');
+        if (useRnnoise) {
+            console.info(`[3RTC] VOICE_ISOLATION ${isolationActive ? 'in-app RNNoise active' : 'could not start, sending mic without it'}`);
+        }
+        if (!micPipeline.getOutputTrack()) {
+            console.info('[3RTC] MIC_PIPELINE could not start, sending mic ungated');
+        }
+        voiceGate.setBypass(audioSettingsRef.current?.inputMode === 'ptt');
+        return track || rawTrack;
     }, []);
-
-    useEffect(() => {
-        voiceGate.onChange = applyVoiceGate;
-        return () => {
-            voiceGate.onChange = null;
-        };
-    }, [applyVoiceGate]);
 
     // Voice Chat: Set Microphone Mute/Unmute
     const setMicrophoneMuted = useCallback(async (shouldMute, isPtt = false) => {
@@ -2508,8 +2519,7 @@ export default function App() {
                     micIsolationRequestedRef.current === Boolean(audioSettingsRef.current?.voiceIsolation);
 
                 if (!settingsMatch) {
-                    voiceGate.stop();
-                    voiceIsolation.detach();
+                    micPipeline.teardown();
                     if (stream) {
                         try { stream.getTracks().forEach((t) => t.stop()); } catch { }
                     }
@@ -2543,12 +2553,7 @@ export default function App() {
                         if (localAnalyserRef.current) {
                             try { localAnalyserRef.current.disconnect(); } catch { }
                         }
-                        const micTrack = stream.getAudioTracks()[0];
-                        if (micTrack && voiceGate.track !== micTrack) {
-                            await voiceGate.start(ctx, micTrack);
-                        }
-                        // Meter reads the gate's clone so it keeps working while the gate is closed
-                        const localSrc = ctx.createMediaStreamSource(voiceGate.analysisStream || stream);
+                        const localSrc = ctx.createMediaStreamSource(stream);
                         const localAnalyser = ctx.createAnalyser();
                         localAnalyser.fftSize = 256;
                         localAnalyser.smoothingTimeConstant = 0.5;
@@ -2687,8 +2692,7 @@ export default function App() {
             // CRITICAL CHROMIUM FIX: Stop existing tracks BEFORE requesting a new stream.
             // In Chromium / WASAPI, calling getUserMedia while an old track is live reuses the
             // existing capture session and corrupts the native WebRTC Audio Processing Module (AEC3).
-            voiceGate.stop();
-            voiceIsolation.detach();
+            micPipeline.teardown();
             if (currentStream) {
                 try {
                     currentStream.getTracks().forEach((t) => t.stop());
@@ -2728,14 +2732,11 @@ export default function App() {
             micIsolationRequestedRef.current = wantIsolation;
 
             await verifyMicProcessing(newTrack, wantIsolation);
-            if (window.__webrtcAudioCtx) {
-                await voiceGate.start(window.__webrtcAudioCtx, newTrack);
-            }
 
             // Reconnect local analyser for speaking indicator & VU meter
             if (window.__webrtcAudioCtx && localAnalyserRef.current) {
                 try {
-                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(voiceGate.analysisStream || newStream);
+                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
                     newSource.connect(localAnalyserRef.current);
                     localSourceNodeRef.current = newSource;
                 } catch (err) {
@@ -3351,7 +3352,7 @@ export default function App() {
                 localAudioLevel={localAudioActivity.level}
                 isMicMuted={isMicMuted}
                 isPttActive={isPttActive}
-                voiceIsolationSupported={isVoiceIsolationSupported() || voiceIsolation.isSupported}
+                voiceIsolationSupported={isVoiceIsolationSupported() || micPipeline.isolationSupported}
                 voiceIsolationStatus={voiceIsolationStatus}
             />
 
