@@ -12,6 +12,9 @@ import { copyToClipboard } from './utils/clipboard';
 import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver, detectOnDemandStreaming } from './utils/p2pStreamer';
 import { voiceGate } from './utils/voiceGate';
 import { micPipeline } from './utils/micPipeline';
+import { ICE_SERVERS, BULK_CHANNEL_ID, RECOVERY } from './webrtc/config';
+import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './webrtc/sdp';
+import { teardownPeerEntry, replacePeerAudioTrack } from './webrtc/peerEntry';
 import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, getOptionalMicConstraints, isVoiceIsolationSupported, MIC_PROCESSING } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
@@ -21,104 +24,12 @@ import QrCodeModal from './components/QrCodeModal';
 import './App.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
-const ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-];
-
-// Second data channel for bulk transfers (P2P video stream, images). Pre-negotiated with a fixed
-// id on both sides, so it needs no extra signaling. Chat, reactions and play/pause sync stay on the
-// main channel and never queue behind file data. (High id: in-band channels use ids 0, 1, 2...)
-const BULK_CHANNEL_ID = 512;
-
-// P2P connection recovery (network change, Wi-Fi drop): ICE restart over the signaling socket
-const RECOVERY = {
-    disconnectGraceMs: 3000,  // 'disconnected' often recovers by itself; restart if it lasts longer
-    retryMs: 8000,            // time given to each ICE restart before trying again
-    maxIceRestarts: 4,        // then rebuild the connection from scratch once, then give up
-    maxWaitMs: 60000          // non-initiator side: drop a connection that stays broken this long
-};
-
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
     window.location.hostname === '[::1]' ||
     Boolean(import.meta.env?.DEV)
 );
-
-function extractAudioSdp(sdp) {
-    if (!sdp) return 'none';
-    const lines = sdp.split('\n');
-    const audioIndex = lines.findIndex((l) => l.startsWith('m=audio'));
-    if (audioIndex === -1) return 'no m=audio';
-    const audioBlock = [];
-    for (let i = audioIndex; i < Math.min(lines.length, audioIndex + 15); i++) {
-        const line = lines[i].trim();
-        if (i > audioIndex && line.startsWith('m=')) break;
-        if (line.startsWith('m=audio') || line.startsWith('a=sendrecv') || line.startsWith('a=recvonly') || line.startsWith('a=sendonly') || line.startsWith('a=inactive') || line.startsWith('a=mid')) {
-            audioBlock.push(line);
-        }
-    }
-    return audioBlock.join(' | ');
-}
-
-/**
- * Raises the Opus bitrate (browser default is ~32 kbps) so voice is crisp.
- * - maxaveragebitrate=128000
- * - useinbandfec=1 (Forward Error Correction against packet drops)
- * Everything else stays at the browser's defaults.
- */
-function tuneSdpForDiscordAudio(sdp) {
-    if (!sdp) return sdp;
-    const match = sdp.match(/a=rtpmap:(\d+)\s+opus\/48000/i);
-    if (!match) return sdp;
-    const pt = match[1];
-    const opusParams = 'useinbandfec=1;maxaveragebitrate=128000';
-
-    const fmtpRegex = new RegExp(`a=fmtp:${pt}\\s+(.*)`, 'i');
-    if (fmtpRegex.test(sdp)) {
-        return sdp.replace(fmtpRegex, (line, existingParams) => {
-            const filtered = existingParams
-                .split(';')
-                .map((s) => s.trim())
-                .filter((p) => !p.match(/^(maxaveragebitrate|useinbandfec)=/i))
-                .join(';');
-            return `a=fmtp:${pt} ${filtered ? filtered + ';' : ''}${opusParams}`;
-        });
-    } else {
-        return sdp.replace(
-            new RegExp(`(a=rtpmap:${pt}\\s+opus\\/48000(?:\\/2)?)`, 'i'),
-            `$1\r\na=fmtp:${pt} ${opusParams}`
-        );
-    }
-}
-
-/**
- * Sender settings for the voice track: 128 kbps ceiling and HIGH priority, so voice keeps its
- * bandwidth (and gets DSCP "expedited" marking) when it competes with P2P video/file transfer.
- * Finds the audio sender through its transceiver, so it works even before the mic is attached;
- * the settings persist across replaceTrack.
- */
-function tuneAudioSender(pc) {
-    if (!pc) return;
-    try {
-        const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
-        const audioTransceiver = transceivers.find((t) =>
-            t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio'
-        );
-        const audioSender = audioTransceiver?.sender ||
-            (pc.getSenders ? pc.getSenders().find((s) => s.track && s.track.kind === 'audio') : null);
-        if (audioSender && audioSender.getParameters && audioSender.setParameters) {
-            const params = audioSender.getParameters();
-            if (params && params.encodings && params.encodings.length > 0) {
-                params.encodings[0].maxBitrate = 128000;
-                params.encodings[0].priority = 'high';
-                params.encodings[0].networkPriority = 'high';
-                audioSender.setParameters(params).catch(() => { });
-            }
-        }
-    } catch { }
-}
 
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
@@ -339,37 +250,7 @@ export default function App() {
     const cleanupPeer = useCallback((targetPeerId) => {
         if (peersRef.current.has(targetPeerId)) {
             const entry = peersRef.current.get(targetPeerId);
-            try {
-                if (entry.audioElement) {
-                    entry.audioElement.pause();
-                    entry.audioElement.srcObject = null;
-                    try { entry.audioElement.remove(); } catch { }
-                    entry.audioElement = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioSource) {
-                    entry.webAudioSource.disconnect();
-                    entry.webAudioSource = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioGain) {
-                    entry.webAudioGain.disconnect();
-                    entry.webAudioGain = null;
-                }
-            } catch { }
-            try {
-                if (entry.analyserNode) {
-                    entry.analyserNode.disconnect();
-                    entry.analyserNode = null;
-                }
-            } catch { }
-            clearTimeout(entry.recoveryTimer);
-            entry.recoveryTimer = null;
-            try { entry.dataChannel?.close(); } catch { }
-            try { entry.bulkChannel?.close(); } catch { }
-            try { entry.pc?.close(); } catch { }
+            teardownPeerEntry(entry);
             peersRef.current.delete(targetPeerId);
             setPeerMetadata((prev) => {
                 const next = { ...prev };
@@ -387,44 +268,8 @@ export default function App() {
 
     // Clean up all peers
     const cleanupAllPeers = useCallback(() => {
-        for (const [peerId, entry] of peersRef.current.entries()) {
-            try {
-                if (entry.audioElement) {
-                    entry.audioElement.pause();
-                    entry.audioElement.srcObject = null;
-                    try { entry.audioElement.remove(); } catch { }
-                    entry.audioElement = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioSource) {
-                    entry.webAudioSource.disconnect();
-                    entry.webAudioSource = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioGain) {
-                    entry.webAudioGain.disconnect();
-                    entry.webAudioGain = null;
-                }
-            } catch { }
-            try {
-                if (entry.analyserNode) {
-                    entry.analyserNode.disconnect();
-                    entry.analyserNode = null;
-                }
-            } catch { }
-            clearTimeout(entry.recoveryTimer);
-            entry.recoveryTimer = null;
-            // Tell the peer we're leaving on purpose, so it cleans up now instead of trying to reconnect
-            try {
-                if (entry.dataChannel?.readyState === 'open') {
-                    entry.dataChannel.send(JSON.stringify({ type: 'peer-bye' }));
-                }
-            } catch { }
-            try { entry.dataChannel?.close(); } catch { }
-            try { entry.bulkChannel?.close(); } catch { }
-            try { entry.pc?.close(); } catch { }
+        for (const entry of peersRef.current.values()) {
+            teardownPeerEntry(entry, { sayBye: true });
         }
         peersRef.current.clear();
         setPeerMetadata({});
@@ -2928,34 +2773,8 @@ export default function App() {
                     const sendTrack = await getSendTrack(stream);
                     logLocalDebug('MIC_UNMUTE', `User "${username}" unmuting mic. Track: "${audioTrack.label}", ID: ${audioTrack.id}, state: ${audioTrack.readyState}`);
 
-                    for (const [peerId, peer] of peersRef.current.entries()) {
-                        if (peer.pc) {
-                            const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                            logLocalDebug('MIC_PEER_TRANSCEIVERS', `Peer ${peerId} has ${transceivers.length} transceivers: ${transceivers.map(t => `${t.mid}:${t.direction}->${t.currentDirection}`).join(', ')}`);
-
-                            let replaced = false;
-                            for (const t of transceivers) {
-                                const isValid = t.mid !== null || transceivers.length === 1;
-                                if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                                    t.direction = 'sendrecv';
-                                    t.sender.replaceTrack(sendTrack)
-                                        .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced on transceiver mid: ${t.mid}!`))
-                                        .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`));
-                                    replaced = true;
-                                }
-                            }
-                            if (!replaced) {
-                                logLocalDebug('NO_AUDIO_TRANSCEIVER', `Peer ${peerId} had no matching transceiver. Using getSenders fallback.`);
-                                const senders = peer.pc.getSenders();
-                                for (const s of senders) {
-                                    if (!s.track || s.track.kind === 'audio') {
-                                        s.replaceTrack(sendTrack)
-                                            .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} track replaced on sender`))
-                                            .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`));
-                                    }
-                                }
-                            }
-                        }
+                    for (const peer of peersRef.current.values()) {
+                        replacePeerAudioTrack(peer.pc, sendTrack, logLocalDebug);
                     }
                 }
 
@@ -3064,14 +2883,7 @@ export default function App() {
             // When user later un-mutes, setMicrophoneMuted will acquire a fresh stream with newSettings.
             if (wasMuted) {
                 for (const peer of peersRef.current.values()) {
-                    if (peer.pc && peer.pc.connectionState !== 'closed') {
-                        const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                        for (const t of transceivers) {
-                            if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                                try { await t.sender.replaceTrack(null); } catch { }
-                            }
-                        }
-                    }
+                    await replacePeerAudioTrack(peer.pc, null, logLocalDebug);
                 }
                 return;
             }
@@ -3106,38 +2918,7 @@ export default function App() {
             const sendTrack = await getSendTrack(newStream);
 
             // Replace audio track cleanly in each peer connection
-            const replacePromises = [];
-            for (const [peerId, peer] of peersRef.current.entries()) {
-                if (peer.pc && peer.pc.connectionState !== 'closed') {
-                    let replaced = false;
-                    const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                    for (const t of transceivers) {
-                        const isValid = t.mid !== null || transceivers.length === 1;
-                        if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                            t.direction = 'sendrecv';
-                            replacePromises.push(
-                                t.sender.replaceTrack(sendTrack)
-                                    .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced`))
-                                    .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`))
-                            );
-                            replaced = true;
-                        }
-                    }
-                    if (!replaced) {
-                        const senders = peer.pc.getSenders ? peer.pc.getSenders() : [];
-                        for (const s of senders) {
-                            if (!s.track || s.track.kind === 'audio') {
-                                replacePromises.push(
-                                    s.replaceTrack(sendTrack)
-                                        .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} sender track replaced`))
-                                        .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`))
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            await Promise.all(replacePromises);
+            await Promise.all([...peersRef.current.values()].map((peer) => replacePeerAudioTrack(peer.pc, sendTrack, logLocalDebug)));
         } catch (err) {
             logLocalDebug('AUDIO_SETTINGS_UPDATE_ERR', err.message);
             showToast('⚠️ Could not update audio settings: ' + err.message);
