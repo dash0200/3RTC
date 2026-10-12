@@ -10284,4 +10284,11 @@ video::cue {
     padding: 6px 8px;
     padding-bottom: max(6px, var(--sab));
   }
+
+  /* The chat sheet sits on top of the stage's bottom toolbar (64px, drawn above it), so the
+     input and quick emojis aren't hidden behind the toolbar */
+  .chat-section {
+    bottom: 64px;
+    max-height: calc(85vh - 64px);
+  }
 }
