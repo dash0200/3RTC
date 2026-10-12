@@ -2,13 +2,16 @@
  * WebRTC Direct P2P Video Streaming & MSE Chunk Sharing
  * 
  * Features:
- * - Slices local video files into 60 KB binary chunks.
+ * - Slices local video files into 16 KB binary chunks.
  * - Streams peer-to-peer over WebRTC DataChannel with backpressure flow control (`bufferedAmount`).
  * - Receiver buffers chunks using MediaSource Extensions (MSE) or progressive chunk assembly.
  * - Zero server bandwidth; direct peer-to-peer delivery.
  */
 
-export const STREAM_CHUNK_SIZE = 61440; // 60 KB (safely within WebRTC 64 KB SCTP payload limit)
+// 16 KB chunks: sent on their own "bulk" data channel, so chat, reactions and play/pause on the
+// control channel only ever wait for one small chunk instead of queuing behind the video.
+// The receiver reads chunkSize from the header, so this can change without breaking peers.
+export const STREAM_CHUNK_SIZE = 16384;
 export const BUFFERED_AMOUNT_HIGH = 512 * 1024; // 512 KB backpressure threshold
 export const BUFFERED_AMOUNT_LOW = 128 * 1024;  // 128 KB resume threshold
 

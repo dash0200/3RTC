@@ -26,6 +26,19 @@ const ICE_SERVERS = [
     { urls: 'stun:stun1.l.google.com:19302' }
 ];
 
+// Second data channel for bulk transfers (P2P video stream, images). Pre-negotiated with a fixed
+// id on both sides, so it needs no extra signaling. Chat, reactions and play/pause sync stay on the
+// main channel and never queue behind file data. (High id: in-band channels use ids 0, 1, 2...)
+const BULK_CHANNEL_ID = 512;
+
+// P2P connection recovery (network change, Wi-Fi drop): ICE restart over the signaling socket
+const RECOVERY = {
+    disconnectGraceMs: 3000,  // 'disconnected' often recovers by itself; restart if it lasts longer
+    retryMs: 8000,            // time given to each ICE restart before trying again
+    maxIceRestarts: 4,        // then rebuild the connection from scratch once, then give up
+    maxWaitMs: 60000          // non-initiator side: drop a connection that stays broken this long
+};
+
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -134,6 +147,7 @@ export default function App() {
     const [streamProgress, setStreamProgress] = useState(null);
     const [streamVideoUrl, setStreamVideoUrl] = useState(null);
     const streamReceiverRef = useRef(null);
+    const getOrCreatePeerConnectionRef = useRef(null);
     const activeStreamSendersRef = useRef(new Map());
     const localVideoFileRef = useRef(null);
     localVideoFileRef.current = localVideoFile;
@@ -349,7 +363,10 @@ export default function App() {
                     entry.analyserNode = null;
                 }
             } catch { }
+            clearTimeout(entry.recoveryTimer);
+            entry.recoveryTimer = null;
             try { entry.dataChannel?.close(); } catch { }
+            try { entry.bulkChannel?.close(); } catch { }
             try { entry.pc?.close(); } catch { }
             peersRef.current.delete(targetPeerId);
             setPeerMetadata((prev) => {
@@ -395,7 +412,16 @@ export default function App() {
                     entry.analyserNode = null;
                 }
             } catch { }
+            clearTimeout(entry.recoveryTimer);
+            entry.recoveryTimer = null;
+            // Tell the peer we're leaving on purpose, so it cleans up now instead of trying to reconnect
+            try {
+                if (entry.dataChannel?.readyState === 'open') {
+                    entry.dataChannel.send(JSON.stringify({ type: 'peer-bye' }));
+                }
+            } catch { }
             try { entry.dataChannel?.close(); } catch { }
+            try { entry.bulkChannel?.close(); } catch { }
             try { entry.pc?.close(); } catch { }
         }
         peersRef.current.clear();
@@ -780,11 +806,29 @@ export default function App() {
         const peerEntry = {
             pc,
             dataChannel: null,
+            bulkChannel: null,
             isConnected: false,
             candidateQueue: [],
-            audioElement: null
+            audioElement: null,
+            isInitiator: Boolean(isInitiator), // the initiator drives ICE restarts (no offer glare)
+            applyingRemote: false,             // remote description being applied: queue candidates
+            recoveryTimer: null,
+            restartAttempts: 0,
+            brokenSince: 0,
+            wasInterrupted: false,
+            signalingGone: false,              // peer dropped off signaling but P2P link was still up
+            rebuilt: false
         };
         peersRef.current.set(targetPeerId, peerEntry);
+
+        // Bulk channel (video stream / images), same pre-agreed id on both sides
+        try {
+            const bulk = pc.createDataChannel('bulk', { negotiated: true, id: BULK_CHANNEL_ID, ordered: true });
+            bulk.binaryType = 'arraybuffer';
+            peerEntry.bulkChannel = bulk;
+        } catch (err) {
+            logLocalDebug('BULK_CHANNEL_ERR', err.message);
+        }
 
         // Audio Transceiver for WebRTC Voice Chat
         // Initiator must call addTransceiver to include 'm=audio sendrecv' in Offer.
@@ -947,10 +991,112 @@ export default function App() {
             }
         };
 
+        // ---- Connection recovery ----
+        // Network changes (Wi-Fi <-> mobile data, a dropped Wi-Fi) break the P2P path. The initiator
+        // runs an ICE restart over the signaling socket; if that keeps failing it rebuilds the
+        // connection from scratch once. The other side just answers the offers it receives.
+        const isStillCurrent = () => peersRef.current.get(targetPeerId) === peerEntry;
+        const isHealthy = () => pc.connectionState === 'connected' &&
+            (!peerEntry.dataChannel || peerEntry.dataChannel.readyState === 'open');
+
+        const sendIceRestartOffer = async () => {
+            try {
+                if (pc.signalingState === 'closed') return;
+                // A previous restart offer was never answered (peer unreachable): withdraw it first
+                if (pc.signalingState === 'have-local-offer') {
+                    await pc.setLocalDescription({ type: 'rollback' });
+                }
+                if (pc.signalingState !== 'stable') return;
+                const offer = await pc.createOffer({ iceRestart: true });
+                const tunedOffer = { type: offer.type, sdp: tuneSdpForDiscordAudio(offer.sdp) };
+                await pc.setLocalDescription(tunedOffer);
+                sendSignal({ type: 'offer', targetId: targetPeerId, offer: tunedOffer, iceRestart: true });
+            } catch (err) {
+                logLocalDebug('ICE_RESTART_ERR', `Peer ${targetPeerId}: ${err.message}`);
+            }
+        };
+
+        const scheduleRecovery = (delayMs) => {
+            clearTimeout(peerEntry.recoveryTimer);
+            peerEntry.recoveryTimer = setTimeout(runRecovery, delayMs);
+        };
+        peerEntry.scheduleRecovery = scheduleRecovery;
+
+        function runRecovery() {
+            peerEntry.recoveryTimer = null;
+            if (!isStillCurrent() || pc.connectionState === 'closed' || isHealthy()) return;
+
+            // Peer already left signaling and now the P2P link broke too: they're gone
+            if (peerEntry.signalingGone) {
+                cleanupPeer(targetPeerId);
+                setPeerCount(peersRef.current.size + 1);
+                return;
+            }
+
+            if (!peerEntry.brokenSince) peerEntry.brokenSince = Date.now();
+
+            if (!peerEntry.isInitiator) {
+                // The initiator restarts; give up only if nothing works for a long time
+                if (Date.now() - peerEntry.brokenSince > RECOVERY.maxWaitMs) {
+                    cleanupPeer(targetPeerId);
+                    setPeerCount(peersRef.current.size + 1);
+                    return;
+                }
+                scheduleRecovery(RECOVERY.retryMs);
+                return;
+            }
+
+            // Offers travel over signaling: wait until it is back
+            if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+                scheduleRecovery(1500);
+                return;
+            }
+
+            // ICE restart can't revive a closed data channel; only a fresh connection can
+            const channelDead = peerEntry.dataChannel &&
+                (peerEntry.dataChannel.readyState === 'closed' || peerEntry.dataChannel.readyState === 'closing');
+
+            if (!channelDead && peerEntry.restartAttempts < RECOVERY.maxIceRestarts) {
+                peerEntry.restartAttempts += 1;
+                if (peerEntry.restartAttempts === 1) {
+                    addSystemMessage('⚠️ Connection to a peer was interrupted. Reconnecting...');
+                }
+                logLocalDebug('ICE_RESTART', `Peer ${targetPeerId} attempt ${peerEntry.restartAttempts}/${RECOVERY.maxIceRestarts}`);
+                sendIceRestartOffer();
+                scheduleRecovery(RECOVERY.retryMs);
+            } else if (!peerEntry.rebuilt) {
+                logLocalDebug('PEER_REBUILD', `Peer ${targetPeerId}: rebuilding the connection`);
+                cleanupPeer(targetPeerId);
+                const fresh = getOrCreatePeerConnectionRef.current?.(targetPeerId, true);
+                if (fresh) fresh.rebuilt = true;
+            } else {
+                addSystemMessage('❌ Could not reconnect to a peer. They can rejoin the room to connect again.');
+                cleanupPeer(targetPeerId);
+                setPeerCount(peersRef.current.size + 1);
+            }
+        }
+
         pc.onconnectionstatechange = () => {
-            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                peerEntry.isConnected = false;
+            const state = pc.connectionState;
+            if (!isStillCurrent()) return;
+            if (state === 'connected') {
+                clearTimeout(peerEntry.recoveryTimer);
+                peerEntry.recoveryTimer = null;
+                const wasRecovering = peerEntry.wasInterrupted && peerEntry.restartAttempts > 0;
+                peerEntry.restartAttempts = 0;
+                peerEntry.brokenSince = 0;
+                peerEntry.wasInterrupted = false;
+                peerEntry.isConnected = peerEntry.dataChannel?.readyState === 'open';
                 updateP2PStatus();
+                if (wasRecovering) {
+                    addSystemMessage('🔄 Connection to peer restored.');
+                    showToast('Reconnected');
+                }
+            } else if (state === 'disconnected' || state === 'failed') {
+                peerEntry.isConnected = false;
+                peerEntry.wasInterrupted = true;
+                updateP2PStatus();
+                scheduleRecovery(state === 'failed' ? 0 : RECOVERY.disconnectGraceMs);
             }
         };
 
@@ -1019,6 +1165,15 @@ export default function App() {
 
                 try {
                     const data = JSON.parse(event.data);
+                    if (data.type === 'peer-bye') {
+                        // Peer is leaving the room on purpose
+                        if (isStillCurrent()) {
+                            peerEntry.byeReceived = true;
+                            cleanupPeer(targetPeerId);
+                            setPeerCount(peersRef.current.size + 1);
+                        }
+                        return;
+                    }
                     if (data.type === 'peer-identity') {
                         setPeerMetadata((prev) => ({
                             ...prev,
@@ -1089,11 +1244,14 @@ export default function App() {
                         handleRemoteSoundboardSfx(data);
                     } else if (data.type === 'p2p-stream-request') {
                         // Remote peer requests to stream the local video file
-                        if (localVideoFileRef.current && peerEntry.dataChannel) {
+                        const streamChannel = peerEntry.bulkChannel?.readyState === 'open'
+                            ? peerEntry.bulkChannel
+                            : peerEntry.dataChannel;
+                        if (localVideoFileRef.current && streamChannel) {
                             addSystemMessage(`📡 Peer "${data.requester || 'User'}" requested video stream. Slicing and streaming chunks...`);
                             showToast(`Streaming video to ${data.requester || 'peer'}...`);
 
-                            const sender = new P2PStreamSender(localVideoFileRef.current, peerEntry.dataChannel, {
+                            const sender = new P2PStreamSender(localVideoFileRef.current, streamChannel, {
                                 targetPeerId,
                                 senderName: username,
                                 onProgress: () => { },
@@ -1260,11 +1418,26 @@ export default function App() {
                     activeStreamSendersRef.current.get(targetPeerId).abort();
                     activeStreamSendersRef.current.delete(targetPeerId);
                 }
+                if (!isStillCurrent()) return;
                 peerEntry.isConnected = false;
                 updateP2PStatus();
+                // Peer left on purpose: clean up. Otherwise the link died: try to recover
+                // (if they closed the tab, the server's peer-left cleans up first)
+                if (peerEntry.byeReceived || peerEntry.signalingGone) {
+                    cleanupPeer(targetPeerId);
+                    setPeerCount(peersRef.current.size + 1);
+                } else if (pc.connectionState !== 'closed') {
+                    peerEntry.wasInterrupted = true;
+                    scheduleRecovery(RECOVERY.disconnectGraceMs);
+                }
             };
 
             dc.onerror = () => { };
+
+            // Bulk transfers (video stream chunks, images) arrive on the bulk channel; same handler
+            if (peerEntry.bulkChannel) {
+                peerEntry.bulkChannel.onmessage = dc.onmessage;
+            }
         };
 
         if (isInitiator) {
@@ -1284,6 +1457,7 @@ export default function App() {
                         sendSignal({
                             type: 'offer',
                             targetId: targetPeerId,
+                            fresh: true, // brand-new connection: the peer replaces any old one it has
                             offer: {
                                 type: tunedOffer.type,
                                 sdp: tunedOffer.sdp
@@ -1301,7 +1475,10 @@ export default function App() {
         }
 
         return peerEntry;
-    }, [addSystemMessage, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, recordPeerPing, sendSignal, showToast, updateP2PStatus, username]);
+    }, [addSystemMessage, cleanupPeer, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, recordPeerPing, sendSignal, showToast, updateP2PStatus, username]);
+    useEffect(() => {
+        getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
+    }, [getOrCreatePeerConnection]);
 
     // Handle incoming signaling messages
     const handleSignalingMessage = useCallback(async (msg) => {
@@ -1314,6 +1491,23 @@ export default function App() {
                 setP2pStatusText('Waiting for peer to enter 5-digit code...');
                 addSystemMessage(`You created room ${msg.roomId} as "${username}".`);
                 showToast(`Created room ${msg.roomId}`);
+                break;
+            }
+
+            case 'room-resumed': {
+                // Host reconnected to signaling and got its room back (same code)
+                setRoomId(msg.roomId);
+                setIsHost(true);
+                isHostRef.current = true;
+                for (const peerId of msg.peers || []) {
+                    const known = peersRef.current.get(peerId);
+                    if (known) {
+                        known.signalingGone = false;
+                    } else {
+                        getOrCreatePeerConnection(peerId, false);
+                    }
+                }
+                setPeerCount(peersRef.current.size + 1);
                 break;
             }
 
@@ -1330,18 +1524,36 @@ export default function App() {
                 if (msg.peers && msg.peers.length > 0) {
                     setP2pStatusText('Connecting direct P2P data channels...');
                     for (const peerId of msg.peers) {
-                        getOrCreatePeerConnection(peerId, false);
+                        const known = peersRef.current.get(peerId);
+                        if (known) {
+                            // Rejoined after a signaling drop: keep the connection; if it is broken,
+                            // this peer sends us a fresh offer (it got 'peer-joined')
+                            known.signalingGone = false;
+                        } else {
+                            getOrCreatePeerConnection(peerId, false);
+                        }
                     }
                 }
                 break;
             }
 
             case 'peer-joined': {
-                const newCount = peersRef.current.size + 2;
-                setPeerCount(newCount);
-                addSystemMessage(`A peer entered room ${currentRoomRef.current}. Establishing P2P connection...`);
-                setP2pStatusText('Connecting direct P2P data channel...');
                 // Existing peers initiate offer to the newcomer
+                const knownEntry = peersRef.current.get(msg.peerId);
+                if (knownEntry) {
+                    knownEntry.signalingGone = false;
+                    if (knownEntry.pc?.connectionState === 'connected' &&
+                        knownEntry.dataChannel?.readyState === 'open') {
+                        // Peer reconnected to signaling; our P2P link with them never broke
+                        break;
+                    }
+                    // Link is broken: build a fresh connection (they replace their old one)
+                    cleanupPeer(msg.peerId);
+                } else {
+                    addSystemMessage(`A peer entered room ${currentRoomRef.current}. Establishing P2P connection...`);
+                }
+                setPeerCount(peersRef.current.size + 2);
+                setP2pStatusText('Connecting direct P2P data channel...');
                 getOrCreatePeerConnection(msg.peerId, true);
                 break;
             }
@@ -1349,6 +1561,22 @@ export default function App() {
             case 'offer': {
                 try {
                     const senderId = msg.from;
+                    const existing = peersRef.current.get(senderId);
+                    // A brand-new connection from the peer (rebuilt or rejoined): flagged 'fresh', or
+                    // recognizable by a new DTLS fingerprint (works with servers that drop the flag)
+                    const fingerprintOf = (sdp) => (sdp?.match(/a=fingerprint:\S+ (\S+)/) || [])[1];
+                    const knownFingerprint = fingerprintOf(existing?.pc?.remoteDescription?.sdp);
+                    const isFreshOffer = Boolean(msg.fresh) ||
+                        Boolean(knownFingerprint && knownFingerprint !== fingerprintOf(msg.offer?.sdp));
+                    // (A connection we only prepared, with no remote description yet, is simply used)
+                    if (existing && isFreshOffer && existing.pc?.remoteDescription) {
+                        // Peer started a brand-new connection (it rebuilt or rejoined): drop the old one
+                        cleanupPeer(senderId);
+                    } else if (existing && existing.isInitiator && existing.pc.signalingState === 'have-local-offer') {
+                        // We're already offering a fresh connection to this peer; it will adopt ours
+                        logLocalDebug('OFFER_GLARE_IGNORED', `From: ${senderId}`);
+                        break;
+                    }
                     const peerEntry = getOrCreatePeerConnection(senderId, false);
                     const pc = peerEntry.pc;
 
@@ -1356,10 +1584,15 @@ export default function App() {
                     logLocalDebug('OFFER_RECEIVED', `From: ${senderId} | Offer SDP: ${offerAudioSdp}`);
 
                     const tunedOfferSdp = tuneSdpForDiscordAudio(msg.offer?.sdp);
-                    await pc.setRemoteDescription(new RTCSessionDescription({
-                        type: msg.offer.type,
-                        sdp: tunedOfferSdp
-                    }));
+                    peerEntry.applyingRemote = true;
+                    try {
+                        await pc.setRemoteDescription(new RTCSessionDescription({
+                            type: msg.offer.type,
+                            sdp: tunedOfferSdp
+                        }));
+                    } finally {
+                        peerEntry.applyingRemote = false;
+                    }
 
                     // Ensure the negotiated audio transceiver on the answerer is active and set to sendrecv
                     if (pc.getTransceivers) {
@@ -1416,11 +1649,17 @@ export default function App() {
                     const peerEntry = peersRef.current.get(senderId);
                     if (peerEntry && peerEntry.pc) {
                         const pc = peerEntry.pc;
+                        if (pc.signalingState !== 'have-local-offer') break; // stale answer
                         const tunedAnswerSdp = tuneSdpForDiscordAudio(msg.answer?.sdp);
-                        await pc.setRemoteDescription(new RTCSessionDescription({
-                            type: msg.answer.type,
-                            sdp: tunedAnswerSdp
-                        }));
+                        peerEntry.applyingRemote = true;
+                        try {
+                            await pc.setRemoteDescription(new RTCSessionDescription({
+                                type: msg.answer.type,
+                                sdp: tunedAnswerSdp
+                            }));
+                        } finally {
+                            peerEntry.applyingRemote = false;
+                        }
                         tuneAudioSender(pc);
 
                         const answerAudioSdp = extractAudioSdp(msg.answer?.sdp);
@@ -1445,7 +1684,9 @@ export default function App() {
                 const peerEntry = peersRef.current.get(senderId);
                 if (peerEntry && msg.candidate) {
                     const pc = peerEntry.pc;
-                    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                    // Queue while a (re)negotiation is being applied: an ICE restart's new candidates
+                    // must not be added before the description that introduces them
+                    if (pc && pc.remoteDescription && pc.remoteDescription.type && !peerEntry.applyingRemote) {
                         try {
                             await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
                         } catch { }
@@ -1457,6 +1698,16 @@ export default function App() {
             }
 
             case 'peer-left': {
+                const leftEntry = peersRef.current.get(msg.peerId);
+                if (leftEntry && leftEntry.pc?.connectionState === 'connected' &&
+                    leftEntry.dataChannel?.readyState === 'open') {
+                    // Only their signaling socket dropped; the direct P2P link still works. Keep it:
+                    // they reconnect to signaling on their own, and if they really left, the
+                    // data channel closes (or they send 'peer-bye') and we clean up then.
+                    leftEntry.signalingGone = true;
+                    logLocalDebug('PEER_SIGNALING_GONE', `Peer ${msg.peerId}: signaling dropped, P2P still up`);
+                    break;
+                }
                 cleanupPeer(msg.peerId);
                 setPeerCount(peersRef.current.size + 1);
                 addSystemMessage('A peer disconnected from the room.');
@@ -1548,7 +1799,8 @@ export default function App() {
                         ws.send(JSON.stringify({
                             type: 'join',
                             roomId: activeRoom,
-                            peerId: peerIdRef.current
+                            peerId: peerIdRef.current,
+                            rejoin: true
                         }));
                     }
                 }
@@ -1557,6 +1809,14 @@ export default function App() {
                 while (pendingSignalsRef.current.length > 0) {
                     const data = pendingSignalsRef.current.shift();
                     ws.send(JSON.stringify(data));
+                }
+
+                // P2P links that broke while signaling was down can be recovered now
+                for (const entry of peersRef.current.values()) {
+                    if (entry.pc && entry.pc.connectionState !== 'connected' && entry.pc.connectionState !== 'new' &&
+                        entry.pc.connectionState !== 'connecting') {
+                        entry.scheduleRecovery?.(1000);
+                    }
                 }
 
                 // Start periodic ping to prevent reverse proxies (e.g. Caddy on GCP) from terminating idle connections
@@ -1781,9 +2041,12 @@ export default function App() {
             return;
         }
 
+        // Images go over each peer's bulk channel so chat and sync never wait behind them
         const activeChannels = [];
         for (const peer of peersRef.current.values()) {
-            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+            if (peer.bulkChannel && peer.bulkChannel.readyState === 'open') {
+                activeChannels.push(peer.bulkChannel);
+            } else if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
                 activeChannels.push(peer.dataChannel);
             }
         }
