@@ -10,15 +10,15 @@ import { fetchYouTubeTitle } from './components/YouTubeSyncPlayer';
 import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { detectOnDemandStreaming } from './utils/p2pStreamer';
-import { voiceGate } from './utils/voiceGate';
 import { micPipeline } from './utils/micPipeline';
 import { ICE_SERVERS, BULK_CHANNEL_ID, RECOVERY } from './webrtc/config';
 import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './webrtc/sdp';
-import { teardownPeerEntry, replacePeerAudioTrack } from './webrtc/peerEntry';
+import { teardownPeerEntry } from './webrtc/peerEntry';
 import { attachRemoteAudio } from './webrtc/remoteAudio';
 import { attachPeerRecovery } from './webrtc/peerRecovery';
 import { createPeerMessageHandler } from './webrtc/peerMessages';
-import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, getOptionalMicConstraints, isVoiceIsolationSupported, MIC_PROCESSING } from './utils/audioSettings';
+import { useVoiceChat } from './hooks/useVoiceChat';
+import { matchesPttKey, isTypingInField, isVoiceIsolationSupported } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
@@ -112,31 +112,9 @@ export default function App() {
     const [initialJoinPin, setInitialJoinPin] = useState('');
     const [toastMessage, setToastMessage] = useState('');
 
-    // WebRTC Voice Chat State
-    const [isMicMuted, setIsMicMuted] = useState(true);
-    const [isAudioBlocked, setIsAudioBlocked] = useState(false);
-    const [peerVoiceStates, setPeerVoiceStates] = useState({});
-
-    // Feature 2.1: Per-Peer Volume Sliders & Speaking Rings State
-    const [peerVolumes, setPeerVolumes] = useState({}); // { [peerId]: number (0.0 to 2.0) }
-    const [localMutedPeers, setLocalMutedPeers] = useState({}); // { [peerId]: boolean }
-    const [peerAudioActivity, setPeerAudioActivity] = useState({}); // { [peerId]: { isSpeaking: boolean, level: number } }
-    const [localAudioActivity, setLocalAudioActivity] = useState({ isSpeaking: false, level: 0 });
     const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username: string, isHost: boolean, isMuted: boolean } }
 
-    // Feature 2.2: Audio Processing Toggles (Noise Suppression & Echo Cancellation) & Push-to-Talk (PTT)
-    const [audioSettings, setAudioSettings] = useState(() => loadAudioSettings());
-    // Voice isolation on the live mic: null (mic not opened yet) | 'off' | 'active' (browser/OS)
-    // | 'rnnoise' (in-app noise removal) | 'unavailable'
-    const [voiceIsolationStatus, setVoiceIsolationStatus] = useState(null);
-    // Whether the current mic stream was opened with voice isolation requested
-    const micIsolationRequestedRef = useRef(false);
     const [showAudioSettingsModal, setShowAudioSettingsModal] = useState(false);
-    const [isPttActive, setIsPttActive] = useState(false);
-    const audioSettingsRef = useRef(audioSettings);
-    const isPttActiveRef = useRef(false);
-    const pttReleaseTimerRef = useRef(null);
-    const isAudioUpdatingRef = useRef(false);
 
     // Feature 2.3: Synchronized Soundboard (Mini SFX Tray)
     const [soundboardSettings, setSoundboardSettings] = useState(() => loadSoundboardSettings());
@@ -177,23 +155,10 @@ export default function App() {
     const syncStateGetterRef = useRef(null);
     const peerIdRef = useRef(crypto.randomUUID());
 
-    const localStreamRef = useRef(null);
-    const isMicMutedRef = useRef(true);
-    const isAudioBlockedRef = useRef(false);
-    const peerVolumesRef = useRef({});
-    const localMutedPeersRef = useRef({});
-    const localAnalyserRef = useRef(null);
-    const localSourceNodeRef = useRef(null);
 
     currentRoomRef.current = roomId;
     isHostRef.current = isHost;
     activeVideoIdRef.current = activeVideoId;
-    isMicMutedRef.current = isMicMuted;
-    isAudioBlockedRef.current = isAudioBlocked;
-    peerVolumesRef.current = peerVolumes;
-    localMutedPeersRef.current = localMutedPeers;
-    audioSettingsRef.current = audioSettings;
-    isPttActiveRef.current = isPttActive;
     soundboardSettingsRef.current = soundboardSettings;
 
     const showToast = useCallback((msg) => {
@@ -217,6 +182,46 @@ export default function App() {
 
     // Developer debug logging is disabled in production to keep console and user logs clean
     const logLocalDebug = useCallback(() => { }, []);
+
+    // Voice chat: mic, push-to-talk, audio settings, deafen, per-peer volume (hooks/useVoiceChat.js)
+    const {
+        isMicMuted,
+        setIsMicMuted,
+        isAudioBlocked,
+        setIsAudioBlocked,
+        peerVoiceStates,
+        setPeerVoiceStates,
+        peerVolumes,
+        setPeerVolumes,
+        localMutedPeers,
+        setLocalMutedPeers,
+        peerAudioActivity,
+        setPeerAudioActivity,
+        localAudioActivity,
+        setLocalAudioActivity,
+        audioSettings,
+        voiceIsolationStatus,
+        isPttActive,
+        setIsPttActive,
+        isPttActiveRef,
+        pttReleaseTimerRef,
+        localStreamRef,
+        isMicMutedRef,
+        isAudioBlockedRef,
+        peerVolumesRef,
+        localMutedPeersRef,
+        localAnalyserRef,
+        localSourceNodeRef,
+        setMicrophoneMuted,
+        toggleMicrophone,
+        handleUpdateAudioSettings,
+        handlePttPressStart,
+        handlePttPressEnd,
+        toggleBlockAudio,
+        handleSetPeerVolume,
+        handleToggleMutePeer
+    } = useVoiceChat({ addSystemMessage, logLocalDebug, peerMetadata, peersRef, showToast, username });
+
 
     const handleClearLogs = useCallback(() => {
         setSystemLogs([]);
@@ -2069,331 +2074,6 @@ export default function App() {
         }
     }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
 
-    // Voice Chat: confirm echo cancellation / noise suppression really took effect on a fresh mic track
-    const verifyMicProcessing = useCallback(async (track, isolationRequested = false) => {
-        const status = await ensureMicProcessing(track, getOptionalMicConstraints({ voiceIsolation: isolationRequested }));
-        // Logged directly (logLocalDebug is a no-op) so the applied mic processing can be checked in DevTools
-        console.info(
-            `[3RTC] AUDIO_DSP_APPLIED AEC: ${status.echoCancellation}, NS: ${status.noiseSuppression}, AGC: ${status.autoGainControl}, Voice isolation: ${status.voiceIsolation} | Mic: "${track?.label}"`
-        );
-        if (!status.ok) {
-            const missing = [
-                status.echoCancellation === false ? 'echo cancellation' : null,
-                status.noiseSuppression === false ? 'noise suppression' : null
-            ].filter(Boolean).join(' & ');
-            showToast(`⚠️ Your browser/mic refused ${missing}. Use headphones to avoid echo.`);
-        }
-        return status;
-    }, [showToast]);
-
-    // Voice Chat: Voice Activity gate. In open-mic mode the mic only transmits while you're talking
-    // (like Discord's automatic input sensitivity), so room/air noise isn't sent during silence.
-    // The gate runs inside the send pipeline (lookahead, smooth fades, see voiceGate.js); the mic
-    // track itself only follows mute. Push-to-talk bypasses the gate.
-    const applyVoiceGate = useCallback(() => {
-        const track = localStreamRef.current?.getAudioTracks()[0];
-        if (track) track.enabled = !isMicMutedRef.current;
-        voiceGate.setBypass(audioSettingsRef.current?.inputMode === 'ptt');
-    }, []);
-
-    // Voice Chat: track to send to peers, from the send pipeline (micPipeline.js): voice gate, plus
-    // in-app RNNoise noise removal when Voice Isolation is on and the browser/OS has no native one.
-    const getSendTrack = useCallback(async (stream) => {
-        const rawTrack = stream?.getAudioTracks()[0] || null;
-        if (!rawTrack) {
-            micPipeline.teardown();
-            return null;
-        }
-        const wantIsolation = micIsolationRequestedRef.current;
-        const nativeIsolation = rawTrack.getSettings?.().voiceIsolation === true;
-        const useRnnoise = wantIsolation && !nativeIsolation;
-        const { track, isolationActive } = await micPipeline.build(stream, { isolation: useRnnoise });
-        setVoiceIsolationStatus(!wantIsolation ? 'off' : nativeIsolation ? 'active' : isolationActive ? 'rnnoise' : 'unavailable');
-        if (useRnnoise) {
-            console.info(`[3RTC] VOICE_ISOLATION ${isolationActive ? 'in-app RNNoise active' : 'could not start, sending mic without it'}`);
-        }
-        if (!micPipeline.getOutputTrack()) {
-            console.info('[3RTC] MIC_PIPELINE could not start, sending mic ungated');
-        }
-        voiceGate.setBypass(audioSettingsRef.current?.inputMode === 'ptt');
-        return track || rawTrack;
-    }, []);
-
-    // Voice Chat: Set Microphone Mute/Unmute
-    const setMicrophoneMuted = useCallback(async (shouldMute, isPtt = false) => {
-        // If incoming audio is currently blocked, unmuting microphone also unblocks audio
-        if (!shouldMute && isAudioBlockedRef.current) {
-            setIsAudioBlocked(false);
-            isAudioBlockedRef.current = false;
-            for (const peer of peersRef.current.values()) {
-                if (peer.audioElement) {
-                    peer.audioElement.muted = false;
-                }
-                if (peer.webAudioGain) {
-                    peer.webAudioGain.gain.value = 1.0;
-                }
-            }
-        }
-
-        if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
-            window.__webrtcAudioCtx.resume().catch(() => { });
-        }
-
-        if (!shouldMute) {
-            try {
-                let stream = localStreamRef.current;
-                const currentTrack = stream?.getAudioTracks()[0];
-                const currentSettings = currentTrack?.getSettings ? currentTrack.getSettings() : {};
-                const settingsMatch = currentTrack &&
-                    currentTrack.readyState === 'live' &&
-                    Boolean(currentSettings.echoCancellation) === MIC_PROCESSING.echoCancellation &&
-                    Boolean(currentSettings.noiseSuppression) === MIC_PROCESSING.noiseSuppression &&
-                    Boolean(currentSettings.autoGainControl) === MIC_PROCESSING.autoGainControl &&
-                    micIsolationRequestedRef.current === Boolean(audioSettingsRef.current?.voiceIsolation);
-
-                if (!settingsMatch) {
-                    micPipeline.teardown();
-                    if (stream) {
-                        try { stream.getTracks().forEach((t) => t.stop()); } catch { }
-                    }
-                    if (localSourceNodeRef.current) {
-                        try { localSourceNodeRef.current.disconnect(); } catch { }
-                        localSourceNodeRef.current = null;
-                    }
-                    await new Promise((r) => setTimeout(r, 60));
-
-                    const wantIsolation = Boolean(audioSettingsRef.current?.voiceIsolation);
-                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(currentSettings?.deviceId, { voiceIsolation: wantIsolation }));
-                    localStreamRef.current = stream;
-                    micIsolationRequestedRef.current = wantIsolation;
-                    await verifyMicProcessing(stream.getAudioTracks()[0], wantIsolation);
-                }
-
-                // Connect local microphone to Web Audio AnalyserNode for Speaking Rings & VU meter
-                try {
-                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                    if (AudioContextClass) {
-                        if (!window.__webrtcAudioCtx) {
-                            window.__webrtcAudioCtx = new AudioContextClass();
-                        }
-                        const ctx = window.__webrtcAudioCtx;
-                        if (ctx.state === 'suspended') {
-                            ctx.resume().catch(() => { });
-                        }
-                        if (localSourceNodeRef.current) {
-                            try { localSourceNodeRef.current.disconnect(); } catch { }
-                        }
-                        if (localAnalyserRef.current) {
-                            try { localAnalyserRef.current.disconnect(); } catch { }
-                        }
-                        const localSrc = ctx.createMediaStreamSource(stream);
-                        const localAnalyser = ctx.createAnalyser();
-                        localAnalyser.fftSize = 256;
-                        localAnalyser.smoothingTimeConstant = 0.5;
-                        localSrc.connect(localAnalyser);
-                        localSourceNodeRef.current = localSrc;
-                        localAnalyserRef.current = localAnalyser;
-                    }
-                } catch { }
-
-                const audioTrack = stream.getAudioTracks()[0];
-                if (audioTrack) {
-                    audioTrack.enabled = true;
-                    const sendTrack = await getSendTrack(stream);
-                    logLocalDebug('MIC_UNMUTE', `User "${username}" unmuting mic. Track: "${audioTrack.label}", ID: ${audioTrack.id}, state: ${audioTrack.readyState}`);
-
-                    for (const peer of peersRef.current.values()) {
-                        replacePeerAudioTrack(peer.pc, sendTrack, logLocalDebug);
-                    }
-                }
-
-                setIsMicMuted(false);
-                isMicMutedRef.current = false;
-                applyVoiceGate();
-                if (!isPtt) {
-                    sound.playPop();
-                    showToast('🎙️ Microphone unmuted (Live)');
-                    addSystemMessage('🎙️ You unmuted your microphone (Voice Chat Active).');
-                }
-
-                const voiceMsg = {
-                    type: 'peer-voice-status',
-                    sender: username,
-                    isMuted: false
-                };
-                for (const peer of peersRef.current.values()) {
-                    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-                        try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
-                    }
-                }
-            } catch (err) {
-                showToast('⚠️ Could not access microphone. Check permissions.');
-            }
-        } else {
-            if (localStreamRef.current) {
-                localStreamRef.current.getAudioTracks().forEach((track) => {
-                    track.enabled = false;
-                });
-            }
-            setIsMicMuted(true);
-            isMicMutedRef.current = true;
-            setLocalAudioActivity({ isSpeaking: false, level: 0 });
-            if (!isPtt) {
-                showToast('🔇 Microphone muted');
-                addSystemMessage('🔇 You muted your microphone.');
-            }
-
-            const voiceMsg = {
-                type: 'peer-voice-status',
-                sender: username,
-                isMuted: true
-            };
-            for (const peer of peersRef.current.values()) {
-                if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-                    try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
-                }
-            }
-        }
-    }, [addSystemMessage, applyVoiceGate, getSendTrack, logLocalDebug, showToast, username, verifyMicProcessing]);
-
-    // Voice Chat: Toggle Microphone Mute/Unmute
-    const toggleMicrophone = useCallback(() => {
-        setMicrophoneMuted(!isMicMutedRef.current, false);
-    }, [setMicrophoneMuted]);
-
-    // Feature 2.2: Apply Updated Audio Processing Settings & Reconfigure MediaStream
-    const handleUpdateAudioSettings = useCallback(async (newSettings) => {
-        const enforcedSettings = {
-            ...newSettings,
-            ...MIC_PROCESSING
-        };
-        setAudioSettings(enforcedSettings);
-        audioSettingsRef.current = enforcedSettings;
-        saveAudioSettings(enforcedSettings);
-        applyVoiceGate();
-
-        // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
-        if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
-            await setMicrophoneMuted(true, true);
-            return;
-        }
-
-        // Concurrency guard to prevent rapid toggle collisions
-        if (isAudioUpdatingRef.current) {
-            return;
-        }
-        isAudioUpdatingRef.current = true;
-
-        try {
-            const wasMuted = isMicMutedRef.current;
-            const currentStream = localStreamRef.current;
-            const currentTrack = currentStream?.getAudioTracks()[0];
-            const deviceId = currentTrack?.getSettings?.()?.deviceId;
-
-            // Disconnect old Web Audio node
-            if (localSourceNodeRef.current) {
-                try { localSourceNodeRef.current.disconnect(); } catch { }
-                localSourceNodeRef.current = null;
-            }
-
-            // CRITICAL CHROMIUM FIX: Stop existing tracks BEFORE requesting a new stream.
-            // In Chromium / WASAPI, calling getUserMedia while an old track is live reuses the
-            // existing capture session and corrupts the native WebRTC Audio Processing Module (AEC3).
-            micPipeline.teardown();
-            if (currentStream) {
-                try {
-                    currentStream.getTracks().forEach((t) => t.stop());
-                } catch { }
-                localStreamRef.current = null;
-            }
-
-            // If the microphone is currently muted, do not open hardware capture while muted.
-            // Null out sender tracks so peers receive silence.
-            // When user later un-mutes, setMicrophoneMuted will acquire a fresh stream with newSettings.
-            if (wasMuted) {
-                for (const peer of peersRef.current.values()) {
-                    await replacePeerAudioTrack(peer.pc, null, logLocalDebug);
-                }
-                return;
-            }
-
-            // If microphone is actively unmuted, re-acquire the stream with new DSP constraints.
-            // Brief 80ms delay to ensure the OS/browser hardware capture session is fully released.
-            await new Promise((resolve) => setTimeout(resolve, 80));
-
-            const wantIsolation = Boolean(enforcedSettings.voiceIsolation);
-            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(deviceId, { voiceIsolation: wantIsolation }));
-            const newTrack = newStream.getAudioTracks()[0];
-            if (!newTrack) {
-                throw new Error('No audio track returned from microphone');
-            }
-            newTrack.enabled = true;
-            localStreamRef.current = newStream;
-            micIsolationRequestedRef.current = wantIsolation;
-
-            await verifyMicProcessing(newTrack, wantIsolation);
-
-            // Reconnect local analyser for speaking indicator & VU meter
-            if (window.__webrtcAudioCtx && localAnalyserRef.current) {
-                try {
-                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
-                    newSource.connect(localAnalyserRef.current);
-                    localSourceNodeRef.current = newSource;
-                } catch (err) {
-                    logLocalDebug('ANALYSER_RECONNECT_ERR', err.message);
-                }
-            }
-
-            const sendTrack = await getSendTrack(newStream);
-
-            // Replace audio track cleanly in each peer connection
-            await Promise.all([...peersRef.current.values()].map((peer) => replacePeerAudioTrack(peer.pc, sendTrack, logLocalDebug)));
-        } catch (err) {
-            logLocalDebug('AUDIO_SETTINGS_UPDATE_ERR', err.message);
-            showToast('⚠️ Could not update audio settings: ' + err.message);
-        } finally {
-            isAudioUpdatingRef.current = false;
-        }
-    }, [applyVoiceGate, getSendTrack, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
-
-    // Push-to-Talk (PTT) Mouse Handlers for button hold
-    const handlePttPressStart = useCallback(() => {
-        if (audioSettings.inputMode !== 'ptt') return;
-        if (pttReleaseTimerRef.current) {
-            clearTimeout(pttReleaseTimerRef.current);
-            pttReleaseTimerRef.current = null;
-        }
-        if (!isPttActiveRef.current) {
-            isPttActiveRef.current = true;
-            setIsPttActive(true);
-            if (audioSettings.pttChime) sound.playPttOn();
-            setMicrophoneMuted(false, true);
-        }
-    }, [audioSettings, setMicrophoneMuted]);
-
-    const handlePttPressEnd = useCallback(() => {
-        if (audioSettings.inputMode !== 'ptt') return;
-        if (isPttActiveRef.current) {
-            const delay = Math.max(0, audioSettings.pttReleaseDelay || 0);
-            if (delay > 0) {
-                if (pttReleaseTimerRef.current) clearTimeout(pttReleaseTimerRef.current);
-                pttReleaseTimerRef.current = setTimeout(() => {
-                    isPttActiveRef.current = false;
-                    setIsPttActive(false);
-                    if (audioSettings.pttChime) sound.playPttOff();
-                    setMicrophoneMuted(true, true);
-                    pttReleaseTimerRef.current = null;
-                }, delay);
-            } else {
-                isPttActiveRef.current = false;
-                setIsPttActive(false);
-                if (audioSettings.pttChime) sound.playPttOff();
-                setMicrophoneMuted(true, true);
-            }
-        }
-    }, [audioSettings, setMicrophoneMuted]);
-
-    // Feature 2.2: Push-to-Talk (PTT) Global Key Handlers & Hotkeys
     useEffect(() => {
         const handleKeyDown = (e) => {
             if (isTypingInField(e)) return;
@@ -2492,191 +2172,6 @@ export default function App() {
         };
     }, [audioSettings, localVideoFile, remoteLocalVideoMeta, setMicrophoneMuted, streamVideoUrl, toggleMicrophone]);
 
-    // Voice Chat: Toggle Block Incoming Audio (Deafen) - blocks incoming audio AND microphone
-    const toggleBlockAudio = useCallback(() => {
-        setIsAudioBlocked((prev) => {
-            const nextVal = !prev;
-            isAudioBlockedRef.current = nextVal;
-
-            // Mute/unmute all peer audio streams (HTMLMediaElement + Web Audio gain)
-            for (const [pId, peer] of peersRef.current.entries()) {
-                const isLocalMuted = Boolean(localMutedPeersRef.current[pId]);
-                const vol = peerVolumesRef.current[pId] !== undefined ? peerVolumesRef.current[pId] : 1.0;
-                const effective = nextVal || isLocalMuted ? 0 : vol;
-                if (peer.audioElement) {
-                    peer.audioElement.muted = effective === 0;
-                    peer.audioElement.volume = Math.min(1.0, effective);
-                }
-                if (peer.webAudioGain) {
-                    peer.webAudioGain.gain.value = effective;
-                }
-            }
-
-            if (nextVal) {
-                // When audio is blocked, the microphone is also blocked (muted)
-                if (localStreamRef.current) {
-                    localStreamRef.current.getAudioTracks().forEach((track) => {
-                        track.enabled = false;
-                    });
-                }
-                setIsMicMuted(true);
-                isMicMutedRef.current = true;
-                setLocalAudioActivity({ isSpeaking: false, level: 0 });
-
-                const voiceMsg = {
-                    type: 'peer-voice-status',
-                    sender: username,
-                    isMuted: true
-                };
-                for (const peer of peersRef.current.values()) {
-                    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-                        try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
-                    }
-                }
-
-                showToast('🔇 Audio & microphone blocked (Text Chat only)');
-                addSystemMessage('🔇 Audio & microphone blocked (Text Chat only mode).');
-            } else {
-                showToast('🔊 Incoming audio unblocked');
-                addSystemMessage('🔊 You unblocked incoming audio.');
-            }
-            return nextVal;
-        });
-    }, [addSystemMessage, showToast, username]);
-
-    // Feature 2.1: Real-time Voice Activity Detection (VAD) & Speaking Rings Sampling Loop
-    useEffect(() => {
-        const buffer = new Uint8Array(128); // 128 frequency bins (fftSize = 256)
-        const interval = setInterval(() => {
-            // 1. Local Microphone Activity
-            let localSpeaking = false;
-            let localLevel = 0;
-            if (!isMicMutedRef.current && localAnalyserRef.current) {
-                try {
-                    localAnalyserRef.current.getByteFrequencyData(buffer);
-                    let sum = 0;
-                    for (let i = 0; i < buffer.length; i++) {
-                        sum += buffer[i];
-                    }
-                    const avg = sum / buffer.length;
-                    const gateDecides = voiceGate.isDetecting && audioSettingsRef.current?.inputMode !== 'ptt';
-                    localSpeaking = gateDecides ? voiceGate.isOpen : avg > 12;
-                    localLevel = Math.min(100, Math.round((avg / 70) * 100));
-                } catch { }
-            }
-
-            // 2. Remote Peers Voice Activity
-            const activityMap = {};
-            for (const [peerId, entry] of peersRef.current.entries()) {
-                if (entry.analyserNode) {
-                    try {
-                        entry.analyserNode.getByteFrequencyData(buffer);
-                        let sum = 0;
-                        for (let i = 0; i < buffer.length; i++) {
-                            sum += buffer[i];
-                        }
-                        const avg = sum / buffer.length;
-                        const isSpeaking = avg > 12;
-                        const level = Math.min(100, Math.round((avg / 70) * 100));
-                        activityMap[peerId] = { isSpeaking, level };
-                    } catch {
-                        activityMap[peerId] = { isSpeaking: false, level: 0 };
-                    }
-                } else {
-                    activityMap[peerId] = { isSpeaking: false, level: 0 };
-                }
-            }
-
-            setLocalAudioActivity((prev) => {
-                if (prev.isSpeaking !== localSpeaking || Math.abs(prev.level - localLevel) > 4) {
-                    return { isSpeaking: localSpeaking, level: localLevel };
-                }
-                return prev;
-            });
-
-            setPeerAudioActivity((prev) => {
-                let changed = false;
-                const peerIds = Object.keys(activityMap);
-                if (peerIds.length !== Object.keys(prev).length) {
-                    return activityMap;
-                }
-                for (const pid of peerIds) {
-                    const oldAct = prev[pid];
-                    const newAct = activityMap[pid];
-                    if (!oldAct || oldAct.isSpeaking !== newAct.isSpeaking || Math.abs(oldAct.level - newAct.level) > 5) {
-                        changed = true;
-                        break;
-                    }
-                }
-                return changed ? activityMap : prev;
-            });
-        }, 75);
-
-        return () => clearInterval(interval);
-    }, []);
-
-    // Feature 2.1: Per-Peer Volume Slider Handler (0% - 200%)
-    const handleSetPeerVolume = useCallback((peerId, vol) => {
-        const clamped = Math.max(0, Math.min(2.0, Math.round(vol * 100) / 100));
-        setPeerVolumes((prev) => ({
-            ...prev,
-            [peerId]: clamped
-        }));
-        peerVolumesRef.current[peerId] = clamped;
-
-        // Auto unmute if user adjusts slider while locally muted
-        if (localMutedPeersRef.current[peerId] && clamped > 0) {
-            setLocalMutedPeers((prev) => ({ ...prev, [peerId]: false }));
-            localMutedPeersRef.current[peerId] = false;
-        }
-
-        const entry = peersRef.current.get(peerId);
-        if (entry) {
-            const isLocalMuted = Boolean(localMutedPeersRef.current[peerId]);
-            const effective = isAudioBlockedRef.current || isLocalMuted ? 0 : clamped;
-            if (entry.webAudioGain) {
-                entry.webAudioGain.gain.value = effective;
-            }
-            if (entry.audioElement) {
-                entry.audioElement.volume = Math.min(1.0, effective);
-                entry.audioElement.muted = effective === 0;
-            }
-        }
-    }, []);
-
-    // Feature 2.1: One-Click Peer Mute for Me
-    const handleToggleMutePeer = useCallback((peerId) => {
-        setLocalMutedPeers((prev) => {
-            const nextVal = !prev[peerId];
-            localMutedPeersRef.current[peerId] = nextVal;
-
-            const entry = peersRef.current.get(peerId);
-            if (entry) {
-                const vol = peerVolumesRef.current[peerId] !== undefined ? peerVolumesRef.current[peerId] : 1.0;
-                const effective = isAudioBlockedRef.current || nextVal ? 0 : vol;
-                if (entry.webAudioGain) {
-                    entry.webAudioGain.gain.value = effective;
-                }
-                if (entry.audioElement) {
-                    entry.audioElement.volume = Math.min(1.0, effective);
-                    entry.audioElement.muted = effective === 0;
-                }
-            }
-
-            const pName = peerMetadata[peerId]?.username || 'Peer';
-            if (nextVal) {
-                showToast(`🔇 Muted ${pName} for you`);
-                addSystemMessage(`🔇 You muted ${pName} for yourself.`);
-            } else {
-                showToast(`🔊 Unmuted ${pName}`);
-                addSystemMessage(`🔊 You unmuted ${pName}.`);
-            }
-
-            return { ...prev, [peerId]: nextVal };
-        });
-    }, [addSystemMessage, peerMetadata, showToast]);
-
-    // Construct connected peers list with volume, mute, identity & speaking status
     const connectedPeers = useMemo(() => {
         const list = [];
         for (const [peerId, entry] of peersRef.current.entries()) {
