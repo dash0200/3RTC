@@ -4,6 +4,7 @@ import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
 import FloatingReactions, { LIVE_REACTIONS } from './FloatingReactions';
 import { PeerAudioPopover, getInitials } from './PeerVoiceRoster';
 import { getAvatarColor } from '../utils/sound';
+import { useLiveVoiceUsers } from '../utils/speakingActivity';
 import SoundboardTray from './SoundboardTray';
 
 export default function Stage({
@@ -371,93 +372,21 @@ export default function Stage({
           <div className="stage-bottom-divider" />
 
           {/* Voice Chips: Local User and Connected Peers */}
-          <div className="stage-bottom-voice-chips">
-            {localUser && (
-              <div
-                className={`stage-voice-chip ${localUser.isSpeaking ? 'speaking' : ''} ${isMicMuted ? 'muted' : 'live'}`}
-                onClick={isPttMode ? onOpenAudioSettings : onToggleMic}
-                title={
-                  isPttMode
-                    ? `PTT Mode: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
-                    : isMicMuted
-                      ? "Microphone is muted. Click to speak"
-                      : "Microphone is live. Click to mute"
-                }
-              >
-                <div className="voice-chip-avatar" style={{ background: '#f59e0b' }}>
-                  {getInitials(localUser.username || 'You')}
-                </div>
-                <span className="voice-chip-name">{localUser.username || 'You'} (You)</span>
-                <span className={`voice-chip-mic-badge ${isMicMuted ? 'muted' : 'live'}`}>
-                  {isMicMuted ? (
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-                      <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
-                    </svg>
-                  )}
-                </span>
-              </div>
-            )}
-
-            {connectedPeers.map((peer, idx) => {
-              const peerKey = peer.peerId || peer.id || `peer-${idx}`;
-              const isPeerSpeaking = Boolean(peer.isSpeaking);
-              const isPeerMuted = Boolean(peer.isMuted);
-              const isSelected = (selectedPeerPopover?.peerId || selectedPeerPopover?.id) === (peer.peerId || peer.id);
-              return (
-                <div key={peerKey} className="stage-peer-chip-wrapper">
-                  <div
-                    className={`stage-voice-chip ${isPeerSpeaking ? 'speaking' : ''} ${isPeerMuted ? 'muted' : 'live'} ${isSelected ? 'selected' : ''}`}
-                    onClick={() => handlePeerChipClick(peer)}
-                    title={`${peer.username}${isPeerSpeaking ? ' • Speaking' : ''}${isPeerMuted ? ' • Muted' : ''} (Click to adjust volume)`}
-                  >
-                    <div className="voice-chip-avatar" style={{ background: getAvatarColor(peer.username) }}>
-                      {getInitials(peer.username)}
-                    </div>
-                    <span className="voice-chip-name">{peer.username}</span>
-                    <span className={`voice-chip-mic-badge ${isPeerMuted ? 'muted' : 'live'}`}>
-                      {isPeerMuted ? (
-                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-                          <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
-                        </svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-                          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
-                        </svg>
-                      )}
-                    </span>
-                  </div>
-
-                  {isSelected && (
-                    <PeerAudioPopover
-                      peer={peer}
-                      onClose={() => setSelectedPeerPopover(null)}
-                      onSetVolume={onSetPeerVolume}
-                      onToggleMute={onToggleMutePeer}
-                    />
-                  )}
-                </div>
-              );
-            })}
-
-            {/* + Invite Pill */}
-            {roomId && (
-              <button
-                type="button"
-                className="stage-invite-btn"
-                onClick={typeof onOpenQrCode === 'function' ? onOpenQrCode : () => onCopyRoom(String(roomId))}
-                title="Invite peers: Scan QR code or copy 5-digit room code"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-                </svg>
-                <span>Invite</span>
-              </button>
-            )}
-          </div>
+          <StageVoiceChips connectedPeers={connectedPeers} localUser={localUser}
+            audioSettings={audioSettings}
+            handlePeerChipClick={handlePeerChipClick}
+            isMicMuted={isMicMuted}
+            isPttMode={isPttMode}
+            onCopyRoom={onCopyRoom}
+            onOpenAudioSettings={onOpenAudioSettings}
+            onOpenQrCode={onOpenQrCode}
+            onSetPeerVolume={onSetPeerVolume}
+            onToggleMic={onToggleMic}
+            onToggleMutePeer={onToggleMutePeer}
+            roomId={roomId}
+            selectedPeerPopover={selectedPeerPopover}
+            setSelectedPeerPopover={setSelectedPeerPopover}
+          />
         </div>
 
         {/* Right: Circular Action Buttons */}
@@ -656,5 +585,103 @@ export default function Stage({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Voice chips under the stage (you + each peer, with speaking rings and the volume popover).
+ * Reads live speaking activity itself, so the stage and video player don't re-render when
+ * someone talks.
+ */
+function StageVoiceChips({ connectedPeers: connectedPeersProp, localUser: localUserProp, audioSettings, handlePeerChipClick, isMicMuted, isPttMode, onCopyRoom, onOpenAudioSettings, onOpenQrCode, onSetPeerVolume, onToggleMic, onToggleMutePeer, roomId, selectedPeerPopover, setSelectedPeerPopover }) {
+  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
+  return (
+      <div className="stage-bottom-voice-chips">
+        {localUser && (
+          <div
+            className={`stage-voice-chip ${localUser.isSpeaking ? 'speaking' : ''} ${isMicMuted ? 'muted' : 'live'}`}
+            onClick={isPttMode ? onOpenAudioSettings : onToggleMic}
+            title={
+              isPttMode
+                ? `PTT Mode: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
+                : isMicMuted
+                  ? "Microphone is muted. Click to speak"
+                  : "Microphone is live. Click to mute"
+            }
+          >
+            <div className="voice-chip-avatar" style={{ background: '#f59e0b' }}>
+              {getInitials(localUser.username || 'You')}
+            </div>
+            <span className="voice-chip-name">{localUser.username || 'You'} (You)</span>
+            <span className={`voice-chip-mic-badge ${isMicMuted ? 'muted' : 'live'}`}>
+              {isMicMuted ? (
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                  <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                </svg>
+              )}
+            </span>
+          </div>
+        )}
+
+        {connectedPeers.map((peer, idx) => {
+          const peerKey = peer.peerId || peer.id || `peer-${idx}`;
+          const isPeerSpeaking = Boolean(peer.isSpeaking);
+          const isPeerMuted = Boolean(peer.isMuted);
+          const isSelected = (selectedPeerPopover?.peerId || selectedPeerPopover?.id) === (peer.peerId || peer.id);
+          return (
+            <div key={peerKey} className="stage-peer-chip-wrapper">
+              <div
+                className={`stage-voice-chip ${isPeerSpeaking ? 'speaking' : ''} ${isPeerMuted ? 'muted' : 'live'} ${isSelected ? 'selected' : ''}`}
+                onClick={() => handlePeerChipClick(peer)}
+                title={`${peer.username}${isPeerSpeaking ? ' • Speaking' : ''}${isPeerMuted ? ' • Muted' : ''} (Click to adjust volume)`}
+              >
+                <div className="voice-chip-avatar" style={{ background: getAvatarColor(peer.username) }}>
+                  {getInitials(peer.username)}
+                </div>
+                <span className="voice-chip-name">{peer.username}</span>
+                <span className={`voice-chip-mic-badge ${isPeerMuted ? 'muted' : 'live'}`}>
+                  {isPeerMuted ? (
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                      <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
+                    </svg>
+                  )}
+                </span>
+              </div>
+
+              {isSelected && (
+                <PeerAudioPopover
+                  peer={peer}
+                  onClose={() => setSelectedPeerPopover(null)}
+                  onSetVolume={onSetPeerVolume}
+                  onToggleMute={onToggleMutePeer}
+                />
+              )}
+            </div>
+          );
+        })}
+
+        {/* + Invite Pill */}
+        {roomId && (
+          <button
+            type="button"
+            className="stage-invite-btn"
+            onClick={typeof onOpenQrCode === 'function' ? onOpenQrCode : () => onCopyRoom(String(roomId))}
+            title="Invite peers: Scan QR code or copy 5-digit room code"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+            </svg>
+            <span>Invite</span>
+          </button>
+        )}
+      </div>
   );
 }

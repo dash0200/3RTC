@@ -18,6 +18,7 @@ import { attachRemoteAudio } from './webrtc/remoteAudio';
 import { attachPeerRecovery } from './webrtc/peerRecovery';
 import { createPeerMessageHandler } from './webrtc/peerMessages';
 import { useVoiceChat } from './hooks/useVoiceChat';
+import { speakingActivity } from './utils/speakingActivity';
 import { processSignalingMessage } from './webrtc/signalingMessages';
 import { useSignalingConnection } from './hooks/useSignalingConnection';
 import { useNetworkStats } from './hooks/useNetworkStats';
@@ -183,10 +184,6 @@ export default function App() {
         setPeerVolumes,
         localMutedPeers,
         setLocalMutedPeers,
-        peerAudioActivity,
-        setPeerAudioActivity,
-        localAudioActivity,
-        setLocalAudioActivity,
         audioSettings,
         voiceIsolationStatus,
         isPttActive,
@@ -253,11 +250,7 @@ export default function App() {
                 delete next[targetPeerId];
                 return next;
             });
-            setPeerAudioActivity((prev) => {
-                const next = { ...prev };
-                delete next[targetPeerId];
-                return next;
-            });
+            speakingActivity.removePeer(targetPeerId);
             updateP2PStatus();
         }
     }, [updateP2PStatus]);
@@ -269,7 +262,7 @@ export default function App() {
         }
         peersRef.current.clear();
         setPeerMetadata({});
-        setPeerAudioActivity({});
+        speakingActivity.clearPeers();
         setIsP2PConnected(false);
         setP2pStatusText('Waiting for peer to enter 5-digit code...');
         setLocalVideoFile(null);
@@ -899,8 +892,8 @@ export default function App() {
             setPeerVolumes({});
             setLocalMutedPeers({});
             setPeerMetadata({});
-            setPeerAudioActivity({});
-            setLocalAudioActivity({ isSpeaking: false, level: 0 });
+            speakingActivity.clearPeers();
+            speakingActivity.resetLocal();
             cleanupAllPeers();
             setRoomId(null);
             setIsHost(false);
@@ -1586,7 +1579,6 @@ export default function App() {
             if (entry.isConnected || entry.dataChannel?.readyState === 'open') {
                 const meta = peerMetadata[peerId] || {};
                 const voiceState = peerVoiceStates[meta.username] || {};
-                const act = peerAudioActivity[peerId] || { isSpeaking: false, level: 0 };
                 const vol = peerVolumes[peerId] !== undefined ? peerVolumes[peerId] : 1.0;
                 const isLocalMuted = Boolean(localMutedPeers[peerId]);
 
@@ -1596,15 +1588,13 @@ export default function App() {
                     username: meta.username || `Peer ${peerId.slice(0, 4)}`,
                     isHost: Boolean(meta.isHost),
                     isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceState.isMuted !== undefined ? voiceState.isMuted : true),
-                    isSpeaking: act.isSpeaking,
-                    audioLevel: act.level,
                     volume: vol,
                     isLocalMuted
                 });
             }
         }
         return list;
-    }, [peerMetadata, peerVoiceStates, peerAudioActivity, peerVolumes, localMutedPeers, peerCount, isP2PConnected]);
+    }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected]);
 
     const localUser = useMemo(() => {
         if (!roomId) return null;
@@ -1614,11 +1604,9 @@ export default function App() {
             username: username,
             isHost: isHost,
             isMuted: isMicMuted,
-            isSpeaking: localAudioActivity.isSpeaking,
-            audioLevel: localAudioActivity.level,
             isSelf: true
         };
-    }, [roomId, username, isHost, isMicMuted, localAudioActivity]);
+    }, [roomId, username, isHost, isMicMuted]);
 
     return (
         <div className="app-container">
@@ -1821,7 +1809,6 @@ export default function App() {
                 onClose={() => setShowAudioSettingsModal(false)}
                 audioSettings={audioSettings}
                 onUpdateAudioSettings={handleUpdateAudioSettings}
-                localAudioLevel={localAudioActivity.level}
                 isMicMuted={isMicMuted}
                 isPttActive={isPttActive}
                 voiceIsolationSupported={isVoiceIsolationSupported() || micPipeline.isolationSupported}

@@ -6,6 +6,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { sound } from '../utils/sound';
 import { voiceGate } from '../utils/voiceGate';
+import { speakingActivity } from '../utils/speakingActivity';
 import { micPipeline } from '../utils/micPipeline';
 import { replacePeerAudioTrack } from '../webrtc/peerEntry';
 import {
@@ -28,8 +29,7 @@ export function useVoiceChat(ctx) {
     // Feature 2.1: Per-Peer Volume Sliders & Speaking Rings State
     const [peerVolumes, setPeerVolumes] = useState({}); // { [peerId]: number (0.0 to 2.0) }
     const [localMutedPeers, setLocalMutedPeers] = useState({}); // { [peerId]: boolean }
-    const [peerAudioActivity, setPeerAudioActivity] = useState({}); // { [peerId]: { isSpeaking: boolean, level: number } }
-    const [localAudioActivity, setLocalAudioActivity] = useState({ isSpeaking: false, level: 0 });
+    // Speaking activity (rings / meters) lives in utils/speakingActivity.js, outside React state
     // Feature 2.2: Audio Processing Toggles (Noise Suppression & Echo Cancellation) & Push-to-Talk (PTT)
     const [audioSettings, setAudioSettings] = useState(() => loadAudioSettings());
     // Voice isolation on the live mic: null (mic not opened yet) | 'off' | 'active' (browser/OS)
@@ -227,7 +227,7 @@ export function useVoiceChat(ctx) {
             }
             setIsMicMuted(true);
             isMicMutedRef.current = true;
-            setLocalAudioActivity({ isSpeaking: false, level: 0 });
+            speakingActivity.resetLocal();
             if (!isPtt) {
                 showToast('🔇 Microphone muted');
                 addSystemMessage('🔇 You muted your microphone.');
@@ -413,7 +413,7 @@ export function useVoiceChat(ctx) {
                 }
                 setIsMicMuted(true);
                 isMicMutedRef.current = true;
-                setLocalAudioActivity({ isSpeaking: false, level: 0 });
+                speakingActivity.resetLocal();
 
                 const voiceMsg = {
                     type: 'peer-voice-status',
@@ -440,6 +440,10 @@ export function useVoiceChat(ctx) {
     useEffect(() => {
         const buffer = new Uint8Array(128); // 128 frequency bins (fftSize = 256)
         const interval = setInterval(() => {
+            // Nothing to measure (no live mic, no peers) and nothing showing: skip
+            const micLive = !isMicMutedRef.current && localAnalyserRef.current;
+            if (!micLive && peersRef.current.size === 0 && speakingActivity.isIdle()) return;
+
             // 1. Local Microphone Activity
             let localSpeaking = false;
             let localLevel = 0;
@@ -479,29 +483,7 @@ export function useVoiceChat(ctx) {
                 }
             }
 
-            setLocalAudioActivity((prev) => {
-                if (prev.isSpeaking !== localSpeaking || Math.abs(prev.level - localLevel) > 4) {
-                    return { isSpeaking: localSpeaking, level: localLevel };
-                }
-                return prev;
-            });
-
-            setPeerAudioActivity((prev) => {
-                let changed = false;
-                const peerIds = Object.keys(activityMap);
-                if (peerIds.length !== Object.keys(prev).length) {
-                    return activityMap;
-                }
-                for (const pid of peerIds) {
-                    const oldAct = prev[pid];
-                    const newAct = activityMap[pid];
-                    if (!oldAct || oldAct.isSpeaking !== newAct.isSpeaking || Math.abs(oldAct.level - newAct.level) > 5) {
-                        changed = true;
-                        break;
-                    }
-                }
-                return changed ? activityMap : prev;
-            });
+            speakingActivity.update({ isSpeaking: localSpeaking, level: localLevel }, activityMap);
         }, 75);
 
         return () => clearInterval(interval);
@@ -581,10 +563,6 @@ export function useVoiceChat(ctx) {
         setPeerVolumes,
         localMutedPeers,
         setLocalMutedPeers,
-        peerAudioActivity,
-        setPeerAudioActivity,
-        localAudioActivity,
-        setLocalAudioActivity,
         audioSettings,
         setAudioSettings,
         voiceIsolationStatus,
