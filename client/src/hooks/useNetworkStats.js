@@ -5,6 +5,16 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES } from '../utils/networkMonitor';
 
+// Polling produces fresh objects every time; keep the old one when nothing changed so React
+// doesn't re-render the app for identical stats
+function keepIfSame(prev, next) {
+    try {
+        return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    } catch {
+        return next;
+    }
+}
+
 export function useNetworkStats(ctx) {
     const { activeVideoId, localVideoFile, peerMetadata, peersRef, roomId, showToast } = ctx;
 
@@ -167,7 +177,7 @@ export function useNetworkStats(ctx) {
 
             if (isCancelled) return;
 
-            setPeersNetworkStats(peerStatsList);
+            setPeersNetworkStats((prev) => keepIfSame(prev, peerStatsList));
 
             const currentAvg = pingCount > 0 ? Math.round(sumPing / pingCount) : null;
             const drift = lastSyncDriftMsRef.current ?? (activeVideoId || localVideoFile ? 14 : undefined);
@@ -175,7 +185,7 @@ export function useNetworkStats(ctx) {
                 ? (drift <= 50 ? `Strict Sync (±${drift}ms)` : `Acceptable Drift (±${drift}ms)`)
                 : 'In Sync';
 
-            setNetworkStats({
+            const nextStats = {
                 avgPingMs: currentAvg,
                 minPingMs: minPing === Infinity ? currentAvg : minPing,
                 maxPingMs: maxPing === -Infinity ? currentAvg : maxPing,
@@ -186,7 +196,8 @@ export function useNetworkStats(ctx) {
                 syncDriftMs: drift,
                 syncDriftStatus: driftText,
                 pingHistory: peerStatsList[0]?.pingHistory || []
-            });
+            };
+            setNetworkStats((prev) => keepIfSame(prev, nextStats));
         };
 
         pollStats();

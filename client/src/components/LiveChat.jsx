@@ -1,13 +1,19 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { getAvatarColor } from '../utils/sound';
 
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
 const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]|\s)+$/u;
+const GRAPHEMES = typeof Intl !== 'undefined' && Intl.Segmenter
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  : null;
 function isEmojiOnly(text) {
   if (!text || !EMOJI_ONLY_RE.test(text) || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(text)) return false;
-  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
-    const count = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text.trim())].length;
-    return count <= 3;
+  if (GRAPHEMES) {
+    let count = 0;
+    for (const _ of GRAPHEMES.segment(text.trim())) {
+      if (++count > 3) return false;
+    }
+    return true;
   }
   return [...text.trim()].length <= 6;
 }
@@ -418,6 +424,13 @@ export default function LiveChat({
 
   // Newest message at the bottom (like WhatsApp): follow new messages while the user is at the
   // bottom, otherwise show the "New messages" pill. Own messages always scroll into view.
+  // Which messages are 1-3 emojis only (shown big, without a bubble); recomputed only when messages change
+  const emojiOnlyIds = useMemo(() => new Set(
+    messages
+      .filter((msg) => !msg.image?.url && !msg.imageTransfer && isEmojiOnly(msg.text))
+      .map((msg) => msg.id)
+  ), [messages]);
+
   const wasNearBottomRef = useRef(true);
   useEffect(() => {
     // Opening the chat tab always lands on the latest messages
@@ -725,7 +738,7 @@ export default function LiveChat({
                     const prev = messages[index - 1];
                     const startsGroup = !prev || prev.sender !== msg.sender ||
                       Math.abs((msg.timestamp || 0) - (prev.timestamp || 0)) > 5 * 60 * 1000;
-                    const emojiOnly = !msg.image?.url && !msg.imageTransfer && isEmojiOnly(msg.text);
+                    const emojiOnly = emojiOnlyIds.has(msg.id);
                     const side = msg.isSelf ? 'self' : 'peer';
 
                     return (
