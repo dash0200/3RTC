@@ -84,6 +84,12 @@ function leaveRoom(ws) {
   if (!roomId || !peerId) return;
 
   const room = rooms.get(roomId);
+  // A peer that reconnected replaced this (stale) socket: the old socket closing must not
+  // remove the live one or tell the room it left
+  if (room && room.get(peerId) !== ws) {
+    ws.roomId = null;
+    return;
+  }
   if (room) {
     room.delete(peerId);
     log('INFO', `Peer ${peerId} left room "${roomId}" (${room.size} remaining)`);
@@ -129,6 +135,42 @@ wss.on('connection', (ws) => {
 
     switch (type) {
       case 'create-room': {
+        // Host reconnecting after a signaling drop asks for its room back by code
+        const resumeRoomId = typeof data.roomId === 'string' || typeof data.roomId === 'number'
+          ? String(data.roomId).trim() : '';
+        if (/^\d{5}$/.test(resumeRoomId) && data.peerId && typeof data.peerId === 'string') {
+          const peerId = data.peerId.trim();
+          if (ws.roomId && ws.roomId !== resumeRoomId) {
+            leaveRoom(ws);
+          }
+          ws.peerId = peerId;
+          let room = rooms.get(resumeRoomId);
+          if (!room) {
+            room = new Map();
+            rooms.set(resumeRoomId, room);
+          } else if (room.size >= 3 && !room.has(peerId)) {
+            safeSend(ws, { type: 'error', message: `Room ${resumeRoomId} is full (maximum 3 users allowed)` });
+            return;
+          }
+          const previous = room.get(peerId);
+          if (previous && previous !== ws) previous.roomId = null; // its close won't remove us
+          room.set(peerId, ws);
+          ws.roomId = resumeRoomId;
+
+          const otherPeers = getOtherPeers(resumeRoomId, peerId);
+          log('RESUME', `Peer ${peerId} resumed room "${resumeRoomId}" (Total: ${room.size})`);
+          safeSend(ws, {
+            type: 'room-resumed',
+            roomId: resumeRoomId,
+            peerId,
+            peers: otherPeers.map((p) => p.peerId)
+          });
+          for (const peer of otherPeers) {
+            safeSend(peer.ws, { type: 'peer-joined', peerId });
+          }
+          break;
+        }
+
         // Generate an unused random 5-digit room ID (10000-99999)
         let generatedRoomId;
         let attempts = 0;
@@ -182,6 +224,13 @@ wss.on('connection', (ws) => {
           ws.peerId = data.peerId.trim();
         }
 
+        // A peer reconnecting after a signaling drop (or server restart) may arrive before the
+        // host does: restore the room instead of turning it away
+        if (!rooms.has(roomId) && data.rejoin === true) {
+          rooms.set(roomId, new Map());
+          log('INFO', `Room "${roomId}" restored by rejoining peer ${ws.peerId}`);
+        }
+
         if (!rooms.has(roomId)) {
           safeSend(ws, {
             type: 'error',
@@ -192,7 +241,8 @@ wss.on('connection', (ws) => {
         }
 
         const room = rooms.get(roomId);
-        if (room.size >= 3) {
+        // A peer rejoining after a signaling drop already has its seat
+        if (room.size >= 3 && !room.has(ws.peerId)) {
           safeSend(ws, {
             type: 'error',
             message: `Room ${roomId} is full (maximum 3 users allowed)`
@@ -200,6 +250,8 @@ wss.on('connection', (ws) => {
           return;
         }
 
+        const previous = room.get(ws.peerId);
+        if (previous && previous !== ws) previous.roomId = null; // stale socket: its close won't remove us
         room.set(ws.peerId, ws);
         ws.roomId = roomId;
 
@@ -249,7 +301,9 @@ wss.on('connection', (ws) => {
           from: ws.peerId,
           offer: data.offer,
           answer: data.answer,
-          candidate: data.candidate
+          candidate: data.candidate,
+          fresh: data.fresh === true ? true : undefined,           // brand-new connection
+          iceRestart: data.iceRestart === true ? true : undefined  // reconnect of an existing one
         };
 
         // Targeted message
