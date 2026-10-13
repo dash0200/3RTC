@@ -455,7 +455,7 @@ export function PeerVoicePanel({
           <div className="voice-empty-state">
             <div className="empty-state-icon">👥</div>
             <h5>No Other Peers Connected</h5>
-            <p>Share your 5-digit room code with up to 2 friends to start voice chat and watch together!</p>
+            <p>Share your 5-digit room code with friends to start voice chat and watch together!</p>
             {roomId && (
               <button
                 type="button"
