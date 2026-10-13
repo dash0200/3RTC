@@ -1,21 +1,20 @@
 /**
- * Microphone send pipeline: everything that happens to your voice on this device before it is
- * sent to peers. Runs entirely in the browser, no server involved.
+ * Microphone send pipeline: in-app noise removal for your voice before it is sent to peers.
+ * Runs entirely in the browser, no server involved.
  *
  *   mic (AEC + NS + AGC from getUserMedia)
- *     -> RNNoise neural noise removal   (only with Voice Isolation on and no native browser/OS support)
- *     -> voice gate                     (lookahead + smooth gain, see voiceGate.js)
+ *     -> RNNoise neural noise removal   (Voice Isolation on, and no native browser/OS isolation)
  *     -> persistent mono track sent to every peer
  *
- * The output track is persistent, so switching microphones or toggling isolation only rewires
- * the graph and senders keep the same track. If the pipeline can't run (no AudioWorklet, the
- * audio context won't start), build() returns the raw mic track so voice still works ungated.
+ * Open mic sends continuously (like Teams): background noise is removed, the mic isn't cut
+ * between words. Without in-app noise removal the raw mic track is sent and no graph is built.
+ * The output track is persistent, so switching microphones only rewires the graph and senders
+ * keep the same track. If RNNoise can't run, build() returns the raw mic track.
  */
 import { RnnoiseWorkletNode, loadRnnoise } from '@sapphi-red/web-noise-suppressor';
 import rnnoiseWorkletUrl from '@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url';
 import rnnoiseWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise.wasm?url';
 import rnnoiseSimdWasmUrl from '@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url';
-import { voiceGate } from './voiceGate';
 
 const SAMPLE_RATE = 48000; // Opus and RNNoise both work at 48 kHz: no resampling in the path
 const RESUME_TIMEOUT_MS = 400;
@@ -26,7 +25,6 @@ class MicPipeline {
     this.destination = null;
     this.source = null;
     this.rnnoise = null;
-    this.gateNode = null;
     this.stream = null;
     this.isolationActive = false;
     this.rnnoisePromise = null;
@@ -34,7 +32,7 @@ class MicPipeline {
     this.buildId = 0;
   }
 
-  /** True when this browser can run the in-app pipeline (gate, and RNNoise with WebAssembly). */
+  /** True when this browser can run AudioWorklet processing. */
   get isSupported() {
     return typeof AudioWorkletNode !== 'undefined';
   }
@@ -94,15 +92,16 @@ class MicPipeline {
       this.teardown();
       return { track: null, isolationActive: false };
     }
-    // Same mic, same choice, still running: keep the graph (no re-learning the room on each unmute)
-    if (this.stream === stream && this.source && this.isolationActive === Boolean(isolation) &&
+    // Same mic, still running: keep the graph
+    if (isolation && this.stream === stream && this.source && this.isolationActive &&
       this.ctx?.state === 'running') {
-      return { track: this.getOutputTrack(), isolationActive: this.isolationActive };
+      return { track: this.getOutputTrack(), isolationActive: true };
     }
 
     const id = ++this.buildId;
     this.teardown();
-    if (!this.isSupported) return { track: rawTrack, isolationActive: false };
+    // Nothing to do in-app: send the mic as-is
+    if (!isolation || !this.isolationSupported) return { track: rawTrack, isolationActive: false };
 
     try {
       const ctx = this.getContext();
@@ -110,39 +109,26 @@ class MicPipeline {
       if (!(await this.ensureRunning(ctx))) return { track: rawTrack, isolationActive: false };
 
       let wasmBinary = null;
-      if (isolation && this.isolationSupported) {
-        try { wasmBinary = await this.ensureRnnoise(ctx); } catch { wasmBinary = null; }
-      }
-      const gateNode = await voiceGate.attach(ctx);
+      try { wasmBinary = await this.ensureRnnoise(ctx); } catch { wasmBinary = null; }
       if (id !== this.buildId) {
         // A newer build started while this one was loading
-        if (gateNode && voiceGate.node === gateNode) voiceGate.detach();
         return { track: this.getOutputTrack() || rawTrack, isolationActive: this.isolationActive };
       }
-      if (!gateNode && !wasmBinary) return { track: rawTrack, isolationActive: false };
+      if (!wasmBinary) return { track: rawTrack, isolationActive: false };
 
       const source = ctx.createMediaStreamSource(stream);
-      let tail = source;
-      if (wasmBinary) {
-        const rnnoise = new RnnoiseWorkletNode(ctx, { maxChannels: 1, wasmBinary });
-        // Force mono in and out: otherwise the node outputs stereo with only one channel cleaned,
-        // and the mono downmix to the sent track halves the voice level (-6 dB)
-        rnnoise.channelCount = 1;
-        rnnoise.channelCountMode = 'explicit';
-        tail.connect(rnnoise);
-        tail = rnnoise;
-        this.rnnoise = rnnoise;
-      }
-      if (gateNode) {
-        tail.connect(gateNode);
-        tail = gateNode;
-        this.gateNode = gateNode;
-      }
-      tail.connect(this.destination);
+      const rnnoise = new RnnoiseWorkletNode(ctx, { maxChannels: 1, wasmBinary });
+      // Force mono in and out: otherwise the node outputs stereo with only one channel cleaned,
+      // and the mono downmix to the sent track halves the voice level (-6 dB)
+      rnnoise.channelCount = 1;
+      rnnoise.channelCountMode = 'explicit';
+      source.connect(rnnoise);
+      rnnoise.connect(this.destination);
+      this.rnnoise = rnnoise;
 
       this.source = source;
       this.stream = stream;
-      this.isolationActive = Boolean(wasmBinary);
+      this.isolationActive = true;
       return { track: this.getOutputTrack() || rawTrack, isolationActive: this.isolationActive };
     } catch {
       this.teardown();
@@ -159,10 +145,8 @@ class MicPipeline {
       try { this.rnnoise.disconnect(); } catch { }
       try { this.rnnoise.destroy(); } catch { }
     }
-    voiceGate.detach();
     this.source = null;
     this.rnnoise = null;
-    this.gateNode = null;
     this.stream = null;
     this.isolationActive = false;
   }
