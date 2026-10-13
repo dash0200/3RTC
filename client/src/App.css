@@ -10292,3 +10292,25 @@ video::cue {
     max-height: calc(85vh - 64px);
   }
 }
+
+/* Attach-image button in the chat input (same look as the emoji button) */
+.chat-pill-attach-btn {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 3px;
+  transform: rotate(45deg);
+  transition: color 0.15s;
+}
+
+.chat-pill-attach-btn:not(:disabled):hover {
+  color: #ffffff;
+}
+
+.chat-pill-attach-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
