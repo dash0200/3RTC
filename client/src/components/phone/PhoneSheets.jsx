@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SoundboardTray from '../SoundboardTray';
-import { extractYouTubeId, fetchYouTubeTitle, PRESET_CATEGORIES } from '../YouTubeSyncPlayer';
+import { extractYouTubeId, fetchYouTubeTitle, isVideoUnavailable, PRESET_CATEGORIES } from '../YouTubeSyncPlayer';
 
 /** Bottom sheet frame: backdrop (tap to close), drag handle, title, close button, Escape closes. */
 export function BottomSheet({ isOpen, onClose, title, children }) {
@@ -118,7 +118,7 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
         ))}
       </div>
       <div className="phone-list">
-        {category?.videos.map((v) => (
+        {category?.videos.filter((v) => !isVideoUnavailable(v.id)).map((v) => (
           <button
             key={v.id}
             type="button"
