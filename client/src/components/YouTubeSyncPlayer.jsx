@@ -45,56 +45,80 @@ export async function fetchYouTubeTitle(videoId, fallbackTitle = '') {
   return fallbackTitle || `YouTube Video (${videoId})`;
 }
 
+// Quick picks. Every ID was checked against YouTube's embed lookup (Oct 2026): it exists, is public
+// and allows playing on other sites. Mostly official channels (Lofi Girl, Chillhop, Blender, NASA)
+// because their videos stay up; fan re-uploads and seasonal live streams disappear.
 export const PRESET_CATEGORIES = [
   {
     id: 'lofi',
     name: '🎵 Lofi Beats',
     videos: [
-      { id: 'lTRiuFIWV54', title: '1 A.M. Study Session (Lofi Girl)' },
-      { id: 'n61ULEU7CO0', title: 'Best of Lofi Hip Hop' },
-      { id: 'a5sdsbGKz8U', title: 'Lofi Hip Hop Mix' },
-      { id: '_tV5LEBDs7w', title: 'Cozy Winter Lofi' }
+      { id: 'jfKfPfyJRdk', title: 'lofi hip hop radio – beats to relax/study to (Lofi Girl)' },
+      { id: 'lTRiuFIWV54', title: '1 A.M Study Session (Lofi Girl)' },
+      { id: '_tV5LEBDs7w', title: 'Cozy Winter (Lofi Girl)' },
+      { id: 'n61ULEU7CO0', title: 'Best of lofi hip hop 2021 (Lofi Girl)' },
+      { id: '28KRPhVzCus', title: 'lofi hip hop radio – beats to sleep/chill to (Lofi Girl)' }
+    ]
+  },
+  {
+    id: 'chill',
+    name: '🎷 Jazz & Chill',
+    videos: [
+      { id: 'HuFYqnbVbzY', title: 'jazz lofi radio (Lofi Girl)' },
+      { id: '5yx6BWlEVcY', title: 'Chillhop Radio – jazzy & lofi hip hop beats' },
+      { id: 'f02mOEt11OQ', title: 'code-fi / lofi beats to code/relax to' },
+      { id: '1ZYbU82GVz4', title: 'Flying – Relaxing Music (Peder B. Helland)' }
     ]
   },
   {
     id: 'synthwave',
     name: '🌆 Synthwave',
     videos: [
-      { id: 'b4N4q-y-L04', title: 'Night Drive (NewRetroWave)' },
-      { id: 'B_9H4o4j16Q', title: "After School '89 Chillwave" },
-      { id: 'g4H51H-pY6k', title: 'Space Trip Synthwave Mix' },
-      { id: 'F3QYt1l_Mog', title: '1991 Interface Never Sleeps' }
+      { id: '4xDzrJKXOOY', title: 'synthwave radio – beats to chill/game to (Lofi Girl)' },
+      { id: 'MV_3Dpw-BRY', title: 'Kavinsky – Nightcall (Drive soundtrack)' },
+      { id: '8GW6sLrK40k', title: 'HOME – Resonance' }
     ]
   },
   {
-    id: 'bunny',
-    name: '🎬 Big Buck Bunny',
+    id: 'movies',
+    name: '🎬 Open Movies',
     videos: [
       { id: 'aqz-KE-bpKQ', title: 'Big Buck Bunny (4K 60fps)' },
-      { id: 'R6MlUcmOul8', title: 'Tears of Steel (Blender Sci-Fi)' },
-      { id: '41hv2tW5Lc4', title: 'Spring (Blender Open Movie)' }
+      { id: 'eRsGyueVLvQ', title: 'Sintel (Blender Open Movie)' },
+      { id: 'R6MlUcmOul8', title: 'Tears of Steel (Blender Open Movie)' },
+      { id: 'WhWc3b3KhnY', title: 'Spring (Blender Open Movie)' },
+      { id: 'mN0zPOpADL4', title: 'Agent 327: Operation Barbershop' },
+      { id: 'Y-rmzh0PI3c', title: 'Cosmos Laundromat (Blender Open Movie)' }
     ]
   },
   {
     id: 'space',
-    name: '🌌 Space Ambient',
+    name: '🌌 Space',
     videos: [
-      { id: '1ZYbU82GVz4', title: 'Deep Space Cosmic Relaxation' },
-      { id: 'yE-n7rC_cT4', title: 'Starfield Space Ambient' },
-      { id: 'n5Xv_Jz-1_k', title: 'Stargazing Space Ambient' },
-      { id: 'N66f6Q7LpSc', title: 'Stillness Space Ambient' }
-    ]
-  },
-  {
-    id: 'cyberpunk',
-    name: '⚡ Cyberpunk Radio',
-    videos: [
-      { id: 'f02mOEt11OQ', title: 'Code-Fi Lofi Beats' },
-      { id: 'vV95-9b2sR0', title: 'CircuitsFM Cyberpunk Radio' },
-      { id: 'k3A-3g8sZ6M', title: 'NewRetroWave Radio' }
+      { id: '21X5lGlDOfg', title: 'NASA Live: Official Stream of NASA TV' },
+      { id: '4czjS9h4Fpg', title: 'Perseverance Rover Landing on Mars (NASA)' },
+      { id: 'UDVtMYqUAyw', title: 'Interstellar Main Theme – Hans Zimmer (extended)' }
     ]
   }
 ];
+
+// Videos YouTube refused this session (removed, private, or blocked from playing on other sites
+// or in this region). Quick picks skip them, so a broken one is never offered twice.
+const unavailableVideoIds = new Set();
+
+export const isVideoUnavailable = (id) => unavailableVideoIds.has(id);
+
+/** The next quick pick after `videoId` in its category that hasn't failed, or null. */
+function nextPlayablePreset(videoId) {
+  const category = PRESET_CATEGORIES.find((c) => c.videos.some((v) => v.id === videoId));
+  if (!category) return null;
+  const start = category.videos.findIndex((v) => v.id === videoId);
+  for (let step = 1; step < category.videos.length; step += 1) {
+    const candidate = category.videos[(start + step) % category.videos.length];
+    if (!unavailableVideoIds.has(candidate.id)) return candidate;
+  }
+  return null;
+}
 
 export default function YouTubeSyncPlayer({
   videoId,
@@ -215,6 +239,7 @@ export default function YouTubeSyncPlayer({
       }
 
       try {
+        const playerVideoId = videoId; // errors are about this video, even if the room moved on
         playerRef.current = new window.YT.Player(element, {
           videoId: videoId,
           playerVars: {
@@ -245,15 +270,7 @@ export default function YouTubeSyncPlayer({
               } catch (err) { }
             },
             onStateChange: handlePlayerStateChange,
-            onError: (e) => {
-              let msg = 'Video playback error';
-              if (e.data === 101 || e.data === 150) {
-                msg = 'Embedding disabled by video owner';
-              } else if (e.data === 100) {
-                msg = 'Video not found or removed';
-              }
-              setSyncStatus(msg);
-            }
+            onError: (e) => handlePlayerErrorRef.current?.(e.data, playerVideoId)
           }
         });
         return true;
@@ -528,9 +545,39 @@ export default function YouTubeSyncPlayer({
     }
   };
 
+  // YouTube refused the video (100: removed or private; 101/150: owner blocks other sites, or it's
+  // blocked in this region / age-restricted). Skip to the next queued video, or the next working
+  // quick pick in the same category, instead of leaving everyone on "Video unavailable".
+  const handlePlayerErrorRef = useRef(null);
+  handlePlayerErrorRef.current = (code, failedId) => {
+    const currentId = currentVideoIdRef.current || videoId;
+    if (code !== 100 && code !== 101 && code !== 150) {
+      if (failedId === currentId) setSyncStatus('Video playback error');
+      return;
+    }
+    if (failedId) unavailableVideoIds.add(failedId);
+    // Late error for a video the room already left (another peer skipped it first): nothing to do
+    if (failedId !== currentId) return;
+    const reason = code === 100 ? 'removed or private' : 'blocked outside YouTube';
+
+    if (queue.length > 0 && typeof onPlayNextInQueue === 'function') {
+      setSyncStatus(`Unavailable (${reason}), playing next`);
+      onPlayNextInQueue();
+      return;
+    }
+    const replacement = failedId ? nextPlayablePreset(failedId) : null;
+    if (replacement) {
+      setSyncStatus(`Unavailable (${reason}), trying another`);
+      onVideoChange(replacement.id, replacement.title);
+      onBroadcastAction('load', { newVideoId: replacement.id, title: replacement.title });
+      return;
+    }
+    setSyncStatus(`Video unavailable (${reason})`);
+  };
+
   const handleSelectPreset = (category) => {
     setInputError('');
-    const pool = category.videos;
+    const pool = category.videos.filter((v) => !unavailableVideoIds.has(v.id));
     if (!pool || pool.length === 0) return;
 
     const activeId = currentVideoIdRef.current || videoId;
