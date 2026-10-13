@@ -867,9 +867,61 @@
   display: none;
 }
 
+/* While a YouTube video is loaded the area grows by the status row, so the video itself
+   gets the full screen width at 16:9 (the row no longer eats into the picture) */
+.phone-app .stage-section.stage-phone:has(.yt-fullstage-player) {
+  aspect-ratio: auto;
+  height: calc(100vw * 9 / 16 + 40px);
+  max-height: 58dvh;
+}
+
+.phone-app .stage-phone .stage-canvas:has(.yt-fullstage-player) {
+  padding: 0;
+}
+
+.phone-app .stage-phone .yt-fullstage-player:not(.is-fullscreen) {
+  gap: 0;
+  height: 100%;
+}
+
 .phone-app .stage-phone .yt-stage-topbar {
-  padding: 4px 8px;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  height: 40px;
   min-height: 0;
+  padding: 0 8px;
+  gap: 6px;
+  border-radius: 0;
+  background: #0e0e0e;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.phone-app .stage-phone .yt-stage-top-controls {
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 6px;
+}
+
+.phone-app .stage-phone .yt-active-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-app .stage-phone .yt-sync-pill {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.phone-app .stage-phone .yt-stage-canvas-viewport {
+  flex: 1;
+  aspect-ratio: auto;
+  height: auto;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 /* ---------- Toasts at the top (clear of the message box); push-to-talk badge above the bar ---------- */
