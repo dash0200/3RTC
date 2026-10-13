@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SoundboardTray from '../SoundboardTray';
-import { extractYouTubeId, fetchYouTubeTitle, isVideoUnavailable } from '../YouTubeSyncPlayer';
-import { useQuickPicks } from '../../utils/quickPicks';
+import { extractYouTubeId, fetchYouTubeTitle } from '../YouTubeSyncPlayer';
+import { groupQuickPicks, isVideoUnavailable, useQuickPicks, youtubeThumb } from '../../utils/quickPicks';
 
 /** Bottom sheet frame: backdrop (tap to close), drag handle, title, close button, Escape closes. */
 export function BottomSheet({ isOpen, onClose, title, children }) {
@@ -45,10 +45,13 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const quickPicks = useQuickPicks();
+  const groups = groupQuickPicks(quickPicks);
+  const [groupName, setGroupName] = useState(null);
   const [categoryId, setCategoryId] = useState(null);
   const fileRef = useRef(null);
 
-  const category = quickPicks.find((c) => c.id === categoryId) || quickPicks[0];
+  const group = groups.find((g) => g.group === groupName) || groups[0];
+  const category = group?.categories.find((c) => c.id === categoryId) || group?.categories[0];
 
   const submitLink = async (mode) => {
     const id = extractYouTubeId(link.trim());
@@ -105,14 +108,30 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
       </form>
 
       <div className="phone-section-label">QUICK PICKS</div>
+      {groups.length > 1 && (
+        <div className="phone-segmented" role="tablist" aria-label="Quick pick groups">
+          {groups.map((g) => (
+            <button
+              key={g.group}
+              type="button"
+              role="tab"
+              aria-selected={g === group}
+              className={g === group ? 'active' : ''}
+              onClick={() => { setGroupName(g.group); setCategoryId(null); }}
+            >
+              {g.group}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="phone-chip-row" role="tablist" aria-label="Quick pick categories">
-        {quickPicks.map((c) => (
+        {group?.categories.map((c) => (
           <button
             key={c.id}
             type="button"
             role="tab"
-            aria-selected={c.id === category?.id}
-            className={`phone-chip ${c.id === category?.id ? 'active' : ''}`}
+            aria-selected={c === category}
+            className={`phone-chip ${c === category ? 'active' : ''}`}
             onClick={() => setCategoryId(c.id)}
           >
             {c.name}
@@ -120,22 +139,30 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
         ))}
       </div>
       <div className="phone-list">
-        {category?.videos.filter((v) => !isVideoUnavailable(v.id)).slice(0, 12).map((v) => (
-          <button
-            key={v.id}
-            type="button"
-            className="phone-row"
-            onClick={() => {
-              onLoadYouTube?.(v.id, v.title);
-              onClose?.();
-            }}
-          >
-            <span className="phone-row-thumb" aria-hidden="true">
-              <img src={`https://i.ytimg.com/vi/${v.id}/default.jpg`} alt="" loading="lazy" />
-            </span>
-            <span className="phone-row-text">{v.title}</span>
-            {Chevron}
-          </button>
+        {category?.videos.filter((v) => !isVideoUnavailable(v.id)).map((v) => (
+          <div key={v.id} className="phone-pick">
+            <button
+              type="button"
+              className="phone-row"
+              onClick={() => {
+                onLoadYouTube?.(v.id, v.title);
+                onClose?.();
+              }}
+            >
+              <span className="phone-row-thumb" aria-hidden="true">
+                <img src={youtubeThumb(v.id)} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
+              </span>
+              <span className="phone-row-text">
+                <span className="phone-pick-title">{v.title}</span>
+                {v.channel && <span className="phone-pick-channel">{v.channel}</span>}
+              </span>
+            </button>
+            {onQueueYouTube && (
+              <button type="button" className="phone-pick-queue" onClick={() => onQueueYouTube(v.id, v.title)} aria-label={`Add "${v.title}" to queue`}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 10H3v2h11v-2zm0-4H3v2h11V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM3 16h7v-2H3v2z" /></svg>
+              </button>
+            )}
+          </div>
         ))}
       </div>
 

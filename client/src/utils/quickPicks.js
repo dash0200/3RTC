@@ -14,6 +14,7 @@ import { useSyncExternalStore } from 'react';
 export const BUILTIN_QUICK_PICKS = [
   {
     id: 'lofi',
+    group: 'Music',
     name: '🎵 Lofi Beats',
     videos: [
       { id: 'jfKfPfyJRdk', title: 'lofi hip hop radio – beats to relax/study to (Lofi Girl)' },
@@ -25,6 +26,7 @@ export const BUILTIN_QUICK_PICKS = [
   },
   {
     id: 'chill',
+    group: 'Music',
     name: '🎷 Jazz & Chill',
     videos: [
       { id: 'HuFYqnbVbzY', title: 'jazz lofi radio (Lofi Girl)' },
@@ -35,6 +37,7 @@ export const BUILTIN_QUICK_PICKS = [
   },
   {
     id: 'synthwave',
+    group: 'Music',
     name: '🌆 Synthwave',
     videos: [
       { id: '4xDzrJKXOOY', title: 'synthwave radio – beats to chill/game to (Lofi Girl)' },
@@ -44,6 +47,7 @@ export const BUILTIN_QUICK_PICKS = [
   },
   {
     id: 'movies',
+    group: 'Watch',
     name: '🎬 Open Movies',
     videos: [
       { id: 'aqz-KE-bpKQ', title: 'Big Buck Bunny (4K 60fps)' },
@@ -56,6 +60,7 @@ export const BUILTIN_QUICK_PICKS = [
   },
   {
     id: 'space',
+    group: 'Relax',
     name: '🌌 Space',
     videos: [
       { id: '21X5lGlDOfg', title: 'NASA Live: Official Stream of NASA TV' },
@@ -71,8 +76,9 @@ const VIDEO_ID = /^[\w-]{11}$/;
 /** Server data is checked before use: a broken or odd response never replaces a working list. */
 function sanitize(data) {
   if (!data || !Array.isArray(data.categories)) return null;
-  const categories = data.categories.slice(0, 12).map((c) => ({
+  const categories = data.categories.slice(0, 40).map((c) => ({
     id: String(c?.id || '').slice(0, 40),
+    group: String(c?.group || 'Picks').slice(0, 30),
     name: String(c?.name || '').slice(0, 60),
     videos: (Array.isArray(c?.videos) ? c.videos : [])
       .filter((v) => VIDEO_ID.test(String(v?.id || '')))
@@ -159,3 +165,28 @@ export function findQuickPickTitle(videoId) {
   }
   return null;
 }
+
+/** Categories grouped for display, groups in first-seen order: [{ group, categories }] */
+export function groupQuickPicks(categories) {
+  const groups = [];
+  for (const category of categories) {
+    let entry = groups.find((g) => g.group === category.group);
+    if (!entry) {
+      entry = { group: category.group || 'Picks', categories: [] };
+      groups.push(entry);
+    }
+    entry.categories.push(category);
+  }
+  return groups;
+}
+
+export const youtubeThumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+
+// Videos YouTube refused this session (removed, private, or blocked from playing on other sites
+// or in this region). Quick picks skip them, so a broken one is never offered twice.
+const unavailableVideoIds = new Set();
+export const isVideoUnavailable = (id) => unavailableVideoIds.has(id);
+export const markVideoUnavailable = (id) => {
+  unavailableVideoIds.add(id);
+  setQuickPicks([...current]); // new snapshot, so pickers re-render without the video
+};

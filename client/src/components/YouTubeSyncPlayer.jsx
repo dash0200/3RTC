@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { findQuickPickTitle, getQuickPicks, useQuickPicks } from '../utils/quickPicks';
+import { findQuickPickTitle, getQuickPicks, isVideoUnavailable, markVideoUnavailable } from '../utils/quickPicks';
+import QuickPicksBrowser from './QuickPicksBrowser';
 
 // Extract YouTube ID from various URL formats or raw 11-char ID
 export function extractYouTubeId(urlOrId) {
@@ -44,11 +45,7 @@ export async function fetchYouTubeTitle(videoId, fallbackTitle = '') {
   return fallbackTitle || `YouTube Video (${videoId})`;
 }
 
-// Videos YouTube refused this session (removed, private, or blocked from playing on other sites
-// or in this region). Quick picks skip them, so a broken one is never offered twice.
-const unavailableVideoIds = new Set();
-
-export const isVideoUnavailable = (id) => unavailableVideoIds.has(id);
+export { isVideoUnavailable };
 
 /** The next quick pick after `videoId` in its category that hasn't failed, or null. */
 function nextPlayablePreset(videoId) {
@@ -57,7 +54,7 @@ function nextPlayablePreset(videoId) {
   const start = category.videos.findIndex((v) => v.id === videoId);
   for (let step = 1; step < category.videos.length; step += 1) {
     const candidate = category.videos[(start + step) % category.videos.length];
-    if (!unavailableVideoIds.has(candidate.id)) return candidate;
+    if (!isVideoUnavailable(candidate.id)) return candidate;
   }
   return null;
 }
@@ -97,7 +94,6 @@ export default function YouTubeSyncPlayer({
   const [isDropOver, setIsDropOver] = useState(false);
   const [activeSourceTab, setActiveSourceTab] = useState('youtube'); // 'youtube' | 'local'
 
-  const quickPicks = useQuickPicks();
   const playerRef = useRef(null);
   const fullstageRef = useRef(null);
   const iframeContainerRef = useRef(null);
@@ -498,7 +494,7 @@ export default function YouTubeSyncPlayer({
       if (failedId === currentId) setSyncStatus('Video playback error');
       return;
     }
-    if (failedId) unavailableVideoIds.add(failedId);
+    if (failedId) markVideoUnavailable(failedId);
     // Late error for a video the room already left (another peer skipped it first): nothing to do
     if (failedId !== currentId) return;
     const reason = code === 100 ? 'removed or private' : 'blocked outside YouTube';
@@ -520,7 +516,7 @@ export default function YouTubeSyncPlayer({
 
   const handleSelectPreset = (category) => {
     setInputError('');
-    const pool = category.videos.filter((v) => !unavailableVideoIds.has(v.id));
+    const pool = category.videos.filter((v) => !isVideoUnavailable(v.id));
     if (!pool || pool.length === 0) return;
 
     const activeId = currentVideoIdRef.current || videoId;
@@ -925,26 +921,15 @@ export default function YouTubeSyncPlayer({
             </form>
             {inputError && <div className="yt-url-error">{inputError}</div>}
 
-            {/* Quick Presets Row */}
-            <div className="yt-hero-presets-row">
-              <span className="yt-hero-presets-tag">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="#f59e0b">
-                  <path d="M7 2v11h3v9l7-12h-4l4-8z" />
-                </svg>
-                Quick Watch
-              </span>
-              {quickPicks.map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  className="yt-hero-preset-btn"
-                  onClick={() => handleSelectPreset(cat)}
-                  title={`Play ${cat.name}`}
-                >
-                  {cat.name}
-                </button>
-              ))}
-            </div>
+            {/* Quick picks: groups, categories and a thumbnail grid */}
+            <QuickPicksBrowser
+              onPlay={(v) => {
+                setInputError('');
+                onVideoChange(v.id, v.title);
+                onBroadcastAction('load', { newVideoId: v.id, title: v.title });
+              }}
+              onShuffle={handleSelectPreset}
+            />
           </>
         ) : (
           <>
