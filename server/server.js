@@ -19,30 +19,41 @@ const PORT = process.env.PORT || 8080;
 
 // ---------------------------------------------------------------------------------------------
 // YouTube quick picks
-// The server searches YouTube for each category a few times a day and every client reads the
-// cached result from GET /api/quick-picks, so YouTube API quota depends on the refresh schedule,
-// never on how many people use the app: 5 searches x 4 refreshes/day = 2,000 of the 10,000 free
-// daily units. The API key stays here and never reaches a browser. It comes from the
-// YOUTUBE_API_KEY environment variable or the private file .youtube-api-key next to server.js
-// (deploy_gcp.py uploads it), and is re-read on every refresh, so adding it needs no restart.
-// Without a key the endpoint returns 503 and clients keep their built-in list.
+// The server searches YouTube for each category and every client reads the cached result from
+// GET /api/quick-picks, so YouTube API quota depends only on the refresh schedule, never on how
+// many people use the app. The schedule is worked out from a daily budget (default 9,000 of the
+// 10,000 free units, leaving room for restarts and retries): one refresh is 5 searches x 100
+// units + 6 one-unit checks = 506 units, so about 17 refreshes a day, one every ~85 minutes.
+//
+// Each refresh uses the next search phrase of every category, and new results are merged into a
+// rolling set of up to QUICK_PICKS_POOL_SIZE videos (newest first), so frequent refreshes keep
+// bringing new videos rather than the same top results. Saved videos are re-checked on every
+// refresh (part of the same 1-unit call), so removed or blocked ones drop out.
+//
+// The API key stays here and never reaches a browser. It comes from the YOUTUBE_API_KEY
+// environment variable or the private file .youtube-api-key next to server.js (deploy_gcp.py
+// uploads it). Without a key the endpoint returns 503 and clients keep their built-in list.
 // ---------------------------------------------------------------------------------------------
 const QUICK_PICK_CATEGORIES = [
   { id: 'trending', name: '🔥 Trending Music', chart: true },
-  { id: 'lofi', name: '🎵 Lofi Beats', query: 'lofi hip hop' },
-  { id: 'chill', name: '🎷 Jazz & Chill', query: 'jazz lofi chill music' },
-  { id: 'synthwave', name: '🌆 Synthwave', query: 'synthwave mix' },
-  { id: 'movies', name: '🎬 Short Films', query: 'animated short film' },
-  { id: 'space', name: '🌌 Space', query: 'space ambient music 4k' }
+  { id: 'lofi', name: '🎵 Lofi Beats', queries: ['lofi hip hop', 'lofi study beats', 'lofi chill mix', 'lofi rainy night', 'lofi radio live'] },
+  { id: 'chill', name: '🎷 Jazz & Chill', queries: ['jazz lofi chill music', 'coffee shop jazz', 'chillhop mix', 'bossa nova cafe music', 'smooth jazz relaxing'] },
+  { id: 'synthwave', name: '🌆 Synthwave', queries: ['synthwave mix', 'retrowave night drive', 'outrun synthwave', 'chillwave mix', 'darksynth cyberpunk mix'] },
+  { id: 'movies', name: '🎬 Short Films', queries: ['animated short film', 'cgi animated short', 'sci-fi short film', 'pixar style short film', 'award winning short film'] },
+  { id: 'space', name: '🌌 Space', queries: ['space ambient music 4k', 'deep space ambient', 'earth from space 4k', 'cosmic relaxation music', 'nasa space footage 4k'] }
 ];
-const QUICK_PICKS_PER_CATEGORY = 8;
+const QUICK_PICKS_POOL_SIZE = 20; // videos kept per category (newest first)
 const QUICK_PICKS_REGION = (process.env.QUICK_PICKS_REGION || 'IN').toUpperCase(); // trending chart + region checks
-const QUICK_PICKS_REFRESH_MS = Math.max(1, Number(process.env.QUICK_PICKS_REFRESH_HOURS) || 6) * 3600 * 1000;
+const QUICK_PICKS_DAILY_UNITS = Math.min(10000, Number(process.env.QUICK_PICKS_DAILY_UNITS) || 9000);
+const QUICK_PICKS_UNITS_PER_REFRESH = QUICK_PICK_CATEGORIES.reduce((sum, c) => sum + (c.chart ? 1 : 101), 0);
+const QUICK_PICKS_REFRESH_MS = Number(process.env.QUICK_PICKS_REFRESH_MINUTES) > 0
+  ? Number(process.env.QUICK_PICKS_REFRESH_MINUTES) * 60 * 1000
+  : Math.max(30 * 60 * 1000, Math.ceil((24 * 3600 * 1000) / Math.max(1, Math.floor(QUICK_PICKS_DAILY_UNITS / QUICK_PICKS_UNITS_PER_REFRESH))));
 const QUICK_PICKS_RETRY_MS = 60 * 60 * 1000; // after a failure (no key, quota used up, network)
 const QUICK_PICKS_CACHE_FILE = path.join(__dirname, 'quick-picks-cache.json');
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 
-let quickPicks = null; // { updatedAt, region, categories: [{ id, name, videos: [{ id, title, channel }] }] }
+let quickPicks = null; // { updatedAt, region, rotation: { [categoryId]: n }, categories: [{ id, name, videos: [{ id, title, channel }] }] }
 let quickPicksTimer = null;
 
 function readYouTubeApiKey() {
@@ -83,26 +94,30 @@ function toPick(video) {
   return { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
 }
 
-async function fetchCategory(category, key) {
+/** New videos for a category merged with its saved ones (re-checked), newest first. */
+async function fetchCategory(category, key, previousVideos, rotation) {
   const details = 'snippet,status,contentDetails';
   if (category.chart) {
-    // 1 quota unit
+    // 1 unit; the chart itself changes through the day
     const chart = await youtubeApi('videos', {
       part: details, chart: 'mostPopular', videoCategoryId: 10, regionCode: QUICK_PICKS_REGION, maxResults: 25
     }, key);
-    return (chart.items || []).filter(isPlayableEverywhere).slice(0, QUICK_PICKS_PER_CATEGORY).map(toPick);
+    return (chart.items || []).filter(isPlayableEverywhere).slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
   }
-  // search: 100 units (playable-outside-YouTube filters applied by YouTube); details check: 1 unit
+  // search: 100 units (YouTube filters to videos that can play outside youtube.com)
+  const query = category.queries[rotation % category.queries.length];
   const search = await youtubeApi('search', {
-    part: 'id', type: 'video', q: category.query, maxResults: 20, safeSearch: 'moderate',
+    part: 'id', type: 'video', q: query, maxResults: 20, safeSearch: 'moderate',
     videoEmbeddable: 'true', videoSyndicated: 'true', regionCode: QUICK_PICKS_REGION, relevanceLanguage: 'en'
   }, key);
-  const ids = (search.items || []).map((item) => item.id?.videoId).filter(Boolean);
+  const newIds = (search.items || []).map((item) => item.id?.videoId).filter(Boolean);
+  // One 1-unit details call checks the new results and re-checks the saved ones (max 50 ids)
+  const ids = [...new Set([...newIds, ...previousVideos.map((v) => v.id)])].slice(0, 50);
   if (ids.length === 0) return [];
   const videos = await youtubeApi('videos', { part: details, id: ids.join(',') }, key);
   const byId = new Map((videos.items || []).map((v) => [v.id, v]));
   return ids.map((id) => byId.get(id)).filter((v) => v && isPlayableEverywhere(v))
-    .slice(0, QUICK_PICKS_PER_CATEGORY).map(toPick);
+    .slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
 }
 
 async function refreshQuickPicks() {
@@ -111,24 +126,32 @@ async function refreshQuickPicks() {
     log('INFO', 'Quick picks: no YouTube API key set, clients use their built-in list');
     return false;
   }
+  const rotation = { ...(quickPicks?.rotation || {}) };
   const categories = [];
   let refreshed = 0;
+  let quotaHit = false;
   for (const category of QUICK_PICK_CATEGORIES) {
-    try {
-      const videos = await fetchCategory(category, key);
-      if (videos.length > 0) categories.push({ id: category.id, name: category.name, videos });
-      refreshed += 1;
-    } catch (err) {
-      log('WARN', `Quick picks: ${category.id}: ${err.message}`);
-      // Keep the last good list for this category rather than dropping it
-      const previous = quickPicks?.categories.find((c) => c.id === category.id);
-      if (previous) categories.push(previous);
-      if (/quota/i.test(err.message)) break; // no point spending more calls today
+    const previous = quickPicks?.categories.find((c) => c.id === category.id);
+    if (!quotaHit) {
+      try {
+        const videos = await fetchCategory(category, key, previous?.videos || [], rotation[category.id] || 0);
+        if (!category.chart) rotation[category.id] = (rotation[category.id] || 0) + 1;
+        if (videos.length > 0) {
+          categories.push({ id: category.id, name: category.name, videos });
+          refreshed += 1;
+          continue;
+        }
+      } catch (err) {
+        log('WARN', `Quick picks: ${category.id}: ${err.message}`);
+        if (/quota/i.test(err.message)) quotaHit = true; // no point spending more calls today
+      }
     }
+    // Couldn't refresh this one: keep its last good list rather than dropping it
+    if (previous) categories.push(previous);
   }
   // Nothing new (bad key, quota used up, YouTube down): keep serving the last list, retry soon
   if (refreshed === 0 || categories.length === 0) return false;
-  quickPicks = { updatedAt: new Date().toISOString(), region: QUICK_PICKS_REGION, categories };
+  quickPicks = { updatedAt: new Date().toISOString(), region: QUICK_PICKS_REGION, rotation, categories };
   try {
     fs.writeFileSync(QUICK_PICKS_CACHE_FILE, JSON.stringify(quickPicks));
   } catch (err) {
@@ -154,6 +177,8 @@ function scheduleQuickPicks(delayMs) {
 
 // A restart reuses the saved list instead of spending quota again
 function startQuickPicks() {
+  const perDay = Math.round((24 * 3600 * 1000) / QUICK_PICKS_REFRESH_MS);
+  log('INFO', `Quick picks: refresh every ${Math.round(QUICK_PICKS_REFRESH_MS / 60000)} min (~${perDay}/day, ~${perDay * QUICK_PICKS_UNITS_PER_REFRESH} of 10,000 daily units)`);
   let delay = 0;
   try {
     const saved = JSON.parse(fs.readFileSync(QUICK_PICKS_CACHE_FILE, 'utf8'));
