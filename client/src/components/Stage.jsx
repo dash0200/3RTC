@@ -242,7 +242,7 @@ export default function Stage({
 
               <h1 className="stage-title">3RTC Watch Party</h1>
               <p className="stage-subtitle">
-                Create a room or enter an existing room with code to connect directly peer-to-peer (up to 6 people).
+                Watch together online: create a room or enter a code to connect directly peer-to-peer (up to 6 people).
                 Watch YouTube videos together.
               </p>
 
@@ -270,6 +270,7 @@ export default function Stage({
               <nav className="site-links" aria-label="About 3RTC">
                 <a href="/about">About</a>
                 <a href="/youtube-watch-party">YouTube watch party</a>
+                <a href="/watch-movies-together">Movie night</a>
                 <a href="/watch-videos-together">Your own videos</a>
                 <a href="/privacy">Privacy</a>
               </nav>

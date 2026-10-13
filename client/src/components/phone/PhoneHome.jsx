@@ -112,6 +112,7 @@ export default function PhoneHome({ username, initialPin = '', onCreate, onJoin,
         <nav className="site-links phone-site-links" aria-label="About 3RTC">
           <a href="/about">About</a>
           <a href="/youtube-watch-party">YouTube watch party</a>
+          <a href="/watch-movies-together">Movie night</a>
           <a href="/watch-videos-together">Your own videos</a>
           <a href="/privacy">Privacy</a>
         </nav>
