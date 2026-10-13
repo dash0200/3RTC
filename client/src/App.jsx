@@ -43,6 +43,13 @@ const IS_LOCAL = typeof window !== 'undefined' && (
     Boolean(import.meta.env?.DEV)
 );
 
+// Server settings is a developer tool: shown on localhost, dev.3rtc.me and Vercel previews only.
+// On 3rtc.me users just see the connection status (the app always uses DEFAULT_SIGNAL_URL there).
+const SHOW_SERVER_SETTINGS = IS_LOCAL || (typeof window !== 'undefined' && (
+    window.location.hostname === 'dev.3rtc.me' ||
+    window.location.hostname.endsWith('.vercel.app')
+));
+
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
         if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
@@ -123,6 +130,7 @@ export default function App() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showJoinModal, setShowJoinModal] = useState(false);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const openServerSettings = SHOW_SERVER_SETTINGS ? () => setShowSettingsModal(true) : undefined;
     const [showQrModal, setShowQrModal] = useState(false);
     const [initialJoinPin, setInitialJoinPin] = useState('');
     const [toastMessage, setToastMessage] = useState('');
@@ -1710,7 +1718,7 @@ export default function App() {
             isAudioBlocked={isAudioBlocked}
             onToggleBlockAudio={toggleBlockAudio}
             signalStatus={signalStatus}
-            onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenSettings={openServerSettings}
             queue={queue}
             activeVideoId={activeVideoId}
             activeVideoTitle={activeVideoTitle}
@@ -1785,7 +1793,7 @@ export default function App() {
                             initialPin={initialJoinPin}
                             onCreate={handleConfirmCreate}
                             onJoin={handleConfirmJoin}
-                            onOpenServerSettings={() => setShowSettingsModal(true)}
+                            onOpenServerSettings={openServerSettings}
                         />
                     )}
                     <AddVideoSheet
@@ -1811,7 +1819,7 @@ export default function App() {
                         networkStats={networkStats}
                         onOpenQrCode={() => setShowQrModal(true)}
                         roomId={roomId}
-                        onOpenServerSettings={() => setShowSettingsModal(true)}
+                        onOpenServerSettings={openServerSettings}
                         onLeaveRoom={handleLeaveRoom}
                     />
                     <SoundboardSheet
@@ -1848,7 +1856,7 @@ export default function App() {
                         onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
                         isPttActive={isPttActive}
                         peerCount={connectedPeers.length + 1}
-                        onOpenSettings={() => setShowSettingsModal(true)}
+                        onOpenSettings={openServerSettings}
                         networkStats={networkStats}
                         onOpenNetworkHud={() => setShowNetworkHudModal(true)}
                         onOpenQrCode={() => setShowQrModal(true)}
@@ -1902,7 +1910,7 @@ export default function App() {
             />
 
             <ServerSettingsModal
-                isOpen={showSettingsModal}
+                isOpen={SHOW_SERVER_SETTINGS && showSettingsModal}
                 onClose={() => setShowSettingsModal(false)}
                 currentUrl={signalUrl}
                 onApply={handleApplyServer}

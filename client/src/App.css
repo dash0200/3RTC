@@ -10343,3 +10343,24 @@ video::cue {
 .phone-site-links a {
   padding: 6px 0;
 }
+
+/* On 3rtc.me the connection pill is just a status (no server settings to open) */
+.sidebar-cloud-pill.static {
+  cursor: default;
+}
+
+.sidebar-cloud-pill.static:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.sidebar-cloud-pill.static.connected:hover {
+  border-color: rgba(43, 166, 64, 0.35);
+  background: rgba(43, 166, 64, 0.08);
+  color: var(--text-primary);
+}
+
+.sidebar-cloud-pill.static:disabled {
+  opacity: 1;
+}
