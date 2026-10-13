@@ -16,6 +16,10 @@ const candidateDirs = [
 const clientDir = candidateDirs.find(d => fs.existsSync(d) && fs.existsSync(path.join(d, 'index.html'))) || candidateDirs[0];
 
 const PORT = process.env.PORT || 8080;
+// People per room. Everyone connects directly to everyone (mesh); 6 keeps voice light on each
+// person's upload, and local video files are passed along a relay tree instead of the owner
+// uploading to every viewer.
+const MAX_ROOM_USERS = Math.max(2, Number(process.env.MAX_ROOM_USERS) || 6);
 
 // ---------------------------------------------------------------------------------------------
 // YouTube quick picks
@@ -381,8 +385,8 @@ wss.on('connection', (ws) => {
           if (!room) {
             room = new Map();
             rooms.set(resumeRoomId, room);
-          } else if (room.size >= 3 && !room.has(peerId)) {
-            safeSend(ws, { type: 'error', message: `Room ${resumeRoomId} is full (maximum 3 users allowed)` });
+          } else if (room.size >= MAX_ROOM_USERS && !room.has(peerId)) {
+            safeSend(ws, { type: 'error', message: `Room ${resumeRoomId} is full (maximum ${MAX_ROOM_USERS} people)` });
             return;
           }
           const previous = room.get(peerId);
@@ -475,10 +479,10 @@ wss.on('connection', (ws) => {
 
         const room = rooms.get(roomId);
         // A peer rejoining after a signaling drop already has its seat
-        if (room.size >= 3 && !room.has(ws.peerId)) {
+        if (room.size >= MAX_ROOM_USERS && !room.has(ws.peerId)) {
           safeSend(ws, {
             type: 'error',
-            message: `Room ${roomId} is full (maximum 3 users allowed)`
+            message: `Room ${roomId} is full (maximum ${MAX_ROOM_USERS} people)`
           });
           return;
         }

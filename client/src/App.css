@@ -10574,3 +10574,45 @@ video::cue {
 @media (hover: none) {
   .qp-queue { opacity: 1; }
 }
+
+/* Bigger rooms (4+ people): voice chips show avatars only, names stay in the tooltip */
+.stage-bottom-left {
+  min-width: 0;
+}
+
+.btn-add-local-video {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.stage-bottom-voice-chips.compact {
+  gap: 6px;
+}
+
+.stage-bottom-voice-chips.compact .voice-chip-name {
+  display: none;
+}
+
+.stage-bottom-voice-chips.compact .stage-voice-chip {
+  padding-right: 8px;
+  gap: 4px;
+}
+
+/* Bigger rooms: "Add Local Video" and "Invite" become icon buttons (titles stay as tooltips) */
+.stage-bottom-left:has(.stage-bottom-voice-chips.compact) .local-video-text,
+.stage-bottom-voice-chips.compact .stage-invite-btn span {
+  display: none;
+}
+
+.stage-bottom-voice-chips.compact .stage-invite-btn {
+  padding-left: 9px;
+  padding-right: 9px;
+}
+
+.stage-bottom-right {
+  flex-shrink: 0;
+}
+
+.stage-bottom-bar {
+  gap: 12px;
+}

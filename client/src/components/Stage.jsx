@@ -240,7 +240,7 @@ export default function Stage({
 
               <h1 className="stage-title">3RTC Watch Party</h1>
               <p className="stage-subtitle">
-                Create a room or enter an existing room with code to connect directly peer-to-peer (up to 3 peers).
+                Create a room or enter an existing room with code to connect directly peer-to-peer (up to 6 people).
                 Watch YouTube videos together.
               </p>
 
@@ -625,8 +625,9 @@ export default function Stage({
  */
 function StageVoiceChips({ connectedPeers: connectedPeersProp, localUser: localUserProp, audioSettings, handlePeerChipClick, isMicMuted, isPttMode, onCopyRoom, onOpenAudioSettings, onOpenQrCode, onSetPeerVolume, onToggleMic, onToggleMutePeer, roomId, selectedPeerPopover, setSelectedPeerPopover }) {
   const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
+  // 4+ people: avatars only (names in the tooltip) so the bar never overflows
   return (
-      <div className="stage-bottom-voice-chips">
+      <div className={`stage-bottom-voice-chips ${connectedPeers.length >= 3 ? 'compact' : ''}`}>
         {localUser && (
           <div
             className={`stage-voice-chip ${localUser.isSpeaking ? 'speaking' : ''} ${isMicMuted ? 'muted' : 'live'}`}

@@ -343,6 +343,13 @@ export class P2PStreamReceiver {
      guest -> host  JSON {type:'p2p-range-request', streamNo, blocks:[...], urgent}
      guest -> host  JSON {type:'p2p-range-cancel',  streamNo, blocks:[...]}
      host -> guest  binary [ 'RNG1' | streamNo u32 | block u32 | offset-in-block u32 | data ]
+
+   Relay tree (bigger rooms): the owner of the file serves at most RELAY_FANOUT viewers itself.
+   Each further viewer is told (header field `via`) to fetch from a parent viewer instead. The
+   parent answers from the blocks it already has, or fetches them from its own source and passes
+   them on, so the owner's upload no longer grows with the number of viewers. A child goes back to
+   fetching from the owner when its parent leaves, stops ('p2p-relay-gone') or is too slow; the
+   owner serves anyone asking for its current stream, so that needs no extra coordination.
    ========================================================================== */
 
 export const RANGE_BLOCK_SIZE = 256 * 1024;
@@ -360,6 +367,8 @@ const RANGE_BUFFER_HIGH = 192 * 1024; // kept small so a block needed after a se
 const RANGE_BUFFER_LOW = 64 * 1024;
 const BLOCK_WAIT_MS = 15000;          // re-request a block that hasn't arrived by then
 const BLOCK_MAX_TRIES = 4;
+const RELAY_WAIT_MS = 5000;           // a parent viewer that takes longer than this: fetch from the owner
+export const RELAY_FANOUT = 2;        // viewers fed directly by the owner, or by one relaying viewer
 
 /**
  * True when this page is controlled by a service worker that can serve P2P streams
@@ -385,7 +394,10 @@ export function detectOnDemandStreaming() {
   });
 }
 
-/** Host side: serves blocks of the local file to one peer, in the order they are needed. */
+/**
+ * Serves blocks to one peer, in the order they are needed. On the owner the blocks come from the
+ * local file; on a relaying viewer (options.readBlock) they come from its own stream cache.
+ */
 export class P2PRangeSender {
   constructor(file, dataChannel, options = {}) {
     this.file = file;
@@ -393,8 +405,18 @@ export class P2PRangeSender {
     this.streamNo = options.streamNo >>> 0;
     this.senderName = options.senderName || 'Peer';
     this.onError = options.onError || (() => { });
-    this.blockSize = RANGE_BLOCK_SIZE;
-    this.totalBlocks = Math.ceil(file.size / this.blockSize);
+    this.blockSize = options.blockSize || RANGE_BLOCK_SIZE;
+    this.fileSize = file ? file.size : options.fileSize;
+    this.totalBlocks = Math.ceil(this.fileSize / this.blockSize);
+    // (block) => Promise<Uint8Array>; default reads the local file
+    this.readBlock = options.readBlock || ((block) => {
+      const start = block * this.blockSize;
+      return this.file.slice(start, Math.min(start + this.blockSize, this.file.size)).arrayBuffer()
+        .then((buf) => new Uint8Array(buf));
+    });
+    this.onRequest = options.onRequest || null;   // relay: fetch the requested blocks upstream early
+    this.cancelType = options.cancelType || 'p2p-stream-cancel';
+    this.isRelay = Boolean(options.readBlock);
     this.queue = [];
     this.current = -1;
     this.isPumping = false;
@@ -402,20 +424,26 @@ export class P2PRangeSender {
     this.drainResolve = null;
   }
 
+  /** The stream announcement; `extra.via` names the viewer that relays it to this peer. */
+  static header(file, streamNo, senderName, extra = {}) {
+    return {
+      type: 'p2p-stream-header',
+      mode: 'range',
+      streamNo: streamNo >>> 0,
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: getVideoMimeType(file),
+      blockSize: RANGE_BLOCK_SIZE,
+      sender: senderName,
+      timestamp: Date.now(),
+      ...extra
+    };
+  }
+
   /** Announce the stream (skipped when re-attaching to a rebuilt connection). */
   start() {
     try {
-      this.dataChannel.send(JSON.stringify({
-        type: 'p2p-stream-header',
-        mode: 'range',
-        streamNo: this.streamNo,
-        fileName: this.file.name,
-        fileSize: this.file.size,
-        mimeType: getVideoMimeType(this.file),
-        blockSize: this.blockSize,
-        sender: this.senderName,
-        timestamp: Date.now()
-      }));
+      this.dataChannel.send(JSON.stringify(P2PRangeSender.header(this.file, this.streamNo, this.senderName)));
     } catch (err) {
       this.onError(err);
     }
@@ -426,6 +454,7 @@ export class P2PRangeSender {
     const wanted = blocks
       .map((b) => b >>> 0)
       .filter((b) => b < this.totalBlocks && b !== this.current);
+    this.onRequest?.(wanted, urgent);
     if (urgent) {
       // Needed right now (playback start / seek): jump the queue, in the order given
       this.queue = this.queue.filter((b) => !wanted.includes(b));
@@ -463,8 +492,14 @@ export class P2PRangeSender {
       while (this.queue.length && !this.isAborted) {
         const block = this.queue.shift();
         this.current = block;
-        const start = block * this.blockSize;
-        const data = new Uint8Array(await this.file.slice(start, Math.min(start + this.blockSize, this.file.size)).arrayBuffer());
+        let data;
+        try {
+          data = await this.readBlock(block);
+        } catch (err) {
+          if (this.isRelay) continue; // relay couldn't get it in time: the child asks the owner
+          throw err;
+        }
+        if (this.isAborted) break;
         for (let offset = 0; offset < data.length && !this.isAborted; offset += RANGE_PACKET_PAYLOAD) {
           await this._waitForDrain();
           if (this.isAborted || this.dataChannel.readyState !== 'open') break;
@@ -495,7 +530,7 @@ export class P2PRangeSender {
     if (this.drainResolve) this.drainResolve();
     try {
       if (this.dataChannel.readyState === 'open') {
-        this.dataChannel.send(JSON.stringify({ type: 'p2p-stream-cancel', streamNo: this.streamNo, timestamp: Date.now() }));
+        this.dataChannel.send(JSON.stringify({ type: this.cancelType, streamNo: this.streamNo, timestamp: Date.now() }));
       }
     } catch { }
   }
@@ -510,7 +545,12 @@ export class P2PRangeReceiver {
     this.mimeType = header.mimeType || 'video/mp4';
     this.blockSize = header.blockSize || RANGE_BLOCK_SIZE;
     this.totalBlocks = Math.ceil(this.fileSize / this.blockSize);
-    this.sendControl = options.sendControl || (() => { });
+    // Who we fetch from: the owner of the file, or a parent viewer that relays it
+    this.ownerId = options.ownerId ?? null;
+    this.sourceId = options.sourceId ?? this.ownerId;
+    this.getChannel = options.getChannel || null; // (peerId) => open data channel or null
+    this.onSourceChange = options.onSourceChange || (() => { });
+    this.sendControl = options.sendControl || ((msg) => this._send(msg));
     this.onProgress = options.onProgress || (() => { });
     this.onError = options.onError || (() => { });
     // () => { byte, bytesPerSec } of the video using this stream, or null if unknown yet
@@ -524,6 +564,44 @@ export class P2PRangeReceiver {
     this.lastProgressBytes = 0;
     this.lastSpeed = 0;
     this.url = `${P2P_STREAM_URL_PREFIX}${this.streamNo}/${encodeURIComponent(this.fileName)}`;
+  }
+
+  get isRelayed() {
+    return this.sourceId !== null && this.sourceId !== this.ownerId;
+  }
+
+  _send(msg) {
+    if (!this.getChannel) return;
+    let channel = this.getChannel(this.sourceId);
+    if (!channel && this.isRelayed) {
+      this.useOwner('parent unreachable');
+      return; // useOwner re-sends what is outstanding
+    }
+    try { channel?.send(JSON.stringify(msg)); } catch { }
+  }
+
+  /** Stop fetching through a parent viewer: ask the owner directly from now on. */
+  useOwner(reason = '') {
+    if (!this.isRelayed || this.isAborted) return;
+    this.sourceId = this.ownerId;
+    this.onSourceChange(this.ownerId, reason);
+    // Everything still outstanding goes to the owner now
+    const urgent = [];
+    const rest = [];
+    for (const b of this.pending.keys()) {
+      const entry = this.blocks.get(b);
+      if (entry?.done) continue;
+      (entry?.waiters.length ? urgent : rest).push(b);
+    }
+    const now = Date.now();
+    for (const b of [...urgent, ...rest]) this.pending.set(b, now);
+    if (urgent.length) this._send({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: urgent, urgent: true });
+    if (rest.length) this._send({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: rest, urgent: false });
+  }
+
+  /** A peer left or its connection broke. */
+  handlePeerGone(peerId) {
+    if (this.isRelayed && peerId === this.sourceId) this.useOwner('parent left');
   }
 
   _block(index) {
@@ -596,7 +674,7 @@ export class P2PRangeReceiver {
     const stale = [];
     for (const b of this.pending.keys()) {
       const entry = this.blocks.get(b);
-      if ((b < index || b > last) && !(entry && entry.waiters.length)) stale.push(b);
+      if ((b < index || b > last) && !(entry && (entry.waiters.length || entry.forRelay))) stale.push(b);
     }
     if (stale.length) {
       for (const b of stale) this.pending.delete(b);
@@ -628,6 +706,7 @@ export class P2PRangeReceiver {
   _waitForBlock(index) {
     const entry = this._block(index);
     if (entry.done) return Promise.resolve();
+    const waitMs = this.isRelayed ? RELAY_WAIT_MS : BLOCK_WAIT_MS;
     return new Promise((resolve, reject) => {
       const waiter = { resolve, reject };
       entry.waiters.push(waiter);
@@ -637,7 +716,7 @@ export class P2PRangeReceiver {
           entry.waiters.splice(i, 1);
           reject(new Error('timeout'));
         }
-      }, BLOCK_WAIT_MS);
+      }, waitMs);
     });
   }
 
@@ -651,7 +730,13 @@ export class P2PRangeReceiver {
         await this._waitForBlock(index);
         break;
       } catch (err) {
-        if (this.isAborted || attempt >= BLOCK_MAX_TRIES) throw err;
+        if (this.isAborted) throw err;
+        if (this.isRelayed) {
+          this.useOwner('parent too slow'); // doesn't count as a failed try
+          attempt -= 1;
+        } else if (attempt >= BLOCK_MAX_TRIES) {
+          throw err;
+        }
         this.pending.delete(index); // ask again
       }
     }
@@ -659,6 +744,41 @@ export class P2PRangeReceiver {
     const from = position - index * this.blockSize;
     const to = Math.min(entry.data.length, from + maxLength);
     return entry.data.slice(from, to).buffer;
+  }
+
+  /** Relay: a child asked us for these blocks; fetch the ones we don't have from our source. */
+  want(blocks, urgent = false) {
+    if (this.isAborted) return;
+    const now = Date.now();
+    const missing = [];
+    for (const b of blocks) {
+      if (b >= this.totalBlocks) continue;
+      const entry = this._block(b);
+      if (entry.done) continue;
+      entry.forRelay = true;
+      const at = this.pending.get(b);
+      if (at === undefined || now - at > (this.isRelayed ? RELAY_WAIT_MS : BLOCK_WAIT_MS)) {
+        this.pending.set(b, now);
+        missing.push(b);
+      }
+    }
+    if (missing.length) this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: missing, urgent });
+  }
+
+  /** Relay: the data of one block, fetching it from our source if needed. */
+  async getBlock(index) {
+    for (let attempt = 1; ; attempt++) {
+      if (this.isAborted) throw new Error('aborted');
+      this.want([index], true);
+      try {
+        await this._waitForBlock(index);
+        return this.blocks.get(index).data;
+      } catch (err) {
+        if (this.isAborted || attempt >= 2) throw err;
+        if (this.isRelayed) this.useOwner('parent too slow');
+        this.pending.delete(index);
+      }
+    }
   }
 
   /** Hold a read while it is far enough ahead of playback; returns when it may proceed. */
