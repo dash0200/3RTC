@@ -1248,7 +1248,9 @@ export default function App() {
     }, [addSystemMessage]);
 
     // Collaborative Queue Actions
-    const handleAddToQueue = useCallback(async ({ videoId, title }) => {
+    // autoplay: with nothing playing, the first video added starts right away. Quick Watch passes
+    // false so several videos can be lined up first (then "Play queue").
+    const handleAddToQueue = useCallback(async ({ videoId, title }, { autoplay = true } = {}) => {
         if (!videoId) return;
         let finalTitle = title;
         if (!finalTitle) {
@@ -1263,7 +1265,7 @@ export default function App() {
         };
 
         // If no video is currently active, immediately play it!
-        if (!activeVideoIdRef.current && !localVideoFile && !remoteLocalVideoMeta) {
+        if (autoplay && !activeVideoIdRef.current && !localVideoFile && !remoteLocalVideoMeta) {
             setActiveVideoId(videoId);
             setActiveVideoTitle(finalTitle);
             handleBroadcastAction('load', {
@@ -1834,6 +1836,9 @@ export default function App() {
                             handleBroadcastAction('load', { newVideoId: id, title });
                         }}
                         onQueueYouTube={(id, title) => handleAddToQueue({ videoId: id, title })}
+                        onQueuePick={(id, title) => handleAddToQueue({ videoId: id, title }, { autoplay: false })}
+                        queuedIds={queue.map((item) => item.videoId)}
+                        onPlayQueue={queue.length > 0 && !isMediaActive ? handlePlayNextInQueue : undefined}
                         onPickFile={handleLocalFileSelect}
                         onStopVideo={handleExitVideo}
                     />

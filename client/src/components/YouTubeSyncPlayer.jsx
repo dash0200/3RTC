@@ -929,6 +929,10 @@ export default function YouTubeSyncPlayer({
                 onBroadcastAction('load', { newVideoId: v.id, title: v.title });
               }}
               onShuffle={handleSelectPreset}
+              onQueue={typeof onAddToQueue === 'function' ? (v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false }) : undefined}
+              queuedIds={queue.map((item) => item.videoId)}
+              queueCount={queue.length}
+              onPlayQueue={typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined}
             />
           </>
         ) : (
