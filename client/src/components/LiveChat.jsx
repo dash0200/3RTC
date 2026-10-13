@@ -959,11 +959,32 @@ export default function LiveChat({
                   disabled={!isP2PConnected}
                 />
 
+                {/* Attach image (opens the file picker; on phones: gallery / camera) */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={handleFileInputChange}
+                />
+                <button
+                  type="button"
+                  className="chat-pill-attach-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!isP2PConnected}
+                  title="Send an image"
+                  aria-label="Send an image"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                    <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z" />
+                  </svg>
+                </button>
+
                 <button
                   type="button"
                   className="chat-pill-send-btn"
                   onClick={handleSend}
-                  disabled={!isP2PConnected || inputText.trim().length === 0}
+                  disabled={!isP2PConnected || (inputText.trim().length === 0 && !pendingImage)}
                   title="Send message (Enter)"
                   aria-label="Send message"
                 >
