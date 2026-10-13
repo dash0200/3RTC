@@ -627,12 +627,12 @@ export default function LiveChat({
             {signalStatus && (
               <button
                 type="button"
-                className={`sidebar-cloud-pill ${signalStatus.connected ? 'connected' : ''}`}
+                className={`sidebar-cloud-pill ${signalStatus.connected ? 'connected' : ''} ${onOpenSettings ? '' : 'static'}`}
                 onClick={onOpenSettings}
+                disabled={!onOpenSettings}
                 title={
-                  signalStatus.connected
-                    ? "Cloud signaling server connected. Click for server settings."
-                    : `Cloud signaling: ${signalStatus.label || 'Connecting...'}. Click for server settings.`
+                  (signalStatus.connected ? 'Connected to the 3RTC server.' : `Server: ${(signalStatus.label || 'Connecting...').replace(/\.*$/, '')}…`)
+                  + (onOpenSettings ? ' Click for server settings.' : '')
                 }
               >
                 <span className={`signal-dot ${signalStatus.connected ? 'connected' : ''}`} />

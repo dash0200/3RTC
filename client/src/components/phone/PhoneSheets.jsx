@@ -265,11 +265,13 @@ export function MoreSheet({
           <span className="phone-row-text">Invite with QR code</span>
           {roomId && <span className="phone-row-value mono">{roomId}</span>}
         </button>
-        <button type="button" className="phone-row" onClick={then(onOpenServerSettings)}>
-          <span className="phone-row-icon" aria-hidden="true">{MoreIcon.server}</span>
-          <span className="phone-row-text">Server settings</span>
-          {Chevron}
-        </button>
+        {onOpenServerSettings && (
+          <button type="button" className="phone-row" onClick={then(onOpenServerSettings)}>
+            <span className="phone-row-icon" aria-hidden="true">{MoreIcon.server}</span>
+            <span className="phone-row-text">Server settings</span>
+            {Chevron}
+          </button>
+        )}
       </div>
 
       <button type="button" className="phone-btn phone-btn-danger phone-btn-block" onClick={then(onLeaveRoom)}>
