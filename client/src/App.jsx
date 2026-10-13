@@ -31,6 +31,7 @@ import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './ut
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
+import { loadQuickPicks } from './utils/quickPicks';
 import './App.css';
 import './phone.css';
 
@@ -47,6 +48,12 @@ export default function App() {
         if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
         return localStorage.getItem('webrtc_signal_url') || DEFAULT_SIGNAL_URL;
     });
+    // YouTube quick picks come from the signaling server's cache (built-in list until then)
+    useEffect(() => {
+        loadQuickPicks(signalUrl);
+        const timer = setInterval(() => loadQuickPicks(signalUrl), 6 * 60 * 60 * 1000);
+        return () => clearInterval(timer);
+    }, [signalUrl]);
     const [username, setUsername] = useState(() => localStorage.getItem('webrtc_username') || `User_${Math.floor(100 + Math.random() * 900)}`);
 
     const [signalStatus, setSignalStatus] = useState({ connected: false, label: 'Connecting...' });

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { findQuickPickTitle, getQuickPicks, useQuickPicks } from '../utils/quickPicks';
 
 // Extract YouTube ID from various URL formats or raw 11-char ID
 export function extractYouTubeId(urlOrId) {
@@ -38,69 +39,10 @@ export async function fetchYouTubeTitle(videoId, fallbackTitle = '') {
     // Ignore timeout or network errors
   }
   // Fallback to presets if matched
-  for (const cat of PRESET_CATEGORIES) {
-    const found = cat.videos.find((v) => v.id === videoId);
-    if (found) return found.title;
-  }
+  const presetTitle = findQuickPickTitle(videoId);
+  if (presetTitle) return presetTitle;
   return fallbackTitle || `YouTube Video (${videoId})`;
 }
-
-// Quick picks. Every ID was checked against YouTube's embed lookup (Oct 2026): it exists, is public
-// and allows playing on other sites. Mostly official channels (Lofi Girl, Chillhop, Blender, NASA)
-// because their videos stay up; fan re-uploads and seasonal live streams disappear.
-export const PRESET_CATEGORIES = [
-  {
-    id: 'lofi',
-    name: '🎵 Lofi Beats',
-    videos: [
-      { id: 'jfKfPfyJRdk', title: 'lofi hip hop radio – beats to relax/study to (Lofi Girl)' },
-      { id: 'lTRiuFIWV54', title: '1 A.M Study Session (Lofi Girl)' },
-      { id: '_tV5LEBDs7w', title: 'Cozy Winter (Lofi Girl)' },
-      { id: 'n61ULEU7CO0', title: 'Best of lofi hip hop 2021 (Lofi Girl)' },
-      { id: '28KRPhVzCus', title: 'lofi hip hop radio – beats to sleep/chill to (Lofi Girl)' }
-    ]
-  },
-  {
-    id: 'chill',
-    name: '🎷 Jazz & Chill',
-    videos: [
-      { id: 'HuFYqnbVbzY', title: 'jazz lofi radio (Lofi Girl)' },
-      { id: '5yx6BWlEVcY', title: 'Chillhop Radio – jazzy & lofi hip hop beats' },
-      { id: 'f02mOEt11OQ', title: 'code-fi / lofi beats to code/relax to' },
-      { id: '1ZYbU82GVz4', title: 'Flying – Relaxing Music (Peder B. Helland)' }
-    ]
-  },
-  {
-    id: 'synthwave',
-    name: '🌆 Synthwave',
-    videos: [
-      { id: '4xDzrJKXOOY', title: 'synthwave radio – beats to chill/game to (Lofi Girl)' },
-      { id: 'MV_3Dpw-BRY', title: 'Kavinsky – Nightcall (Drive soundtrack)' },
-      { id: '8GW6sLrK40k', title: 'HOME – Resonance' }
-    ]
-  },
-  {
-    id: 'movies',
-    name: '🎬 Open Movies',
-    videos: [
-      { id: 'aqz-KE-bpKQ', title: 'Big Buck Bunny (4K 60fps)' },
-      { id: 'eRsGyueVLvQ', title: 'Sintel (Blender Open Movie)' },
-      { id: 'R6MlUcmOul8', title: 'Tears of Steel (Blender Open Movie)' },
-      { id: 'WhWc3b3KhnY', title: 'Spring (Blender Open Movie)' },
-      { id: 'mN0zPOpADL4', title: 'Agent 327: Operation Barbershop' },
-      { id: 'Y-rmzh0PI3c', title: 'Cosmos Laundromat (Blender Open Movie)' }
-    ]
-  },
-  {
-    id: 'space',
-    name: '🌌 Space',
-    videos: [
-      { id: '21X5lGlDOfg', title: 'NASA Live: Official Stream of NASA TV' },
-      { id: '4czjS9h4Fpg', title: 'Perseverance Rover Landing on Mars (NASA)' },
-      { id: 'UDVtMYqUAyw', title: 'Interstellar Main Theme – Hans Zimmer (extended)' }
-    ]
-  }
-];
 
 // Videos YouTube refused this session (removed, private, or blocked from playing on other sites
 // or in this region). Quick picks skip them, so a broken one is never offered twice.
@@ -110,7 +52,7 @@ export const isVideoUnavailable = (id) => unavailableVideoIds.has(id);
 
 /** The next quick pick after `videoId` in its category that hasn't failed, or null. */
 function nextPlayablePreset(videoId) {
-  const category = PRESET_CATEGORIES.find((c) => c.videos.some((v) => v.id === videoId));
+  const category = getQuickPicks().find((c) => c.videos.some((v) => v.id === videoId));
   if (!category) return null;
   const start = category.videos.findIndex((v) => v.id === videoId);
   for (let step = 1; step < category.videos.length; step += 1) {
@@ -155,6 +97,7 @@ export default function YouTubeSyncPlayer({
   const [isDropOver, setIsDropOver] = useState(false);
   const [activeSourceTab, setActiveSourceTab] = useState('youtube'); // 'youtube' | 'local'
 
+  const quickPicks = useQuickPicks();
   const playerRef = useRef(null);
   const fullstageRef = useRef(null);
   const iframeContainerRef = useRef(null);
@@ -990,7 +933,7 @@ export default function YouTubeSyncPlayer({
                 </svg>
                 Quick Watch
               </span>
-              {PRESET_CATEGORIES.map((cat) => (
+              {quickPicks.map((cat) => (
                 <button
                   key={cat.id}
                   type="button"
