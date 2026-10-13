@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /__p2p-stream/
+
+Sitemap: https://3rtc.me/sitemap.xml

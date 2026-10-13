@@ -2,12 +2,6 @@
   "framework": "vite",
   "buildCommand": "npm run build --workspace=client",
   "outputDirectory": "client/dist",
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ],
   "headers": [
     {
       "source": "/sw.js",
@@ -39,6 +33,38 @@
           "value": "no-cache"
         }
       ]
+    },
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "dev.3rtc.me"
+        }
+      ],
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": ".*\\.vercel\\.app"
+        }
+      ],
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow"
+        }
+      ]
     }
-  ]
+  ],
+  "cleanUrls": true,
+  "trailingSlash": false
 }
