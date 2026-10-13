@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import QuickPicksModal from './QuickPicksModal';
 import { getAvatarColor } from '../utils/sound';
 
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
@@ -359,6 +360,7 @@ export default function LiveChat({
 
   // Collaborative queue states
   const [queueInput, setQueueInput] = useState('');
+  const [showQuickPicks, setShowQuickPicks] = useState(false);
   const [queueError, setQueueError] = useState('');
   const [isAddingQueue, setIsAddingQueue] = useState(false);
 
@@ -1095,6 +1097,20 @@ export default function LiveChat({
                 </div>
               )}
             </div>
+
+            {/* Pick from Quick Watch without leaving the current video */}
+            {typeof onAddToQueue === 'function' && (
+              <button type="button" className="queue-browse-btn" onClick={() => setShowQuickPicks(true)}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="#f59e0b" aria-hidden="true"><path d="M7 2v11h3v9l7-12h-4l4-8z" /></svg>
+                Browse Quick Watch
+              </button>
+            )}
+            <QuickPicksModal
+              isOpen={showQuickPicks}
+              onClose={() => setShowQuickPicks(false)}
+              onQueue={(v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false })}
+              queuedIds={queue.map((item) => item.videoId)}
+            />
 
             {/* Add Video to Queue Form */}
             <form className="queue-add-form" onSubmit={handleQueueSubmit}>

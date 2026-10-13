@@ -85,6 +85,15 @@ export default function LocalVideoSyncPlayer({
   const isHoveringTopRef = useRef(false);
   const isHoveringBottomRef = useRef(false);
   const isRemoteActionRef = useRef(false);
+  // Video events caused by applying a peer's command: only those are skipped, so pausing right
+  // after someone else pressed play is still sent to the room
+  const echoRef = useRef({ play: 0, pause: 0, seeked: 0 });
+  const expectEcho = (event, ms = 1500) => { echoRef.current[event] = Date.now() + ms; };
+  const isEcho = (event) => {
+    if (Date.now() >= echoRef.current[event]) return false;
+    echoRef.current[event] = 0; // each expected event is skipped once
+    return true;
+  };
   const fileInputRef = useRef(null);
   const subtitleFileInputRef = useRef(null);
   const idleTimeoutRef = useRef(null);
@@ -283,8 +292,10 @@ export default function LocalVideoSyncPlayer({
       if (action === 'play') {
         setSyncStatus(`▶️ ${sender || 'Peer'} played`);
         if (currentTime !== undefined && Math.abs(vid.currentTime - currentTime) > 0.8) {
+          expectEcho('seeked', 8000);
           vid.currentTime = currentTime;
         }
+        if (vid.paused) expectEcho('play');
         vid.play().then(() => {
           setIsPlaying(true);
         }).catch(() => {
@@ -293,12 +304,15 @@ export default function LocalVideoSyncPlayer({
       } else if (action === 'pause') {
         setSyncStatus(`⏸️ ${sender || 'Peer'} paused`);
         if (currentTime !== undefined && Math.abs(vid.currentTime - currentTime) > 0.8) {
+          expectEcho('seeked', 8000);
           vid.currentTime = currentTime;
         }
+        if (!vid.paused) expectEcho('pause');
         vid.pause();
         setIsPlaying(false);
       } else if (action === 'seek') {
         if (currentTime !== undefined) {
+          expectEcho('seeked', 8000); // streamed video: the seek can take a few seconds
           vid.currentTime = currentTime;
           setCurrentTimeSec(currentTime);
           setSyncStatus(`⏩ ${sender || 'Peer'} seeked to ${formatTime(currentTime)}`);
@@ -410,7 +424,7 @@ export default function LocalVideoSyncPlayer({
   // 5. Video event listeners (play, pause, seeked, timeupdate)
   const handleVideoPlay = () => {
     setIsPlaying(true);
-    if (isRemoteActionRef.current) return;
+    if (isEcho('play')) return;
     setSyncStatus('Playing (Synced)');
     if (typeof onBroadcastAction === 'function' && videoRef.current) {
       onBroadcastAction('play', {
@@ -422,7 +436,7 @@ export default function LocalVideoSyncPlayer({
 
   const handleVideoPause = () => {
     setIsPlaying(false);
-    if (isRemoteActionRef.current) return;
+    if (isEcho('pause')) return;
     setSyncStatus('Paused (Synced)');
     if (typeof onBroadcastAction === 'function' && videoRef.current) {
       onBroadcastAction('pause', {
@@ -433,7 +447,7 @@ export default function LocalVideoSyncPlayer({
   };
 
   const handleVideoSeeked = () => {
-    if (isRemoteActionRef.current || !videoRef.current) return;
+    if (!videoRef.current || isEcho('seeked')) return;
     const cur = videoRef.current.currentTime;
     setSyncStatus(`Seeked to ${formatTime(cur)} (Synced)`);
     if (typeof onBroadcastAction === 'function') {
@@ -477,6 +491,7 @@ export default function LocalVideoSyncPlayer({
     const vid = videoRef.current;
     if (!vid) return;
     const target = Math.max(0, Math.min(vid.duration || 0, vid.currentTime + deltaSec));
+    expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
     vid.currentTime = target;
     setCurrentTimeSec(target);
     setSyncStatus(`Seeked ${deltaSec > 0 ? `+${deltaSec}s` : `${deltaSec}s`} (Synced)`);
@@ -491,6 +506,7 @@ export default function LocalVideoSyncPlayer({
   const handleRestart = () => {
     const vid = videoRef.current;
     if (!vid) return;
+    expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
     vid.currentTime = 0;
     setCurrentTimeSec(0);
     setSyncStatus('Restarted video (Synced)');
@@ -529,12 +545,14 @@ export default function LocalVideoSyncPlayer({
     if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
 
     const targetTime = calculateLocalSeekTime(e);
+    expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
     vid.currentTime = targetTime;
     setCurrentTimeSec(targetTime);
 
     const onMouseMove = (moveEvt) => {
       if (!isScrubbingRef.current) return;
       const time = calculateLocalSeekTime(moveEvt);
+      expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
       vid.currentTime = time;
       setCurrentTimeSec(time);
     };
@@ -544,6 +562,7 @@ export default function LocalVideoSyncPlayer({
       isScrubbingRef.current = false;
       setIsScrubbing(false);
       const finalTime = calculateLocalSeekTime(upEvt);
+      expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
       vid.currentTime = finalTime;
       setCurrentTimeSec(finalTime);
       setSyncStatus(`Seeked to ${formatTime(finalTime)} (Synced)`);
@@ -584,6 +603,7 @@ export default function LocalVideoSyncPlayer({
     setShowBottomBar(true);
     setIsCursorIdle(false);
     if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
+    expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
     vid.currentTime = target;
     setCurrentTimeSec(target);
     setSyncStatus(`Seeked to ${formatTime(target)} (Synced)`);
