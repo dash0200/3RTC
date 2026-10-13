@@ -3,8 +3,10 @@
  * PRECACHE_URLS and writes the result to dist/sw.js. Not used in dev.
  *
  * - App shell (index.html, hashed JS/CSS, icons, sounds) is precached per build -> instant launch.
- * - Navigations are served from the cached shell (single-page app); a new deploy installs a
- *   new worker in the background and takes effect on the next launch.
+ * - The app page is fetched from the network first (falling back to the cached copy offline or
+ *   after a few seconds), so an online visit always gets the current page with matching assets.
+ *   Hashed files of replaced versions are kept in the asset cache, so a page that is already open
+ *   keeps working while a new version takes over (otherwise its CSS/JS could 404 mid-deploy).
  * - Other hashed /assets/ files (on-demand, e.g. the voice isolation model) are cached on first use.
  * - Google Fonts are cached stale-while-revalidate.
  * - /__p2p-stream/... is a peer's video streamed on demand: each byte range the <video> element
@@ -34,16 +36,50 @@ self.addEventListener('activate', (event) => {
       .then((keys) => Promise.all(
         keys
           .filter((key) => key.startsWith('3rtc-shell-') && key !== SHELL_CACHE)
-          .map((key) => caches.delete(key))
+          .map((key) => retireShellCache(key))
       ))
       .then(() => self.clients.claim())
   );
 });
 
+const SHELL_NETWORK_TIMEOUT_MS = 3000;
+const ASSET_CACHE_MAX = 80;
+
+// Network first so a new deploy is picked up on the next visit; the cached shell when offline
+// or when the network is too slow to answer
 async function serveShell(request) {
-  const cached = await caches.match(SHELL_URL, { cacheName: SHELL_CACHE });
-  if (cached) return cached;
-  return fetch(request);
+  const cached = caches.match(SHELL_URL, { cacheName: SHELL_CACHE });
+  try {
+    const network = fetch(request).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response;
+    });
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('slow')), SHELL_NETWORK_TIMEOUT_MS));
+    return await Promise.race([network, timeout]);
+  } catch (err) {
+    const fallback = await cached;
+    if (fallback) return fallback;
+    return fetch(request);
+  }
+}
+
+// An old version's shell cache is going away: keep its hashed assets (their names never clash),
+// trimmed to the most recent ASSET_CACHE_MAX, for pages of that version that are still open
+async function retireShellCache(key) {
+  try {
+    const [oldCache, assets] = await Promise.all([caches.open(key), caches.open(ASSET_CACHE)]);
+    for (const request of await oldCache.keys()) {
+      if (new URL(request.url).pathname.startsWith('/assets/')) {
+        const response = await oldCache.match(request);
+        if (response) await assets.put(request, response);
+      }
+    }
+    const keys = await assets.keys();
+    for (const stale of keys.slice(0, Math.max(0, keys.length - ASSET_CACHE_MAX))) await assets.delete(stale);
+  } catch (err) {
+    // best effort
+  }
+  return caches.delete(key);
 }
 
 // Other pages (/about, /privacy…) are plain static pages: network first, cached copy offline
@@ -62,6 +98,13 @@ const isAppPath = (pathname) => pathname === '/' || pathname === '/index.html';
 async function cacheFirst(request) {
   const cached = await caches.match(request, { cacheName: SHELL_CACHE });
   return cached || fetch(request);
+}
+
+// Hashed asset: current shell cache, then assets kept from earlier versions, then the network
+async function serveAsset(request) {
+  const current = await caches.match(request, { cacheName: SHELL_CACHE });
+  if (current) return current;
+  return cacheOnFirstUse(request);
 }
 
 // Hashed file names never change content, so a cached copy is always valid
@@ -191,10 +234,10 @@ self.addEventListener('fetch', (event) => {
       event.respondWith(isAppPath(url.pathname) ? serveShell(request) : servePage(request, url));
       return;
     }
-    if (PRECACHE_URLS.includes(url.pathname)) {
+    if (url.pathname.startsWith('/assets/')) {
+      event.respondWith(serveAsset(request));
+    } else if (PRECACHE_URLS.includes(url.pathname)) {
       event.respondWith(cacheFirst(request));
-    } else if (url.pathname.startsWith('/assets/')) {
-      event.respondWith(cacheOnFirstUse(request));
     }
     return;
   }

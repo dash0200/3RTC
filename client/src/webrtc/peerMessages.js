@@ -8,7 +8,7 @@ import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver } 
 import { addViewer, detachViewer, markDirect } from './streamTree';
 
 export function createPeerMessageHandler(ctx) {
-    const { activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, hostStreamRef, isAudioBlockedRef, peerNameOf, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, streamTreeRef, syncStateGetterRef, targetPeerId, username } = ctx;
+    const { activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, handleRoomSettings, hostStreamRef, isAudioBlockedRef, lockRevertPendingRef, playbackLockRef, peerNameOf, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, streamTreeRef, syncStateGetterRef, targetPeerId, username } = ctx;
     const openChannelTo = (peerId) => {
         const entry = peersRef.current.get(peerId);
         const channel = entry?.bulkChannel?.readyState === 'open' ? entry.bulkChannel : entry?.dataChannel;
@@ -61,6 +61,7 @@ export function createPeerMessageHandler(ctx) {
                         isMuted: Boolean(data.isMuted)
                     }
                 }));
+                handleRoomSettings?.(data, targetPeerId); // the host's identity carries the controls lock
                 if (!data.isReply) {
                     try {
                         dc.send(JSON.stringify({
@@ -69,10 +70,13 @@ export function createPeerMessageHandler(ctx) {
                             username: username,
                             isHost: isHostRef.current,
                             isMuted: isMicMutedRef.current,
+                            ...(isHostRef.current ? { playbackLock: Boolean(playbackLockRef?.current) } : {}),
                             isReply: true
                         }));
                     } catch (e) { }
                 }
+            } else if (data.type === 'room-settings') {
+                handleRoomSettings?.(data, targetPeerId);
             } else if (data.type === 'chat') {
                 setMessages((prev) => [...prev, { ...data, isSelf: false }]);
                 sound.playPop();
@@ -360,10 +364,26 @@ export function createPeerMessageHandler(ctx) {
                         isPlaying: false,
                         sender: username
                     }));
+                    hasSent = true;
+                }
+                if (!hasSent) {
+                    // Nothing playing here (lets a guest under the host controls lock drop what it opened)
+                    dc.send(JSON.stringify({ type: 'yt-sync-state', videoId: null, nothingPlaying: true, sender: username }));
                 }
             } else if (data.type === 'yt-sync-state') {
                 // Received sync state from an existing peer in the room
-                if (data.videoId) {
+                const isLockRevert = Boolean(lockRevertPendingRef?.current);
+                if (lockRevertPendingRef) lockRevertPendingRef.current = false;
+                if (data.nothingPlaying) {
+                    // Host controls lock: we opened something the host doesn't have, so close it
+                    if (isLockRevert) {
+                        setLocalVideoFile(null);
+                        setRemoteLocalVideoMeta(null);
+                        setActiveVideoId(null);
+                        setActiveVideoTitle('');
+                        setRemoteAction({ action: 'close', type: 'yt-action', fromHost: true });
+                    }
+                } else if (data.videoId) {
                     setLocalVideoFile(null);
                     setRemoteLocalVideoMeta(null);
                     setActiveVideoId(data.videoId);
@@ -386,6 +406,7 @@ export function createPeerMessageHandler(ctx) {
                     addSystemMessage(`🔄 Synced YouTube playback & queue with room`);
                 }
             } else if (data.type === 'local-video-sync-state') {
+                if (lockRevertPendingRef) lockRevertPendingRef.current = false;
                 if (data.fileName) {
                     setActiveVideoId(null);
                     setRemoteLocalVideoMeta({

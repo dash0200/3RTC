@@ -27,7 +27,8 @@ export default function Header({
   networkStats = null,
   onOpenNetworkHud,
   // Feature 4.3: QR Code for Instant Mobile Join
-  onOpenQrCode
+  onOpenQrCode,
+  playbackLock = false
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -101,6 +102,11 @@ export default function Header({
       <div className="header-right">
         {roomId && (
           <>
+            {playbackLock && (
+              <span className="header-lock-pill" title="The host turned on host controls: only the host can play, pause, seek or change the video">
+                🔒 Host controls
+              </span>
+            )}
             {/* Network Latency & Topology Pill */}
             <button
               type="button"

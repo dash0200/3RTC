@@ -34,6 +34,8 @@ export default function Stage({
   onCloseLocalVideo,
   onBroadcastAction,
   remoteAction,
+  playbackLock = false,
+  onTogglePlaybackLock,
   onRegisterStateGetter,
   isMicMuted = true,
   isAudioBlocked = false,
@@ -590,6 +592,28 @@ export default function Stage({
                   <span className="dropdown-item-icon">📱</span>
                   <span>Mobile Join QR Code</span>
                 </button>
+                {roomId && (isHost ? (
+                  <button
+                    type="button"
+                    className={`dropdown-item ${playbackLock ? 'is-on' : ''}`}
+                    role="menuitemcheckbox"
+                    aria-checked={playbackLock}
+                    onClick={() => {
+                      setIsMoreMenuOpen(false);
+                      onTogglePlaybackLock?.();
+                    }}
+                    title="When on, others can't play, pause, seek or change the video (they can still chat, talk and add to the queue)"
+                  >
+                    <span className="dropdown-item-icon">{playbackLock ? '🔒' : '🔓'}</span>
+                    <span>Only I control playback</span>
+                    <span className={`dropdown-switch ${playbackLock ? 'on' : ''}`} aria-hidden="true" />
+                  </button>
+                ) : playbackLock ? (
+                  <div className="dropdown-item dropdown-item-static" role="note">
+                    <span className="dropdown-item-icon">🔒</span>
+                    <span>The host controls playback</span>
+                  </div>
+                ) : null)}
                 <div className="dropdown-divider" />
                 <div className="dropdown-label">Quick Reactions (Press 1-6):</div>
                 <div className="dropdown-reactions-row">

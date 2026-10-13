@@ -1,7 +1,7 @@
 import React from 'react';
 
 /** Phone top bar: logo, room code (tap to copy), connection status (tap for network details). */
-export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, signalStatus, onOpenNetworkHud }) {
+export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, signalStatus, onOpenNetworkHud, playbackLock = false }) {
   const ping = networkStats?.avgPingMs;
   let status;
   if (roomId) {
@@ -33,6 +33,9 @@ export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, 
             <path d="M5 15V6a2 2 0 0 1 2-2h9" />
           </svg>
         </button>
+      )}
+      {roomId && playbackLock && (
+        <span className="phone-lock-pill" title="Only the host can control playback" aria-label="Host controls on">🔒</span>
       )}
       <button
         type="button"
