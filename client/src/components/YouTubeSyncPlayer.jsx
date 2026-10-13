@@ -106,9 +106,16 @@ export default function YouTubeSyncPlayer({
   // else is a person using the player and is sent to the room. (Skipping every change for a while
   // used to also skip updating lastStateRef, so after a peer's play/pause our own next
   // pause/play looked like "no change" and was never sent.)
-  const echoRef = useRef({ states: null, until: 0 });
-  const expectEcho = (states, ms = 1500) => {
-    echoRef.current = { states: new Set(states), until: Date.now() + ms };
+  // `final` is where the command ends up (e.g. PLAYING after a play); once it arrives nothing more
+  // is skipped, so a person acting right after a peer's command is still sent to the room
+  const echoRef = useRef({ states: null, final: null, until: 0 });
+  const expectEcho = (states, ms = 1500, final = null) => {
+    echoRef.current = { states: new Set(states), final, until: Date.now() + ms };
+  };
+  // A seek keeps the player's state (after buffering): playing stays playing, paused stays paused
+  const expectSeekEcho = (ms = 1500) => {
+    const playing = playerRef.current?.getPlayerState?.() === 1;
+    expectEcho(playing ? [3, 1] : [3, 2], ms, playing ? 1 : 2);
   };
   const isScrubbingRef = useRef(false);
   const lastStateRef = useRef(-1);
@@ -266,6 +273,7 @@ export default function YouTubeSyncPlayer({
     const echo = echoRef.current;
     if (echo.states && Date.now() < echo.until && echo.states.has(state)) {
       lastStateRef.current = state;
+      if (echo.final !== null && state === echo.final) echoRef.current = { states: null, final: null, until: 0 };
       return;
     }
 
@@ -293,7 +301,7 @@ export default function YouTubeSyncPlayer({
       setSyncStatus('Video finished');
       setIsPlaying(false);
       if (typeof onPlayNextInQueue === 'function') {
-        onPlayNextInQueue();
+        onPlayNextInQueue({ auto: true });
       }
     }
 
@@ -364,10 +372,10 @@ export default function YouTubeSyncPlayer({
 
     isRemoteActionRef.current = true;
     const YTS = window.YT?.PlayerState || { UNSTARTED: -1, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
-    if (action === 'load') expectEcho([YTS.UNSTARTED, YTS.BUFFERING, YTS.PLAYING, YTS.CUED, YTS.PAUSED], 3000);
-    else if (action === 'play') expectEcho([YTS.PLAYING, YTS.BUFFERING]);
-    else if (action === 'pause') expectEcho([YTS.PAUSED, YTS.BUFFERING]);
-    else if (action === 'seek') expectEcho([YTS.PLAYING, YTS.PAUSED, YTS.BUFFERING]);
+    if (action === 'load') expectEcho([YTS.UNSTARTED, YTS.BUFFERING, YTS.PLAYING, YTS.CUED, YTS.PAUSED], 3000, YTS.PLAYING);
+    else if (action === 'play') expectEcho([YTS.PLAYING, YTS.BUFFERING], 1500, YTS.PLAYING);
+    else if (action === 'pause') expectEcho([YTS.PAUSED, YTS.BUFFERING], 1500, YTS.PAUSED);
+    else if (action === 'seek') expectSeekEcho();
 
     try {
       if (action === 'load' && targetVideoId && targetVideoId !== currentVideoIdRef.current) {
@@ -517,7 +525,7 @@ export default function YouTubeSyncPlayer({
 
     if (queue.length > 0 && typeof onPlayNextInQueue === 'function') {
       setSyncStatus(`Unavailable (${reason}), playing next`);
-      onPlayNextInQueue();
+      onPlayNextInQueue({ auto: true });
       return;
     }
     const replacement = failedId ? nextPlayablePreset(failedId) : null;
@@ -552,7 +560,7 @@ export default function YouTubeSyncPlayer({
 
     if (state === 1) {
       isRemoteActionRef.current = true;
-      expectEcho([2]);
+      expectEcho([2], 1500, 2);
       playerRef.current.pauseVideo?.();
       setIsPlaying(false);
       setTimeout(() => { isRemoteActionRef.current = false; }, 800);
@@ -560,7 +568,7 @@ export default function YouTubeSyncPlayer({
       setSyncStatus('Paused (Synced)');
     } else {
       isRemoteActionRef.current = true;
-      expectEcho([1, 3]);
+      expectEcho([1, 3], 1500, 1);
       playerRef.current.playVideo?.();
       setIsPlaying(true);
       setTimeout(() => { isRemoteActionRef.current = false; }, 800);
@@ -574,7 +582,7 @@ export default function YouTubeSyncPlayer({
     const cur = playerRef.current.getCurrentTime();
     const target = Math.max(0, cur + deltaSec);
     isRemoteActionRef.current = true;
-    expectEcho([1, 2, 3]);
+    expectSeekEcho();
     playerRef.current.seekTo(target, true);
     lastReportedTimeRef.current = target;
     setCurrentTimeSec(target);
@@ -586,7 +594,7 @@ export default function YouTubeSyncPlayer({
   const handleRestart = () => {
     if (!playerRef.current) return;
     isRemoteActionRef.current = true;
-    expectEcho([1, 2, 3]);
+    expectSeekEcho();
     playerRef.current.seekTo(0, true);
     lastReportedTimeRef.current = 0;
     setCurrentTimeSec(0);
@@ -702,7 +710,7 @@ export default function YouTubeSyncPlayer({
 
     if (playerRef.current?.seekTo) {
       isRemoteActionRef.current = true;
-      expectEcho([1, 2, 3], 60000); // until mouse up
+      expectSeekEcho(60000); // until mouse up
       playerRef.current.seekTo(targetTime, true);
       lastReportedTimeRef.current = targetTime;
     }
@@ -727,7 +735,7 @@ export default function YouTubeSyncPlayer({
         lastReportedTimeRef.current = finalTime;
       }
       setTimeout(() => { isRemoteActionRef.current = false; }, 800);
-      expectEcho([1, 2, 3]);
+      expectSeekEcho();
       if (isP2PConnected) {
         onBroadcastAction('seek', { currentTime: finalTime });
       }

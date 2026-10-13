@@ -1029,3 +1029,15 @@
   width: 100%;
   margin-bottom: 10px;
 }
+
+.phone-app .phone-lock-pill {
+  margin-left: auto;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.phone-app .phone-lock-pill + .phone-status-pill {
+  margin-left: 6px;
+}

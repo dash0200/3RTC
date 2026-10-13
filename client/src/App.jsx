@@ -20,6 +20,7 @@ import { createPeerMessageHandler } from './webrtc/peerMessages';
 import { useVoiceChat } from './hooks/useVoiceChat';
 import { speakingActivity } from './utils/speakingActivity';
 import { processSignalingMessage } from './webrtc/signalingMessages';
+import { useWakeLock } from './hooks/useWakeLock';
 import { useSignalingConnection } from './hooks/useSignalingConnection';
 import { useNetworkStats } from './hooks/useNetworkStats';
 import { useIsPhone } from './hooks/useIsPhone';
@@ -61,6 +62,11 @@ const isPhoneLikeDevice = () => {
     }
 };
 
+// Changes to what everyone watches; with the host controls lock on, only the host sends these
+const LOCKED_PLAYBACK_ACTIONS = new Set(['play', 'pause', 'seek', 'load', 'close', 'unload']);
+const isLockedPlaybackAction = (type, action, payload = {}) =>
+    (type === 'yt-action' || type === 'local-video-action') && LOCKED_PLAYBACK_ACTIONS.has(action) && !payload.byVote;
+
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
         if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
@@ -79,6 +85,15 @@ export default function App() {
     const [signalStatus, setSignalStatus] = useState({ connected: false, label: 'Connecting...' });
     const [roomId, setRoomId] = useState(null);
     const [isHost, setIsHost] = useState(false);
+    // Host controls lock: when on, only the host can play, pause, seek or change the video
+    const [playbackLock, setPlaybackLockState] = useState(false);
+    const playbackLockRef = useRef(false);
+    const onBlockedPlaybackRef = useRef(null);
+    const lockRevertPendingRef = useRef(false);
+    const setPlaybackLock = useCallback((on) => {
+        playbackLockRef.current = Boolean(on);
+        setPlaybackLockState(Boolean(on));
+    }, []);
     const [peerCount, setPeerCount] = useState(0);
     const [isP2PConnected, setIsP2PConnected] = useState(false);
     const [p2pStatusText, setP2pStatusText] = useState('Waiting for peer to enter 5-digit code...');
@@ -307,6 +322,69 @@ export default function App() {
         }
     }, [updateP2PStatus]);
 
+    // ---- Host controls lock -------------------------------------------------------------
+    const hostPeerId = () => Object.entries(peerMetadataRef.current).find(([, m]) => m?.isHost)?.[0] || null;
+    const lastBlockedToastRef = useRef(0);
+    const revertTimerRef = useRef(null);
+    // A guest tried to change playback: tell them, and put their player back to the host's state
+    onBlockedPlaybackRef.current = () => {
+        if (Date.now() - lastBlockedToastRef.current > 3000) {
+            lastBlockedToastRef.current = Date.now();
+            showToast('🔒 Only the host can control playback right now');
+        }
+        clearTimeout(revertTimerRef.current);
+        revertTimerRef.current = setTimeout(() => {
+            const host = peersRef.current.get(hostPeerId());
+            if (host?.dataChannel?.readyState === 'open') {
+                lockRevertPendingRef.current = true;
+                try { host.dataChannel.send(JSON.stringify({ type: 'yt-request-sync' })); } catch { }
+            }
+        }, 350);
+    };
+
+    const handleTogglePlaybackLock = useCallback(() => {
+        if (!isHostRef.current) return;
+        const next = !playbackLockRef.current;
+        setPlaybackLock(next);
+        const msg = JSON.stringify({ type: 'room-settings', playbackLock: next, timestamp: Date.now() });
+        for (const peer of peersRef.current.values()) {
+            if (peer.dataChannel?.readyState === 'open') {
+                try { peer.dataChannel.send(msg); } catch { }
+            }
+        }
+        addSystemMessage(next ? '🔒 You turned on host controls: only you can control playback.' : '🔓 Everyone can control playback again.');
+        showToast(next ? '🔒 Only you can control playback' : '🔓 Everyone can control playback');
+    }, [addSystemMessage, setPlaybackLock, showToast]);
+
+    // From the host (room-settings message or its identity)
+    const handleRoomSettings = useCallback((data, fromPeerId) => {
+        if (typeof data.playbackLock !== 'boolean') return;
+        const isFromHost = data.type === 'peer-identity' ? Boolean(data.isHost) : Boolean(peerMetadataRef.current[fromPeerId]?.isHost);
+        if (!isFromHost || data.playbackLock === playbackLockRef.current) return;
+        setPlaybackLock(data.playbackLock);
+        if (data.type !== 'peer-identity') {
+            const who = peerMetadataRef.current[fromPeerId]?.username || 'The host';
+            addSystemMessage(data.playbackLock ? `🔒 ${who} turned on host controls: only the host can control playback.` : `🔓 ${who} turned off host controls.`);
+            showToast(data.playbackLock ? '🔒 Only the host can control playback' : '🔓 Everyone can control playback');
+        }
+    }, [addSystemMessage, setPlaybackLock, showToast]);
+
+    // The host left: nobody could control playback, so the lock goes away
+    useEffect(() => {
+        if (!playbackLock || isHost) return;
+        const hostThere = Object.values(peerMetadata).some((m) => m?.isHost);
+        if (!hostThere) {
+            const t = setTimeout(() => {
+                if (playbackLockRef.current && !Object.values(peerMetadataRef.current).some((m) => m?.isHost)) {
+                    setPlaybackLock(false);
+                    showToast('🔓 The host left: everyone can control playback');
+                }
+            }, 4000); // a host that is only reconnecting comes back within this
+            return () => clearTimeout(t);
+        }
+        return undefined;
+    }, [peerMetadata, playbackLock, isHost, setPlaybackLock, showToast]);
+
     // Clean up all peers
     const cleanupAllPeers = useCallback(() => {
         for (const entry of peersRef.current.values()) {
@@ -316,6 +394,7 @@ export default function App() {
         setPeerMetadata({});
         speakingActivity.clearPeers();
         setIsP2PConnected(false);
+        setPlaybackLock(false);
         setP2pStatusText('Waiting for peer to enter 5-digit code...');
         setLocalVideoFile(null);
         setRemoteLocalVideoMeta(null);
@@ -328,10 +407,16 @@ export default function App() {
 
     // Broadcast an action (e.g. YouTube or Local Video play/pause/seek/load) to all connected peers
     const handleBroadcastAction = useCallback((action, payload = {}) => {
+        const type = payload.type || 'yt-action';
+        if (isLockedPlaybackAction(type, action, payload) && !isHostRef.current && playbackLockRef.current) {
+            onBlockedPlaybackRef.current?.();
+            return;
+        }
         const msg = {
-            type: payload.type || 'yt-action',
+            type,
             action,
             sender: username,
+            fromHost: isHostRef.current,
             timestamp: Date.now(),
             ...payload
         };
@@ -365,6 +450,8 @@ export default function App() {
 
     // Handle incoming remote YouTube action
     const handleRemoteYouTubeAction = useCallback(async (data) => {
+        // Host controls lock: a guest's play/pause/seek/change (e.g. from an older app) is ignored
+        if (playbackLockRef.current && !data.fromHost && isLockedPlaybackAction('yt-action', data.action, data)) return;
         if (data.action === 'close' || data.action === 'unload') {
             setActiveVideoId(null);
             setActiveVideoTitle('');
@@ -492,6 +579,7 @@ export default function App() {
 
     // Handle incoming remote Local Video action
     const handleRemoteLocalVideoAction = useCallback((data) => {
+        if (playbackLockRef.current && !data.fromHost && isLockedPlaybackAction('local-video-action', data.action, data)) return;
         if (data.action === 'load') {
             setActiveVideoId(null);
             setRemoteLocalVideoMeta({
@@ -756,7 +844,8 @@ export default function App() {
                         peerId: peerIdRef.current,
                         username: username,
                         isHost: isHostRef.current,
-                        isMuted: isMicMutedRef.current
+                        isMuted: isMicMutedRef.current,
+                        ...(isHostRef.current ? { playbackLock: playbackLockRef.current } : {})
                     }));
                     dc.send(JSON.stringify({
                         type: 'peer-voice-status',
@@ -772,7 +861,7 @@ export default function App() {
                 } catch (e) { }
             };
 
-            dc.onmessage = createPeerMessageHandler({ activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, hostStreamRef, isAudioBlockedRef, peerNameOf: (id) => peerMetadataRef.current[id]?.username, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, streamTreeRef, syncStateGetterRef, targetPeerId, username });
+            dc.onmessage = createPeerMessageHandler({ activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, handleRoomSettings, hostStreamRef, isAudioBlockedRef, lockRevertPendingRef, playbackLockRef, peerNameOf: (id) => peerMetadataRef.current[id]?.username, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, streamTreeRef, syncStateGetterRef, targetPeerId, username });
 
             dc.onclose = () => {
                 if (activeStreamSendersRef.current.has(targetPeerId)) {
@@ -1321,6 +1410,10 @@ export default function App() {
     const handlePlayQueueItem = useCallback((itemId) => {
         const item = queueRef.current.find((q) => q.id === itemId);
         if (!item) return;
+        if (playbackLockRef.current && !isHostRef.current) {
+            onBlockedPlaybackRef.current?.();
+            return;
+        }
 
         setQueue((prev) => {
             const nextQueue = prev.filter((q) => q.id !== itemId);
@@ -1345,7 +1438,13 @@ export default function App() {
         addSystemMessage(`🎬 Playing queued video: "${item.title}"`);
     }, [addSystemMessage, broadcastQueueAction, handleBroadcastAction, showToast]);
 
-    const handlePlayNextInQueue = useCallback(() => {
+    // byVote: a passed vote-skip is the room deciding, so it goes through the host controls lock
+    // auto: the video ended or failed on this device; with the lock on, the host's app moves on
+    const handlePlayNextInQueue = useCallback(({ byVote = false, auto = false } = {}) => {
+        if (playbackLockRef.current && !isHostRef.current && !byVote) {
+            if (!auto) onBlockedPlaybackRef.current?.();
+            return;
+        }
         const currentQ = queueRef.current;
         if (currentQ.length === 0) {
             showToast('Queue is empty');
@@ -1365,7 +1464,8 @@ export default function App() {
             type: 'yt-action',
             action: 'load',
             newVideoId: nextItem.videoId,
-            title: nextItem.title
+            title: nextItem.title,
+            ...(byVote ? { byVote: true } : {})
         });
         broadcastQueueAction('next', { nextVideoId: nextItem.videoId, nextTitle: nextItem.title, remainingQueue: remaining });
 
@@ -1399,11 +1499,11 @@ export default function App() {
             broadcastQueueAction('vote-skip-passed');
 
             if (queueRef.current.length > 0) {
-                handlePlayNextInQueue();
+                handlePlayNextInQueue({ byVote: true });
             } else {
                 setActiveVideoId(null);
                 setActiveVideoTitle('');
-                handleBroadcastAction('close', {});
+                handleBroadcastAction('close', { byVote: true });
                 addSystemMessage('🎬 Queue ended. Exited video player.');
             }
         } else {
@@ -1520,6 +1620,21 @@ export default function App() {
     }, [streamVideoUrl, addSystemMessage, showToast]);
 
     const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl);
+    // A timestamp clicked in chat: jump everyone there (respects the host controls lock)
+    const handleChatSeek = useCallback((seconds) => {
+        if (playbackLockRef.current && !isHostRef.current) {
+            onBlockedPlaybackRef.current?.();
+            return;
+        }
+        const type = activeVideoIdRef.current ? 'yt-action' : 'local-video-action';
+        setRemoteAction({ action: 'seek', currentTime: seconds, type, fromHost: isHostRef.current, sender: username, timestamp: Date.now() });
+        handleBroadcastAction('seek', { type, currentTime: seconds });
+        const m = Math.floor(seconds / 60);
+        showToast(`⏩ Jumped to ${m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}` : m}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`);
+    }, [handleBroadcastAction, showToast, username]);
+
+    // Keep the screen on while watching together (phones would dim, lock and pause the stream)
+    useWakeLock(Boolean(roomId) && isMediaActive);
 
     const handleExitVideo = useCallback(() => {
         if (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) {
@@ -1669,6 +1784,8 @@ export default function App() {
         <Stage
             roomId={roomId}
             isHost={isHost}
+            playbackLock={playbackLock}
+            onTogglePlaybackLock={handleTogglePlaybackLock}
             peerCount={peerCount}
             isP2PConnected={isP2PConnected}
             p2pStatusText={p2pStatusText}
@@ -1736,6 +1853,7 @@ export default function App() {
     );
     const renderChat = (extra = {}) => (
         <LiveChat
+            onSeekTo={isMediaActive ? handleChatSeek : undefined}
             messages={messages}
             systemLogs={systemLogs}
             onSendMessage={handleSendMessage}
@@ -1800,6 +1918,7 @@ export default function App() {
                         isP2PConnected={isP2PConnected}
                         signalStatus={signalStatus}
                         onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                        playbackLock={playbackLock}
                     />
                     {roomId ? (
                         <>
@@ -1855,6 +1974,9 @@ export default function App() {
                         roomId={roomId}
                         onOpenServerSettings={openServerSettings}
                         onLeaveRoom={handleLeaveRoom}
+                        isHost={isHost}
+                        playbackLock={playbackLock}
+                        onTogglePlaybackLock={handleTogglePlaybackLock}
                     />
                     <SoundboardSheet
                         isOpen={phoneSheet === 'soundboard'}
@@ -1873,6 +1995,7 @@ export default function App() {
                     <Header
                         isLive={Boolean(roomId)}
                         roomId={roomId}
+                        playbackLock={playbackLock}
                         onCopyRoom={handleCopyRoom}
                         isMicMuted={isMicMuted}
                         isAudioBlocked={isAudioBlocked}

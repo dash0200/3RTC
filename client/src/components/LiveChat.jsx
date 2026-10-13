@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { splitTimestamps } from '../utils/chatTimestamps';
 import QuickPicksModal from './QuickPicksModal';
 import { getAvatarColor } from '../utils/sound';
 
@@ -77,7 +78,28 @@ const EMOJI_CATEGORIES = [
   }
 ];
 
+// "Look at 12:34": video timestamps become links that jump everyone there (while a video is loaded)
+function renderMessageText(text, onSeekTo) {
+  if (!onSeekTo) return text;
+  const parts = splitTimestamps(text);
+  if (parts.length === 1 && parts[0].seconds === undefined) return text;
+  return parts.map((part, idx) => (part.seconds === undefined ? (
+    <React.Fragment key={idx}>{part.text}</React.Fragment>
+  ) : (
+    <button
+      key={idx}
+      type="button"
+      className="chat-timestamp"
+      onClick={() => onSeekTo(part.seconds)}
+      title={`Jump everyone to ${part.text}`}
+    >
+      {part.text}
+    </button>
+  )));
+}
+
 export default function LiveChat({
+  onSeekTo,
   messages = [],
   systemLogs = [],
   onSendMessage,
@@ -825,7 +847,7 @@ export default function LiveChat({
                                 </div>
                               )}
 
-                          {msg.text && <span className="wa-text">{msg.text}</span>}
+                          {msg.text && <span className="wa-text">{renderMessageText(msg.text, onSeekTo)}</span>}
                           <span className="wa-time">{timeStr}</span>
                         </div>
                       </div>
