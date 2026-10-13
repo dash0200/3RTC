@@ -61,3 +61,9 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# YouTube quick picks (server): private API key and cached results
+server/.youtube-api-key
+server/quick-picks-cache.json
+.youtube-api-key
+quick-picks-cache.json

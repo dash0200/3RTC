@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SoundboardTray from '../SoundboardTray';
-import { extractYouTubeId, fetchYouTubeTitle, isVideoUnavailable, PRESET_CATEGORIES } from '../YouTubeSyncPlayer';
+import { extractYouTubeId, fetchYouTubeTitle, isVideoUnavailable } from '../YouTubeSyncPlayer';
+import { useQuickPicks } from '../../utils/quickPicks';
 
 /** Bottom sheet frame: backdrop (tap to close), drag handle, title, close button, Escape closes. */
 export function BottomSheet({ isOpen, onClose, title, children }) {
@@ -43,10 +44,11 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
   const [link, setLink] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [categoryId, setCategoryId] = useState(PRESET_CATEGORIES[0]?.id);
+  const quickPicks = useQuickPicks();
+  const [categoryId, setCategoryId] = useState(null);
   const fileRef = useRef(null);
 
-  const category = PRESET_CATEGORIES.find((c) => c.id === categoryId) || PRESET_CATEGORIES[0];
+  const category = quickPicks.find((c) => c.id === categoryId) || quickPicks[0];
 
   const submitLink = async (mode) => {
     const id = extractYouTubeId(link.trim());
@@ -104,7 +106,7 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
 
       <div className="phone-section-label">QUICK PICKS</div>
       <div className="phone-chip-row" role="tablist" aria-label="Quick pick categories">
-        {PRESET_CATEGORIES.map((c) => (
+        {quickPicks.map((c) => (
           <button
             key={c.id}
             type="button"
