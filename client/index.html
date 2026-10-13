@@ -9,9 +9,69 @@
     <meta name="apple-mobile-web-app-title" content="3RTC" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
-    <meta name="description" content="3RTC: Pure P2P WebRTC Watch Party & Live Chat with synchronized video playback, voice chat, and real-time mesh data channels." />
-    <title>3RTC - P2P Watch Party & Live Chat</title>
-    
+    <title>3RTC – Watch YouTube &amp; Videos Together | Free P2P Watch Party</title>
+    <meta name="description" content="Watch YouTube or your own video files together in perfect sync, with voice chat and live chat. Free, no sign-up, peer-to-peer. Rooms for up to 3 people." />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://3rtc.me/" />
+    <meta name="application-name" content="3RTC" />
+
+    <!-- Link previews (WhatsApp, Discord, Facebook, X, LinkedIn…) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="3RTC" />
+    <meta property="og:url" content="https://3rtc.me/" />
+    <meta property="og:title" content="3RTC – Watch videos together, in sync" />
+    <meta property="og:description" content="YouTube or your own video files, perfectly synced, with voice and chat. Free, no sign-up, straight between your devices." />
+    <meta property="og:image" content="https://3rtc.me/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="3RTC – watch videos together, peer to peer" />
+    <meta property="og:locale" content="en_US" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="3RTC – Watch videos together, in sync" />
+    <meta name="twitter:description" content="YouTube or your own video files, perfectly synced, with voice and chat. Free, no sign-up, peer-to-peer." />
+    <meta name="twitter:image" content="https://3rtc.me/og-image.png" />
+
+    <!-- Structured data: what this site is (used by Google for rich results) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": "https://3rtc.me/#website",
+          "url": "https://3rtc.me/",
+          "name": "3RTC",
+          "alternateName": "3RTC Watch Party",
+          "description": "Watch YouTube or your own video files together in sync, with voice chat and live chat.",
+          "inLanguage": "en"
+        },
+        {
+          "@type": "WebApplication",
+          "@id": "https://3rtc.me/#app",
+          "name": "3RTC",
+          "url": "https://3rtc.me/",
+          "description": "A peer-to-peer watch party app: watch YouTube or local video files together in sync, talk over voice chat and send messages and images, in rooms of up to 3 people.",
+          "applicationCategory": "EntertainmentApplication",
+          "operatingSystem": "Any (web browser)",
+          "browserRequirements": "Requires a modern browser with WebRTC support",
+          "isAccessibleForFree": true,
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+          "image": "https://3rtc.me/og-image.png",
+          "featureList": [
+            "Synchronized YouTube playback",
+            "Stream your own video files peer-to-peer (MP4, WebM, MKV)",
+            "Voice chat with noise suppression and push-to-talk",
+            "Live chat with images and emoji reactions",
+            "Shared video queue",
+            "Installable as an app (PWA)",
+            "No account or sign-up"
+          ],
+          "isPartOf": { "@id": "https://3rtc.me/#website" }
+        }
+      ]
+    }
+    </script>
+
     <!-- Favicon, Touch Icon & PWA Manifest -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
@@ -24,6 +84,13 @@
   </head>
   <body class="dark-theme">
     <div id="root"></div>
+    <noscript>
+      <main style="max-width:640px;margin:48px auto;padding:0 16px;font-family:system-ui,sans-serif;color:#eee;line-height:1.6">
+        <h1>3RTC – watch videos together, in sync</h1>
+        <p>Watch YouTube or your own video files together with friends, perfectly synced, with voice chat and live chat. Free, no sign-up, peer-to-peer. 3RTC needs JavaScript to run.</p>
+        <p><a href="/about" style="color:#ff5470">About 3RTC</a> · <a href="/youtube-watch-party" style="color:#ff5470">YouTube watch party</a> · <a href="/watch-videos-together" style="color:#ff5470">Watch your own videos together</a> · <a href="/privacy" style="color:#ff5470">Privacy</a></p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

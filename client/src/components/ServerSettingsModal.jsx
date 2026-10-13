@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const CLOUD_URL = 'wss://34.57.36.145.sslip.io:443';
+const CLOUD_URL = 'wss://signal.3rtc.me';
 const LOCAL_URL = 'ws://localhost:8080';
 
 export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApply }) {
@@ -37,7 +37,7 @@ export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApp
               className={`server-preset-btn ${url === CLOUD_URL ? 'active' : ''}`}
               onClick={() => handlePreset(CLOUD_URL)}
             >
-              <span className="preset-name">GCP Cloud Server (Always Free)</span>
+              <span className="preset-name">3RTC Cloud Server</span>
               <span className="preset-url">{CLOUD_URL}</span>
             </button>
             <button

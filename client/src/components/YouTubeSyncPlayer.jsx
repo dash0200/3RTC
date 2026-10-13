@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { findQuickPickTitle, getQuickPicks, isVideoUnavailable, markVideoUnavailable } from '../utils/quickPicks';
+import QuickPicksBrowser from './QuickPicksBrowser';
 
 // Extract YouTube ID from various URL formats or raw 11-char ID
 export function extractYouTubeId(urlOrId) {
@@ -38,63 +40,24 @@ export async function fetchYouTubeTitle(videoId, fallbackTitle = '') {
     // Ignore timeout or network errors
   }
   // Fallback to presets if matched
-  for (const cat of PRESET_CATEGORIES) {
-    const found = cat.videos.find((v) => v.id === videoId);
-    if (found) return found.title;
-  }
+  const presetTitle = findQuickPickTitle(videoId);
+  if (presetTitle) return presetTitle;
   return fallbackTitle || `YouTube Video (${videoId})`;
 }
 
-export const PRESET_CATEGORIES = [
-  {
-    id: 'lofi',
-    name: '🎵 Lofi Beats',
-    videos: [
-      { id: 'lTRiuFIWV54', title: '1 A.M. Study Session (Lofi Girl)' },
-      { id: 'n61ULEU7CO0', title: 'Best of Lofi Hip Hop' },
-      { id: 'a5sdsbGKz8U', title: 'Lofi Hip Hop Mix' },
-      { id: '_tV5LEBDs7w', title: 'Cozy Winter Lofi' }
-    ]
-  },
-  {
-    id: 'synthwave',
-    name: '🌆 Synthwave',
-    videos: [
-      { id: 'b4N4q-y-L04', title: 'Night Drive (NewRetroWave)' },
-      { id: 'B_9H4o4j16Q', title: "After School '89 Chillwave" },
-      { id: 'g4H51H-pY6k', title: 'Space Trip Synthwave Mix' },
-      { id: 'F3QYt1l_Mog', title: '1991 Interface Never Sleeps' }
-    ]
-  },
-  {
-    id: 'bunny',
-    name: '🎬 Big Buck Bunny',
-    videos: [
-      { id: 'aqz-KE-bpKQ', title: 'Big Buck Bunny (4K 60fps)' },
-      { id: 'R6MlUcmOul8', title: 'Tears of Steel (Blender Sci-Fi)' },
-      { id: '41hv2tW5Lc4', title: 'Spring (Blender Open Movie)' }
-    ]
-  },
-  {
-    id: 'space',
-    name: '🌌 Space Ambient',
-    videos: [
-      { id: '1ZYbU82GVz4', title: 'Deep Space Cosmic Relaxation' },
-      { id: 'yE-n7rC_cT4', title: 'Starfield Space Ambient' },
-      { id: 'n5Xv_Jz-1_k', title: 'Stargazing Space Ambient' },
-      { id: 'N66f6Q7LpSc', title: 'Stillness Space Ambient' }
-    ]
-  },
-  {
-    id: 'cyberpunk',
-    name: '⚡ Cyberpunk Radio',
-    videos: [
-      { id: 'f02mOEt11OQ', title: 'Code-Fi Lofi Beats' },
-      { id: 'vV95-9b2sR0', title: 'CircuitsFM Cyberpunk Radio' },
-      { id: 'k3A-3g8sZ6M', title: 'NewRetroWave Radio' }
-    ]
+export { isVideoUnavailable };
+
+/** The next quick pick after `videoId` in its category that hasn't failed, or null. */
+function nextPlayablePreset(videoId) {
+  const category = getQuickPicks().find((c) => c.videos.some((v) => v.id === videoId));
+  if (!category) return null;
+  const start = category.videos.findIndex((v) => v.id === videoId);
+  for (let step = 1; step < category.videos.length; step += 1) {
+    const candidate = category.videos[(start + step) % category.videos.length];
+    if (!isVideoUnavailable(candidate.id)) return candidate;
   }
-];
+  return null;
+}
 
 export default function YouTubeSyncPlayer({
   videoId,
@@ -215,6 +178,7 @@ export default function YouTubeSyncPlayer({
       }
 
       try {
+        const playerVideoId = videoId; // errors are about this video, even if the room moved on
         playerRef.current = new window.YT.Player(element, {
           videoId: videoId,
           playerVars: {
@@ -245,15 +209,7 @@ export default function YouTubeSyncPlayer({
               } catch (err) { }
             },
             onStateChange: handlePlayerStateChange,
-            onError: (e) => {
-              let msg = 'Video playback error';
-              if (e.data === 101 || e.data === 150) {
-                msg = 'Embedding disabled by video owner';
-              } else if (e.data === 100) {
-                msg = 'Video not found or removed';
-              }
-              setSyncStatus(msg);
-            }
+            onError: (e) => handlePlayerErrorRef.current?.(e.data, playerVideoId)
           }
         });
         return true;
@@ -528,9 +484,39 @@ export default function YouTubeSyncPlayer({
     }
   };
 
+  // YouTube refused the video (100: removed or private; 101/150: owner blocks other sites, or it's
+  // blocked in this region / age-restricted). Skip to the next queued video, or the next working
+  // quick pick in the same category, instead of leaving everyone on "Video unavailable".
+  const handlePlayerErrorRef = useRef(null);
+  handlePlayerErrorRef.current = (code, failedId) => {
+    const currentId = currentVideoIdRef.current || videoId;
+    if (code !== 100 && code !== 101 && code !== 150) {
+      if (failedId === currentId) setSyncStatus('Video playback error');
+      return;
+    }
+    if (failedId) markVideoUnavailable(failedId);
+    // Late error for a video the room already left (another peer skipped it first): nothing to do
+    if (failedId !== currentId) return;
+    const reason = code === 100 ? 'removed or private' : 'blocked outside YouTube';
+
+    if (queue.length > 0 && typeof onPlayNextInQueue === 'function') {
+      setSyncStatus(`Unavailable (${reason}), playing next`);
+      onPlayNextInQueue();
+      return;
+    }
+    const replacement = failedId ? nextPlayablePreset(failedId) : null;
+    if (replacement) {
+      setSyncStatus(`Unavailable (${reason}), trying another`);
+      onVideoChange(replacement.id, replacement.title);
+      onBroadcastAction('load', { newVideoId: replacement.id, title: replacement.title });
+      return;
+    }
+    setSyncStatus(`Video unavailable (${reason})`);
+  };
+
   const handleSelectPreset = (category) => {
     setInputError('');
-    const pool = category.videos;
+    const pool = category.videos.filter((v) => !isVideoUnavailable(v.id));
     if (!pool || pool.length === 0) return;
 
     const activeId = currentVideoIdRef.current || videoId;
@@ -935,26 +921,15 @@ export default function YouTubeSyncPlayer({
             </form>
             {inputError && <div className="yt-url-error">{inputError}</div>}
 
-            {/* Quick Presets Row */}
-            <div className="yt-hero-presets-row">
-              <span className="yt-hero-presets-tag">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="#f59e0b">
-                  <path d="M7 2v11h3v9l7-12h-4l4-8z" />
-                </svg>
-                Quick Watch
-              </span>
-              {PRESET_CATEGORIES.map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  className="yt-hero-preset-btn"
-                  onClick={() => handleSelectPreset(cat)}
-                  title={`Play ${cat.name}`}
-                >
-                  {cat.name}
-                </button>
-              ))}
-            </div>
+            {/* Quick picks: groups, categories and a thumbnail grid */}
+            <QuickPicksBrowser
+              onPlay={(v) => {
+                setInputError('');
+                onVideoChange(v.id, v.title);
+                onBroadcastAction('load', { newVideoId: v.id, title: v.title });
+              }}
+              onShuffle={handleSelectPreset}
+            />
           </>
         ) : (
           <>
