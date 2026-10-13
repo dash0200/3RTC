@@ -125,7 +125,9 @@ export default function LiveChat({
   onPlaySoundboardClip,
   onSoundboardVolumeChange,
   onToggleSoundboardMute,
-  onOpenQrCode
+  onOpenQrCode,
+  // Phone layout: shown in the page under the video (no floating sheet, header or resize)
+  embedded = false
 }) {
   const DEFAULT_WIDTH = 380;
   const MIN_WIDTH = 260;
@@ -565,14 +567,16 @@ export default function LiveChat({
 
   return (
     <>
-      <div
-        className={`mobile-chat-backdrop ${isOpen ? 'active' : ''}`}
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      {!embedded && (
+        <div
+          className={`mobile-chat-backdrop ${isOpen ? 'active' : ''}`}
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
       <aside
-        className={`chat-section ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
-        style={isOpen ? { width: `${sidebarWidth}px` } : undefined}
+        className={`chat-section ${embedded ? 'embedded' : ''} ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+        style={isOpen && !embedded ? { width: `${sidebarWidth}px` } : undefined}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -588,7 +592,7 @@ export default function LiveChat({
           </div>
         )}
         {/* Sidebar resize handle on the left edge (desktop) */}
-        {isOpen && (
+        {isOpen && !embedded && (
           <div
             className={`sidebar-resize-handle ${isResizing ? 'resizing' : ''}`}
             onMouseDown={handleStartResize}
@@ -603,6 +607,7 @@ export default function LiveChat({
           </div>
         )}
 
+        {!embedded && (
         <div
           className="mobile-sheet-pill-bar"
           onClick={onClose}
@@ -610,7 +615,9 @@ export default function LiveChat({
         >
           <div className="mobile-sheet-pill"></div>
         </div>
+        )}
 
+        {!embedded && (
         <div className="chat-header">
           <div className="chat-header-title-wrap">
             <span className="chat-header-title">Live Chat & Activity</span>
@@ -647,6 +654,7 @@ export default function LiveChat({
             </button>
           </div>
         </div>
+        )}
 
         {/* Tabs: Chat vs Queue vs Peers */}
         <div className="chat-nav-tabs">

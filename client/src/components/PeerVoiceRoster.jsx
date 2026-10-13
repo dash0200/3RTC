@@ -372,7 +372,7 @@ export function PeerVoicePanel({
           </div>
         </div>
         <p className="voice-panel-desc">
-          Green pulsating rings indicate real-time speech. Individual volume sliders $(0\% - 200\%)$ balance quiet or loud microphones.
+          Green pulsating rings indicate real-time speech. Volume sliders (0% to 200%) balance quiet or loud microphones.
         </p>
       </div>
 

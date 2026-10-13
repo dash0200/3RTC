@@ -22,12 +22,17 @@ import { speakingActivity } from './utils/speakingActivity';
 import { processSignalingMessage } from './webrtc/signalingMessages';
 import { useSignalingConnection } from './hooks/useSignalingConnection';
 import { useNetworkStats } from './hooks/useNetworkStats';
+import { useIsPhone } from './hooks/useIsPhone';
+import { PhoneTopBar, PhoneActionBar } from './components/phone/PhoneChrome';
+import { AddVideoSheet, MoreSheet, SoundboardSheet } from './components/phone/PhoneSheets';
+import PhoneHome from './components/phone/PhoneHome';
 import { matchesPttKey, isTypingInField } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
 import './App.css';
+import './phone.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
 const IS_LOCAL = typeof window !== 'undefined' && (
@@ -114,6 +119,11 @@ export default function App() {
     const [showQrModal, setShowQrModal] = useState(false);
     const [initialJoinPin, setInitialJoinPin] = useState('');
     const [toastMessage, setToastMessage] = useState('');
+
+    // Phone layout (its own app shell; desktop layout unchanged) and its open bottom sheet
+    const isPhone = useIsPhone();
+    const [phoneSheet, setPhoneSheet] = useState(null); // 'add' | 'more' | 'soundboard' | null
+    const closePhoneSheet = useCallback(() => setPhoneSheet(null), []);
 
     const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username: string, isHost: boolean, isMuted: boolean } }
 
@@ -1608,156 +1618,243 @@ export default function App() {
         };
     }, [roomId, username, isHost, isMicMuted]);
 
-    return (
-        <div className="app-container">
-            <div className="app-main-pane">
-                <Header
-                    isLive={Boolean(roomId)}
-                    roomId={roomId}
-                    onCopyRoom={handleCopyRoom}
-                    isMicMuted={isMicMuted}
-                    isAudioBlocked={isAudioBlocked}
-                    onToggleMic={toggleMicrophone}
-                    onToggleBlockAudio={toggleBlockAudio}
-                    isP2PConnected={isP2PConnected}
-                    p2pStatusText={p2pStatusText}
-                    isMediaActive={isMediaActive}
-                    onExitVideo={handleExitVideo}
-                    onLeaveRoom={handleLeaveRoom}
-                    isChatOpen={isChatOpen}
-                    unreadChatCount={unreadChatCount}
-                    onToggleChat={() => setIsChatOpen((prev) => !prev)}
-                    audioSettings={audioSettings}
-                    onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
-                    isPttActive={isPttActive}
-                    peerCount={connectedPeers.length + 1}
-                    onOpenSettings={() => setShowSettingsModal(true)}
-                    networkStats={networkStats}
-                    onOpenNetworkHud={() => setShowNetworkHudModal(true)}
-                    onOpenQrCode={() => setShowQrModal(true)}
-                />
+    // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)
+    const renderStage = (extra = {}) => (
+        <Stage
+            roomId={roomId}
+            isHost={isHost}
+            peerCount={peerCount}
+            isP2PConnected={isP2PConnected}
+            p2pStatusText={p2pStatusText}
+            onOpenCreate={() => setShowCreateModal(true)}
+            onOpenJoin={() => {
+                setInitialJoinPin('');
+                setShowJoinModal(true);
+            }}
+            onCopyRoom={handleCopyRoom}
+            onLeaveRoom={handleLeaveRoom}
+            onToggleChat={() => setIsChatOpen((prev) => !prev)}
+            isChatOpen={isChatOpen}
+            unreadChatCount={unreadChatCount}
+            chatCount={unreadChatCount}
+            activeVideoId={activeVideoId}
+            activeVideoTitle={activeVideoTitle}
+            onVideoChange={handleVideoChange}
+            localVideoFile={localVideoFile}
+            remoteLocalVideoMeta={remoteLocalVideoMeta}
+            onLocalFileSelect={handleLocalFileSelect}
+            onCloseLocalVideo={handleCloseLocalVideo}
+            onBroadcastAction={handleBroadcastAction}
+            remoteAction={remoteAction}
+            onRegisterStateGetter={(getter) => {
+                syncStateGetterRef.current = getter;
+            }}
+            streamProgress={streamProgress}
+            streamVideoUrl={streamVideoUrl}
+            onRequestP2PStream={handleRequestP2PStream}
+            onCancelP2PStream={handleCancelP2PStream}
+            isMicMuted={isMicMuted}
+            isAudioBlocked={isAudioBlocked}
+            onToggleMic={toggleMicrophone}
+            onToggleBlockAudio={toggleBlockAudio}
+            peerVoiceStates={peerVoiceStates}
+            queue={queue}
+            onAddToQueue={handleAddToQueue}
+            onPlayNextInQueue={handlePlayNextInQueue}
+            onVoteSkip={handleVoteSkip}
+            skipVotes={skipVotes}
+            onOpenQueue={handleOpenQueue}
+            username={username}
+            floatingReactions={floatingReactions}
+            onSendReaction={handleSendReaction}
+            connectedPeers={connectedPeers}
+            localUser={localUser}
+            onSetPeerVolume={handleSetPeerVolume}
+            onToggleMutePeer={handleToggleMutePeer}
+            audioSettings={audioSettings}
+            onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+            isPttActive={isPttActive}
+            onPttPressStart={handlePttPressStart}
+            onPttPressEnd={handlePttPressEnd}
+            soundboardSettings={soundboardSettings}
+            activeSoundboardSfx={activeSoundboardSfx}
+            activeSfxCooldowns={activeSfxCooldowns}
+            onPlaySoundboardClip={handlePlaySoundboardClip}
+            onSoundboardVolumeChange={handleSoundboardVolumeChange}
+            onToggleSoundboardMute={handleToggleSoundboardMute}
+            networkStats={networkStats}
+            onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+            onOpenQrCode={() => setShowQrModal(true)}
+            {...extra}
+        />
+    );
+    const renderChat = (extra = {}) => (
+        <LiveChat
+            messages={messages}
+            systemLogs={systemLogs}
+            onSendMessage={handleSendMessage}
+            onSendImage={handleSendImage}
+            onClearLogs={handleClearLogs}
+            onTestSound={handleTestSound}
+            isP2PConnected={isP2PConnected}
+            username={username}
+            isOpen={isChatOpen}
+            onClose={() => setIsChatOpen(false)}
+            isAudioBlocked={isAudioBlocked}
+            onToggleBlockAudio={toggleBlockAudio}
+            signalStatus={signalStatus}
+            onOpenSettings={() => setShowSettingsModal(true)}
+            queue={queue}
+            activeVideoId={activeVideoId}
+            activeVideoTitle={activeVideoTitle}
+            onAddToQueue={handleAddToQueue}
+            onRemoveFromQueue={handleRemoveFromQueue}
+            onReorderQueue={handleReorderQueue}
+            onClearQueue={handleClearQueue}
+            onPlayQueueItem={handlePlayQueueItem}
+            onPlayNextInQueue={handlePlayNextInQueue}
+            onVoteSkip={handleVoteSkip}
+            skipVotes={skipVotes}
+            peerCount={peerCount}
+            activeTab={sidebarTab}
+            onTabChange={setSidebarTab}
+            onSendReaction={handleSendReaction}
+            connectedPeers={connectedPeers}
+            localUser={localUser}
+            onSetPeerVolume={handleSetPeerVolume}
+            onToggleMutePeer={handleToggleMutePeer}
+            onToggleMic={toggleMicrophone}
+            roomId={roomId}
+            onCopyRoom={handleCopyRoom}
+            audioSettings={audioSettings}
+            onUpdateAudioSettings={handleUpdateAudioSettings}
+            onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+            isPttActive={isPttActive}
+            onPttPressStart={handlePttPressStart}
+            onPttPressEnd={handlePttPressEnd}
+            soundboardSettings={soundboardSettings}
+            activeSoundboardSfx={activeSoundboardSfx}
+            activeSfxCooldowns={activeSfxCooldowns}
+            onPlaySoundboardClip={handlePlaySoundboardClip}
+            onSoundboardVolumeChange={handleSoundboardVolumeChange}
+            onToggleSoundboardMute={handleToggleSoundboardMute}
+            onOpenQrCode={() => setShowQrModal(true)}
+            {...extra}
+        />
+    );
 
-                <main className="main-container">
-                    <Stage
+    return (
+        <div className={`app-container ${isPhone ? 'phone-app' : ''}`}>
+            {isPhone ? (
+                <>
+                    <PhoneTopBar
                         roomId={roomId}
-                        isHost={isHost}
-                        peerCount={peerCount}
-                        isP2PConnected={isP2PConnected}
-                        p2pStatusText={p2pStatusText}
-                        onOpenCreate={() => setShowCreateModal(true)}
-                        onOpenJoin={() => {
-                            setInitialJoinPin('');
-                            setShowJoinModal(true);
-                        }}
                         onCopyRoom={handleCopyRoom}
-                        onLeaveRoom={handleLeaveRoom}
-                        onToggleChat={() => setIsChatOpen((prev) => !prev)}
-                        isChatOpen={isChatOpen}
-                        unreadChatCount={unreadChatCount}
-                        chatCount={unreadChatCount}
-                        activeVideoId={activeVideoId}
-                        activeVideoTitle={activeVideoTitle}
-                        onVideoChange={handleVideoChange}
-                        localVideoFile={localVideoFile}
-                        remoteLocalVideoMeta={remoteLocalVideoMeta}
-                        onLocalFileSelect={handleLocalFileSelect}
-                        onCloseLocalVideo={handleCloseLocalVideo}
-                        onBroadcastAction={handleBroadcastAction}
-                        remoteAction={remoteAction}
-                        onRegisterStateGetter={(getter) => {
-                            syncStateGetterRef.current = getter;
+                        networkStats={networkStats}
+                        isP2PConnected={isP2PConnected}
+                        signalStatus={signalStatus}
+                        onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                    />
+                    {roomId ? (
+                        <>
+                            {renderStage({ layout: 'phone', onOpenAddVideo: () => setPhoneSheet('add') })}
+                            {renderChat({ embedded: true, isOpen: true })}
+                            <PhoneActionBar
+                                isMicMuted={isMicMuted}
+                                isPttMode={audioSettings?.inputMode === 'ptt'}
+                                isPttActive={isPttActive}
+                                onToggleMic={toggleMicrophone}
+                                onPttPressStart={handlePttPressStart}
+                                onPttPressEnd={handlePttPressEnd}
+                                isAudioBlocked={isAudioBlocked}
+                                onToggleBlockAudio={toggleBlockAudio}
+                                onOpenAddVideo={() => setPhoneSheet('add')}
+                                onOpenMore={() => setPhoneSheet('more')}
+                            />
+                        </>
+                    ) : (
+                        <PhoneHome
+                            username={username}
+                            initialPin={initialJoinPin}
+                            onCreate={handleConfirmCreate}
+                            onJoin={handleConfirmJoin}
+                            onOpenServerSettings={() => setShowSettingsModal(true)}
+                        />
+                    )}
+                    <AddVideoSheet
+                        isOpen={phoneSheet === 'add'}
+                        onClose={closePhoneSheet}
+                        isMediaActive={isMediaActive}
+                        onLoadYouTube={(id, title) => {
+                            handleVideoChange(id, title);
+                            handleBroadcastAction('load', { newVideoId: id, title });
                         }}
-                        streamProgress={streamProgress}
-                        streamVideoUrl={streamVideoUrl}
-                        onRequestP2PStream={handleRequestP2PStream}
-                        onCancelP2PStream={handleCancelP2PStream}
-                        isMicMuted={isMicMuted}
-                        isAudioBlocked={isAudioBlocked}
-                        onToggleMic={toggleMicrophone}
-                        onToggleBlockAudio={toggleBlockAudio}
-                        peerVoiceStates={peerVoiceStates}
-                        queue={queue}
-                        onAddToQueue={handleAddToQueue}
-                        onPlayNextInQueue={handlePlayNextInQueue}
-                        onVoteSkip={handleVoteSkip}
-                        skipVotes={skipVotes}
-                        onOpenQueue={handleOpenQueue}
-                        username={username}
-                        floatingReactions={floatingReactions}
-                        onSendReaction={handleSendReaction}
-                        connectedPeers={connectedPeers}
-                        localUser={localUser}
-                        onSetPeerVolume={handleSetPeerVolume}
-                        onToggleMutePeer={handleToggleMutePeer}
+                        onQueueYouTube={(id, title) => handleAddToQueue({ videoId: id, title })}
+                        onPickFile={handleLocalFileSelect}
+                        onStopVideo={handleExitVideo}
+                    />
+                    <MoreSheet
+                        isOpen={phoneSheet === 'more'}
+                        onClose={closePhoneSheet}
                         audioSettings={audioSettings}
+                        onUpdateAudioSettings={handleUpdateAudioSettings}
                         onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
-                        isPttActive={isPttActive}
-                        onPttPressStart={handlePttPressStart}
-                        onPttPressEnd={handlePttPressEnd}
+                        onOpenSoundboard={() => setPhoneSheet('soundboard')}
+                        onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                        networkStats={networkStats}
+                        onOpenQrCode={() => setShowQrModal(true)}
+                        roomId={roomId}
+                        onOpenServerSettings={() => setShowSettingsModal(true)}
+                        onLeaveRoom={handleLeaveRoom}
+                    />
+                    <SoundboardSheet
+                        isOpen={phoneSheet === 'soundboard'}
+                        onClose={closePhoneSheet}
                         soundboardSettings={soundboardSettings}
                         activeSoundboardSfx={activeSoundboardSfx}
                         activeSfxCooldowns={activeSfxCooldowns}
                         onPlaySoundboardClip={handlePlaySoundboardClip}
                         onSoundboardVolumeChange={handleSoundboardVolumeChange}
                         onToggleSoundboardMute={handleToggleSoundboardMute}
+                    />
+                </>
+            ) : (
+                <>
+                <div className="app-main-pane">
+                    <Header
+                        isLive={Boolean(roomId)}
+                        roomId={roomId}
+                        onCopyRoom={handleCopyRoom}
+                        isMicMuted={isMicMuted}
+                        isAudioBlocked={isAudioBlocked}
+                        onToggleMic={toggleMicrophone}
+                        onToggleBlockAudio={toggleBlockAudio}
+                        isP2PConnected={isP2PConnected}
+                        p2pStatusText={p2pStatusText}
+                        isMediaActive={isMediaActive}
+                        onExitVideo={handleExitVideo}
+                        onLeaveRoom={handleLeaveRoom}
+                        isChatOpen={isChatOpen}
+                        unreadChatCount={unreadChatCount}
+                        onToggleChat={() => setIsChatOpen((prev) => !prev)}
+                        audioSettings={audioSettings}
+                        onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+                        isPttActive={isPttActive}
+                        peerCount={connectedPeers.length + 1}
+                        onOpenSettings={() => setShowSettingsModal(true)}
                         networkStats={networkStats}
                         onOpenNetworkHud={() => setShowNetworkHudModal(true)}
                         onOpenQrCode={() => setShowQrModal(true)}
                     />
-                </main>
-            </div>
 
-            <LiveChat
-                messages={messages}
-                systemLogs={systemLogs}
-                onSendMessage={handleSendMessage}
-                onSendImage={handleSendImage}
-                onClearLogs={handleClearLogs}
-                onTestSound={handleTestSound}
-                isP2PConnected={isP2PConnected}
-                username={username}
-                isOpen={isChatOpen}
-                onClose={() => setIsChatOpen(false)}
-                isAudioBlocked={isAudioBlocked}
-                onToggleBlockAudio={toggleBlockAudio}
-                signalStatus={signalStatus}
-                onOpenSettings={() => setShowSettingsModal(true)}
-                queue={queue}
-                activeVideoId={activeVideoId}
-                activeVideoTitle={activeVideoTitle}
-                onAddToQueue={handleAddToQueue}
-                onRemoveFromQueue={handleRemoveFromQueue}
-                onReorderQueue={handleReorderQueue}
-                onClearQueue={handleClearQueue}
-                onPlayQueueItem={handlePlayQueueItem}
-                onPlayNextInQueue={handlePlayNextInQueue}
-                onVoteSkip={handleVoteSkip}
-                skipVotes={skipVotes}
-                peerCount={peerCount}
-                activeTab={sidebarTab}
-                onTabChange={setSidebarTab}
-                onSendReaction={handleSendReaction}
-                connectedPeers={connectedPeers}
-                localUser={localUser}
-                onSetPeerVolume={handleSetPeerVolume}
-                onToggleMutePeer={handleToggleMutePeer}
-                onToggleMic={toggleMicrophone}
-                roomId={roomId}
-                onCopyRoom={handleCopyRoom}
-                audioSettings={audioSettings}
-                onUpdateAudioSettings={handleUpdateAudioSettings}
-                onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
-                isPttActive={isPttActive}
-                onPttPressStart={handlePttPressStart}
-                onPttPressEnd={handlePttPressEnd}
-                soundboardSettings={soundboardSettings}
-                activeSoundboardSfx={activeSoundboardSfx}
-                activeSfxCooldowns={activeSfxCooldowns}
-                onPlaySoundboardClip={handlePlaySoundboardClip}
-                onSoundboardVolumeChange={handleSoundboardVolumeChange}
-                onToggleSoundboardMute={handleToggleSoundboardMute}
-                onOpenQrCode={() => setShowQrModal(true)}
-            />
+                    <main className="main-container">
+                        {renderStage()}
+                    </main>
+                </div>
+
+                {renderChat()}
+                </>
+            )}
 
             {/* Floating Push-to-Talk HUD Indicator */}
             {isPttActive && (
@@ -1783,14 +1880,14 @@ export default function App() {
 
             {/* Modals */}
             <CreateRoomModal
-                isOpen={showCreateModal}
+                isOpen={showCreateModal && !isPhone}
                 onClose={() => setShowCreateModal(false)}
                 onConfirm={handleConfirmCreate}
                 currentUsername={username}
             />
 
             <JoinRoomModal
-                isOpen={showJoinModal}
+                isOpen={showJoinModal && !isPhone}
                 onClose={() => setShowJoinModal(false)}
                 onConfirm={handleConfirmJoin}
                 currentUsername={username}

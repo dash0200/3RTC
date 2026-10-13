@@ -6,6 +6,7 @@ import { PeerAudioPopover, getInitials } from './PeerVoiceRoster';
 import { getAvatarColor } from '../utils/sound';
 import { useLiveVoiceUsers } from '../utils/speakingActivity';
 import SoundboardTray from './SoundboardTray';
+import { PhoneEmptyMedia, PhoneStreamOffer } from './phone/PhoneMediaOverlays';
 
 export default function Stage({
   roomId,
@@ -70,8 +71,13 @@ export default function Stage({
   networkStats = null,
   onOpenNetworkHud,
   // Feature 4.3: QR Code for Instant Mobile Join
-  onOpenQrCode
+  onOpenQrCode,
+  // Phone layout: only the video area (the phone shell has its own bars); overlays for the
+  // empty state and for a peer's video offer sit on top of the still-mounted players
+  layout = 'desktop',
+  onOpenAddVideo
 }) {
+  const isPhone = layout === 'phone';
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const localFileInputRef = useRef(null);
 
@@ -193,11 +199,16 @@ export default function Stage({
     }
   };
 
+  const phoneOverlay = !isPhone ? null
+    : (remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) ? 'offer'
+      : !isMediaActive ? 'empty'
+        : null;
+
   return (
-    <section className="stage-section">
+    <section className={`stage-section ${isPhone ? 'stage-phone' : ''}`}>
       {/* Main Canvas Area (Drag-and-Drop Video Target & Stage Canvas) */}
       <div
-        className={`stage-canvas yt-sync-wrapper ${isMediaActive ? 'has-video' : ''} ${isStageDragOver ? 'stage-drag-active' : ''}`}
+        className={`stage-canvas yt-sync-wrapper ${isMediaActive ? 'has-video' : ''} ${isStageDragOver ? 'stage-drag-active' : ''} ${phoneOverlay ? 'phone-overlay-active' : ''}`}
         onDragOver={handleStageDragOver}
         onDragEnter={handleStageDragOver}
         onDragLeave={handleStageDragLeave}
@@ -299,6 +310,17 @@ export default function Stage({
           />
         )}
 
+        {phoneOverlay === 'empty' && <PhoneEmptyMedia onAddVideo={onOpenAddVideo} />}
+        {phoneOverlay === 'offer' && (
+          <PhoneStreamOffer
+            meta={remoteLocalVideoMeta}
+            streamProgress={streamProgress}
+            onRequestStream={onRequestP2PStream}
+            onCancelStream={onCancelP2PStream}
+            onPickFile={onLocalFileSelect}
+          />
+        )}
+
         {/* Floating Live Reactions Overlay */}
         <FloatingReactions
           reactions={floatingReactions}
@@ -332,7 +354,8 @@ export default function Stage({
         </div>
       )}
 
-      {/* Bottom Stage Controls Bar (Matching Screenshot UI) */}
+      {!isPhone && (
+      /* Bottom Stage Controls Bar (desktop) */
       <div className="stage-bottom-bar">
         {/* Left: Add Local Video Button & Voice Chips */}
         <div className="stage-bottom-left">
@@ -584,6 +607,7 @@ export default function Stage({
           </div>
         </div>
       </div>
+      )}
     </section>
   );
 }
