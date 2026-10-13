@@ -121,7 +121,15 @@ export function quickPicksUrl(signalUrl) {
   }
 }
 
-export async function loadQuickPicks(signalUrl) {
+/** Tries each server address in turn (the same server can be reachable under several names). */
+export async function loadQuickPicks(signalUrls) {
+  for (const signalUrl of [].concat(signalUrls)) {
+    if (await loadQuickPicksFrom(signalUrl)) return true;
+  }
+  return false;
+}
+
+async function loadQuickPicksFrom(signalUrl) {
   const url = quickPicksUrl(signalUrl);
   if (!url) return false;
   try {
