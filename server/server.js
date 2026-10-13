@@ -189,6 +189,15 @@ function serveQuickPicks(req, res) {
 const server = http.createServer((req, res) => {
   let reqPath = req.url.split('?')[0];
   if (reqPath === '/api/quick-picks') return serveQuickPicks(req, res);
+
+  // In production the website is 3rtc.me (Vercel); this server only does signaling. Browser visits
+  // (signal.3rtc.me, the sslip.io address, old invite links) go to the app, keeping ?room=…
+  if (process.env.NODE_ENV === 'production') {
+    const appUrl = (process.env.APP_URL || 'https://3rtc.me').replace(/\/$/, '');
+    const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+    res.writeHead(302, { Location: `${appUrl}/${query}`, 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+    return res.end();
+  }
   if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
 
   let safePath = path.normalize(path.join(clientDir, reqPath));
