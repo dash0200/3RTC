@@ -526,7 +526,7 @@ export function drawQrToCanvas(canvas, text, options = {}) {
 export function getMobileJoinUrl(roomId, customHost = null) {
   const cleanRoom = String(roomId || '').trim();
   if (typeof window === 'undefined') {
-    return `https://34.57.36.145.sslip.io/?room=${cleanRoom}`;
+    return `https://3rtc.me/?room=${cleanRoom}`;
   }
 
   const origin = customHost ? customHost : window.location.origin;

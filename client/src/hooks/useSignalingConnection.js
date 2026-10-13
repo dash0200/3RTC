@@ -6,7 +6,10 @@
 import { useEffect, useRef } from 'react';
 
 export function useSignalingConnection(ctx) {
-    const { addSystemMessage, currentRoomRef, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef } = ctx;
+    const { addSystemMessage, currentRoomRef, fallbackUrls = [], handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef } = ctx;
+    // Same server under other addresses (signal.3rtc.me, then the raw sslip.io name): if one can't
+    // be reached, the next attempt tries the next address, and the app stays on whichever worked
+    const fallbackKey = fallbackUrls.join(' ');
 
     const handleSignalingMessageRef = useRef();
     handleSignalingMessageRef.current = handleSignalingMessage;
@@ -39,6 +42,8 @@ export function useSignalingConnection(ctx) {
             wsRef.current = null;
         }
 
+        const urls = [signalUrl, ...fallbackKey.split(' ').filter((u) => u && u !== signalUrl)];
+        let urlIndex = 0;
         const isLocalServer = signalUrl.includes('localhost') || signalUrl.includes('127.0.0.1');
         const serverLabel = isLocalServer ? 'Local' : 'Cloud';
 
@@ -50,12 +55,12 @@ export function useSignalingConnection(ctx) {
 
             let ws;
             try {
-                ws = new WebSocket(signalUrl);
+                ws = new WebSocket(urls[urlIndex]);
                 wsRef.current = ws;
             } catch (err) {
                 if (isCancelled) return;
                 setSignalStatus({ connected: false, label: 'Connection Failed' });
-                showToast(`Failed to connect to ${signalUrl}`);
+                showToast('Failed to connect to the server');
                 return;
             }
 
@@ -140,6 +145,9 @@ export function useSignalingConnection(ctx) {
                     showToast('Local server not reachable on port 8080. Start "node server.js" or switch to GCP Cloud Server.');
                 }
 
+                // Never reached this address: try the next one (a working address is kept)
+                if (!hasOpened && urls.length > 1) urlIndex = (urlIndex + 1) % urls.length;
+
                 // Schedule auto-reconnect
                 clearTimeout(reconnectTimeout);
                 reconnectTimeout = setTimeout(() => {
@@ -166,5 +174,5 @@ export function useSignalingConnection(ctx) {
                 wsRef.current = null;
             }
         };
-    }, [signalUrl, showToast, addSystemMessage]);
+    }, [signalUrl, fallbackKey, showToast, addSystemMessage]);
 }

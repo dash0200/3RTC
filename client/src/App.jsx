@@ -35,7 +35,9 @@ import { loadQuickPicks } from './utils/quickPicks';
 import './App.css';
 import './phone.css';
 
-const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
+const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
+// Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
+const BACKUP_SIGNAL_URLS = ['wss://34.57.36.145.sslip.io:443'];
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -57,8 +59,9 @@ export default function App() {
     });
     // YouTube quick picks come from the signaling server's cache (built-in list until then)
     useEffect(() => {
-        loadQuickPicks(signalUrl);
-        const timer = setInterval(() => loadQuickPicks(signalUrl), 6 * 60 * 60 * 1000);
+        const urls = signalUrl === DEFAULT_SIGNAL_URL ? [signalUrl, ...BACKUP_SIGNAL_URLS] : [signalUrl];
+        loadQuickPicks(urls);
+        const timer = setInterval(() => loadQuickPicks(urls), 6 * 60 * 60 * 1000);
         return () => clearInterval(timer);
     }, [signalUrl]);
     const [username, setUsername] = useState(() => localStorage.getItem('webrtc_username') || `User_${Math.floor(100 + Math.random() * 900)}`);
@@ -818,7 +821,7 @@ export default function App() {
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username }), [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, logLocalDebug, sendSignal, showToast, username]);
 
     // Signaling server connection (hooks/useSignalingConnection.js)
-    useSignalingConnection({ addSystemMessage, currentRoomRef, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
+    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls: signalUrl === DEFAULT_SIGNAL_URL ? BACKUP_SIGNAL_URLS : undefined, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
     // On-demand P2P stream: the service worker forwards each byte range the video player asks for
     useEffect(() => {
         const sw = navigator.serviceWorker;
