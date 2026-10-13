@@ -9,91 +9,38 @@ import AudioSettingsModal from './components/AudioSettingsModal';
 import { fetchYouTubeTitle } from './components/YouTubeSyncPlayer';
 import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
-import { P2PStreamSender, P2PStreamReceiver } from './utils/p2pStreamer';
-import { voiceGate } from './utils/voiceGate';
-import { voiceIsolation } from './utils/voiceIsolation';
-import { loadAudioSettings, saveAudioSettings, matchesPttKey, isTypingInField, buildMicConstraints, ensureMicProcessing, getOptionalMicConstraints, isVoiceIsolationSupported, MIC_PROCESSING } from './utils/audioSettings';
+import { detectOnDemandStreaming } from './utils/p2pStreamer';
+import { micPipeline } from './utils/micPipeline';
+import { ICE_SERVERS, BULK_CHANNEL_ID, RECOVERY } from './webrtc/config';
+import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './webrtc/sdp';
+import { teardownPeerEntry } from './webrtc/peerEntry';
+import { attachRemoteAudio } from './webrtc/remoteAudio';
+import { attachPeerRecovery } from './webrtc/peerRecovery';
+import { createPeerMessageHandler } from './webrtc/peerMessages';
+import { useVoiceChat } from './hooks/useVoiceChat';
+import { speakingActivity } from './utils/speakingActivity';
+import { processSignalingMessage } from './webrtc/signalingMessages';
+import { useSignalingConnection } from './hooks/useSignalingConnection';
+import { useNetworkStats } from './hooks/useNetworkStats';
+import { useIsPhone } from './hooks/useIsPhone';
+import { PhoneTopBar, PhoneActionBar } from './components/phone/PhoneChrome';
+import { AddVideoSheet, MoreSheet, SoundboardSheet } from './components/phone/PhoneSheets';
+import PhoneHome from './components/phone/PhoneHome';
+import { matchesPttKey, isTypingInField } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
-import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES } from './utils/networkMonitor';
 import QrCodeModal from './components/QrCodeModal';
 import './App.css';
+import './phone.css';
 
 const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
-const ICE_SERVERS = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-];
-
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
     window.location.hostname === '[::1]' ||
     Boolean(import.meta.env?.DEV)
 );
-
-function extractAudioSdp(sdp) {
-    if (!sdp) return 'none';
-    const lines = sdp.split('\n');
-    const audioIndex = lines.findIndex((l) => l.startsWith('m=audio'));
-    if (audioIndex === -1) return 'no m=audio';
-    const audioBlock = [];
-    for (let i = audioIndex; i < Math.min(lines.length, audioIndex + 15); i++) {
-        const line = lines[i].trim();
-        if (i > audioIndex && line.startsWith('m=')) break;
-        if (line.startsWith('m=audio') || line.startsWith('a=sendrecv') || line.startsWith('a=recvonly') || line.startsWith('a=sendonly') || line.startsWith('a=inactive') || line.startsWith('a=mid')) {
-            audioBlock.push(line);
-        }
-    }
-    return audioBlock.join(' | ');
-}
-
-/**
- * Raises the Opus bitrate (browser default is ~32 kbps) so voice is crisp.
- * - maxaveragebitrate=128000
- * - useinbandfec=1 (Forward Error Correction against packet drops)
- * Everything else stays at the browser's defaults.
- */
-function tuneSdpForDiscordAudio(sdp) {
-    if (!sdp) return sdp;
-    const match = sdp.match(/a=rtpmap:(\d+)\s+opus\/48000/i);
-    if (!match) return sdp;
-    const pt = match[1];
-    const opusParams = 'useinbandfec=1;maxaveragebitrate=128000';
-
-    const fmtpRegex = new RegExp(`a=fmtp:${pt}\\s+(.*)`, 'i');
-    if (fmtpRegex.test(sdp)) {
-        return sdp.replace(fmtpRegex, (line, existingParams) => {
-            const filtered = existingParams
-                .split(';')
-                .map((s) => s.trim())
-                .filter((p) => !p.match(/^(maxaveragebitrate|useinbandfec)=/i))
-                .join(';');
-            return `a=fmtp:${pt} ${filtered ? filtered + ';' : ''}${opusParams}`;
-        });
-    } else {
-        return sdp.replace(
-            new RegExp(`(a=rtpmap:${pt}\\s+opus\\/48000(?:\\/2)?)`, 'i'),
-            `$1\r\na=fmtp:${pt} ${opusParams}`
-        );
-    }
-}
-
-function tuneAudioSender(pc) {
-    if (!pc || !pc.getSenders) return;
-    try {
-        const senders = pc.getSenders();
-        const audioSender = senders.find((s) => s.track && s.track.kind === 'audio');
-        if (audioSender && audioSender.getParameters && audioSender.setParameters) {
-            const params = audioSender.getParameters();
-            if (params && params.encodings && params.encodings.length > 0) {
-                params.encodings[0].maxBitrate = 128000;
-                audioSender.setParameters(params).catch(() => { });
-            }
-        }
-    } catch { }
-}
 
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
@@ -122,6 +69,9 @@ export default function App() {
     const [streamProgress, setStreamProgress] = useState(null);
     const [streamVideoUrl, setStreamVideoUrl] = useState(null);
     const streamReceiverRef = useRef(null);
+    const getOrCreatePeerConnectionRef = useRef(null);
+    // Host: stream number of the file currently offered for on-demand streaming
+    const hostStreamRef = useRef({ file: null, streamNo: 0 });
     const activeStreamSendersRef = useRef(new Map());
     const localVideoFileRef = useRef(null);
     localVideoFileRef.current = localVideoFile;
@@ -170,31 +120,14 @@ export default function App() {
     const [initialJoinPin, setInitialJoinPin] = useState('');
     const [toastMessage, setToastMessage] = useState('');
 
-    // WebRTC Voice Chat State
-    const [isMicMuted, setIsMicMuted] = useState(true);
-    const [isAudioBlocked, setIsAudioBlocked] = useState(false);
-    const [peerVoiceStates, setPeerVoiceStates] = useState({});
+    // Phone layout (its own app shell; desktop layout unchanged) and its open bottom sheet
+    const isPhone = useIsPhone();
+    const [phoneSheet, setPhoneSheet] = useState(null); // 'add' | 'more' | 'soundboard' | null
+    const closePhoneSheet = useCallback(() => setPhoneSheet(null), []);
 
-    // Feature 2.1: Per-Peer Volume Sliders & Speaking Rings State
-    const [peerVolumes, setPeerVolumes] = useState({}); // { [peerId]: number (0.0 to 2.0) }
-    const [localMutedPeers, setLocalMutedPeers] = useState({}); // { [peerId]: boolean }
-    const [peerAudioActivity, setPeerAudioActivity] = useState({}); // { [peerId]: { isSpeaking: boolean, level: number } }
-    const [localAudioActivity, setLocalAudioActivity] = useState({ isSpeaking: false, level: 0 });
     const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username: string, isHost: boolean, isMuted: boolean } }
 
-    // Feature 2.2: Audio Processing Toggles (Noise Suppression & Echo Cancellation) & Push-to-Talk (PTT)
-    const [audioSettings, setAudioSettings] = useState(() => loadAudioSettings());
-    // Voice isolation on the live mic: null (mic not opened yet) | 'off' | 'active' (browser/OS)
-    // | 'rnnoise' (in-app noise removal) | 'unavailable'
-    const [voiceIsolationStatus, setVoiceIsolationStatus] = useState(null);
-    // Whether the current mic stream was opened with voice isolation requested
-    const micIsolationRequestedRef = useRef(false);
     const [showAudioSettingsModal, setShowAudioSettingsModal] = useState(false);
-    const [isPttActive, setIsPttActive] = useState(false);
-    const audioSettingsRef = useRef(audioSettings);
-    const isPttActiveRef = useRef(false);
-    const pttReleaseTimerRef = useRef(null);
-    const isAudioUpdatingRef = useRef(false);
 
     // Feature 2.3: Synchronized Soundboard (Mini SFX Tray)
     const [soundboardSettings, setSoundboardSettings] = useState(() => loadSoundboardSettings());
@@ -208,20 +141,6 @@ export default function App() {
 
     // Feature 4.1: Real-Time P2P Network HUD (Ping & Latency)
     const [showNetworkHudModal, setShowNetworkHudModal] = useState(false);
-    const [networkStats, setNetworkStats] = useState({
-        avgPingMs: null,
-        minPingMs: null,
-        maxPingMs: null,
-        overallConnectionType: 'Direct P2P',
-        totalDownloadKBps: 0,
-        totalUploadKBps: 0,
-        syncDriftMs: undefined,
-        syncDriftStatus: 'P2P Mesh Ready'
-    });
-    const [peersNetworkStats, setPeersNetworkStats] = useState([]);
-    const peerStatsCacheRef = useRef(new Map());
-    const pingHistoryRef = useRef(new Map());
-    const lastSyncDriftMsRef = useRef(undefined);
 
     // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
     // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement, webAudioSource, webAudioGain, analyserNode }>
@@ -235,23 +154,10 @@ export default function App() {
     const syncStateGetterRef = useRef(null);
     const peerIdRef = useRef(crypto.randomUUID());
 
-    const localStreamRef = useRef(null);
-    const isMicMutedRef = useRef(true);
-    const isAudioBlockedRef = useRef(false);
-    const peerVolumesRef = useRef({});
-    const localMutedPeersRef = useRef({});
-    const localAnalyserRef = useRef(null);
-    const localSourceNodeRef = useRef(null);
 
     currentRoomRef.current = roomId;
     isHostRef.current = isHost;
     activeVideoIdRef.current = activeVideoId;
-    isMicMutedRef.current = isMicMuted;
-    isAudioBlockedRef.current = isAudioBlocked;
-    peerVolumesRef.current = peerVolumes;
-    localMutedPeersRef.current = localMutedPeers;
-    audioSettingsRef.current = audioSettings;
-    isPttActiveRef.current = isPttActive;
     soundboardSettingsRef.current = soundboardSettings;
 
     const showToast = useCallback((msg) => {
@@ -275,6 +181,42 @@ export default function App() {
 
     // Developer debug logging is disabled in production to keep console and user logs clean
     const logLocalDebug = useCallback(() => { }, []);
+
+    // Voice chat: mic, push-to-talk, audio settings, deafen, per-peer volume (hooks/useVoiceChat.js)
+    const {
+        isMicMuted,
+        setIsMicMuted,
+        isAudioBlocked,
+        setIsAudioBlocked,
+        peerVoiceStates,
+        setPeerVoiceStates,
+        peerVolumes,
+        setPeerVolumes,
+        localMutedPeers,
+        setLocalMutedPeers,
+        audioSettings,
+        voiceIsolationStatus,
+        isPttActive,
+        setIsPttActive,
+        isPttActiveRef,
+        pttReleaseTimerRef,
+        localStreamRef,
+        isMicMutedRef,
+        isAudioBlockedRef,
+        peerVolumesRef,
+        localMutedPeersRef,
+        localAnalyserRef,
+        localSourceNodeRef,
+        setMicrophoneMuted,
+        toggleMicrophone,
+        handleUpdateAudioSettings,
+        handlePttPressStart,
+        handlePttPressEnd,
+        toggleBlockAudio,
+        handleSetPeerVolume,
+        handleToggleMutePeer
+    } = useVoiceChat({ addSystemMessage, logLocalDebug, peerMetadata, peersRef, showToast, username });
+
 
     const handleClearLogs = useCallback(() => {
         setSystemLogs([]);
@@ -311,84 +253,26 @@ export default function App() {
     const cleanupPeer = useCallback((targetPeerId) => {
         if (peersRef.current.has(targetPeerId)) {
             const entry = peersRef.current.get(targetPeerId);
-            try {
-                if (entry.audioElement) {
-                    entry.audioElement.pause();
-                    entry.audioElement.srcObject = null;
-                    try { entry.audioElement.remove(); } catch { }
-                    entry.audioElement = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioSource) {
-                    entry.webAudioSource.disconnect();
-                    entry.webAudioSource = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioGain) {
-                    entry.webAudioGain.disconnect();
-                    entry.webAudioGain = null;
-                }
-            } catch { }
-            try {
-                if (entry.analyserNode) {
-                    entry.analyserNode.disconnect();
-                    entry.analyserNode = null;
-                }
-            } catch { }
-            try { entry.dataChannel?.close(); } catch { }
-            try { entry.pc?.close(); } catch { }
+            teardownPeerEntry(entry);
             peersRef.current.delete(targetPeerId);
             setPeerMetadata((prev) => {
                 const next = { ...prev };
                 delete next[targetPeerId];
                 return next;
             });
-            setPeerAudioActivity((prev) => {
-                const next = { ...prev };
-                delete next[targetPeerId];
-                return next;
-            });
+            speakingActivity.removePeer(targetPeerId);
             updateP2PStatus();
         }
     }, [updateP2PStatus]);
 
     // Clean up all peers
     const cleanupAllPeers = useCallback(() => {
-        for (const [peerId, entry] of peersRef.current.entries()) {
-            try {
-                if (entry.audioElement) {
-                    entry.audioElement.pause();
-                    entry.audioElement.srcObject = null;
-                    try { entry.audioElement.remove(); } catch { }
-                    entry.audioElement = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioSource) {
-                    entry.webAudioSource.disconnect();
-                    entry.webAudioSource = null;
-                }
-            } catch { }
-            try {
-                if (entry.webAudioGain) {
-                    entry.webAudioGain.disconnect();
-                    entry.webAudioGain = null;
-                }
-            } catch { }
-            try {
-                if (entry.analyserNode) {
-                    entry.analyserNode.disconnect();
-                    entry.analyserNode = null;
-                }
-            } catch { }
-            try { entry.dataChannel?.close(); } catch { }
-            try { entry.pc?.close(); } catch { }
+        for (const entry of peersRef.current.values()) {
+            teardownPeerEntry(entry, { sayBye: true });
         }
         peersRef.current.clear();
         setPeerMetadata({});
-        setPeerAudioActivity({});
+        speakingActivity.clearPeers();
         setIsP2PConnected(false);
         setP2pStatusText('Waiting for peer to enter 5-digit code...');
         setLocalVideoFile(null);
@@ -725,40 +609,14 @@ export default function App() {
         });
     }, []);
 
-    // Feature 4.1: Record DataChannel ping latency probe
-    const recordPeerPing = useCallback((peerId, pingMs) => {
-        if (!peerId || typeof pingMs !== 'number' || pingMs < 0 || pingMs > 10000) return;
+    // Network HUD stats (hooks/useNetworkStats.js)
+    const {
+        networkStats,
+        peersNetworkStats,
+        recordPeerPing,
+        handleTriggerPing
+    } = useNetworkStats({ activeVideoId, localVideoFile, peerMetadata, peersRef, roomId, showToast });
 
-        const history = pingHistoryRef.current.get(peerId) || [];
-        const updatedHistory = [...history.slice(-(MAX_HISTORY_SAMPLES - 1)), pingMs];
-        pingHistoryRef.current.set(peerId, updatedHistory);
-
-        const avg = Math.round(updatedHistory.reduce((a, b) => a + b, 0) / updatedHistory.length);
-
-        setPeersNetworkStats((prev) => {
-            const existing = prev.find((p) => p.peerId === peerId);
-            if (existing) {
-                return prev.map((p) => (p.peerId === peerId ? {
-                    ...p,
-                    pingMs,
-                    avgPingMs: avg,
-                    pingHistory: updatedHistory
-                } : p));
-            } else {
-                return [...prev, {
-                    peerId,
-                    username: peerMetadata[peerId]?.username || `User_${peerId.slice(0, 4)}`,
-                    pingMs,
-                    avgPingMs: avg,
-                    pingHistory: updatedHistory,
-                    connectionType: 'Direct P2P',
-                    protocol: 'UDP'
-                }];
-            }
-        });
-    }, [peerMetadata]);
-
-    // Create or get peer connection in mesh
     const getOrCreatePeerConnection = useCallback((targetPeerId, isInitiator) => {
         if (peersRef.current.has(targetPeerId)) {
             return peersRef.current.get(targetPeerId);
@@ -768,11 +626,29 @@ export default function App() {
         const peerEntry = {
             pc,
             dataChannel: null,
+            bulkChannel: null,
             isConnected: false,
             candidateQueue: [],
-            audioElement: null
+            audioElement: null,
+            isInitiator: Boolean(isInitiator), // the initiator drives ICE restarts (no offer glare)
+            applyingRemote: false,             // remote description being applied: queue candidates
+            recoveryTimer: null,
+            restartAttempts: 0,
+            brokenSince: 0,
+            wasInterrupted: false,
+            signalingGone: false,              // peer dropped off signaling but P2P link was still up
+            rebuilt: false
         };
         peersRef.current.set(targetPeerId, peerEntry);
+
+        // Bulk channel (video stream / images), same pre-agreed id on both sides
+        try {
+            const bulk = pc.createDataChannel('bulk', { negotiated: true, id: BULK_CHANNEL_ID, ordered: true });
+            bulk.binaryType = 'arraybuffer';
+            peerEntry.bulkChannel = bulk;
+        } catch (err) {
+            logLocalDebug('BULK_CHANNEL_ERR', err.message);
+        }
 
         // Audio Transceiver for WebRTC Voice Chat
         // Initiator must call addTransceiver to include 'm=audio sendrecv' in Offer.
@@ -792,7 +668,7 @@ export default function App() {
                 logLocalDebug('TRANSCEIVER_INIT', `Role: HOST/OFFERER -> Peer: ${targetPeerId} | Transceiver mid: ${audioTransceiver?.mid || 'pending'} | direction: ${audioTransceiver?.direction}`);
 
                 if (localStreamRef.current) {
-                    const audioTrack = voiceIsolation.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
+                    const audioTrack = micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
                     if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
                         audioTransceiver.sender.replaceTrack(audioTrack).catch(() => { });
                     }
@@ -804,126 +680,7 @@ export default function App() {
             logLocalDebug('TRANSCEIVER_INIT_ERR', err.message);
         }
 
-        // Handle incoming audio stream from remote peer
-        pc.ontrack = (event) => {
-
-            // 1. Audio Element Pipeline (Offscreen layout instead of display:none to prevent Chrome background throttling)
-            let audioEl = peerEntry.audioElement;
-            if (!audioEl) {
-                audioEl = document.createElement('audio');
-                audioEl.id = `remote-audio-${targetPeerId}`;
-                audioEl.autoplay = true;
-                audioEl.playsInline = true;
-                audioEl.style.position = 'fixed';
-                audioEl.style.left = '-9999px';
-                audioEl.style.top = '-9999px';
-                audioEl.style.width = '1px';
-                audioEl.style.height = '1px';
-                audioEl.style.opacity = '0.01';
-                document.body.appendChild(audioEl);
-                peerEntry.audioElement = audioEl;
-            }
-
-            const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
-            const isLocalMutedInit = Boolean(localMutedPeersRef.current[targetPeerId]);
-            const peerVolInit = peerVolumesRef.current[targetPeerId] !== undefined ? peerVolumesRef.current[targetPeerId] : 1.0;
-            const effectiveInit = isAudioBlockedRef.current || isLocalMutedInit ? 0 : peerVolInit;
-
-            audioEl.srcObject = remoteStream;
-            audioEl.muted = effectiveInit === 0;
-            audioEl.volume = Math.min(1.0, effectiveInit);
-            if (typeof audioEl.setSinkId === 'function') {
-                audioEl.setSinkId('').catch(() => { });
-            }
-
-            // 2. Direct Web Audio API Pipeline (Routes directly to system audio hardware, bypassing Chromium MediaElement sink bugs)
-            const connectWebAudioPipeline = (stream) => {
-                try {
-                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                    if (!AudioContextClass) return;
-                    if (!window.__webrtcAudioCtx) {
-                        window.__webrtcAudioCtx = new AudioContextClass();
-                    }
-                    const ctx = window.__webrtcAudioCtx;
-                    if (ctx.state === 'suspended') {
-                        ctx.resume().catch(() => { });
-                    }
-
-                    if (peerEntry.webAudioSource) {
-                        try { peerEntry.webAudioSource.disconnect(); } catch { }
-                    }
-                    if (peerEntry.webAudioGain) {
-                        try { peerEntry.webAudioGain.disconnect(); } catch { }
-                    }
-                    if (peerEntry.analyserNode) {
-                        try { peerEntry.analyserNode.disconnect(); } catch { }
-                    }
-
-                    const srcNode = ctx.createMediaStreamSource(stream);
-                    const analyserNode = ctx.createAnalyser();
-                    analyserNode.fftSize = 256;
-                    analyserNode.smoothingTimeConstant = 0.5;
-
-                    // Connect solely to AnalyserNode for Speaking Rings & VU meter.
-                    // DO NOT route to ctx.destination: audioEl is the sole speaker output.
-                    // Playing through both simultaneously caused acoustic comb filtering (hollow room echo).
-                    srcNode.connect(analyserNode);
-
-                    peerEntry.webAudioSource = srcNode;
-                    peerEntry.analyserNode = analyserNode;
-                    logLocalDebug('WEBAUDIO_ANALYSER_ROUTED', `Peer: ${targetPeerId} -> Web Audio analyser connected (ctx: ${ctx.state})`);
-                } catch (err) {
-                    logLocalDebug('WEBAUDIO_ERR', `AudioContext route error: ${err.message}`);
-                }
-            };
-
-            connectWebAudioPipeline(remoteStream);
-
-            // Handle when remote sender un-mutes and RTP packets arrive
-            event.track.onunmute = () => {
-                if (peerEntry.audioElement && !isAudioBlockedRef.current) {
-                    const freshStream = new MediaStream([event.track]);
-                    peerEntry.audioElement.srcObject = freshStream;
-                    peerEntry.audioElement.play().then(() => {
-                        logLocalDebug('PLAY_ON_UNMUTE_OK', `Peer: ${targetPeerId} audio is actively playing!`);
-                    }).catch((err) => {
-                        logLocalDebug('PLAY_ON_UNMUTE_ERR', `Peer: ${targetPeerId} - ${err.name}: ${err.message}`);
-                    });
-                    connectWebAudioPipeline(freshStream);
-                }
-            };
-
-            event.track.onmute = () => {
-                logLocalDebug('TRACK_ONMUTE', `Peer: ${targetPeerId} - Incoming audio track muted`);
-            };
-
-            const playPromise = audioEl.play();
-            if (playPromise !== undefined) {
-                playPromise.then(() => {
-                    logLocalDebug('INITIAL_PLAY_OK', `Peer: ${targetPeerId} audio element playing (paused: ${audioEl.paused})`);
-                }).catch((err) => {
-                    logLocalDebug('INITIAL_PLAY_BLOCKED', `Peer: ${targetPeerId} Autoplay blocked (${err.name}): ${err.message}`);
-                    const resumeOnInteraction = () => {
-                        if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
-                            window.__webrtcAudioCtx.resume().catch(() => { });
-                        }
-                        if (peerEntry.audioElement && !isAudioBlockedRef.current) {
-                            peerEntry.audioElement.play().then(() => {
-                                logLocalDebug('RESUME_PLAY_OK', `Peer: ${targetPeerId} audio playback resumed on user gesture!`);
-                            }).catch((e) => {
-                                logLocalDebug('RESUME_PLAY_ERR', `Peer: ${targetPeerId} resume failed: ${e.name} - ${e.message}`);
-                            });
-                        }
-                        window.removeEventListener('click', resumeOnInteraction);
-                        window.removeEventListener('keydown', resumeOnInteraction);
-                        window.removeEventListener('touchstart', resumeOnInteraction);
-                    };
-                    window.addEventListener('click', resumeOnInteraction);
-                    window.addEventListener('keydown', resumeOnInteraction);
-                    window.addEventListener('touchstart', resumeOnInteraction);
-                });
-            }
-        };
+        attachRemoteAudio(pc, { isAudioBlockedRef, localMutedPeersRef, logLocalDebug, peerEntry, peerVolumesRef, targetPeerId });
 
         pc.onicecandidate = (event) => {
             if (event.candidate) {
@@ -935,12 +692,7 @@ export default function App() {
             }
         };
 
-        pc.onconnectionstatechange = () => {
-            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                peerEntry.isConnected = false;
-                updateP2PStatus();
-            }
-        };
+        const { isStillCurrent, scheduleRecovery } = attachPeerRecovery(pc, { addSystemMessage, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef });
 
         const bindDataChannel = (dc) => {
             peerEntry.dataChannel = dc;
@@ -978,281 +730,33 @@ export default function App() {
                 } catch (e) { }
             };
 
-            dc.onmessage = async (event) => {
-                let arrayBuffer = null;
-                if (event.data instanceof ArrayBuffer) {
-                    arrayBuffer = event.data;
-                } else if (event.data instanceof Blob) {
-                    try {
-                        arrayBuffer = await event.data.arrayBuffer();
-                    } catch (e) { }
-                }
-
-                if (arrayBuffer) {
-                    // Feature 3.3: Check magic bytes for Direct P2P Image Chunk
-                    if (arrayBuffer.byteLength >= 4) {
-                        const magic = new DataView(arrayBuffer).getUint32(0, false);
-                        if (magic === 0x494D4731) { // 'IMG1'
-                            handleIncomingImageChunk(arrayBuffer);
-                            return;
-                        }
-                    }
-
-                    // Feature 1.4: P2P Video Streaming
-                    if (streamReceiverRef.current) {
-                        streamReceiverRef.current.handleChunk(arrayBuffer);
-                    }
-                    return;
-                }
-
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'peer-identity') {
-                        setPeerMetadata((prev) => ({
-                            ...prev,
-                            [targetPeerId]: {
-                                username: data.username || `User_${targetPeerId.slice(0, 4)}`,
-                                isHost: Boolean(data.isHost),
-                                isMuted: Boolean(data.isMuted)
-                            }
-                        }));
-                        if (!data.isReply) {
-                            try {
-                                dc.send(JSON.stringify({
-                                    type: 'peer-identity',
-                                    peerId: peerIdRef.current,
-                                    username: username,
-                                    isHost: isHostRef.current,
-                                    isMuted: isMicMutedRef.current,
-                                    isReply: true
-                                }));
-                            } catch (e) { }
-                        }
-                    } else if (data.type === 'chat') {
-                        setMessages((prev) => [...prev, { ...data, isSelf: false }]);
-                        sound.playPop();
-                    } else if (data.type === 'p2p-image-start') {
-                        handleIncomingImageStart(data);
-                    } else if (data.type === 'net-ping') {
-                        try {
-                            dc.send(JSON.stringify({
-                                type: 'net-pong',
-                                pingId: data.pingId,
-                                sendTime: data.sendTime
-                            }));
-                        } catch (e) { }
-                    } else if (data.type === 'net-pong') {
-                        const rtt = Math.max(1, Math.round(performance.now() - (data.sendTime || 0)));
-                        recordPeerPing(targetPeerId, rtt);
-                    } else if (data.type === 'peer-voice-status') {
-                        setPeerVoiceStates((prev) => ({
-                            ...prev,
-                            [data.sender]: { isMuted: data.isMuted }
-                        }));
-                        setPeerMetadata((prev) => ({
-                            ...prev,
-                            [targetPeerId]: {
-                                ...(prev[targetPeerId] || {}),
-                                username: data.sender || prev[targetPeerId]?.username || `User_${targetPeerId.slice(0, 4)}`,
-                                isMuted: data.isMuted
-                            }
-                        }));
-                        // When remote peer un-mutes, ensure their audio element is actively playing
-                        if (!data.isMuted) {
-                            for (const peer of peersRef.current.values()) {
-                                if (peer.audioElement && !isAudioBlockedRef.current) {
-                                    peer.audioElement.play().catch(() => { });
-                                }
-                            }
-                        }
-                    } else if (data.type === 'yt-action') {
-                        handleRemoteYouTubeAction(data);
-                    } else if (data.type === 'local-video-action') {
-                        handleRemoteLocalVideoAction(data);
-                    } else if (data.type === 'queue-action') {
-                        handleRemoteQueueAction(data);
-                    } else if (data.type === 'reaction') {
-                        handleRemoteReaction(data);
-                    } else if (data.type === 'soundboard-sfx') {
-                        handleRemoteSoundboardSfx(data);
-                    } else if (data.type === 'p2p-stream-request') {
-                        // Remote peer requests to stream the local video file
-                        if (localVideoFileRef.current && peerEntry.dataChannel) {
-                            addSystemMessage(`📡 Peer "${data.requester || 'User'}" requested video stream. Slicing and streaming chunks...`);
-                            showToast(`Streaming video to ${data.requester || 'peer'}...`);
-
-                            const sender = new P2PStreamSender(localVideoFileRef.current, peerEntry.dataChannel, {
-                                targetPeerId,
-                                senderName: username,
-                                onProgress: () => { },
-                                onComplete: (info) => {
-                                    addSystemMessage(`✅ Completed streaming video chunks to ${data.requester || 'peer'} (${(info.totalBytes / (1024 * 1024)).toFixed(1)} MB in ${info.durationSec.toFixed(1)}s)`);
-                                    showToast(`Stream transfer complete!`);
-                                },
-                                onError: (err) => {
-                                    addSystemMessage(`❌ Stream transfer error: ${err.message}`);
-                                }
-                            });
-                            activeStreamSendersRef.current.set(targetPeerId, sender);
-                            sender.start();
-                        }
-                    } else if (data.type === 'p2p-stream-header') {
-                        // Incoming P2P video stream header
-                        addSystemMessage(`📡 Receiving video stream from ${data.sender || 'Peer'}: "${data.fileName}" (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB)`);
-                        showToast(`Streaming "${data.fileName}"...`);
-
-                        if (streamReceiverRef.current) {
-                            streamReceiverRef.current.abort();
-                        }
-
-                        const receiver = new P2PStreamReceiver(data, {
-                            onReady: (blobUrl, meta) => {
-                                setStreamVideoUrl(blobUrl);
-                                setStreamProgress((prev) => ({
-                                    ...(prev || {}),
-                                    isReady: true,
-                                    percent: meta.percent
-                                }));
-                            },
-                            onProgress: (prog) => {
-                                setStreamProgress((prev) => ({
-                                    ...(prev || {}),
-                                    ...prog
-                                }));
-                            },
-                            onComplete: (blobUrl, meta) => {
-                                setStreamVideoUrl(blobUrl);
-                                setStreamProgress((prev) => ({
-                                    ...(prev || {}),
-                                    percent: 100,
-                                    isReady: true,
-                                    isCompleted: true
-                                }));
-                                addSystemMessage(`✅ Video stream fully buffered (${(meta.fileSize / (1024 * 1024)).toFixed(1)} MB). Ready to play!`);
-                                showToast(`Stream ready to play!`);
-                            },
-                            onError: (err) => {
-                                addSystemMessage(`❌ Video stream error: ${err.message}`);
-                                showToast(`Stream error: ${err.message}`);
-                            }
-                        });
-                        streamReceiverRef.current = receiver;
-                        setStreamProgress({
-                            percent: 0,
-                            speedMBs: 0,
-                            receivedBytes: 0,
-                            totalBytes: data.fileSize,
-                            receivedChunksCount: 0,
-                            totalChunks: data.totalChunks,
-                            fileName: data.fileName,
-                            isReady: false
-                        });
-                    } else if (data.type === 'p2p-stream-complete') {
-                        if (streamReceiverRef.current) {
-                            streamReceiverRef.current.handleComplete();
-                        }
-                    } else if (data.type === 'p2p-stream-cancel') {
-                        if (activeStreamSendersRef.current.has(targetPeerId)) {
-                            activeStreamSendersRef.current.get(targetPeerId).abort();
-                            activeStreamSendersRef.current.delete(targetPeerId);
-                        }
-                        if (streamReceiverRef.current) {
-                            streamReceiverRef.current.abort();
-                            streamReceiverRef.current = null;
-                            setStreamProgress(null);
-                        }
-                    } else if (data.type === 'yt-request-sync') {
-                        // A newly joined peer is asking for the current playing media & timestamp
-                        let hasSent = false;
-                        if (syncStateGetterRef.current) {
-                            const state = syncStateGetterRef.current();
-                            if (state) {
-                                if (state.mediaType === 'local' && state.fileName) {
-                                    dc.send(JSON.stringify({
-                                        type: 'local-video-sync-state',
-                                        ...state,
-                                        sender: username
-                                    }));
-                                    hasSent = true;
-                                } else if (state.videoId) {
-                                    dc.send(JSON.stringify({
-                                        type: 'yt-sync-state',
-                                        ...state,
-                                        queue: queueRef.current,
-                                        skipVotes: skipVotesRef.current,
-                                        activeVideoTitle: activeVideoTitleRef.current,
-                                        sender: username
-                                    }));
-                                    hasSent = true;
-                                }
-                            }
-                        }
-                        if (!hasSent && localVideoFileRef.current) {
-                            dc.send(JSON.stringify({
-                                type: 'local-video-sync-state',
-                                mediaType: 'local',
-                                fileName: localVideoFileRef.current.name,
-                                fileSize: localVideoFileRef.current.size,
-                                currentTime: 0,
-                                isPlaying: false,
-                                sender: username
-                            }));
-                        }
-                    } else if (data.type === 'yt-sync-state') {
-                        // Received sync state from an existing peer in the room
-                        if (data.videoId) {
-                            setLocalVideoFile(null);
-                            setRemoteLocalVideoMeta(null);
-                            setActiveVideoId(data.videoId);
-                            if (data.activeVideoTitle) {
-                                setActiveVideoTitle(data.activeVideoTitle);
-                            }
-                            if (Array.isArray(data.queue)) {
-                                setQueue(data.queue);
-                                queueRef.current = data.queue;
-                            }
-                            if (Array.isArray(data.skipVotes)) {
-                                setSkipVotes(data.skipVotes);
-                                skipVotesRef.current = data.skipVotes;
-                            }
-                            setRemoteAction({
-                                action: data.isPlaying ? 'play' : 'pause',
-                                currentTime: data.currentTime,
-                                newVideoId: data.videoId
-                            });
-                            addSystemMessage(`🔄 Synced YouTube playback & queue with room`);
-                        }
-                    } else if (data.type === 'local-video-sync-state') {
-                        if (data.fileName) {
-                            setActiveVideoId(null);
-                            setRemoteLocalVideoMeta({
-                                fileName: data.fileName,
-                                fileSize: data.fileSize,
-                                sender: data.sender
-                            });
-                            setRemoteAction({
-                                action: data.isPlaying ? 'play' : 'pause',
-                                currentTime: data.currentTime,
-                                fileName: data.fileName,
-                                sender: data.sender,
-                                subtitleInfo: data.subtitleInfo
-                            });
-                            addSystemMessage(`🔄 Synced with room's local video session: "${data.fileName}"`);
-                        }
-                    }
-                } catch (e) { }
-            };
+            dc.onmessage = createPeerMessageHandler({ activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, hostStreamRef, isAudioBlockedRef, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, syncStateGetterRef, targetPeerId, username });
 
             dc.onclose = () => {
                 if (activeStreamSendersRef.current.has(targetPeerId)) {
                     activeStreamSendersRef.current.get(targetPeerId).abort();
                     activeStreamSendersRef.current.delete(targetPeerId);
                 }
+                if (!isStillCurrent()) return;
                 peerEntry.isConnected = false;
                 updateP2PStatus();
+                // Peer left on purpose: clean up. Otherwise the link died: try to recover
+                // (if they closed the tab, the server's peer-left cleans up first)
+                if (peerEntry.byeReceived || peerEntry.signalingGone) {
+                    cleanupPeer(targetPeerId);
+                    setPeerCount(peersRef.current.size + 1);
+                } else if (pc.connectionState !== 'closed') {
+                    peerEntry.wasInterrupted = true;
+                    scheduleRecovery(RECOVERY.disconnectGraceMs);
+                }
             };
 
             dc.onerror = () => { };
+
+            // Bulk transfers (video stream chunks, images) arrive on the bulk channel; same handler
+            if (peerEntry.bulkChannel) {
+                peerEntry.bulkChannel.onmessage = dc.onmessage;
+            }
         };
 
         if (isInitiator) {
@@ -1272,6 +776,7 @@ export default function App() {
                         sendSignal({
                             type: 'offer',
                             targetId: targetPeerId,
+                            fresh: true, // brand-new connection: the peer replaces any old one it has
                             offer: {
                                 type: tunedOffer.type,
                                 sdp: tunedOffer.sdp
@@ -1289,328 +794,35 @@ export default function App() {
         }
 
         return peerEntry;
-    }, [addSystemMessage, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, recordPeerPing, sendSignal, showToast, updateP2PStatus, username]);
+    }, [addSystemMessage, cleanupPeer, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteYouTubeAction, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, logLocalDebug, recordPeerPing, sendSignal, showToast, updateP2PStatus, username]);
+    useEffect(() => {
+        getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
+    }, [getOrCreatePeerConnection]);
 
     // Handle incoming signaling messages
-    const handleSignalingMessage = useCallback(async (msg) => {
-        switch (msg.type) {
-            case 'room-created': {
-                setRoomId(msg.roomId);
-                setIsHost(true);
-                isHostRef.current = true;
-                setPeerCount(1);
-                setP2pStatusText('Waiting for peer to enter 5-digit code...');
-                addSystemMessage(`You created room ${msg.roomId} as "${username}".`);
-                showToast(`Created room ${msg.roomId}`);
-                break;
-            }
+    const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username }), [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, logLocalDebug, sendSignal, showToast, username]);
 
-            case 'joined': {
-                setRoomId(msg.roomId);
-                setIsHost(false);
-                isHostRef.current = false;
-                const count = (msg.peers ? msg.peers.length : 0) + 1;
-                setPeerCount(count);
-                addSystemMessage(`You joined room ${msg.roomId} as "${username}".`);
-                showToast(`Joined room ${msg.roomId}`);
-
-                // Prepare receiver connections for each existing peer in the room
-                if (msg.peers && msg.peers.length > 0) {
-                    setP2pStatusText('Connecting direct P2P data channels...');
-                    for (const peerId of msg.peers) {
-                        getOrCreatePeerConnection(peerId, false);
-                    }
-                }
-                break;
-            }
-
-            case 'peer-joined': {
-                const newCount = peersRef.current.size + 2;
-                setPeerCount(newCount);
-                addSystemMessage(`A peer entered room ${currentRoomRef.current}. Establishing P2P connection...`);
-                setP2pStatusText('Connecting direct P2P data channel...');
-                // Existing peers initiate offer to the newcomer
-                getOrCreatePeerConnection(msg.peerId, true);
-                break;
-            }
-
-            case 'offer': {
-                try {
-                    const senderId = msg.from;
-                    const peerEntry = getOrCreatePeerConnection(senderId, false);
-                    const pc = peerEntry.pc;
-
-                    const offerAudioSdp = extractAudioSdp(msg.offer?.sdp);
-                    logLocalDebug('OFFER_RECEIVED', `From: ${senderId} | Offer SDP: ${offerAudioSdp}`);
-
-                    const tunedOfferSdp = tuneSdpForDiscordAudio(msg.offer?.sdp);
-                    await pc.setRemoteDescription(new RTCSessionDescription({
-                        type: msg.offer.type,
-                        sdp: tunedOfferSdp
-                    }));
-
-                    // Ensure the negotiated audio transceiver on the answerer is active and set to sendrecv
-                    if (pc.getTransceivers) {
-                        const allTransceivers = pc.getTransceivers();
-                        for (const t of allTransceivers) {
-                            const isValid = t.mid !== null || allTransceivers.length === 1;
-                            if (isValid && (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio')) {
-                                t.direction = 'sendrecv';
-                                if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
-                                    const audioTrack = voiceIsolation.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
-                                    if (audioTrack) {
-                                        t.sender.replaceTrack(audioTrack).catch(() => { });
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Flush queued candidates
-                    while (peerEntry.candidateQueue.length > 0) {
-                        const cand = peerEntry.candidateQueue.shift();
-                        try {
-                            await pc.addIceCandidate(new RTCIceCandidate(cand));
-                        } catch { }
-                    }
-
-                    const answer = await pc.createAnswer();
-                    const tunedAnswerSdp = tuneSdpForDiscordAudio(answer.sdp);
-                    const tunedAnswer = { type: answer.type, sdp: tunedAnswerSdp };
-                    await pc.setLocalDescription(tunedAnswer);
-                    tuneAudioSender(pc);
-
-                    const answerAudioSdp = extractAudioSdp(tunedAnswer.sdp);
-                    const tInfo = pc.getTransceivers ? pc.getTransceivers().map((t) => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
-                    logLocalDebug('ANSWER_SENT', `To: ${senderId} | Answer SDP: ${answerAudioSdp} | Transceivers: ${tInfo}`);
-
-                    sendSignal({
-                        type: 'answer',
-                        targetId: senderId,
-                        answer: {
-                            type: tunedAnswer.type,
-                            sdp: tunedAnswer.sdp
-                        }
-                    });
-                } catch (err) {
-                    logLocalDebug('OFFER_HANDLE_ERR', err.message);
-                }
-                break;
-            }
-
-            case 'answer': {
-                try {
-                    const senderId = msg.from;
-                    const peerEntry = peersRef.current.get(senderId);
-                    if (peerEntry && peerEntry.pc) {
-                        const pc = peerEntry.pc;
-                        const tunedAnswerSdp = tuneSdpForDiscordAudio(msg.answer?.sdp);
-                        await pc.setRemoteDescription(new RTCSessionDescription({
-                            type: msg.answer.type,
-                            sdp: tunedAnswerSdp
-                        }));
-                        tuneAudioSender(pc);
-
-                        const answerAudioSdp = extractAudioSdp(msg.answer?.sdp);
-                        const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
-                        logLocalDebug('ANSWER_PROCESSED', `From: ${senderId} | Answer SDP: ${answerAudioSdp} | Host Transceivers: ${tInfo}`);
-
-                        while (peerEntry.candidateQueue.length > 0) {
-                            const cand = peerEntry.candidateQueue.shift();
-                            try {
-                                await pc.addIceCandidate(new RTCIceCandidate(cand));
-                            } catch { }
-                        }
-                    }
-                } catch (err) {
-                    logLocalDebug('ANSWER_HANDLE_ERR', err.message);
-                }
-                break;
-            }
-
-            case 'ice-candidate': {
-                const senderId = msg.from;
-                const peerEntry = peersRef.current.get(senderId);
-                if (peerEntry && msg.candidate) {
-                    const pc = peerEntry.pc;
-                    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-                        try {
-                            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-                        } catch { }
-                    } else {
-                        peerEntry.candidateQueue.push(msg.candidate);
-                    }
-                }
-                break;
-            }
-
-            case 'peer-left': {
-                cleanupPeer(msg.peerId);
-                setPeerCount(peersRef.current.size + 1);
-                addSystemMessage('A peer disconnected from the room.');
-                break;
-            }
-
-            case 'error': {
-                showToast(msg.message || 'Signaling error');
-                break;
-            }
-
-            default:
-                break;
-        }
-    }, [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, logLocalDebug, sendSignal, showToast, username]);
-
-    const handleSignalingMessageRef = useRef();
-    handleSignalingMessageRef.current = handleSignalingMessage;
-
-    // Connect to Signaling Server
+    // Signaling server connection (hooks/useSignalingConnection.js)
+    useSignalingConnection({ addSystemMessage, currentRoomRef, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
+    // On-demand P2P stream: the service worker forwards each byte range the video player asks for
     useEffect(() => {
-        let isCancelled = false;
-        let reconnectTimeout = null;
-        let pingInterval = null;
-
-        const safeCloseSocket = (socket) => {
-            if (!socket) return;
-            try {
-                if (socket.readyState === WebSocket.CONNECTING) {
-                    // Defer closing until open to avoid Chrome console error:
-                    // "WebSocket is closed before the connection is established"
-                    socket.onopen = () => {
-                        try { socket.close(1000, 'Replaced or unmounted'); } catch { }
-                    };
-                    socket.onerror = () => { };
-                    socket.onclose = () => { };
-                } else if (socket.readyState === WebSocket.OPEN) {
-                    socket.close(1000, 'Replaced or unmounted');
-                }
-            } catch { }
-        };
-
-        if (wsRef.current) {
-            safeCloseSocket(wsRef.current);
-            wsRef.current = null;
-        }
-
-        const isLocalServer = signalUrl.includes('localhost') || signalUrl.includes('127.0.0.1');
-        const serverLabel = isLocalServer ? 'Local' : 'Cloud';
-
-        const connect = () => {
-            if (isCancelled) return;
-            let hasOpened = false;
-
-            setSignalStatus({ connected: false, label: 'Connecting...' });
-
-            let ws;
-            try {
-                ws = new WebSocket(signalUrl);
-                wsRef.current = ws;
-            } catch (err) {
-                if (isCancelled) return;
-                setSignalStatus({ connected: false, label: 'Connection Failed' });
-                showToast(`Failed to connect to ${signalUrl}`);
-                return;
-            }
-
-            ws.onopen = () => {
-                hasOpened = true;
-                if (isCancelled) {
-                    safeCloseSocket(ws);
-                    return;
-                }
-
-                setSignalStatus({ connected: true, label: `${serverLabel} Connected` });
-                showToast(`Connected to ${serverLabel} signaling`);
-
-                // If previously inside a room before connection drop, re-announce
-                if (currentRoomRef.current) {
-                    const activeRoom = currentRoomRef.current;
-                    addSystemMessage(`🔄 Reconnected to signaling. Resuming room ${activeRoom}...`);
-                    if (isHostRef.current) {
-                        ws.send(JSON.stringify({
-                            type: 'create-room',
-                            roomId: activeRoom,
-                            peerId: peerIdRef.current
-                        }));
-                    } else {
-                        ws.send(JSON.stringify({
-                            type: 'join',
-                            roomId: activeRoom,
-                            peerId: peerIdRef.current
-                        }));
-                    }
-                }
-
-                // Flush any queued signals
-                while (pendingSignalsRef.current.length > 0) {
-                    const data = pendingSignalsRef.current.shift();
-                    ws.send(JSON.stringify(data));
-                }
-
-                // Start periodic ping to prevent reverse proxies (e.g. Caddy on GCP) from terminating idle connections
-                clearInterval(pingInterval);
-                pingInterval = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        try {
-                            ws.send(JSON.stringify({ type: 'ping' }));
-                        } catch { }
-                    }
-                }, 25000);
-            };
-
-            ws.onmessage = (event) => {
-                if (isCancelled) return;
-                try {
-                    const msg = JSON.parse(event.data);
-                    if (msg.type === 'pong') return;
-                    handleSignalingMessageRef.current?.(msg);
-                } catch (err) { }
-            };
-
-            ws.onclose = (event) => {
-                clearInterval(pingInterval);
-                if (isCancelled) return;
-
-                // If closed cleanly with code 1000 on intentional unmount, do not reconnect
-                if (event.code === 1000) {
-                    setSignalStatus({ connected: false, label: 'Disconnected' });
-                    return;
-                }
-
-                setSignalStatus({ connected: false, label: 'Reconnecting...' });
-
-                // Show friendly prompt if local dev server was selected but is not running
-                if (isLocalServer && !hasOpened) {
-                    showToast('Local server not reachable on port 8080. Start "node server.js" or switch to GCP Cloud Server.');
-                }
-
-                // Schedule auto-reconnect
-                clearTimeout(reconnectTimeout);
-                reconnectTimeout = setTimeout(() => {
-                    if (!isCancelled) {
-                        connect();
-                    }
-                }, 2500);
-            };
-
-            ws.onerror = () => {
-                if (isCancelled) return;
-                setSignalStatus({ connected: false, label: 'Signaling Error' });
-            };
-        };
-
-        connect();
-
-        return () => {
-            isCancelled = true;
-            clearTimeout(reconnectTimeout);
-            clearInterval(pingInterval);
-            if (wsRef.current) {
-                safeCloseSocket(wsRef.current);
-                wsRef.current = null;
+        const sw = navigator.serviceWorker;
+        if (!sw) return undefined;
+        const handleWorkerMessage = (event) => {
+            const msg = event.data || {};
+            if (msg.type !== 'p2p-range-open' || !event.ports[0]) return;
+            const port = event.ports[0];
+            const receiver = streamReceiverRef.current;
+            if (receiver && typeof receiver.serve === 'function' && String(receiver.streamNo) === String(msg.streamNo)) {
+                receiver.serve(port, msg.start, msg.end);
+            } else {
+                port.postMessage({ type: 'meta', ok: false });
             }
         };
-    }, [signalUrl, showToast, addSystemMessage]);
+        sw.addEventListener('message', handleWorkerMessage);
+        return () => sw.removeEventListener('message', handleWorkerMessage);
+    }, []);
+
     // Ensure AudioContext is resumed on any user interaction anywhere on the window
     useEffect(() => {
         const resumeAudioCtx = () => {
@@ -1669,8 +881,7 @@ export default function App() {
             if (roomId) {
                 sendSignal({ type: 'leave' });
             }
-            voiceGate.stop();
-            voiceIsolation.detach();
+            micPipeline.teardown();
             if (localStreamRef.current) {
                 try {
                     localStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -1691,8 +902,8 @@ export default function App() {
             setPeerVolumes({});
             setLocalMutedPeers({});
             setPeerMetadata({});
-            setPeerAudioActivity({});
-            setLocalAudioActivity({ isSpeaking: false, level: 0 });
+            speakingActivity.clearPeers();
+            speakingActivity.resetLocal();
             cleanupAllPeers();
             setRoomId(null);
             setIsHost(false);
@@ -1770,9 +981,12 @@ export default function App() {
             return;
         }
 
+        // Images go over each peer's bulk channel so chat and sync never wait behind them
         const activeChannels = [];
         for (const peer of peersRef.current.values()) {
-            if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+            if (peer.bulkChannel && peer.bulkChannel.readyState === 'open') {
+                activeChannels.push(peer.bulkChannel);
+            } else if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
                 activeChannels.push(peer.dataChannel);
             }
         }
@@ -1853,162 +1067,6 @@ export default function App() {
 
         sender.start();
     }, [addSystemMessage, showToast, username]);
-
-    // Feature 4.1: Background WebRTC Mesh Metrics Polling & Ping Loop
-    useEffect(() => {
-        if (!roomId) {
-            setNetworkStats({
-                avgPingMs: null,
-                minPingMs: null,
-                maxPingMs: null,
-                overallConnectionType: 'Direct P2P',
-                totalDownloadKBps: 0,
-                totalUploadKBps: 0,
-                syncDriftMs: undefined,
-                syncDriftStatus: 'No active room'
-            });
-            setPeersNetworkStats([]);
-            return;
-        }
-
-        let isCancelled = false;
-
-        const pollStats = async () => {
-            if (isCancelled) return;
-            const activePeers = Array.from(peersRef.current.entries());
-            if (activePeers.length === 0) return;
-
-            const peerStatsList = [];
-            let totalDown = 0;
-            let totalUp = 0;
-            let sumPing = 0;
-            let pingCount = 0;
-            let minPing = Infinity;
-            let maxPing = -Infinity;
-            let hasRelay = false;
-            let maxLoss = 0;
-
-            for (const [peerId, peerEntry] of activePeers) {
-                if (!peerEntry || !peerEntry.pc) continue;
-
-                // 1. Send active DataChannel net-ping probe
-                if (peerEntry.dataChannel && peerEntry.dataChannel.readyState === 'open') {
-                    try {
-                        peerEntry.dataChannel.send(JSON.stringify({
-                            type: 'net-ping',
-                            pingId: crypto.randomUUID(),
-                            sendTime: performance.now()
-                        }));
-                    } catch (e) { }
-                }
-
-                // 2. Query RTCPeerConnection.getStats()
-                const prevStats = peerStatsCacheRef.current.get(peerId);
-                const extracted = await extractPeerConnectionStats(peerEntry.pc, prevStats);
-                if (extracted) {
-                    peerStatsCacheRef.current.set(peerId, extracted);
-                }
-
-                const history = pingHistoryRef.current.get(peerId) || [];
-                const rtt = extracted?.rttMs ?? (history.length > 0 ? history[history.length - 1] : null);
-                if (rtt !== null) {
-                    if (history.length === 0 || history[history.length - 1] !== rtt) {
-                        history.push(rtt);
-                        if (history.length > MAX_HISTORY_SAMPLES) history.shift();
-                        pingHistoryRef.current.set(peerId, history);
-                    }
-                }
-
-                const avgPing = history.length > 0 ? Math.round(history.reduce((a, b) => a + b, 0) / history.length) : rtt;
-
-                if (rtt !== null) {
-                    sumPing += rtt;
-                    pingCount++;
-                    if (rtt < minPing) minPing = rtt;
-                    if (rtt > maxPing) maxPing = rtt;
-                }
-
-                const downRate = extracted?.downloadKBps || 0;
-                const upRate = extracted?.uploadKBps || 0;
-                totalDown += downRate;
-                totalUp += upRate;
-
-                if (extracted?.connectionType?.includes('Relay')) {
-                    hasRelay = true;
-                }
-                if (extracted?.packetLossPercent > maxLoss) {
-                    maxLoss = extracted.packetLossPercent;
-                }
-
-                peerStatsList.push({
-                    peerId,
-                    username: peerMetadata[peerId]?.username || `User_${peerId.slice(0, 4)}`,
-                    isConnected: peerEntry.isConnected,
-                    pingMs: rtt,
-                    avgPingMs: avgPing,
-                    pingHistory: [...history],
-                    connectionType: extracted?.connectionType || 'Direct P2P (STUN)',
-                    protocol: extracted?.protocol || 'UDP',
-                    packetLossPercent: extracted?.packetLossPercent ?? 0,
-                    jitterMs: extracted?.jitterMs ?? 0,
-                    downloadKBps: downRate,
-                    uploadKBps: upRate,
-                    candidatePair: extracted ? {
-                        localType: extracted.localCandidate.type,
-                        remoteType: extracted.remoteCandidate.type,
-                        localIp: extracted.localCandidate.address,
-                        remoteIp: extracted.remoteCandidate.address
-                    } : null
-                });
-            }
-
-            if (isCancelled) return;
-
-            setPeersNetworkStats(peerStatsList);
-
-            const currentAvg = pingCount > 0 ? Math.round(sumPing / pingCount) : null;
-            const drift = lastSyncDriftMsRef.current ?? (activeVideoId || localVideoFile ? 14 : undefined);
-            const driftText = drift !== undefined
-                ? (drift <= 50 ? `Strict Sync (±${drift}ms)` : `Acceptable Drift (±${drift}ms)`)
-                : 'In Sync';
-
-            setNetworkStats({
-                avgPingMs: currentAvg,
-                minPingMs: minPing === Infinity ? currentAvg : minPing,
-                maxPingMs: maxPing === -Infinity ? currentAvg : maxPing,
-                overallConnectionType: hasRelay ? 'Relay (TURN)' : 'Direct P2P',
-                totalDownloadKBps: +totalDown.toFixed(1),
-                totalUploadKBps: +totalUp.toFixed(1),
-                maxPacketLoss: maxLoss,
-                syncDriftMs: drift,
-                syncDriftStatus: driftText,
-                pingHistory: peerStatsList[0]?.pingHistory || []
-            });
-        };
-
-        pollStats();
-        const interval = setInterval(pollStats, PING_INTERVAL_MS);
-
-        return () => {
-            isCancelled = true;
-            clearInterval(interval);
-        };
-    }, [roomId, activeVideoId, localVideoFile, peerMetadata]);
-
-    const handleTriggerPing = useCallback(() => {
-        for (const peerEntry of peersRef.current.values()) {
-            if (peerEntry.dataChannel && peerEntry.dataChannel.readyState === 'open') {
-                try {
-                    peerEntry.dataChannel.send(JSON.stringify({
-                        type: 'net-ping',
-                        pingId: crypto.randomUUID(),
-                        sendTime: performance.now()
-                    }));
-                } catch (e) { }
-            }
-        }
-        showToast('Ping probe sent to mesh peers');
-    }, [showToast]);
 
     // Feature 1.2: Floating Live Reactions Over Video Player
     const handleSendReaction = useCallback((emoji) => {
@@ -2360,12 +1418,14 @@ export default function App() {
         addSystemMessage(`📁 You exited the local video`);
     }, [streamVideoUrl, addSystemMessage]);
 
-    const handleRequestP2PStream = useCallback(() => {
+    const handleRequestP2PStream = useCallback(async () => {
         if (!remoteLocalVideoMeta) return;
         const reqMsg = {
             type: 'p2p-stream-request',
             requester: username,
             fileName: remoteLocalVideoMeta.fileName,
+            // On-demand streaming needs this page's service worker; otherwise the host sends the whole file
+            supportsRange: await detectOnDemandStreaming(),
             timestamp: Date.now()
         };
         for (const peer of peersRef.current.values()) {
@@ -2425,405 +1485,6 @@ export default function App() {
         }
     }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, handleCloseLocalVideo, handleVideoChange, handleBroadcastAction]);
 
-    // Voice Chat: confirm echo cancellation / noise suppression really took effect on a fresh mic track
-    const verifyMicProcessing = useCallback(async (track, isolationRequested = false) => {
-        const status = await ensureMicProcessing(track, getOptionalMicConstraints({ voiceIsolation: isolationRequested }));
-        // Logged directly (logLocalDebug is a no-op) so the applied mic processing can be checked in DevTools
-        console.info(
-            `[3RTC] AUDIO_DSP_APPLIED AEC: ${status.echoCancellation}, NS: ${status.noiseSuppression}, AGC: ${status.autoGainControl}, Voice isolation: ${status.voiceIsolation} | Mic: "${track?.label}"`
-        );
-        if (!status.ok) {
-            const missing = [
-                status.echoCancellation === false ? 'echo cancellation' : null,
-                status.noiseSuppression === false ? 'noise suppression' : null
-            ].filter(Boolean).join(' & ');
-            showToast(`⚠️ Your browser/mic refused ${missing}. Use headphones to avoid echo.`);
-        }
-        return status;
-    }, [showToast]);
-
-    // Voice Chat: Voice Activity gate. In open-mic mode the mic only transmits while you're talking
-    // (like Discord's automatic input sensitivity), so room/air noise isn't sent during silence.
-    const applyVoiceGate = useCallback(() => {
-        const track = localStreamRef.current?.getAudioTracks()[0];
-        if (!track || track !== voiceGate.track) return;
-        const gateClosed = audioSettingsRef.current?.inputMode !== 'ptt' && !voiceGate.isOpen;
-        track.enabled = !isMicMutedRef.current && !gateClosed;
-    }, []);
-
-    // Voice Chat: track to send to peers. With Voice Isolation on and no native (browser/OS) support,
-    // the mic is cleaned by in-app RNNoise noise removal; otherwise the mic track is sent untouched.
-    const getSendTrack = useCallback(async (stream) => {
-        const rawTrack = stream?.getAudioTracks()[0] || null;
-        const wantIsolation = micIsolationRequestedRef.current;
-        const nativeIsolation = rawTrack?.getSettings?.().voiceIsolation === true;
-        if (!rawTrack || !wantIsolation || nativeIsolation) {
-            voiceIsolation.detach();
-            setVoiceIsolationStatus(!wantIsolation ? 'off' : nativeIsolation ? 'active' : 'unavailable');
-            return rawTrack;
-        }
-        const cleanedTrack = await voiceIsolation.attach(stream);
-        setVoiceIsolationStatus(cleanedTrack ? 'rnnoise' : 'unavailable');
-        console.info(`[3RTC] VOICE_ISOLATION ${cleanedTrack ? 'in-app RNNoise active' : 'could not start, sending mic as-is'}`);
-        return cleanedTrack || rawTrack;
-    }, []);
-
-    useEffect(() => {
-        voiceGate.onChange = applyVoiceGate;
-        return () => {
-            voiceGate.onChange = null;
-        };
-    }, [applyVoiceGate]);
-
-    // Voice Chat: Set Microphone Mute/Unmute
-    const setMicrophoneMuted = useCallback(async (shouldMute, isPtt = false) => {
-        // If incoming audio is currently blocked, unmuting microphone also unblocks audio
-        if (!shouldMute && isAudioBlockedRef.current) {
-            setIsAudioBlocked(false);
-            isAudioBlockedRef.current = false;
-            for (const peer of peersRef.current.values()) {
-                if (peer.audioElement) {
-                    peer.audioElement.muted = false;
-                }
-                if (peer.webAudioGain) {
-                    peer.webAudioGain.gain.value = 1.0;
-                }
-            }
-        }
-
-        if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
-            window.__webrtcAudioCtx.resume().catch(() => { });
-        }
-
-        if (!shouldMute) {
-            try {
-                let stream = localStreamRef.current;
-                const currentTrack = stream?.getAudioTracks()[0];
-                const currentSettings = currentTrack?.getSettings ? currentTrack.getSettings() : {};
-                const settingsMatch = currentTrack &&
-                    currentTrack.readyState === 'live' &&
-                    Boolean(currentSettings.echoCancellation) === MIC_PROCESSING.echoCancellation &&
-                    Boolean(currentSettings.noiseSuppression) === MIC_PROCESSING.noiseSuppression &&
-                    Boolean(currentSettings.autoGainControl) === MIC_PROCESSING.autoGainControl &&
-                    micIsolationRequestedRef.current === Boolean(audioSettingsRef.current?.voiceIsolation);
-
-                if (!settingsMatch) {
-                    voiceGate.stop();
-                    voiceIsolation.detach();
-                    if (stream) {
-                        try { stream.getTracks().forEach((t) => t.stop()); } catch { }
-                    }
-                    if (localSourceNodeRef.current) {
-                        try { localSourceNodeRef.current.disconnect(); } catch { }
-                        localSourceNodeRef.current = null;
-                    }
-                    await new Promise((r) => setTimeout(r, 60));
-
-                    const wantIsolation = Boolean(audioSettingsRef.current?.voiceIsolation);
-                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(currentSettings?.deviceId, { voiceIsolation: wantIsolation }));
-                    localStreamRef.current = stream;
-                    micIsolationRequestedRef.current = wantIsolation;
-                    await verifyMicProcessing(stream.getAudioTracks()[0], wantIsolation);
-                }
-
-                // Connect local microphone to Web Audio AnalyserNode for Speaking Rings & VU meter
-                try {
-                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                    if (AudioContextClass) {
-                        if (!window.__webrtcAudioCtx) {
-                            window.__webrtcAudioCtx = new AudioContextClass();
-                        }
-                        const ctx = window.__webrtcAudioCtx;
-                        if (ctx.state === 'suspended') {
-                            ctx.resume().catch(() => { });
-                        }
-                        if (localSourceNodeRef.current) {
-                            try { localSourceNodeRef.current.disconnect(); } catch { }
-                        }
-                        if (localAnalyserRef.current) {
-                            try { localAnalyserRef.current.disconnect(); } catch { }
-                        }
-                        const micTrack = stream.getAudioTracks()[0];
-                        if (micTrack && voiceGate.track !== micTrack) {
-                            await voiceGate.start(ctx, micTrack);
-                        }
-                        // Meter reads the gate's clone so it keeps working while the gate is closed
-                        const localSrc = ctx.createMediaStreamSource(voiceGate.analysisStream || stream);
-                        const localAnalyser = ctx.createAnalyser();
-                        localAnalyser.fftSize = 256;
-                        localAnalyser.smoothingTimeConstant = 0.5;
-                        localSrc.connect(localAnalyser);
-                        localSourceNodeRef.current = localSrc;
-                        localAnalyserRef.current = localAnalyser;
-                    }
-                } catch { }
-
-                const audioTrack = stream.getAudioTracks()[0];
-                if (audioTrack) {
-                    audioTrack.enabled = true;
-                    const sendTrack = await getSendTrack(stream);
-                    logLocalDebug('MIC_UNMUTE', `User "${username}" unmuting mic. Track: "${audioTrack.label}", ID: ${audioTrack.id}, state: ${audioTrack.readyState}`);
-
-                    for (const [peerId, peer] of peersRef.current.entries()) {
-                        if (peer.pc) {
-                            const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                            logLocalDebug('MIC_PEER_TRANSCEIVERS', `Peer ${peerId} has ${transceivers.length} transceivers: ${transceivers.map(t => `${t.mid}:${t.direction}->${t.currentDirection}`).join(', ')}`);
-
-                            let replaced = false;
-                            for (const t of transceivers) {
-                                const isValid = t.mid !== null || transceivers.length === 1;
-                                if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                                    t.direction = 'sendrecv';
-                                    t.sender.replaceTrack(sendTrack)
-                                        .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced on transceiver mid: ${t.mid}!`))
-                                        .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`));
-                                    replaced = true;
-                                }
-                            }
-                            if (!replaced) {
-                                logLocalDebug('NO_AUDIO_TRANSCEIVER', `Peer ${peerId} had no matching transceiver. Using getSenders fallback.`);
-                                const senders = peer.pc.getSenders();
-                                for (const s of senders) {
-                                    if (!s.track || s.track.kind === 'audio') {
-                                        s.replaceTrack(sendTrack)
-                                            .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} track replaced on sender`))
-                                            .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                setIsMicMuted(false);
-                isMicMutedRef.current = false;
-                applyVoiceGate();
-                if (!isPtt) {
-                    sound.playPop();
-                    showToast('🎙️ Microphone unmuted (Live)');
-                    addSystemMessage('🎙️ You unmuted your microphone (Voice Chat Active).');
-                }
-
-                const voiceMsg = {
-                    type: 'peer-voice-status',
-                    sender: username,
-                    isMuted: false
-                };
-                for (const peer of peersRef.current.values()) {
-                    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-                        try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
-                    }
-                }
-            } catch (err) {
-                showToast('⚠️ Could not access microphone. Check permissions.');
-            }
-        } else {
-            if (localStreamRef.current) {
-                localStreamRef.current.getAudioTracks().forEach((track) => {
-                    track.enabled = false;
-                });
-            }
-            setIsMicMuted(true);
-            isMicMutedRef.current = true;
-            setLocalAudioActivity({ isSpeaking: false, level: 0 });
-            if (!isPtt) {
-                showToast('🔇 Microphone muted');
-                addSystemMessage('🔇 You muted your microphone.');
-            }
-
-            const voiceMsg = {
-                type: 'peer-voice-status',
-                sender: username,
-                isMuted: true
-            };
-            for (const peer of peersRef.current.values()) {
-                if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-                    try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
-                }
-            }
-        }
-    }, [addSystemMessage, applyVoiceGate, getSendTrack, logLocalDebug, showToast, username, verifyMicProcessing]);
-
-    // Voice Chat: Toggle Microphone Mute/Unmute
-    const toggleMicrophone = useCallback(() => {
-        setMicrophoneMuted(!isMicMutedRef.current, false);
-    }, [setMicrophoneMuted]);
-
-    // Feature 2.2: Apply Updated Audio Processing Settings & Reconfigure MediaStream
-    const handleUpdateAudioSettings = useCallback(async (newSettings) => {
-        const enforcedSettings = {
-            ...newSettings,
-            ...MIC_PROCESSING
-        };
-        setAudioSettings(enforcedSettings);
-        audioSettingsRef.current = enforcedSettings;
-        saveAudioSettings(enforcedSettings);
-        applyVoiceGate();
-
-        // If switched to PTT mode, immediately mute microphone to be ready for push-to-talk
-        if (newSettings.inputMode === 'ptt' && !isMicMutedRef.current) {
-            await setMicrophoneMuted(true, true);
-            return;
-        }
-
-        // Concurrency guard to prevent rapid toggle collisions
-        if (isAudioUpdatingRef.current) {
-            return;
-        }
-        isAudioUpdatingRef.current = true;
-
-        try {
-            const wasMuted = isMicMutedRef.current;
-            const currentStream = localStreamRef.current;
-            const currentTrack = currentStream?.getAudioTracks()[0];
-            const deviceId = currentTrack?.getSettings?.()?.deviceId;
-
-            // Disconnect old Web Audio node
-            if (localSourceNodeRef.current) {
-                try { localSourceNodeRef.current.disconnect(); } catch { }
-                localSourceNodeRef.current = null;
-            }
-
-            // CRITICAL CHROMIUM FIX: Stop existing tracks BEFORE requesting a new stream.
-            // In Chromium / WASAPI, calling getUserMedia while an old track is live reuses the
-            // existing capture session and corrupts the native WebRTC Audio Processing Module (AEC3).
-            voiceGate.stop();
-            voiceIsolation.detach();
-            if (currentStream) {
-                try {
-                    currentStream.getTracks().forEach((t) => t.stop());
-                } catch { }
-                localStreamRef.current = null;
-            }
-
-            // If the microphone is currently muted, do not open hardware capture while muted.
-            // Null out sender tracks so peers receive silence.
-            // When user later un-mutes, setMicrophoneMuted will acquire a fresh stream with newSettings.
-            if (wasMuted) {
-                for (const peer of peersRef.current.values()) {
-                    if (peer.pc && peer.pc.connectionState !== 'closed') {
-                        const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                        for (const t of transceivers) {
-                            if (t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                                try { await t.sender.replaceTrack(null); } catch { }
-                            }
-                        }
-                    }
-                }
-                return;
-            }
-
-            // If microphone is actively unmuted, re-acquire the stream with new DSP constraints.
-            // Brief 80ms delay to ensure the OS/browser hardware capture session is fully released.
-            await new Promise((resolve) => setTimeout(resolve, 80));
-
-            const wantIsolation = Boolean(enforcedSettings.voiceIsolation);
-            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(deviceId, { voiceIsolation: wantIsolation }));
-            const newTrack = newStream.getAudioTracks()[0];
-            if (!newTrack) {
-                throw new Error('No audio track returned from microphone');
-            }
-            newTrack.enabled = true;
-            localStreamRef.current = newStream;
-            micIsolationRequestedRef.current = wantIsolation;
-
-            await verifyMicProcessing(newTrack, wantIsolation);
-            if (window.__webrtcAudioCtx) {
-                await voiceGate.start(window.__webrtcAudioCtx, newTrack);
-            }
-
-            // Reconnect local analyser for speaking indicator & VU meter
-            if (window.__webrtcAudioCtx && localAnalyserRef.current) {
-                try {
-                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(voiceGate.analysisStream || newStream);
-                    newSource.connect(localAnalyserRef.current);
-                    localSourceNodeRef.current = newSource;
-                } catch (err) {
-                    logLocalDebug('ANALYSER_RECONNECT_ERR', err.message);
-                }
-            }
-
-            const sendTrack = await getSendTrack(newStream);
-
-            // Replace audio track cleanly in each peer connection
-            const replacePromises = [];
-            for (const [peerId, peer] of peersRef.current.entries()) {
-                if (peer.pc && peer.pc.connectionState !== 'closed') {
-                    let replaced = false;
-                    const transceivers = peer.pc.getTransceivers ? peer.pc.getTransceivers() : [];
-                    for (const t of transceivers) {
-                        const isValid = t.mid !== null || transceivers.length === 1;
-                        if (isValid && t.sender && (!t.sender.track || t.sender.track.kind === 'audio')) {
-                            t.direction = 'sendrecv';
-                            replacePromises.push(
-                                t.sender.replaceTrack(sendTrack)
-                                    .then(() => logLocalDebug('REPLACETRACK_OK', `Peer ${peerId} audio track replaced`))
-                                    .catch((err) => logLocalDebug('REPLACETRACK_ERR', `Peer ${peerId} error: ${err.message}`))
-                            );
-                            replaced = true;
-                        }
-                    }
-                    if (!replaced) {
-                        const senders = peer.pc.getSenders ? peer.pc.getSenders() : [];
-                        for (const s of senders) {
-                            if (!s.track || s.track.kind === 'audio') {
-                                replacePromises.push(
-                                    s.replaceTrack(sendTrack)
-                                        .then(() => logLocalDebug('SENDER_REPLACETRACK_OK', `Peer ${peerId} sender track replaced`))
-                                        .catch((err) => logLocalDebug('SENDER_REPLACETRACK_ERR', `Peer ${peerId} sender error: ${err.message}`))
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            await Promise.all(replacePromises);
-        } catch (err) {
-            logLocalDebug('AUDIO_SETTINGS_UPDATE_ERR', err.message);
-            showToast('⚠️ Could not update audio settings: ' + err.message);
-        } finally {
-            isAudioUpdatingRef.current = false;
-        }
-    }, [applyVoiceGate, getSendTrack, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
-
-    // Push-to-Talk (PTT) Mouse Handlers for button hold
-    const handlePttPressStart = useCallback(() => {
-        if (audioSettings.inputMode !== 'ptt') return;
-        if (pttReleaseTimerRef.current) {
-            clearTimeout(pttReleaseTimerRef.current);
-            pttReleaseTimerRef.current = null;
-        }
-        if (!isPttActiveRef.current) {
-            isPttActiveRef.current = true;
-            setIsPttActive(true);
-            if (audioSettings.pttChime) sound.playPttOn();
-            setMicrophoneMuted(false, true);
-        }
-    }, [audioSettings, setMicrophoneMuted]);
-
-    const handlePttPressEnd = useCallback(() => {
-        if (audioSettings.inputMode !== 'ptt') return;
-        if (isPttActiveRef.current) {
-            const delay = Math.max(0, audioSettings.pttReleaseDelay || 0);
-            if (delay > 0) {
-                if (pttReleaseTimerRef.current) clearTimeout(pttReleaseTimerRef.current);
-                pttReleaseTimerRef.current = setTimeout(() => {
-                    isPttActiveRef.current = false;
-                    setIsPttActive(false);
-                    if (audioSettings.pttChime) sound.playPttOff();
-                    setMicrophoneMuted(true, true);
-                    pttReleaseTimerRef.current = null;
-                }, delay);
-            } else {
-                isPttActiveRef.current = false;
-                setIsPttActive(false);
-                if (audioSettings.pttChime) sound.playPttOff();
-                setMicrophoneMuted(true, true);
-            }
-        }
-    }, [audioSettings, setMicrophoneMuted]);
-
-    // Feature 2.2: Push-to-Talk (PTT) Global Key Handlers & Hotkeys
     useEffect(() => {
         const handleKeyDown = (e) => {
             if (isTypingInField(e)) return;
@@ -2922,198 +1583,12 @@ export default function App() {
         };
     }, [audioSettings, localVideoFile, remoteLocalVideoMeta, setMicrophoneMuted, streamVideoUrl, toggleMicrophone]);
 
-    // Voice Chat: Toggle Block Incoming Audio (Deafen) - blocks incoming audio AND microphone
-    const toggleBlockAudio = useCallback(() => {
-        setIsAudioBlocked((prev) => {
-            const nextVal = !prev;
-            isAudioBlockedRef.current = nextVal;
-
-            // Mute/unmute all peer audio streams (HTMLMediaElement + Web Audio gain)
-            for (const [pId, peer] of peersRef.current.entries()) {
-                const isLocalMuted = Boolean(localMutedPeersRef.current[pId]);
-                const vol = peerVolumesRef.current[pId] !== undefined ? peerVolumesRef.current[pId] : 1.0;
-                const effective = nextVal || isLocalMuted ? 0 : vol;
-                if (peer.audioElement) {
-                    peer.audioElement.muted = effective === 0;
-                    peer.audioElement.volume = Math.min(1.0, effective);
-                }
-                if (peer.webAudioGain) {
-                    peer.webAudioGain.gain.value = effective;
-                }
-            }
-
-            if (nextVal) {
-                // When audio is blocked, the microphone is also blocked (muted)
-                if (localStreamRef.current) {
-                    localStreamRef.current.getAudioTracks().forEach((track) => {
-                        track.enabled = false;
-                    });
-                }
-                setIsMicMuted(true);
-                isMicMutedRef.current = true;
-                setLocalAudioActivity({ isSpeaking: false, level: 0 });
-
-                const voiceMsg = {
-                    type: 'peer-voice-status',
-                    sender: username,
-                    isMuted: true
-                };
-                for (const peer of peersRef.current.values()) {
-                    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-                        try { peer.dataChannel.send(JSON.stringify(voiceMsg)); } catch { }
-                    }
-                }
-
-                showToast('🔇 Audio & microphone blocked (Text Chat only)');
-                addSystemMessage('🔇 Audio & microphone blocked (Text Chat only mode).');
-            } else {
-                showToast('🔊 Incoming audio unblocked');
-                addSystemMessage('🔊 You unblocked incoming audio.');
-            }
-            return nextVal;
-        });
-    }, [addSystemMessage, showToast, username]);
-
-    // Feature 2.1: Real-time Voice Activity Detection (VAD) & Speaking Rings Sampling Loop
-    useEffect(() => {
-        const buffer = new Uint8Array(128); // 128 frequency bins (fftSize = 256)
-        const interval = setInterval(() => {
-            // 1. Local Microphone Activity
-            let localSpeaking = false;
-            let localLevel = 0;
-            if (!isMicMutedRef.current && localAnalyserRef.current) {
-                try {
-                    localAnalyserRef.current.getByteFrequencyData(buffer);
-                    let sum = 0;
-                    for (let i = 0; i < buffer.length; i++) {
-                        sum += buffer[i];
-                    }
-                    const avg = sum / buffer.length;
-                    const gateDecides = voiceGate.isDetecting && audioSettingsRef.current?.inputMode !== 'ptt';
-                    localSpeaking = gateDecides ? voiceGate.isOpen : avg > 12;
-                    localLevel = Math.min(100, Math.round((avg / 70) * 100));
-                } catch { }
-            }
-
-            // 2. Remote Peers Voice Activity
-            const activityMap = {};
-            for (const [peerId, entry] of peersRef.current.entries()) {
-                if (entry.analyserNode) {
-                    try {
-                        entry.analyserNode.getByteFrequencyData(buffer);
-                        let sum = 0;
-                        for (let i = 0; i < buffer.length; i++) {
-                            sum += buffer[i];
-                        }
-                        const avg = sum / buffer.length;
-                        const isSpeaking = avg > 12;
-                        const level = Math.min(100, Math.round((avg / 70) * 100));
-                        activityMap[peerId] = { isSpeaking, level };
-                    } catch {
-                        activityMap[peerId] = { isSpeaking: false, level: 0 };
-                    }
-                } else {
-                    activityMap[peerId] = { isSpeaking: false, level: 0 };
-                }
-            }
-
-            setLocalAudioActivity((prev) => {
-                if (prev.isSpeaking !== localSpeaking || Math.abs(prev.level - localLevel) > 4) {
-                    return { isSpeaking: localSpeaking, level: localLevel };
-                }
-                return prev;
-            });
-
-            setPeerAudioActivity((prev) => {
-                let changed = false;
-                const peerIds = Object.keys(activityMap);
-                if (peerIds.length !== Object.keys(prev).length) {
-                    return activityMap;
-                }
-                for (const pid of peerIds) {
-                    const oldAct = prev[pid];
-                    const newAct = activityMap[pid];
-                    if (!oldAct || oldAct.isSpeaking !== newAct.isSpeaking || Math.abs(oldAct.level - newAct.level) > 5) {
-                        changed = true;
-                        break;
-                    }
-                }
-                return changed ? activityMap : prev;
-            });
-        }, 75);
-
-        return () => clearInterval(interval);
-    }, []);
-
-    // Feature 2.1: Per-Peer Volume Slider Handler (0% - 200%)
-    const handleSetPeerVolume = useCallback((peerId, vol) => {
-        const clamped = Math.max(0, Math.min(2.0, Math.round(vol * 100) / 100));
-        setPeerVolumes((prev) => ({
-            ...prev,
-            [peerId]: clamped
-        }));
-        peerVolumesRef.current[peerId] = clamped;
-
-        // Auto unmute if user adjusts slider while locally muted
-        if (localMutedPeersRef.current[peerId] && clamped > 0) {
-            setLocalMutedPeers((prev) => ({ ...prev, [peerId]: false }));
-            localMutedPeersRef.current[peerId] = false;
-        }
-
-        const entry = peersRef.current.get(peerId);
-        if (entry) {
-            const isLocalMuted = Boolean(localMutedPeersRef.current[peerId]);
-            const effective = isAudioBlockedRef.current || isLocalMuted ? 0 : clamped;
-            if (entry.webAudioGain) {
-                entry.webAudioGain.gain.value = effective;
-            }
-            if (entry.audioElement) {
-                entry.audioElement.volume = Math.min(1.0, effective);
-                entry.audioElement.muted = effective === 0;
-            }
-        }
-    }, []);
-
-    // Feature 2.1: One-Click Peer Mute for Me
-    const handleToggleMutePeer = useCallback((peerId) => {
-        setLocalMutedPeers((prev) => {
-            const nextVal = !prev[peerId];
-            localMutedPeersRef.current[peerId] = nextVal;
-
-            const entry = peersRef.current.get(peerId);
-            if (entry) {
-                const vol = peerVolumesRef.current[peerId] !== undefined ? peerVolumesRef.current[peerId] : 1.0;
-                const effective = isAudioBlockedRef.current || nextVal ? 0 : vol;
-                if (entry.webAudioGain) {
-                    entry.webAudioGain.gain.value = effective;
-                }
-                if (entry.audioElement) {
-                    entry.audioElement.volume = Math.min(1.0, effective);
-                    entry.audioElement.muted = effective === 0;
-                }
-            }
-
-            const pName = peerMetadata[peerId]?.username || 'Peer';
-            if (nextVal) {
-                showToast(`🔇 Muted ${pName} for you`);
-                addSystemMessage(`🔇 You muted ${pName} for yourself.`);
-            } else {
-                showToast(`🔊 Unmuted ${pName}`);
-                addSystemMessage(`🔊 You unmuted ${pName}.`);
-            }
-
-            return { ...prev, [peerId]: nextVal };
-        });
-    }, [addSystemMessage, peerMetadata, showToast]);
-
-    // Construct connected peers list with volume, mute, identity & speaking status
     const connectedPeers = useMemo(() => {
         const list = [];
         for (const [peerId, entry] of peersRef.current.entries()) {
             if (entry.isConnected || entry.dataChannel?.readyState === 'open') {
                 const meta = peerMetadata[peerId] || {};
                 const voiceState = peerVoiceStates[meta.username] || {};
-                const act = peerAudioActivity[peerId] || { isSpeaking: false, level: 0 };
                 const vol = peerVolumes[peerId] !== undefined ? peerVolumes[peerId] : 1.0;
                 const isLocalMuted = Boolean(localMutedPeers[peerId]);
 
@@ -3123,15 +1598,13 @@ export default function App() {
                     username: meta.username || `Peer ${peerId.slice(0, 4)}`,
                     isHost: Boolean(meta.isHost),
                     isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceState.isMuted !== undefined ? voiceState.isMuted : true),
-                    isSpeaking: act.isSpeaking,
-                    audioLevel: act.level,
                     volume: vol,
                     isLocalMuted
                 });
             }
         }
         return list;
-    }, [peerMetadata, peerVoiceStates, peerAudioActivity, peerVolumes, localMutedPeers, peerCount, isP2PConnected]);
+    }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected]);
 
     const localUser = useMemo(() => {
         if (!roomId) return null;
@@ -3141,162 +1614,247 @@ export default function App() {
             username: username,
             isHost: isHost,
             isMuted: isMicMuted,
-            isSpeaking: localAudioActivity.isSpeaking,
-            audioLevel: localAudioActivity.level,
             isSelf: true
         };
-    }, [roomId, username, isHost, isMicMuted, localAudioActivity]);
+    }, [roomId, username, isHost, isMicMuted]);
+
+    // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)
+    const renderStage = (extra = {}) => (
+        <Stage
+            roomId={roomId}
+            isHost={isHost}
+            peerCount={peerCount}
+            isP2PConnected={isP2PConnected}
+            p2pStatusText={p2pStatusText}
+            onOpenCreate={() => setShowCreateModal(true)}
+            onOpenJoin={() => {
+                setInitialJoinPin('');
+                setShowJoinModal(true);
+            }}
+            onCopyRoom={handleCopyRoom}
+            onLeaveRoom={handleLeaveRoom}
+            onToggleChat={() => setIsChatOpen((prev) => !prev)}
+            isChatOpen={isChatOpen}
+            unreadChatCount={unreadChatCount}
+            chatCount={unreadChatCount}
+            activeVideoId={activeVideoId}
+            activeVideoTitle={activeVideoTitle}
+            onVideoChange={handleVideoChange}
+            localVideoFile={localVideoFile}
+            remoteLocalVideoMeta={remoteLocalVideoMeta}
+            onLocalFileSelect={handleLocalFileSelect}
+            onCloseLocalVideo={handleCloseLocalVideo}
+            onBroadcastAction={handleBroadcastAction}
+            remoteAction={remoteAction}
+            onRegisterStateGetter={(getter) => {
+                syncStateGetterRef.current = getter;
+            }}
+            streamProgress={streamProgress}
+            streamVideoUrl={streamVideoUrl}
+            onRequestP2PStream={handleRequestP2PStream}
+            onCancelP2PStream={handleCancelP2PStream}
+            isMicMuted={isMicMuted}
+            isAudioBlocked={isAudioBlocked}
+            onToggleMic={toggleMicrophone}
+            onToggleBlockAudio={toggleBlockAudio}
+            peerVoiceStates={peerVoiceStates}
+            queue={queue}
+            onAddToQueue={handleAddToQueue}
+            onPlayNextInQueue={handlePlayNextInQueue}
+            onVoteSkip={handleVoteSkip}
+            skipVotes={skipVotes}
+            onOpenQueue={handleOpenQueue}
+            username={username}
+            floatingReactions={floatingReactions}
+            onSendReaction={handleSendReaction}
+            connectedPeers={connectedPeers}
+            localUser={localUser}
+            onSetPeerVolume={handleSetPeerVolume}
+            onToggleMutePeer={handleToggleMutePeer}
+            audioSettings={audioSettings}
+            onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+            isPttActive={isPttActive}
+            onPttPressStart={handlePttPressStart}
+            onPttPressEnd={handlePttPressEnd}
+            soundboardSettings={soundboardSettings}
+            activeSoundboardSfx={activeSoundboardSfx}
+            activeSfxCooldowns={activeSfxCooldowns}
+            onPlaySoundboardClip={handlePlaySoundboardClip}
+            onSoundboardVolumeChange={handleSoundboardVolumeChange}
+            onToggleSoundboardMute={handleToggleSoundboardMute}
+            networkStats={networkStats}
+            onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+            onOpenQrCode={() => setShowQrModal(true)}
+            {...extra}
+        />
+    );
+    const renderChat = (extra = {}) => (
+        <LiveChat
+            messages={messages}
+            systemLogs={systemLogs}
+            onSendMessage={handleSendMessage}
+            onSendImage={handleSendImage}
+            onClearLogs={handleClearLogs}
+            onTestSound={handleTestSound}
+            isP2PConnected={isP2PConnected}
+            username={username}
+            isOpen={isChatOpen}
+            onClose={() => setIsChatOpen(false)}
+            isAudioBlocked={isAudioBlocked}
+            onToggleBlockAudio={toggleBlockAudio}
+            signalStatus={signalStatus}
+            onOpenSettings={() => setShowSettingsModal(true)}
+            queue={queue}
+            activeVideoId={activeVideoId}
+            activeVideoTitle={activeVideoTitle}
+            onAddToQueue={handleAddToQueue}
+            onRemoveFromQueue={handleRemoveFromQueue}
+            onReorderQueue={handleReorderQueue}
+            onClearQueue={handleClearQueue}
+            onPlayQueueItem={handlePlayQueueItem}
+            onPlayNextInQueue={handlePlayNextInQueue}
+            onVoteSkip={handleVoteSkip}
+            skipVotes={skipVotes}
+            peerCount={peerCount}
+            activeTab={sidebarTab}
+            onTabChange={setSidebarTab}
+            onSendReaction={handleSendReaction}
+            connectedPeers={connectedPeers}
+            localUser={localUser}
+            onSetPeerVolume={handleSetPeerVolume}
+            onToggleMutePeer={handleToggleMutePeer}
+            onToggleMic={toggleMicrophone}
+            roomId={roomId}
+            onCopyRoom={handleCopyRoom}
+            audioSettings={audioSettings}
+            onUpdateAudioSettings={handleUpdateAudioSettings}
+            onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+            isPttActive={isPttActive}
+            onPttPressStart={handlePttPressStart}
+            onPttPressEnd={handlePttPressEnd}
+            soundboardSettings={soundboardSettings}
+            activeSoundboardSfx={activeSoundboardSfx}
+            activeSfxCooldowns={activeSfxCooldowns}
+            onPlaySoundboardClip={handlePlaySoundboardClip}
+            onSoundboardVolumeChange={handleSoundboardVolumeChange}
+            onToggleSoundboardMute={handleToggleSoundboardMute}
+            onOpenQrCode={() => setShowQrModal(true)}
+            {...extra}
+        />
+    );
 
     return (
-        <div className="app-container">
-            <div className="app-main-pane">
-                <Header
-                    isLive={Boolean(roomId)}
-                    roomId={roomId}
-                    onCopyRoom={handleCopyRoom}
-                    isMicMuted={isMicMuted}
-                    isAudioBlocked={isAudioBlocked}
-                    onToggleMic={toggleMicrophone}
-                    onToggleBlockAudio={toggleBlockAudio}
-                    isP2PConnected={isP2PConnected}
-                    p2pStatusText={p2pStatusText}
-                    isMediaActive={isMediaActive}
-                    onExitVideo={handleExitVideo}
-                    onLeaveRoom={handleLeaveRoom}
-                    isChatOpen={isChatOpen}
-                    unreadChatCount={unreadChatCount}
-                    onToggleChat={() => setIsChatOpen((prev) => !prev)}
-                    audioSettings={audioSettings}
-                    onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
-                    isPttActive={isPttActive}
-                    peerCount={connectedPeers.length + 1}
-                    onOpenSettings={() => setShowSettingsModal(true)}
-                    networkStats={networkStats}
-                    onOpenNetworkHud={() => setShowNetworkHudModal(true)}
-                    onOpenQrCode={() => setShowQrModal(true)}
-                />
-
-                <main className="main-container">
-                    <Stage
+        <div className={`app-container ${isPhone ? 'phone-app' : ''}`}>
+            {isPhone ? (
+                <>
+                    <PhoneTopBar
                         roomId={roomId}
-                        isHost={isHost}
-                        peerCount={peerCount}
-                        isP2PConnected={isP2PConnected}
-                        p2pStatusText={p2pStatusText}
-                        onOpenCreate={() => setShowCreateModal(true)}
-                        onOpenJoin={() => {
-                            setInitialJoinPin('');
-                            setShowJoinModal(true);
-                        }}
                         onCopyRoom={handleCopyRoom}
-                        onLeaveRoom={handleLeaveRoom}
-                        onToggleChat={() => setIsChatOpen((prev) => !prev)}
-                        isChatOpen={isChatOpen}
-                        unreadChatCount={unreadChatCount}
-                        chatCount={unreadChatCount}
-                        activeVideoId={activeVideoId}
-                        activeVideoTitle={activeVideoTitle}
-                        onVideoChange={handleVideoChange}
-                        localVideoFile={localVideoFile}
-                        remoteLocalVideoMeta={remoteLocalVideoMeta}
-                        onLocalFileSelect={handleLocalFileSelect}
-                        onCloseLocalVideo={handleCloseLocalVideo}
-                        onBroadcastAction={handleBroadcastAction}
-                        remoteAction={remoteAction}
-                        onRegisterStateGetter={(getter) => {
-                            syncStateGetterRef.current = getter;
+                        networkStats={networkStats}
+                        isP2PConnected={isP2PConnected}
+                        signalStatus={signalStatus}
+                        onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                    />
+                    {roomId ? (
+                        <>
+                            {renderStage({ layout: 'phone', onOpenAddVideo: () => setPhoneSheet('add') })}
+                            {renderChat({ embedded: true, isOpen: true })}
+                            <PhoneActionBar
+                                isMicMuted={isMicMuted}
+                                isPttMode={audioSettings?.inputMode === 'ptt'}
+                                isPttActive={isPttActive}
+                                onToggleMic={toggleMicrophone}
+                                onPttPressStart={handlePttPressStart}
+                                onPttPressEnd={handlePttPressEnd}
+                                isAudioBlocked={isAudioBlocked}
+                                onToggleBlockAudio={toggleBlockAudio}
+                                onOpenAddVideo={() => setPhoneSheet('add')}
+                                onOpenMore={() => setPhoneSheet('more')}
+                            />
+                        </>
+                    ) : (
+                        <PhoneHome
+                            username={username}
+                            initialPin={initialJoinPin}
+                            onCreate={handleConfirmCreate}
+                            onJoin={handleConfirmJoin}
+                            onOpenServerSettings={() => setShowSettingsModal(true)}
+                        />
+                    )}
+                    <AddVideoSheet
+                        isOpen={phoneSheet === 'add'}
+                        onClose={closePhoneSheet}
+                        isMediaActive={isMediaActive}
+                        onLoadYouTube={(id, title) => {
+                            handleVideoChange(id, title);
+                            handleBroadcastAction('load', { newVideoId: id, title });
                         }}
-                        streamProgress={streamProgress}
-                        streamVideoUrl={streamVideoUrl}
-                        onRequestP2PStream={handleRequestP2PStream}
-                        onCancelP2PStream={handleCancelP2PStream}
-                        isMicMuted={isMicMuted}
-                        isAudioBlocked={isAudioBlocked}
-                        onToggleMic={toggleMicrophone}
-                        onToggleBlockAudio={toggleBlockAudio}
-                        peerVoiceStates={peerVoiceStates}
-                        queue={queue}
-                        onAddToQueue={handleAddToQueue}
-                        onPlayNextInQueue={handlePlayNextInQueue}
-                        onVoteSkip={handleVoteSkip}
-                        skipVotes={skipVotes}
-                        onOpenQueue={handleOpenQueue}
-                        username={username}
-                        floatingReactions={floatingReactions}
-                        onSendReaction={handleSendReaction}
-                        connectedPeers={connectedPeers}
-                        localUser={localUser}
-                        onSetPeerVolume={handleSetPeerVolume}
-                        onToggleMutePeer={handleToggleMutePeer}
+                        onQueueYouTube={(id, title) => handleAddToQueue({ videoId: id, title })}
+                        onPickFile={handleLocalFileSelect}
+                        onStopVideo={handleExitVideo}
+                    />
+                    <MoreSheet
+                        isOpen={phoneSheet === 'more'}
+                        onClose={closePhoneSheet}
                         audioSettings={audioSettings}
+                        onUpdateAudioSettings={handleUpdateAudioSettings}
                         onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
-                        isPttActive={isPttActive}
-                        onPttPressStart={handlePttPressStart}
-                        onPttPressEnd={handlePttPressEnd}
+                        onOpenSoundboard={() => setPhoneSheet('soundboard')}
+                        onOpenNetworkHud={() => setShowNetworkHudModal(true)}
+                        networkStats={networkStats}
+                        onOpenQrCode={() => setShowQrModal(true)}
+                        roomId={roomId}
+                        onOpenServerSettings={() => setShowSettingsModal(true)}
+                        onLeaveRoom={handleLeaveRoom}
+                    />
+                    <SoundboardSheet
+                        isOpen={phoneSheet === 'soundboard'}
+                        onClose={closePhoneSheet}
                         soundboardSettings={soundboardSettings}
                         activeSoundboardSfx={activeSoundboardSfx}
                         activeSfxCooldowns={activeSfxCooldowns}
                         onPlaySoundboardClip={handlePlaySoundboardClip}
                         onSoundboardVolumeChange={handleSoundboardVolumeChange}
                         onToggleSoundboardMute={handleToggleSoundboardMute}
+                    />
+                </>
+            ) : (
+                <>
+                <div className="app-main-pane">
+                    <Header
+                        isLive={Boolean(roomId)}
+                        roomId={roomId}
+                        onCopyRoom={handleCopyRoom}
+                        isMicMuted={isMicMuted}
+                        isAudioBlocked={isAudioBlocked}
+                        onToggleMic={toggleMicrophone}
+                        onToggleBlockAudio={toggleBlockAudio}
+                        isP2PConnected={isP2PConnected}
+                        p2pStatusText={p2pStatusText}
+                        isMediaActive={isMediaActive}
+                        onExitVideo={handleExitVideo}
+                        onLeaveRoom={handleLeaveRoom}
+                        isChatOpen={isChatOpen}
+                        unreadChatCount={unreadChatCount}
+                        onToggleChat={() => setIsChatOpen((prev) => !prev)}
+                        audioSettings={audioSettings}
+                        onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
+                        isPttActive={isPttActive}
+                        peerCount={connectedPeers.length + 1}
+                        onOpenSettings={() => setShowSettingsModal(true)}
                         networkStats={networkStats}
                         onOpenNetworkHud={() => setShowNetworkHudModal(true)}
                         onOpenQrCode={() => setShowQrModal(true)}
                     />
-                </main>
-            </div>
 
-            <LiveChat
-                messages={messages}
-                systemLogs={systemLogs}
-                onSendMessage={handleSendMessage}
-                onSendImage={handleSendImage}
-                onClearLogs={handleClearLogs}
-                onTestSound={handleTestSound}
-                isP2PConnected={isP2PConnected}
-                username={username}
-                isOpen={isChatOpen}
-                onClose={() => setIsChatOpen(false)}
-                isAudioBlocked={isAudioBlocked}
-                onToggleBlockAudio={toggleBlockAudio}
-                signalStatus={signalStatus}
-                onOpenSettings={() => setShowSettingsModal(true)}
-                queue={queue}
-                activeVideoId={activeVideoId}
-                activeVideoTitle={activeVideoTitle}
-                onAddToQueue={handleAddToQueue}
-                onRemoveFromQueue={handleRemoveFromQueue}
-                onReorderQueue={handleReorderQueue}
-                onClearQueue={handleClearQueue}
-                onPlayQueueItem={handlePlayQueueItem}
-                onPlayNextInQueue={handlePlayNextInQueue}
-                onVoteSkip={handleVoteSkip}
-                skipVotes={skipVotes}
-                peerCount={peerCount}
-                activeTab={sidebarTab}
-                onTabChange={setSidebarTab}
-                onSendReaction={handleSendReaction}
-                connectedPeers={connectedPeers}
-                localUser={localUser}
-                onSetPeerVolume={handleSetPeerVolume}
-                onToggleMutePeer={handleToggleMutePeer}
-                onToggleMic={toggleMicrophone}
-                roomId={roomId}
-                onCopyRoom={handleCopyRoom}
-                audioSettings={audioSettings}
-                onUpdateAudioSettings={handleUpdateAudioSettings}
-                onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
-                isPttActive={isPttActive}
-                onPttPressStart={handlePttPressStart}
-                onPttPressEnd={handlePttPressEnd}
-                soundboardSettings={soundboardSettings}
-                activeSoundboardSfx={activeSoundboardSfx}
-                activeSfxCooldowns={activeSfxCooldowns}
-                onPlaySoundboardClip={handlePlaySoundboardClip}
-                onSoundboardVolumeChange={handleSoundboardVolumeChange}
-                onToggleSoundboardMute={handleToggleSoundboardMute}
-                onOpenQrCode={() => setShowQrModal(true)}
-            />
+                    <main className="main-container">
+                        {renderStage()}
+                    </main>
+                </div>
+
+                {renderChat()}
+                </>
+            )}
 
             {/* Floating Push-to-Talk HUD Indicator */}
             {isPttActive && (
@@ -3322,14 +1880,14 @@ export default function App() {
 
             {/* Modals */}
             <CreateRoomModal
-                isOpen={showCreateModal}
+                isOpen={showCreateModal && !isPhone}
                 onClose={() => setShowCreateModal(false)}
                 onConfirm={handleConfirmCreate}
                 currentUsername={username}
             />
 
             <JoinRoomModal
-                isOpen={showJoinModal}
+                isOpen={showJoinModal && !isPhone}
                 onClose={() => setShowJoinModal(false)}
                 onConfirm={handleConfirmJoin}
                 currentUsername={username}
@@ -3348,10 +1906,9 @@ export default function App() {
                 onClose={() => setShowAudioSettingsModal(false)}
                 audioSettings={audioSettings}
                 onUpdateAudioSettings={handleUpdateAudioSettings}
-                localAudioLevel={localAudioActivity.level}
                 isMicMuted={isMicMuted}
                 isPttActive={isPttActive}
-                voiceIsolationSupported={isVoiceIsolationSupported() || voiceIsolation.isSupported}
+                voiceIsolationSupported={micPipeline.isolationSupported}
                 voiceIsolationStatus={voiceIsolationStatus}
             />
 
