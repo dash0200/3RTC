@@ -1,16 +1,22 @@
 {
   "id": "/",
-  "name": "3RTC - P2P Watch Party & Live Chat",
+  "name": "3RTC – Watch Together",
   "short_name": "3RTC",
-  "description": "Pure P2P WebRTC Watch Party & Live Chat with synchronized video playback, voice chat, and real-time mesh data channels.",
+  "description": "Watch YouTube or your own video files together in sync, with voice chat and live chat. Free, no sign-up, peer-to-peer.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["standalone", "minimal-ui"],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
   "orientation": "any",
   "background_color": "#0f0f0f",
   "theme_color": "#0a0a0c",
-  "categories": ["entertainment", "social"],
+  "categories": [
+    "entertainment",
+    "social"
+  ],
   "icons": [
     {
       "src": "/icons/pwa-192.png",

@@ -31,10 +31,13 @@ import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './ut
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
+import { loadQuickPicks } from './utils/quickPicks';
 import './App.css';
 import './phone.css';
 
-const DEFAULT_SIGNAL_URL = 'wss://34.57.36.145.sslip.io:443';
+const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
+// Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
+const BACKUP_SIGNAL_URLS = ['wss://34.57.36.145.sslip.io:443'];
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -42,11 +45,26 @@ const IS_LOCAL = typeof window !== 'undefined' && (
     Boolean(import.meta.env?.DEV)
 );
 
+// Server settings is a developer tool: shown on localhost, dev.3rtc.me and Vercel previews only.
+// On 3rtc.me users just see the connection status (the app always uses DEFAULT_SIGNAL_URL there).
+const SHOW_SERVER_SETTINGS = IS_LOCAL || (typeof window !== 'undefined' && (
+    window.location.hostname === 'dev.3rtc.me' ||
+    window.location.hostname.endsWith('.vercel.app')
+));
+
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
         if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
         return localStorage.getItem('webrtc_signal_url') || DEFAULT_SIGNAL_URL;
     });
+    // YouTube quick picks come from the signaling server's cache (built-in list until then)
+    useEffect(() => {
+        const urls = signalUrl === DEFAULT_SIGNAL_URL ? [signalUrl, ...BACKUP_SIGNAL_URLS] : [signalUrl];
+        loadQuickPicks(urls);
+        // Reads the server's saved list (no YouTube quota); the server refreshes it every ~85 min
+        const timer = setInterval(() => loadQuickPicks(urls), 60 * 60 * 1000);
+        return () => clearInterval(timer);
+    }, [signalUrl]);
     const [username, setUsername] = useState(() => localStorage.getItem('webrtc_username') || `User_${Math.floor(100 + Math.random() * 900)}`);
 
     const [signalStatus, setSignalStatus] = useState({ connected: false, label: 'Connecting...' });
@@ -116,6 +134,7 @@ export default function App() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showJoinModal, setShowJoinModal] = useState(false);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
+    const openServerSettings = SHOW_SERVER_SETTINGS ? () => setShowSettingsModal(true) : undefined;
     const [showQrModal, setShowQrModal] = useState(false);
     const [initialJoinPin, setInitialJoinPin] = useState('');
     const [toastMessage, setToastMessage] = useState('');
@@ -803,7 +822,7 @@ export default function App() {
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username }), [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, logLocalDebug, sendSignal, showToast, username]);
 
     // Signaling server connection (hooks/useSignalingConnection.js)
-    useSignalingConnection({ addSystemMessage, currentRoomRef, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
+    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls: signalUrl === DEFAULT_SIGNAL_URL ? BACKUP_SIGNAL_URLS : undefined, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
     // On-demand P2P stream: the service worker forwards each byte range the video player asks for
     useEffect(() => {
         const sw = navigator.serviceWorker;
@@ -1703,7 +1722,7 @@ export default function App() {
             isAudioBlocked={isAudioBlocked}
             onToggleBlockAudio={toggleBlockAudio}
             signalStatus={signalStatus}
-            onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenSettings={openServerSettings}
             queue={queue}
             activeVideoId={activeVideoId}
             activeVideoTitle={activeVideoTitle}
@@ -1778,7 +1797,7 @@ export default function App() {
                             initialPin={initialJoinPin}
                             onCreate={handleConfirmCreate}
                             onJoin={handleConfirmJoin}
-                            onOpenServerSettings={() => setShowSettingsModal(true)}
+                            onOpenServerSettings={openServerSettings}
                         />
                     )}
                     <AddVideoSheet
@@ -1804,7 +1823,7 @@ export default function App() {
                         networkStats={networkStats}
                         onOpenQrCode={() => setShowQrModal(true)}
                         roomId={roomId}
-                        onOpenServerSettings={() => setShowSettingsModal(true)}
+                        onOpenServerSettings={openServerSettings}
                         onLeaveRoom={handleLeaveRoom}
                     />
                     <SoundboardSheet
@@ -1841,7 +1860,7 @@ export default function App() {
                         onOpenAudioSettings={() => setShowAudioSettingsModal(true)}
                         isPttActive={isPttActive}
                         peerCount={connectedPeers.length + 1}
-                        onOpenSettings={() => setShowSettingsModal(true)}
+                        onOpenSettings={openServerSettings}
                         networkStats={networkStats}
                         onOpenNetworkHud={() => setShowNetworkHudModal(true)}
                         onOpenQrCode={() => setShowQrModal(true)}
@@ -1895,7 +1914,7 @@ export default function App() {
             />
 
             <ServerSettingsModal
-                isOpen={showSettingsModal}
+                isOpen={SHOW_SERVER_SETTINGS && showSettingsModal}
                 onClose={() => setShowSettingsModal(false)}
                 currentUrl={signalUrl}
                 onApply={handleApplyServer}

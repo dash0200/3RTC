@@ -106,7 +106,15 @@ export default function PhoneHome({ username, initialPin = '', onCreate, onJoin,
 
       <footer className="phone-home-foot">
         <p>Video, voice and chat stay peer-to-peer.</p>
-        <button type="button" className="phone-link-btn" onClick={onOpenServerSettings}>Server settings</button>
+        {onOpenServerSettings && (
+          <button type="button" className="phone-link-btn" onClick={onOpenServerSettings}>Server settings</button>
+        )}
+        <nav className="site-links phone-site-links" aria-label="About 3RTC">
+          <a href="/about">About</a>
+          <a href="/youtube-watch-party">YouTube watch party</a>
+          <a href="/watch-videos-together">Your own videos</a>
+          <a href="/privacy">Privacy</a>
+        </nav>
       </footer>
     </div>
   );

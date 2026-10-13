@@ -14,6 +14,8 @@ import base64
 import time
 import urllib.request
 import webbrowser
+import getpass
+import tempfile
 from pathlib import Path
 
 # Eligible Always Free regions and zones
@@ -25,6 +27,7 @@ FREE_REGIONS = {
 
 FIREWALL_RULE_NAME = "allow-webrtc-signaling"
 FIREWALL_TAG = "webrtc-signaling-server"
+SIGNAL_DOMAIN = "signal.3rtc.me"  # the app connects to wss://signal.3rtc.me (A record -> VM IP)
 DEFAULT_INSTANCE_NAME = "webrtc-signaling-free"
 DEFAULT_PORT = "443"
 ALT_PORT = "8443"
@@ -360,8 +363,9 @@ cat <<EOF > /etc/caddy/Caddyfile
     admin off
 }}
 
-# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443
-${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
+# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443. {SIGNAL_DOMAIN} needs a DNS A
+# record pointing at this VM's IP; until it has one, Caddy keeps retrying and the sslip.io name works.
+{SIGNAL_DOMAIN}:443, ${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
     reverse_proxy 127.0.0.1:8080
 }}
 
@@ -507,6 +511,7 @@ def wait_for_ready(external_ip):
     print(" WebRTC Signaling Server Deployed Successfully (Always Free)")
     print("=" * 60)
     print(f"\n Secure WebSocket (WSS) URLs with Port:\n")
+    print(f"  App URL (DNS)   : wss://{SIGNAL_DOMAIN}  (A record {SIGNAL_DOMAIN} -> {external_ip})")
     print(f"  Primary WSS URL : {wss_url}")
     print(f"  Alternative WSS : {wss_alt}")
     print(f"  Plain WS (Port) : ws://{external_ip}:8080")
@@ -516,6 +521,47 @@ def wait_for_ready(external_ip):
     print(f"  SSL Domain   : {domain} (Valid Let's Encrypt Certificate)")
     print("  Tier         : Google Cloud Always Free (e2-micro, 30GB pd-standard)")
     print("=" * 60 + "\n")
+
+
+def configure_quick_picks(gcloud, zone, instance_name):
+    """Upload the YouTube Data API key that powers the quick-pick videos (optional).
+
+    The server searches YouTube a few times a day and caches the result for every client, so the
+    key is only ever used on the server. It is stored in /opt/webrtc-server/.youtube-api-key,
+    readable only by root, and never embedded in instance metadata or sent to browsers.
+    """
+    print_step("Step 8: YouTube Quick Picks (optional)")
+    print("Quick picks can be filled from live YouTube searches instead of the built-in list.")
+    print("This needs a YouTube Data API v3 key: https://console.cloud.google.com/apis/credentials")
+    print("(Enable 'YouTube Data API v3' for the project, create an API key, and restrict it to that API.)")
+    key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if key:
+        print("Using YOUTUBE_API_KEY from your environment.")
+    else:
+        key = getpass.getpass("Paste the API key (input hidden), or press Enter to keep the current setting: ").strip()
+    if not key:
+        print("Skipped. Quick picks keep their current source.")
+        return
+
+    fd, local_path = tempfile.mkstemp(prefix="yt-key-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(key + "\n")
+        os.chmod(local_path, 0o600)
+        run_cmd([
+            gcloud, "compute", "scp", local_path, f"{instance_name}:/tmp/.youtube-api-key",
+            f"--zone={zone}", "--quiet"
+        ], capture_output=False)
+    finally:
+        os.remove(local_path)
+    run_cmd([
+        gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+        "--command=sudo install -m 600 -o root -g root /tmp/.youtube-api-key /opt/webrtc-server/.youtube-api-key"
+        " && rm -f /tmp/.youtube-api-key && sudo rm -f /opt/webrtc-server/quick-picks-cache.json"
+        " && sudo systemctl restart webrtc-signaling",
+        "--quiet"
+    ], capture_output=False)
+    print("[OK] Key saved on the server. Quick picks refresh now, then about every 3 hours.")
 
 
 def main():
@@ -529,8 +575,9 @@ def main():
     select_or_create_project(gcloud)
     zone = choose_region_and_zone()
     ensure_firewall(gcloud)
-    _, external_ip = deploy_vm(gcloud, zone, server_js, package_json)
+    instance_name, external_ip = deploy_vm(gcloud, zone, server_js, package_json)
     wait_for_ready(external_ip)
+    configure_quick_picks(gcloud, zone, instance_name)
 
 
 if __name__ == "__main__":

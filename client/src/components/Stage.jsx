@@ -265,6 +265,12 @@ export default function Stage({
                 </svg>
                 <span>Direct WebRTC P2P mesh data connection. No third-party video storage.</span>
               </div>
+              <nav className="site-links" aria-label="About 3RTC">
+                <a href="/about">About</a>
+                <a href="/youtube-watch-party">YouTube watch party</a>
+                <a href="/watch-videos-together">Your own videos</a>
+                <a href="/privacy">Privacy</a>
+              </nav>
             </div>
           </div>
         ) : (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) ? (
