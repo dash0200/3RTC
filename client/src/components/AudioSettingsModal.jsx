@@ -106,7 +106,7 @@ export default function AudioSettingsModal({
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
-      voiceIsolation: false,
+      voiceIsolation: true,
       inputMode: 'open',
       pttKey: 'Space',
       pttKeyLabel: 'Space',

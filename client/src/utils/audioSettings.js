@@ -16,7 +16,10 @@ export const MIC_PROCESSING = {
 
 export const DEFAULT_AUDIO_SETTINGS = {
   ...MIC_PROCESSING,
-  voiceIsolation: false, // Browser/OS voice isolation (stronger than noise suppression), user toggle
+  // Noise removal on your voice: the browser/OS voice isolation where available, otherwise in-app
+  // RNNoise. On by default: open mic sends continuously, so background noise must be removed.
+  voiceIsolation: true,
+  settingsVersion: 2,
   inputMode: 'open', // 'open' (Open Mic / Toggle) | 'ptt' (Push-to-Talk)
   pttKey: 'Space',   // KeyboardEvent code or key identifier
   pttKeyLabel: 'Space',
@@ -43,6 +46,12 @@ export function loadAudioSettings() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // v2: voice isolation became the default. Settings saved before that carry the old default
+      // (off), which the user most likely never chose, so turn it on once
+      if ((parsed.settingsVersion || 1) < 2) {
+        parsed.voiceIsolation = true;
+        parsed.settingsVersion = 2;
+      }
       return {
         ...DEFAULT_AUDIO_SETTINGS,
         ...parsed,
@@ -62,7 +71,8 @@ export function saveAudioSettings(settings) {
   try {
     const enforced = {
       ...settings,
-      ...MIC_PROCESSING
+      ...MIC_PROCESSING,
+      settingsVersion: DEFAULT_AUDIO_SETTINGS.settingsVersion
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(enforced));
   } catch {
@@ -83,8 +93,11 @@ export function isVoiceIsolationSupported() {
 }
 
 /** Extra constraints on top of MIC_PROCESSING for the user's optional processing toggles. */
-export function getOptionalMicConstraints({ voiceIsolation = false } = {}) {
-  return voiceIsolation && isVoiceIsolationSupported() ? { voiceIsolation: true } : {};
+export function getOptionalMicConstraints() {
+  // The browser's own `voiceIsolation` is deliberately not requested: Chrome reports it as applied
+  // even where no isolation effect exists (e.g. Windows/Linux), which would silently replace the
+  // real noise removal. Voice Isolation always uses in-app RNNoise instead (utils/micPipeline.js).
+  return {};
 }
 
 /**

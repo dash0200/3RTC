@@ -22,7 +22,7 @@ import { speakingActivity } from './utils/speakingActivity';
 import { processSignalingMessage } from './webrtc/signalingMessages';
 import { useSignalingConnection } from './hooks/useSignalingConnection';
 import { useNetworkStats } from './hooks/useNetworkStats';
-import { matchesPttKey, isTypingInField, isVoiceIsolationSupported } from './utils/audioSettings';
+import { matchesPttKey, isTypingInField } from './utils/audioSettings';
 import { soundboard, loadSoundboardSettings, saveSoundboardSettings } from './utils/soundboard';
 import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
@@ -1811,7 +1811,7 @@ export default function App() {
                 onUpdateAudioSettings={handleUpdateAudioSettings}
                 isMicMuted={isMicMuted}
                 isPttActive={isPttActive}
-                voiceIsolationSupported={isVoiceIsolationSupported() || micPipeline.isolationSupported}
+                voiceIsolationSupported={micPipeline.isolationSupported}
                 voiceIsolationStatus={voiceIsolationStatus}
             />
 

@@ -1,11 +1,10 @@
 /**
- * Voice chat: microphone (open / mute / push-to-talk), the send pipeline (voice gate, noise
+ * Voice chat: microphone (open / mute / push-to-talk), the send pipeline (in-app noise
  * removal), audio settings, deafen, per-peer volume and local mute, and the speaking indicators.
  * Owns the voice state and the refs that mirror it for the audio and peer-connection code.
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { sound } from '../utils/sound';
-import { voiceGate } from '../utils/voiceGate';
 import { speakingActivity } from '../utils/speakingActivity';
 import { micPipeline } from '../utils/micPipeline';
 import { replacePeerAudioTrack } from '../webrtc/peerEntry';
@@ -60,8 +59,8 @@ export function useVoiceChat(ctx) {
     isPttActiveRef.current = isPttActive;
 
     // Voice Chat: confirm echo cancellation / noise suppression really took effect on a fresh mic track
-    const verifyMicProcessing = useCallback(async (track, isolationRequested = false) => {
-        const status = await ensureMicProcessing(track, getOptionalMicConstraints({ voiceIsolation: isolationRequested }));
+    const verifyMicProcessing = useCallback(async (track) => {
+        const status = await ensureMicProcessing(track, getOptionalMicConstraints());
         // Logged directly (logLocalDebug is a no-op) so the applied mic processing can be checked in DevTools
         console.info(
             `[3RTC] AUDIO_DSP_APPLIED AEC: ${status.echoCancellation}, NS: ${status.noiseSuppression}, AGC: ${status.autoGainControl}, Voice isolation: ${status.voiceIsolation} | Mic: "${track?.label}"`
@@ -76,14 +75,11 @@ export function useVoiceChat(ctx) {
         return status;
     }, [showToast]);
 
-    // Voice Chat: Voice Activity gate. In open-mic mode the mic only transmits while you're talking
-    // (like Discord's automatic input sensitivity), so room/air noise isn't sent during silence.
-    // The gate runs inside the send pipeline (lookahead, smooth fades, see voiceGate.js); the mic
-    // track itself only follows mute. Push-to-talk bypasses the gate.
+    // Open mic sends continuously (like Teams); background noise is removed by noise suppression /
+    // RNNoise rather than by cutting the mic between words. The mic track only follows mute.
     const applyVoiceGate = useCallback(() => {
         const track = localStreamRef.current?.getAudioTracks()[0];
         if (track) track.enabled = !isMicMutedRef.current;
-        voiceGate.setBypass(audioSettingsRef.current?.inputMode === 'ptt');
     }, []);
 
     // Voice Chat: track to send to peers, from the send pipeline (micPipeline.js): voice gate, plus
@@ -94,20 +90,34 @@ export function useVoiceChat(ctx) {
             micPipeline.teardown();
             return null;
         }
-        const wantIsolation = micIsolationRequestedRef.current;
-        const nativeIsolation = rawTrack.getSettings?.().voiceIsolation === true;
-        const useRnnoise = wantIsolation && !nativeIsolation;
+        // Voice Isolation = in-app RNNoise on every platform (the browser's own isolation isn't trusted)
+        const useRnnoise = micIsolationRequestedRef.current;
         const { track, isolationActive } = await micPipeline.build(stream, { isolation: useRnnoise });
-        setVoiceIsolationStatus(!wantIsolation ? 'off' : nativeIsolation ? 'active' : isolationActive ? 'rnnoise' : 'unavailable');
+        setVoiceIsolationStatus(!useRnnoise ? 'off' : isolationActive ? 'rnnoise' : 'unavailable');
         if (useRnnoise) {
             console.info(`[3RTC] VOICE_ISOLATION ${isolationActive ? 'in-app RNNoise active' : 'could not start, sending mic without it'}`);
         }
-        if (!micPipeline.getOutputTrack()) {
-            console.info('[3RTC] MIC_PIPELINE could not start, sending mic ungated');
-        }
-        voiceGate.setBypass(audioSettingsRef.current?.inputMode === 'ptt');
         return track || rawTrack;
     }, []);
+
+    // Speaking ring / level meter for your own mic: reads the track actually sent to peers (after
+    // noise removal), so it reflects what others hear rather than the raw room sound
+    const connectLocalMeter = useCallback((track) => {
+        const ctx = window.__webrtcAudioCtx;
+        const analyser = localAnalyserRef.current;
+        if (localSourceNodeRef.current) {
+            try { localSourceNodeRef.current.disconnect(); } catch { }
+            localSourceNodeRef.current = null;
+        }
+        if (!ctx || !analyser || !track) return;
+        try {
+            const source = ctx.createMediaStreamSource(new MediaStream([track]));
+            source.connect(analyser);
+            localSourceNodeRef.current = source;
+        } catch (err) {
+            logLocalDebug('ANALYSER_CONNECT_ERR', err.message);
+        }
+    }, [logLocalDebug]);
 
     // Voice Chat: Set Microphone Mute/Unmute
     const setMicrophoneMuted = useCallback(async (shouldMute, isPtt = false) => {
@@ -176,12 +186,10 @@ export function useVoiceChat(ctx) {
                         if (localAnalyserRef.current) {
                             try { localAnalyserRef.current.disconnect(); } catch { }
                         }
-                        const localSrc = ctx.createMediaStreamSource(stream);
                         const localAnalyser = ctx.createAnalyser();
                         localAnalyser.fftSize = 256;
                         localAnalyser.smoothingTimeConstant = 0.5;
-                        localSrc.connect(localAnalyser);
-                        localSourceNodeRef.current = localSrc;
+                        localSourceNodeRef.current = null;
                         localAnalyserRef.current = localAnalyser;
                     }
                 } catch { }
@@ -190,6 +198,7 @@ export function useVoiceChat(ctx) {
                 if (audioTrack) {
                     audioTrack.enabled = true;
                     const sendTrack = await getSendTrack(stream);
+                    connectLocalMeter(sendTrack);
                     logLocalDebug('MIC_UNMUTE', `User "${username}" unmuting mic. Track: "${audioTrack.label}", ID: ${audioTrack.id}, state: ${audioTrack.readyState}`);
 
                     for (const peer of peersRef.current.values()) {
@@ -244,7 +253,7 @@ export function useVoiceChat(ctx) {
                 }
             }
         }
-    }, [addSystemMessage, applyVoiceGate, getSendTrack, logLocalDebug, showToast, username, verifyMicProcessing]);
+    }, [addSystemMessage, applyVoiceGate, connectLocalMeter, getSendTrack, logLocalDebug, showToast, username, verifyMicProcessing]);
 
     // Voice Chat: Toggle Microphone Mute/Unmute
     const toggleMicrophone = useCallback(() => {
@@ -323,18 +332,8 @@ export function useVoiceChat(ctx) {
 
             await verifyMicProcessing(newTrack, wantIsolation);
 
-            // Reconnect local analyser for speaking indicator & VU meter
-            if (window.__webrtcAudioCtx && localAnalyserRef.current) {
-                try {
-                    const newSource = window.__webrtcAudioCtx.createMediaStreamSource(newStream);
-                    newSource.connect(localAnalyserRef.current);
-                    localSourceNodeRef.current = newSource;
-                } catch (err) {
-                    logLocalDebug('ANALYSER_RECONNECT_ERR', err.message);
-                }
-            }
-
             const sendTrack = await getSendTrack(newStream);
+            connectLocalMeter(sendTrack);
 
             // Replace audio track cleanly in each peer connection
             await Promise.all([...peersRef.current.values()].map((peer) => replacePeerAudioTrack(peer.pc, sendTrack, logLocalDebug)));
@@ -344,7 +343,7 @@ export function useVoiceChat(ctx) {
         } finally {
             isAudioUpdatingRef.current = false;
         }
-    }, [applyVoiceGate, getSendTrack, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
+    }, [applyVoiceGate, connectLocalMeter, getSendTrack, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
 
     // Push-to-Talk (PTT) Mouse Handlers for button hold
     const handlePttPressStart = useCallback(() => {
@@ -455,8 +454,7 @@ export function useVoiceChat(ctx) {
                         sum += buffer[i];
                     }
                     const avg = sum / buffer.length;
-                    const gateDecides = voiceGate.isDetecting && audioSettingsRef.current?.inputMode !== 'ptt';
-                    localSpeaking = gateDecides ? voiceGate.isOpen : avg > 12;
+                    localSpeaking = avg > 12;
                     localLevel = Math.min(100, Math.round((avg / 70) * 100));
                 } catch { }
             }
