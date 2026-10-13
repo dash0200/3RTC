@@ -1,5 +1,22 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { getAvatarColor } from '../utils/sound';
+
+// 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
+const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]|\s)+$/u;
+const GRAPHEMES = typeof Intl !== 'undefined' && Intl.Segmenter
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  : null;
+function isEmojiOnly(text) {
+  if (!text || !EMOJI_ONLY_RE.test(text) || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(text)) return false;
+  if (GRAPHEMES) {
+    let count = 0;
+    for (const _ of GRAPHEMES.segment(text.trim())) {
+      if (++count > 3) return false;
+    }
+    return true;
+  }
+  return [...text.trim()].length <= 6;
+}
 import { copyToClipboard } from '../utils/clipboard';
 import { extractYouTubeId, fetchYouTubeTitle } from './YouTubeSyncPlayer';
 import { PeerVoicePanel } from './PeerVoiceRoster';
@@ -108,7 +125,9 @@ export default function LiveChat({
   onPlaySoundboardClip,
   onSoundboardVolumeChange,
   onToggleSoundboardMute,
-  onOpenQrCode
+  onOpenQrCode,
+  // Phone layout: shown in the page under the video (no floating sheet, header or resize)
+  embedded = false
 }) {
   const DEFAULT_WIDTH = 380;
   const MIN_WIDTH = 260;
@@ -405,14 +424,28 @@ export default function LiveChat({
     }
   };
 
-  // Auto-scroll to top when new messages arrive (latest message on top)
+  // Newest message at the bottom (like WhatsApp): follow new messages while the user is at the
+  // bottom, otherwise show the "New messages" pill. Own messages always scroll into view.
+  // Which messages are 1-3 emojis only (shown big, without a bubble); recomputed only when messages change
+  const emojiOnlyIds = useMemo(() => new Set(
+    messages
+      .filter((msg) => !msg.image?.url && !msg.imageTransfer && isEmojiOnly(msg.text))
+      .map((msg) => msg.id)
+  ), [messages]);
+
+  const wasNearBottomRef = useRef(true);
+  useEffect(() => {
+    // Opening the chat tab always lands on the latest messages
+    if (activeTab === 'chat') wasNearBottomRef.current = true;
+  }, [activeTab]);
   useEffect(() => {
     const scroller = chatContainerRef.current;
     if (!scroller || activeTab !== 'chat') return;
 
-    const isNearTop = scroller.scrollTop < 60;
-    if (isNearTop) {
-      scroller.scrollTop = 0;
+    const lastMsg = messages[messages.length - 1];
+    if (wasNearBottomRef.current || lastMsg?.isSelf) {
+      scroller.scrollTop = scroller.scrollHeight;
+      wasNearBottomRef.current = true;
       setShowScrollPill(false);
     } else {
       setShowScrollPill(true);
@@ -455,15 +488,18 @@ export default function LiveChat({
     const scroller = chatContainerRef.current;
     if (!scroller) return;
 
-    const isNearTop = scroller.scrollTop < 50;
-    if (isNearTop) {
+    const isNearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
+    wasNearBottomRef.current = isNearBottom;
+    if (isNearBottom) {
       setShowScrollPill(false);
     }
   };
 
-  const scrollToTop = () => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+  const scrollToLatest = () => {
+    const scroller = chatContainerRef.current;
+    if (scroller) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+      wasNearBottomRef.current = true;
       setShowScrollPill(false);
     }
   };
@@ -531,14 +567,16 @@ export default function LiveChat({
 
   return (
     <>
-      <div
-        className={`mobile-chat-backdrop ${isOpen ? 'active' : ''}`}
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      {!embedded && (
+        <div
+          className={`mobile-chat-backdrop ${isOpen ? 'active' : ''}`}
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
       <aside
-        className={`chat-section ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
-        style={isOpen ? { width: `${sidebarWidth}px` } : undefined}
+        className={`chat-section ${embedded ? 'embedded' : ''} ${isOpen ? '' : 'collapsed'} ${isResizing ? 'is-resizing' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+        style={isOpen && !embedded ? { width: `${sidebarWidth}px` } : undefined}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -554,7 +592,7 @@ export default function LiveChat({
           </div>
         )}
         {/* Sidebar resize handle on the left edge (desktop) */}
-        {isOpen && (
+        {isOpen && !embedded && (
           <div
             className={`sidebar-resize-handle ${isResizing ? 'resizing' : ''}`}
             onMouseDown={handleStartResize}
@@ -569,6 +607,7 @@ export default function LiveChat({
           </div>
         )}
 
+        {!embedded && (
         <div
           className="mobile-sheet-pill-bar"
           onClick={onClose}
@@ -576,7 +615,9 @@ export default function LiveChat({
         >
           <div className="mobile-sheet-pill"></div>
         </div>
+        )}
 
+        {!embedded && (
         <div className="chat-header">
           <div className="chat-header-title-wrap">
             <span className="chat-header-title">Live Chat & Activity</span>
@@ -613,6 +654,7 @@ export default function LiveChat({
             </button>
           </div>
         </div>
+        )}
 
         {/* Tabs: Chat vs Queue vs Peers */}
         <div className="chat-nav-tabs">
@@ -691,86 +733,98 @@ export default function LiveChat({
                   <div className="empty-state-subtitle">Say hello to your peers in the room!</div>
                 </div>
               ) : (
-                <div className="chat-messages-inner">
-                  {[...messages].reverse().map((msg) => {
+                <div className="chat-messages-inner wa-chat">
+                  {messages.map((msg, index) => {
                     const date = new Date(msg.timestamp || Date.now());
                     const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                     const msgInitial = (msg.sender?.[0] || '?').toUpperCase();
                     const msgAvatarBg = getAvatarColor(msg.sender || 'Peer');
-                    const authorClass = msg.isSelf ? 'self' : 'peer';
+                    // Avatar colors are gradients; the name uses the gradient's first color
+                    const msgNameColor = msgAvatarBg.match(/#[0-9a-f]{6}/i)?.[0] || '#53bdeb';
+                    // Consecutive messages from the same person within 5 min form one group:
+                    // name, avatar and bubble tail only on the first one (like WhatsApp)
+                    const prev = messages[index - 1];
+                    const startsGroup = !prev || prev.sender !== msg.sender ||
+                      Math.abs((msg.timestamp || 0) - (prev.timestamp || 0)) > 5 * 60 * 1000;
+                    const emojiOnly = emojiOnlyIds.has(msg.id);
+                    const side = msg.isSelf ? 'self' : 'peer';
 
                     return (
-                      <div key={msg.id} className="yt-message">
-                        <div className="yt-avatar" style={{ background: msgAvatarBg }}>
-                          {msgInitial}
-                        </div>
-                        <div className="yt-message-content">
-                          <div className="yt-message-header">
-                            <span className={`yt-author ${authorClass}`} style={{ color: msgAvatarBg }}>{msg.sender}</span>
-                            {msg.isHost && <span className="yt-badge host-badge">HOST</span>}
-                            <span className="yt-timestamp">{timeStr}</span>
-                          </div>
+                      <div key={msg.id} className={`wa-row ${side} ${startsGroup ? 'group-start' : ''}`}>
+                        {!msg.isSelf && (
+                          startsGroup
+                            ? <div className="wa-avatar" style={{ background: msgAvatarBg }} title={msg.sender}>{msgInitial}</div>
+                            : <div className="wa-avatar-spacer" />
+                        )}
+                        <div className={`wa-bubble ${side} ${startsGroup ? 'tail' : ''} ${emojiOnly ? 'emoji-only' : ''}`}>
+                          {!msg.isSelf && startsGroup && (
+                            <div className="wa-sender">
+                              <span className="wa-sender-name" style={{ color: msgNameColor }}>{msg.sender}</span>
+                              {msg.isHost && <span className="wa-host-badge">HOST</span>}
+                            </div>
+                          )}
 
-                          {/* Image Transfer in Progress */}
-                          {msg.imageTransfer && (
-                            <div className="chat-image-transfer-card">
-                              <div className="transfer-header">
-                                <span className="transfer-icon">🖼️</span>
-                                <div className="transfer-details">
-                                  <span className="transfer-filename" title={msg.imageTransfer.fileName}>
-                                    {msg.imageTransfer.fileName}
-                                  </span>
-                                  <span className="transfer-status">
-                                    {msg.isSelf ? 'Sending' : 'Receiving'} • {msg.imageTransfer.percent || 0}% ({formatFileSize(msg.imageTransfer.fileSize)})
-                                  </span>
+                              {/* Image Transfer in Progress */}
+                              {msg.imageTransfer && (
+                                <div className="chat-image-transfer-card">
+                                  <div className="transfer-header">
+                                    <span className="transfer-icon">🖼️</span>
+                                    <div className="transfer-details">
+                                      <span className="transfer-filename" title={msg.imageTransfer.fileName}>
+                                        {msg.imageTransfer.fileName}
+                                      </span>
+                                      <span className="transfer-status">
+                                        {msg.isSelf ? 'Sending' : 'Receiving'} • {msg.imageTransfer.percent || 0}% ({formatFileSize(msg.imageTransfer.fileSize)})
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="transfer-progress-track">
+                                    <div
+                                      className="transfer-progress-fill"
+                                      style={{ width: `${Math.max(4, msg.imageTransfer.percent || 0)}%` }}
+                                    />
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="transfer-progress-track">
+                              )}
+
+                              {/* Completed Image Thumbnail */}
+                              {msg.image?.url && (
                                 <div
-                                  className="transfer-progress-fill"
-                                  style={{ width: `${Math.max(4, msg.imageTransfer.percent || 0)}%` }}
-                                />
-                              </div>
-                            </div>
-                          )}
+                                  className="chat-image-card"
+                                  onClick={() => {
+                                    setLightboxImage({
+                                      url: msg.image.url,
+                                      name: msg.image.name,
+                                      size: msg.image.size,
+                                      sender: msg.sender,
+                                      timestamp: msg.timestamp,
+                                      caption: msg.text,
+                                      blob: msg.image.blob
+                                    });
+                                    setIsLightboxOpen(true);
+                                  }}
+                                  title="Click to view image in high resolution"
+                                >
+                                  <img
+                                    src={msg.image.url}
+                                    alt={msg.image.name || 'Shared Image'}
+                                    className="chat-image-thumb"
+                                    loading="lazy"
+                                  />
+                                  <div className="chat-image-hover-overlay">
+                                    <span className="chat-image-meta-pill">
+                                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                                        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+                                      </svg>
+                                      {formatFileSize(msg.image.size)}
+                                    </span>
+                                    <span className="chat-image-action-label">Preview</span>
+                                  </div>
+                                </div>
+                              )}
 
-                          {/* Completed Image Thumbnail */}
-                          {msg.image?.url && (
-                            <div
-                              className="chat-image-card"
-                              onClick={() => {
-                                setLightboxImage({
-                                  url: msg.image.url,
-                                  name: msg.image.name,
-                                  size: msg.image.size,
-                                  sender: msg.sender,
-                                  timestamp: msg.timestamp,
-                                  caption: msg.text,
-                                  blob: msg.image.blob
-                                });
-                                setIsLightboxOpen(true);
-                              }}
-                              title="Click to view image in high resolution"
-                            >
-                              <img
-                                src={msg.image.url}
-                                alt={msg.image.name || 'Shared Image'}
-                                className="chat-image-thumb"
-                                loading="lazy"
-                              />
-                              <div className="chat-image-hover-overlay">
-                                <span className="chat-image-meta-pill">
-                                  <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-                                    <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
-                                  </svg>
-                                  {formatFileSize(msg.image.size)}
-                                </span>
-                                <span className="chat-image-action-label">Preview</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {msg.text && <span className="yt-text">{msg.text}</span>}
+                          {msg.text && <span className="wa-text">{msg.text}</span>}
+                          <span className="wa-time">{timeStr}</span>
                         </div>
                       </div>
                     );
@@ -779,9 +833,9 @@ export default function LiveChat({
               )}
 
               {showScrollPill && (
-                <button className="scroll-top-pill" onClick={scrollToTop} title="Jump to latest messages">
+                <button className="scroll-top-pill wa-latest-pill" onClick={scrollToLatest} title="Jump to latest messages">
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                    <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
+                    <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
                   </svg>
                   <span>New messages</span>
                 </button>
@@ -913,11 +967,32 @@ export default function LiveChat({
                   disabled={!isP2PConnected}
                 />
 
+                {/* Attach image (opens the file picker; on phones: gallery / camera) */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={handleFileInputChange}
+                />
+                <button
+                  type="button"
+                  className="chat-pill-attach-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!isP2PConnected}
+                  title="Send an image"
+                  aria-label="Send an image"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                    <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z" />
+                  </svg>
+                </button>
+
                 <button
                   type="button"
                   className="chat-pill-send-btn"
                   onClick={handleSend}
-                  disabled={!isP2PConnected || inputText.trim().length === 0}
+                  disabled={!isP2PConnected || (inputText.trim().length === 0 && !pendingImage)}
                   title="Send message (Enter)"
                   aria-label="Send message"
                 >

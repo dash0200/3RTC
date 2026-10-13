@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getAvatarColor } from '../utils/sound';
+import { useLiveVoiceUsers } from '../utils/speakingActivity';
 
 export function getInitials(name) {
   if (!name) return '??';
@@ -253,8 +254,8 @@ export function PeerAudioPopover({
  * Compact Horizontal Roster Displayed on the Main Stage
  */
 export default function PeerVoiceRoster({
-  connectedPeers = [],
-  localUser = null,
+  connectedPeers: connectedPeersProp = [],
+  localUser: localUserProp = null,
   onSetPeerVolume,
   onToggleMutePeer,
   onToggleMic,
@@ -262,6 +263,8 @@ export default function PeerVoiceRoster({
   onOpenAudioSettings,
   isPttActive = false
 }) {
+  // Live speaking rings / meters
+  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
   const [selectedPeerId, setSelectedPeerId] = useState(null);
 
   const selectedPeer = connectedPeers.find((p) => p.peerId === selectedPeerId);
@@ -310,8 +313,8 @@ export default function PeerVoiceRoster({
  * Full Voice & Participants Panel for the Sidebar Tab
  */
 export function PeerVoicePanel({
-  connectedPeers = [],
-  localUser = null,
+  connectedPeers: connectedPeersProp = [],
+  localUser: localUserProp = null,
   onSetPeerVolume,
   onToggleMutePeer,
   onToggleMic,
@@ -325,6 +328,8 @@ export function PeerVoicePanel({
   onPttPressStart,
   onPttPressEnd
 }) {
+  // Live speaking rings / meters
+  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
   const isPttMode = audioSettings?.inputMode === 'ptt';
 
 
@@ -367,7 +372,7 @@ export function PeerVoicePanel({
           </div>
         </div>
         <p className="voice-panel-desc">
-          Green pulsating rings indicate real-time speech. Individual volume sliders $(0\% - 200\%)$ balance quiet or loud microphones.
+          Green pulsating rings indicate real-time speech. Volume sliders (0% to 200%) balance quiet or loud microphones.
         </p>
       </div>
 

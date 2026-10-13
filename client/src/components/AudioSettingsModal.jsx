@@ -1,13 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { PTT_PRESET_KEYS, getPttKeyLabel, matchesPttKey } from '../utils/audioSettings';
 import { sound } from '../utils/sound';
+import { useSpeakingActivity } from '../utils/speakingActivity';
+
+/** Live mic level for the push-to-talk test; only this re-renders as the level changes. */
+function PttTestMeter({ isTransmitting }) {
+  const localAudioLevel = useSpeakingActivity().local.level;
+  return (
+    <div className="ptt-test-vu-wrapper">
+      <div className="ptt-test-vu-bar">
+        <div
+          className="ptt-test-vu-fill"
+          style={{ width: `${isTransmitting ? Math.max(12, localAudioLevel) : 0}%` }}
+        />
+      </div>
+      <span className="ptt-test-vu-number">
+        {isTransmitting ? `${localAudioLevel}%` : '0%'}
+      </span>
+    </div>
+  );
+}
 
 export default function AudioSettingsModal({
   isOpen,
   onClose,
   audioSettings,
   onUpdateAudioSettings,
-  localAudioLevel = 0,
   isMicMuted = true,
   isPttActive = false,
   voiceIsolationSupported = false,
@@ -88,7 +106,7 @@ export default function AudioSettingsModal({
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
-      voiceIsolation: false,
+      voiceIsolation: true,
       inputMode: 'open',
       pttKey: 'Space',
       pttKeyLabel: 'Space',
@@ -311,17 +329,7 @@ export default function AudioSettingsModal({
                     </span>
                   </div>
 
-                  <div className="ptt-test-vu-wrapper">
-                    <div className="ptt-test-vu-bar">
-                      <div
-                        className="ptt-test-vu-fill"
-                        style={{ width: `${(isPttActive || isTestPressed) ? Math.max(12, localAudioLevel) : 0}%` }}
-                      />
-                    </div>
-                    <span className="ptt-test-vu-number">
-                      {(isPttActive || isTestPressed) ? `${localAudioLevel}%` : '0%'}
-                    </span>
-                  </div>
+                  <PttTestMeter isTransmitting={isPttActive || isTestPressed} />
 
                   <button
                     type="button"
