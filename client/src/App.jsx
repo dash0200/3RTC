@@ -61,7 +61,8 @@ export default function App() {
     useEffect(() => {
         const urls = signalUrl === DEFAULT_SIGNAL_URL ? [signalUrl, ...BACKUP_SIGNAL_URLS] : [signalUrl];
         loadQuickPicks(urls);
-        const timer = setInterval(() => loadQuickPicks(urls), 6 * 60 * 60 * 1000);
+        // Reads the server's saved list (no YouTube quota); the server refreshes it every ~85 min
+        const timer = setInterval(() => loadQuickPicks(urls), 60 * 60 * 1000);
         return () => clearInterval(timer);
     }, [signalUrl]);
     const [username, setUsername] = useState(() => localStorage.getItem('webrtc_username') || `User_${Math.floor(100 + Math.random() * 900)}`);

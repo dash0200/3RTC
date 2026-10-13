@@ -120,7 +120,7 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
         ))}
       </div>
       <div className="phone-list">
-        {category?.videos.filter((v) => !isVideoUnavailable(v.id)).map((v) => (
+        {category?.videos.filter((v) => !isVideoUnavailable(v.id)).slice(0, 12).map((v) => (
           <button
             key={v.id}
             type="button"
