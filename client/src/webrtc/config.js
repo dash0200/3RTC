@@ -10,6 +10,9 @@ export const ICE_SERVERS = [
 // main channel and never queue behind file data. (High id: in-band channels use ids 0, 1, 2...)
 export const BULK_CHANNEL_ID = 512;
 
+// People per room (the signaling server enforces the same number)
+export const MAX_ROOM_SIZE = 6;
+
 // P2P connection recovery (network change, Wi-Fi drop): ICE restart over the signaling socket
 export const RECOVERY = {
     disconnectGraceMs: 3000,  // 'disconnected' often recovers by itself; restart if it lasts longer
