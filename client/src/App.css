@@ -10314,3 +10314,32 @@ video::cue {
   opacity: 0.4;
   cursor: default;
 }
+
+/* Links to the static pages (About, YouTube, Your videos, Privacy) under the home card */
+.site-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+  margin-top: 14px;
+  font-size: 0.78rem;
+}
+
+.site-links a {
+  color: #8f8f99;
+  text-decoration: none;
+}
+
+.site-links a:hover {
+  color: #e8e8ec;
+  text-decoration: underline;
+}
+
+.phone-site-links {
+  margin-top: 0;
+  gap: 2px 14px;
+}
+
+.phone-site-links a {
+  padding: 6px 0;
+}

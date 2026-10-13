@@ -11,6 +11,8 @@ import { defineConfig } from 'vite'
 // of the precache so visitors who never enable it don't download them; the service worker
 // caches them on first use instead.
 const ON_DEMAND_ASSET = /(^|\/)(rnnoise[^/]*\.wasm|workletProcessor-[^/]*\.js)$/
+// Files for search engines and link previews; the app itself never needs them
+const NOT_PRECACHED = /^(og-image\.png|robots\.txt|sitemap\.xml|404\.html)$/
 
 function pwaServiceWorker() {
   let config
@@ -41,6 +43,7 @@ function pwaServiceWorker() {
             walk(full)
           } else {
             const rel = path.relative(publicDir, full).split(path.sep).join('/')
+            if (NOT_PRECACHED.test(rel)) continue
             files.push(rel)
             hash.update(rel)
             hash.update(fs.readFileSync(full))
@@ -49,7 +52,10 @@ function pwaServiceWorker() {
       }
       if (publicDir && fs.existsSync(publicDir)) walk(publicDir)
 
-      const urls = [...new Set(files)].sort().map((file) => `${base}${file}`)
+      // Pages are cached under their clean URLs (/ and /about, not /index.html and /about.html):
+      // the host redirects the .html addresses, and a service worker can't serve a redirect
+      const cleanUrl = (file) => (file === 'index.html' ? '' : file.replace(/\.html$/, ''))
+      const urls = [...new Set(files.map(cleanUrl))].sort().map((file) => `${base}${file}`)
       const template = fs.readFileSync(path.resolve(config.root, 'src/pwa/sw.js'), 'utf8')
       const source = template
         .replace("const VERSION = '__SW_VERSION__';", `const VERSION = '${hash.digest('hex').slice(0, 12)}';`)

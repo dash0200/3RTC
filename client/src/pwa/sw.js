@@ -17,7 +17,7 @@ const PRECACHE_URLS = __PRECACHE_URLS__;
 const SHELL_CACHE = `3rtc-shell-${VERSION}`;
 const FONT_CACHE = '3rtc-fonts';
 const ASSET_CACHE = '3rtc-assets';
-const SHELL_URL = '/index.html';
+const SHELL_URL = '/';
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', (event) => {
@@ -45,6 +45,19 @@ async function serveShell(request) {
   if (cached) return cached;
   return fetch(request);
 }
+
+// Other pages (/about, /privacy…) are plain static pages: network first, cached copy offline
+async function servePage(request, url) {
+  try {
+    return await fetch(request);
+  } catch (err) {
+    const cached = await caches.match(url.pathname, { cacheName: SHELL_CACHE });
+    if (cached) return cached;
+    throw err;
+  }
+}
+
+const isAppPath = (pathname) => pathname === '/' || pathname === '/index.html';
 
 async function cacheFirst(request) {
   const cached = await caches.match(request, { cacheName: SHELL_CACHE });
@@ -175,7 +188,7 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin === self.location.origin) {
     if (request.mode === 'navigate') {
-      event.respondWith(serveShell(request));
+      event.respondWith(isAppPath(url.pathname) ? serveShell(request) : servePage(request, url));
       return;
     }
     if (PRECACHE_URLS.includes(url.pathname)) {
