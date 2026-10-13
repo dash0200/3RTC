@@ -1019,3 +1019,13 @@
 .phone-pick-queue:active {
   background: rgba(255, 255, 255, 0.08);
 }
+
+.phone-pick-queue.is-queued {
+  color: #22c55e;
+  cursor: default;
+}
+
+.phone-play-queue {
+  width: 100%;
+  margin-bottom: 10px;
+}
