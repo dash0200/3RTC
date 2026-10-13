@@ -67,6 +67,10 @@ const QUICK_PICKS_REFRESH_MS = Number(process.env.QUICK_PICKS_REFRESH_MINUTES) >
   : Math.max(30 * 60 * 1000, Math.ceil((24 * 3600 * 1000) / Math.max(1, Math.floor(QUICK_PICKS_DAILY_UNITS / QUICK_PICKS_UNITS_PER_REFRESH))));
 const QUICK_PICKS_RETRY_MS = 60 * 60 * 1000; // after a failure (no key, quota used up, network)
 const QUICK_PICKS_CACHE_FILE = path.join(__dirname, 'quick-picks-cache.json');
+// Changes whenever the categories, phrases or region change, so a saved list from an older setup
+// is refreshed at startup instead of being served until the next scheduled refresh
+const QUICK_PICKS_CONFIG_ID = crypto.createHash('sha256')
+  .update(JSON.stringify({ region: QUICK_PICKS_REGION, categories: QUICK_PICK_CATEGORIES })).digest('hex').slice(0, 12);
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 
 let quickPicks = null; // { updatedAt, region, rotation: { [categoryId]: n }, categories: [{ id, name, videos: [{ id, title, channel }] }] }
@@ -172,7 +176,7 @@ async function refreshQuickPicks() {
   }
   // Nothing new (bad key, quota used up, YouTube down): keep serving the last list, retry soon
   if (refreshed === 0 || categories.length === 0) return false;
-  quickPicks = { updatedAt: new Date().toISOString(), region: QUICK_PICKS_REGION, rotation, categories };
+  quickPicks = { updatedAt: new Date().toISOString(), region: QUICK_PICKS_REGION, config: QUICK_PICKS_CONFIG_ID, rotation, categories };
   try {
     fs.writeFileSync(QUICK_PICKS_CACHE_FILE, JSON.stringify(quickPicks));
   } catch (err) {
@@ -204,9 +208,13 @@ function startQuickPicks() {
   try {
     const saved = JSON.parse(fs.readFileSync(QUICK_PICKS_CACHE_FILE, 'utf8'));
     if (saved?.categories?.length && saved.region === QUICK_PICKS_REGION) {
-      quickPicks = saved;
-      const age = Date.now() - Date.parse(saved.updatedAt);
-      delay = Math.max(0, QUICK_PICKS_REFRESH_MS - (Number.isFinite(age) ? age : QUICK_PICKS_REFRESH_MS));
+      quickPicks = saved; // served until the refresh below, and its videos seed the new lists
+      if (saved.config === QUICK_PICKS_CONFIG_ID) {
+        const age = Date.now() - Date.parse(saved.updatedAt);
+        delay = Math.max(0, QUICK_PICKS_REFRESH_MS - (Number.isFinite(age) ? age : QUICK_PICKS_REFRESH_MS));
+      } else {
+        log('INFO', 'Quick picks: categories changed since the saved list, refreshing now');
+      }
     }
   } catch {
     // no saved list yet
