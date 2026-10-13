@@ -561,7 +561,7 @@ def configure_quick_picks(gcloud, zone, instance_name):
         " && sudo systemctl restart webrtc-signaling",
         "--quiet"
     ], capture_output=False)
-    print("[OK] Key saved on the server. Quick picks refresh now, then about every 85 minutes.")
+    print("[OK] Key saved on the server. Quick picks refresh now, then about every 3 hours.")
 
 
 def main():
