@@ -53,6 +53,21 @@ export function tuneSdpForDiscordAudio(sdp) {
  * Finds the audio sender through its transceiver, so it works even before the mic is attached;
  * the settings persist across replaceTrack.
  */
+// Each person sends one copy of their voice per connection, so in bigger rooms each copy gets a
+// lower bitrate: 128 kbps up to 4 people, 64 kbps above (still very clear Opus voice).
+let voiceBitrate = 128000;
+export const voiceBitrateFor = (people) => (people > 4 ? 64000 : 128000);
+export const getVoiceBitrate = () => voiceBitrate;
+
+/** Room size changed: re-apply the voice bitrate to every connection if the tier changed. */
+export function setVoiceRoomSize(people, peerEntries) {
+    const next = voiceBitrateFor(people);
+    if (next === voiceBitrate) return false;
+    voiceBitrate = next;
+    for (const entry of peerEntries) tuneAudioSender(entry?.pc);
+    return true;
+}
+
 export function tuneAudioSender(pc) {
     if (!pc) return;
     try {
@@ -65,7 +80,7 @@ export function tuneAudioSender(pc) {
         if (audioSender && audioSender.getParameters && audioSender.setParameters) {
             const params = audioSender.getParameters();
             if (params && params.encodings && params.encodings.length > 0) {
-                params.encodings[0].maxBitrate = 128000;
+                params.encodings[0].maxBitrate = voiceBitrate;
                 params.encodings[0].priority = 'high';
                 params.encodings[0].networkPriority = 'high';
                 audioSender.setParameters(params).catch(() => { });

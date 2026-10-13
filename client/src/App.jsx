@@ -12,7 +12,7 @@ import { copyToClipboard } from './utils/clipboard';
 import { detectOnDemandStreaming } from './utils/p2pStreamer';
 import { micPipeline } from './utils/micPipeline';
 import { ICE_SERVERS, BULK_CHANNEL_ID, RECOVERY } from './webrtc/config';
-import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './webrtc/sdp';
+import { extractAudioSdp, setVoiceRoomSize, tuneSdpForDiscordAudio, tuneAudioSender } from './webrtc/sdp';
 import { teardownPeerEntry } from './webrtc/peerEntry';
 import { attachRemoteAudio } from './webrtc/remoteAudio';
 import { attachPeerRecovery } from './webrtc/peerRecovery';
@@ -32,6 +32,7 @@ import { P2PImageSender, p2pImageReceiver } from './utils/p2pImageShare';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
 import { loadQuickPicks } from './utils/quickPicks';
+import { detachViewer } from './webrtc/streamTree';
 import './App.css';
 import './phone.css';
 
@@ -51,6 +52,14 @@ const SHOW_SERVER_SETTINGS = IS_LOCAL || (typeof window !== 'undefined' && (
     window.location.hostname === 'dev.3rtc.me' ||
     window.location.hostname.endsWith('.vercel.app')
 ));
+
+const isPhoneLikeDevice = () => {
+    try {
+        return window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    } catch {
+        return false;
+    }
+};
 
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
@@ -91,6 +100,8 @@ export default function App() {
     // Host: stream number of the file currently offered for on-demand streaming
     const hostStreamRef = useRef({ file: null, streamNo: 0 });
     const activeStreamSendersRef = useRef(new Map());
+    // Owner of a local video: who fetches it from whom (relay tree, see webrtc/streamTree.js)
+    const streamTreeRef = useRef(new Map());
     const localVideoFileRef = useRef(null);
     localVideoFileRef.current = localVideoFile;
 
@@ -145,6 +156,8 @@ export default function App() {
     const closePhoneSheet = useCallback(() => setPhoneSheet(null), []);
 
     const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username: string, isHost: boolean, isMuted: boolean } }
+    const peerMetadataRef = useRef(peerMetadata);
+    peerMetadataRef.current = peerMetadata;
 
     const [showAudioSettingsModal, setShowAudioSettingsModal] = useState(false);
 
@@ -161,9 +174,14 @@ export default function App() {
     // Feature 4.1: Real-Time P2P Network HUD (Ping & Latency)
     const [showNetworkHudModal, setShowNetworkHudModal] = useState(false);
 
-    // Refs for Multi-Peer WebRTC Mesh (up to 3 users)
+    // Refs for Multi-Peer WebRTC Mesh (up to MAX_ROOM_SIZE people)
     // Map<targetPeerId, { pc, dataChannel, isConnected, candidateQueue, audioElement, webAudioSource, webAudioGain, analyserNode }>
     const peersRef = useRef(new Map());
+    // Voice bitrate per connection follows the room size (128 kbps up to 4 people, 64 kbps above)
+    useEffect(() => {
+        if (peerCount > 0) setVoiceRoomSize(peerCount, peersRef.current.values());
+    }, [peerCount]);
+
     const wsRef = useRef(null);
     const currentRoomRef = useRef(null);
     const isHostRef = useRef(false);
@@ -274,6 +292,11 @@ export default function App() {
             const entry = peersRef.current.get(targetPeerId);
             teardownPeerEntry(entry);
             peersRef.current.delete(targetPeerId);
+            // Local video relay: our parent left -> fetch from the owner; a viewer left -> its children do
+            streamReceiverRef.current?.handlePeerGone?.(targetPeerId);
+            detachViewer(streamTreeRef.current, targetPeerId);
+            activeStreamSendersRef.current.get(targetPeerId)?.abort?.();
+            activeStreamSendersRef.current.delete(targetPeerId);
             setPeerMetadata((prev) => {
                 const next = { ...prev };
                 delete next[targetPeerId];
@@ -749,7 +772,7 @@ export default function App() {
                 } catch (e) { }
             };
 
-            dc.onmessage = createPeerMessageHandler({ activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, hostStreamRef, isAudioBlockedRef, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, syncStateGetterRef, targetPeerId, username });
+            dc.onmessage = createPeerMessageHandler({ activeStreamSendersRef, activeVideoTitleRef, addSystemMessage, cleanupPeer, dc, handleIncomingImageChunk, handleIncomingImageStart, handleRemoteLocalVideoAction, handleRemoteQueueAction, handleRemoteReaction, handleRemoteSoundboardSfx, handleRemoteYouTubeAction, hostStreamRef, isAudioBlockedRef, peerNameOf: (id) => peerMetadataRef.current[id]?.username, isHostRef, isMicMutedRef, isStillCurrent, localVideoFileRef, peerEntry, peerIdRef, peersRef, queueRef, recordPeerPing, setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setMessages, setPeerCount, setPeerMetadata, setPeerVoiceStates, setQueue, setRemoteAction, setRemoteLocalVideoMeta, setSkipVotes, setStreamProgress, setStreamVideoUrl, showToast, skipVotesRef, streamReceiverRef, streamTreeRef, syncStateGetterRef, targetPeerId, username });
 
             dc.onclose = () => {
                 if (activeStreamSendersRef.current.has(targetPeerId)) {
@@ -1225,7 +1248,9 @@ export default function App() {
     }, [addSystemMessage]);
 
     // Collaborative Queue Actions
-    const handleAddToQueue = useCallback(async ({ videoId, title }) => {
+    // autoplay: with nothing playing, the first video added starts right away. Quick Watch passes
+    // false so several videos can be lined up first (then "Play queue").
+    const handleAddToQueue = useCallback(async ({ videoId, title }, { autoplay = true } = {}) => {
         if (!videoId) return;
         let finalTitle = title;
         if (!finalTitle) {
@@ -1240,7 +1265,7 @@ export default function App() {
         };
 
         // If no video is currently active, immediately play it!
-        if (!activeVideoIdRef.current && !localVideoFile && !remoteLocalVideoMeta) {
+        if (autoplay && !activeVideoIdRef.current && !localVideoFile && !remoteLocalVideoMeta) {
             setActiveVideoId(videoId);
             setActiveVideoTitle(finalTitle);
             handleBroadcastAction('load', {
@@ -1447,6 +1472,8 @@ export default function App() {
             supportsRange: await detectOnDemandStreaming(),
             timestamp: Date.now()
         };
+        // Computers can pass the video on to other viewers; phones (battery, upload) don't
+        reqMsg.canRelay = reqMsg.supportsRange && !isPhoneLikeDevice();
         for (const peer of peersRef.current.values()) {
             if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
                 try {
@@ -1809,6 +1836,9 @@ export default function App() {
                             handleBroadcastAction('load', { newVideoId: id, title });
                         }}
                         onQueueYouTube={(id, title) => handleAddToQueue({ videoId: id, title })}
+                        onQueuePick={(id, title) => handleAddToQueue({ videoId: id, title }, { autoplay: false })}
+                        queuedIds={queue.map((item) => item.videoId)}
+                        onPlayQueue={queue.length > 0 && !isMediaActive ? handlePlayNextInQueue : undefined}
                         onPickFile={handleLocalFileSelect}
                         onStopVideo={handleExitVideo}
                     />

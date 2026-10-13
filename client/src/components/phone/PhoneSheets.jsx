@@ -40,7 +40,9 @@ const Chevron = (
 );
 
 /** Add video: YouTube link, quick picks, or a video file from the phone. */
-export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, onQueueYouTube, onPickFile, onStopVideo }) {
+export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, onQueueYouTube, onQueuePick, queuedIds = [], onPlayQueue, onPickFile, onStopVideo }) {
+  const queuedSet = new Set(queuedIds);
+  const queuePick = onQueuePick || onQueueYouTube;
   const [link, setLink] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -108,6 +110,11 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
       </form>
 
       <div className="phone-section-label">QUICK PICKS</div>
+      {onPlayQueue && queuedIds.length > 0 && (
+        <button type="button" className="phone-btn phone-btn-primary phone-play-queue" onClick={() => { onPlayQueue(); onClose?.(); }}>
+          ▶ Play queue ({queuedIds.length})
+        </button>
+      )}
       {groups.length > 1 && (
         <div className="phone-segmented" role="tablist" aria-label="Quick pick groups">
           {groups.map((g) => (
@@ -157,9 +164,19 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
                 {v.channel && <span className="phone-pick-channel">{v.channel}</span>}
               </span>
             </button>
-            {onQueueYouTube && (
-              <button type="button" className="phone-pick-queue" onClick={() => onQueueYouTube(v.id, v.title)} aria-label={`Add "${v.title}" to queue`}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 10H3v2h11v-2zm0-4H3v2h11V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM3 16h7v-2H3v2z" /></svg>
+            {queuePick && (
+              <button
+                type="button"
+                className={`phone-pick-queue ${queuedSet.has(v.id) ? 'is-queued' : ''}`}
+                onClick={() => !queuedSet.has(v.id) && queuePick(v.id, v.title)}
+                disabled={queuedSet.has(v.id)}
+                aria-label={queuedSet.has(v.id) ? `"${v.title}" is in the queue` : `Add "${v.title}" to queue`}
+              >
+                {queuedSet.has(v.id) ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" /></svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 10H3v2h11v-2zm0-4H3v2h11V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM3 16h7v-2H3v2z" /></svg>
+                )}
               </button>
             )}
           </div>

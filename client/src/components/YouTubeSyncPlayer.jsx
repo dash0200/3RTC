@@ -101,6 +101,15 @@ export default function YouTubeSyncPlayer({
   const settingsRef = useRef(null);
   const localFileInputRef = useRef(null);
   const isRemoteActionRef = useRef(false);
+  // State changes the player is about to report because of something we told it to do (a peer's
+  // command, or our own buttons, which broadcast themselves). Only those are skipped: anything
+  // else is a person using the player and is sent to the room. (Skipping every change for a while
+  // used to also skip updating lastStateRef, so after a peer's play/pause our own next
+  // pause/play looked like "no change" and was never sent.)
+  const echoRef = useRef({ states: null, until: 0 });
+  const expectEcho = (states, ms = 1500) => {
+    echoRef.current = { states: new Set(states), until: Date.now() + ms };
+  };
   const isScrubbingRef = useRef(false);
   const lastStateRef = useRef(-1);
   const lastReportedTimeRef = useRef(0);
@@ -253,8 +262,10 @@ export default function YouTubeSyncPlayer({
       setDurationSec(dur);
     }
 
-    // Ignore state changes triggered programmatically by incoming remote actions
-    if (isRemoteActionRef.current) {
+    // Caused by a command we gave the player: remember the state, don't broadcast it
+    const echo = echoRef.current;
+    if (echo.states && Date.now() < echo.until && echo.states.has(state)) {
+      lastStateRef.current = state;
       return;
     }
 
@@ -352,6 +363,11 @@ export default function YouTubeSyncPlayer({
     if (!playerRef.current) return;
 
     isRemoteActionRef.current = true;
+    const YTS = window.YT?.PlayerState || { UNSTARTED: -1, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
+    if (action === 'load') expectEcho([YTS.UNSTARTED, YTS.BUFFERING, YTS.PLAYING, YTS.CUED, YTS.PAUSED], 3000);
+    else if (action === 'play') expectEcho([YTS.PLAYING, YTS.BUFFERING]);
+    else if (action === 'pause') expectEcho([YTS.PAUSED, YTS.BUFFERING]);
+    else if (action === 'seek') expectEcho([YTS.PLAYING, YTS.PAUSED, YTS.BUFFERING]);
 
     try {
       if (action === 'load' && targetVideoId && targetVideoId !== currentVideoIdRef.current) {
@@ -536,6 +552,7 @@ export default function YouTubeSyncPlayer({
 
     if (state === 1) {
       isRemoteActionRef.current = true;
+      expectEcho([2]);
       playerRef.current.pauseVideo?.();
       setIsPlaying(false);
       setTimeout(() => { isRemoteActionRef.current = false; }, 800);
@@ -543,6 +560,7 @@ export default function YouTubeSyncPlayer({
       setSyncStatus('Paused (Synced)');
     } else {
       isRemoteActionRef.current = true;
+      expectEcho([1, 3]);
       playerRef.current.playVideo?.();
       setIsPlaying(true);
       setTimeout(() => { isRemoteActionRef.current = false; }, 800);
@@ -556,6 +574,7 @@ export default function YouTubeSyncPlayer({
     const cur = playerRef.current.getCurrentTime();
     const target = Math.max(0, cur + deltaSec);
     isRemoteActionRef.current = true;
+    expectEcho([1, 2, 3]);
     playerRef.current.seekTo(target, true);
     lastReportedTimeRef.current = target;
     setCurrentTimeSec(target);
@@ -567,6 +586,7 @@ export default function YouTubeSyncPlayer({
   const handleRestart = () => {
     if (!playerRef.current) return;
     isRemoteActionRef.current = true;
+    expectEcho([1, 2, 3]);
     playerRef.current.seekTo(0, true);
     lastReportedTimeRef.current = 0;
     setCurrentTimeSec(0);
@@ -682,6 +702,7 @@ export default function YouTubeSyncPlayer({
 
     if (playerRef.current?.seekTo) {
       isRemoteActionRef.current = true;
+      expectEcho([1, 2, 3], 60000); // until mouse up
       playerRef.current.seekTo(targetTime, true);
       lastReportedTimeRef.current = targetTime;
     }
@@ -706,6 +727,7 @@ export default function YouTubeSyncPlayer({
         lastReportedTimeRef.current = finalTime;
       }
       setTimeout(() => { isRemoteActionRef.current = false; }, 800);
+      expectEcho([1, 2, 3]);
       if (isP2PConnected) {
         onBroadcastAction('seek', { currentTime: finalTime });
       }
@@ -929,6 +951,10 @@ export default function YouTubeSyncPlayer({
                 onBroadcastAction('load', { newVideoId: v.id, title: v.title });
               }}
               onShuffle={handleSelectPreset}
+              onQueue={typeof onAddToQueue === 'function' ? (v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false }) : undefined}
+              queuedIds={queue.map((item) => item.videoId)}
+              queueCount={queue.length}
+              onPlayQueue={typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined}
             />
           </>
         ) : (
