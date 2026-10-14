@@ -29,7 +29,8 @@ class SoundFx {
     } catch {}
   }
 
-  playReactionPop() {
+  // A soft bubble pop. pitch > 1 raises it (combos climb), volume scales it.
+  playReactionPop({ pitch = 1, volume = 1 } = {}) {
     try {
       this.init();
       if (!this.ctx) return;
@@ -37,9 +38,10 @@ class SoundFx {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(560, now);
-      osc.frequency.exponentialRampToValueAtTime(1120, now + 0.09);
-      gain.gain.setValueAtTime(0.06, now);
+      osc.frequency.setValueAtTime(520 * pitch, now);
+      osc.frequency.exponentialRampToValueAtTime(1040 * pitch, now + 0.08);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.045 * volume, now + 0.008);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
       osc.connect(gain);
       gain.connect(this.ctx.destination);

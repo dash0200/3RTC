@@ -50,7 +50,7 @@ export default function Stage({
   onOpenQueue,
   activeVideoTitle = '',
   username = '',
-  floatingReactions = [],
+  reactionFeed,
   onSendReaction,
   // Feature 1.4: WebRTC Direct Video Streaming
   streamProgress = null,
@@ -296,7 +296,7 @@ export default function Stage({
             onRequestP2PStream={onRequestP2PStream}
             onCancelP2PStream={onCancelP2PStream}
             isHost={isHost}
-            floatingReactions={floatingReactions}
+            reactionFeed={reactionFeed}
             onSendReaction={onSendReaction}
             roomId={roomId}
             isPttSpaceActive={isPttMode && (audioSettings?.pttKey === 'Space' || audioSettings?.pttKey === ' ')}
@@ -338,7 +338,7 @@ export default function Stage({
 
         {/* Floating Live Reactions Overlay */}
         <FloatingReactions
-          reactions={floatingReactions}
+          feed={reactionFeed}
           onSendReaction={onSendReaction}
           showDock={false}
           hasMedia={isMediaActive}

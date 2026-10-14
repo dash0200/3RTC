@@ -38,7 +38,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `queue` | Quick Watch queue buttons, Play queue, browse window, phone sheet |
 | `activities` | start, shared state, late joiner, host lock, close, leave (dev sample activity) |
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
-| `room_basics` | reactions, soundboard, ping, vote to skip, leaving resets the room |
+| `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
 | `stream` | sharing a local video: on-demand streaming, seeking, cancel |
 | `local_video_sync` | local video play / pause / seek sync |

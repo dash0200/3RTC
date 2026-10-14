@@ -154,7 +154,7 @@ export default function App() {
     const [isChatOpen, setIsChatOpen] = useState(() => !(typeof window !== 'undefined' && window.innerWidth <= 768));
     const [sidebarTab, setSidebarTab] = useState('chat');
     const chat = useChat({ room, isChatOpen });
-    const reactions = useReactions({ room, isAudioBlockedRef });
+    const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
     const soundboard = useSoundboard({ room, isAudioBlockedRef });
     const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast });
     const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
@@ -342,7 +342,7 @@ export default function App() {
             skipVotes={skipVotes}
             onOpenQueue={handleOpenQueue}
             username={username}
-            floatingReactions={reactions.floatingReactions}
+            reactionFeed={reactions.reactionFeed}
             onSendReaction={reactions.sendReaction}
             connectedPeers={connectedPeers}
             localUser={localUser}

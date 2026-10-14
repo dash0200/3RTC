@@ -26,6 +26,7 @@ with sync_playwright() as p:
     for _ in range(2):
         pg = b.new_context(viewport={'width': 1440, 'height': 900}).new_page()
         pg.add_init_script(YT)
+        pg.add_init_script("window.__chan = []; const __OPC = window.RTCPeerConnection; window.RTCPeerConnection = class extends __OPC { constructor(...a) { super(...a); this.addEventListener('datachannel', (e) => window.__chan.push(e.channel)); } createDataChannel(...a) { const c = super.createDataChannel(...a); window.__chan.push(c); return c; } };")
         pg.on('pageerror', lambda e: errors.append(str(e)))
         pg.on('dialog', lambda d: d.accept())
         pages.append(pg)
@@ -42,6 +43,33 @@ with sync_playwright() as p:
     host.locator('.stage-more-wrap .circle-action-btn').click()
     host.locator('.dropdown-react-btn').first.click()
     check('a reaction shows up for the other person', wait(lambda: guest.locator('.floating-reaction-item').count() > 0, 5))
+    check('...with the sender name on the first one', wait(lambda: guest.locator('.floating-reaction-item .reaction-sender-tag').count() > 0, 3))
+
+    # spam: hold "3" for 2 seconds (the key auto-repeats ~30 times a second)
+    host.keyboard.press('Escape'); time.sleep(2.5)
+    guest.evaluate("""() => { window.__rx = 0; window.__maxItems = 0;
+        const t = setInterval(() => { window.__maxItems = Math.max(window.__maxItems, document.querySelectorAll('.floating-reaction-item').length); }, 50);
+        window.__stopCount = () => clearInterval(t); }""")
+    host.evaluate("""() => { window.__sentReactions = 0; const o = RTCDataChannel.prototype.send;
+        RTCDataChannel.prototype.send = function (d) { if (typeof d === 'string' && d.includes('"type":"reaction"')) window.__sentReactions++; return o.call(this, d); }; }""")
+    for _ in range(60):
+        host.keyboard.down('3'); time.sleep(0.033)
+    host.keyboard.up('3')
+    time.sleep(0.6)
+    sent = host.evaluate('window.__sentReactions')
+    check('holding a key sends ~8 a second, not 30 (2 s held)', 8 <= sent <= 22, sent)
+    check('the combo counter shows for the other person', wait(lambda: guest.locator('.floating-reaction-combo').count() >= 1, 3))
+    combo_text = guest.locator('.floating-reaction-combo').inner_text() if guest.locator('.floating-reaction-combo').count() else ''
+    check('...counting up (x10 or more)', bool(re.search(r'×(\d+)', combo_text)) and int(re.search(r'×(\d+)', combo_text).group(1)) >= 10, combo_text)
+    max_items = guest.evaluate('window.__stopCount(), window.__maxItems')
+    check('on screen it stays capped', 0 < max_items <= 30, max_items)
+    # a flood from a modified app: 200 messages at once are cut down by the receiver
+    host.evaluate("""() => { for (const c of window.__chan || []) if (c.label.startsWith('chat') && c.readyState === 'open')
+        for (let i = 0; i < 200; i++) c.send(JSON.stringify({ type: 'reaction', id: 'x' + i, emoji: '🎉', lane: 50, sender: 'Flood' })); }""")
+    time.sleep(0.5)
+    flood_items = guest.evaluate("document.querySelectorAll('.floating-reaction-item').length")
+    check('a flood of 200 at once shows only a handful', flood_items <= 30, flood_items)
+    check('the app is still responsive after the flood', guest.evaluate('1 + 1') == 2 and guest.locator('.stage-voice-chip').count() >= 2)
 
     # soundboard
     host.locator('.stage-soundboard-wrap .circle-action-btn').click()

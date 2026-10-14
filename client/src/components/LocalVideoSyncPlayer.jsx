@@ -36,7 +36,7 @@ export default function LocalVideoSyncPlayer({
   onRequestP2PStream,
   onCancelP2PStream,
   isHost = false,
-  floatingReactions = [],
+  reactionFeed,
   onSendReaction,
   roomId = null,
   isPttSpaceActive = false
@@ -1986,7 +1986,7 @@ export default function LocalVideoSyncPlayer({
       {/* Floating Live Reactions in Fullscreen */}
       {isFullscreen && typeof onSendReaction === 'function' && (
         <FloatingReactions
-          reactions={floatingReactions}
+          feed={reactionFeed}
           onSendReaction={onSendReaction}
           showDock={Boolean(roomId)}
           hasMedia={true}
