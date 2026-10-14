@@ -3,14 +3,16 @@ import http from 'node:http';
 const calls = { search: 0, videos: 0, chart: 0, badKey: 0, queries: [], maxIdsPerCheck: 0 };
 const QUOTA_AFTER = Number(process.env.QUOTA_AFTER || 1e9);
 const id = (n) => (`vid${n}`.padEnd(11, 'x')).slice(0, 11);
-const BAD = { [id(2)]: 'private', [id(3)]: 'age', [id(4)]: 'region', [id(5)]: 'noembed', [id(6)]: 'upcoming' };
+const BAD = { [id(2)]: 'private', [id(3)]: 'age', [id(4)]: 'region', [id(5)]: 'noembed', [id(6)]: 'upcoming', [id(7)]: 'vertical', [id(8)]: 'shorts-tag', [id(9)]: 'too-short' };
 function video(vid, q) {
   const bad = BAD[vid];
   return {
     id: vid,
-    snippet: { title: `${q} & "friends" — a longer video title to check wrapping ${vid}`, channelTitle: 'Some Channel', liveBroadcastContent: bad === 'upcoming' ? 'upcoming' : 'none' },
+    snippet: { title: `${q} & "friends" — a longer video title to check wrapping ${vid}${bad === 'shorts-tag' ? ' #shorts' : ''}`, channelTitle: 'Some Channel', liveBroadcastContent: bad === 'upcoming' ? 'upcoming' : 'none' },
+    player: { embedWidth: '480', embedHeight: bad === 'vertical' ? '853' : '270' },
     status: { privacyStatus: bad === 'private' ? 'private' : 'public', embeddable: bad !== 'noembed', uploadStatus: 'processed' },
     contentDetails: {
+      duration: bad === 'too-short' ? 'PT40S' : 'PT4M2S',
       contentRating: bad === 'age' ? { ytRating: 'ytAgeRestricted' } : {},
       ...(bad === 'region' ? { regionRestriction: { blocked: ['IN', 'PK'] } } : {})
     }
@@ -27,7 +29,7 @@ http.createServer((req, res) => {
     const ok = u.searchParams.get('videoEmbeddable') === 'true' && u.searchParams.get('type') === 'video' && u.searchParams.get('regionCode') === 'IN';
     if (!ok) { res.statusCode = 400; return res.end('{}'); }
     const base = calls.search * 100;
-    const items = Array.from({ length: 12 }, (_, i) => ({ id: { videoId: i < 6 ? id(i + 1) : id(base + i) } }));
+    const items = Array.from({ length: 14 }, (_, i) => ({ id: { videoId: i < 9 ? id(i + 1) : id(base + i) } }));
     return res.end(JSON.stringify({ items }));
   }
   if (u.pathname === '/videos') {
@@ -36,7 +38,7 @@ http.createServer((req, res) => {
       calls.charts = calls.charts || {}; const cat = u.searchParams.get('videoCategoryId'); calls.charts[cat] = (calls.charts[cat] || 0) + 1;
       if (cat === '28') { res.statusCode = 404; return res.end(JSON.stringify({ error: { errors: [{ reason: 'videoChartNotFound' }], message: 'chart not found' } })); }
       const base = 900 + Number(cat) * 10;
-      return res.end(JSON.stringify({ items: [id(3), id(base), id(base + 1), id(base + 2), id(4)].map((v) => video(v, 'Trending ' + cat)) }));
+      return res.end(JSON.stringify({ items: [id(3), id(7), id(base), id(base + 1), id(base + 2), id(4), id(9)].map((v) => video(v, 'Trending ' + cat)) }));
       return res.end(JSON.stringify({ items: [id(3), id(900), id(901), id(4)].map((v) => video(v, 'Top hit')) }));
     }
     calls.videos++;
