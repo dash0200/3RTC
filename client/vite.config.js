@@ -1,4 +1,5 @@
 import react from '@vitejs/plugin-react'
+import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -68,18 +69,51 @@ function pwaServiceWorker() {
   }
 }
 
+// Build number: when it was built, India time, YYMMDD.HHMM (always goes up), plus the commit.
+// Shown in the app and served as /version.json so a deploy can be checked from anywhere.
+function buildInfo(command) {
+  if (command !== 'build') return { number: 'dev', sha: '', branch: '', time: '' }
+  const git = (args) => {
+    try { return execSync(`git ${args}`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() } catch { return '' }
+  }
+  const now = new Date()
+  const ist = new Date(now.getTime() + 330 * 60 * 1000)
+  const two = (n) => String(n).padStart(2, '0')
+  const number = `${String(ist.getUTCFullYear()).slice(2)}${two(ist.getUTCMonth() + 1)}${two(ist.getUTCDate())}.${two(ist.getUTCHours())}${two(ist.getUTCMinutes())}`
+  return {
+    number,
+    sha: (process.env.VERCEL_GIT_COMMIT_SHA || git('rev-parse HEAD')).slice(0, 7),
+    branch: process.env.VERCEL_GIT_COMMIT_REF || git('rev-parse --abbrev-ref HEAD'),
+    time: now.toISOString(),
+  }
+}
+
+function versionFile(info) {
+  return {
+    name: '3rtc-version-file',
+    apply: 'build',
+    writeBundle(options) {
+      fs.writeFileSync(path.join(options.dir, 'version.json'), JSON.stringify(info, null, 2))
+    },
+  }
+}
+
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => ({
-  plugins: [react(), pwaServiceWorker()],
-  // Keep the browser console empty in the live app. Vite 8 minifies with Oxc, which ignores the
-  // old `esbuild.drop` option, so console/debugger are dropped by the minifier itself.
-  build: {
-    rolldownOptions: {
-      output: {
-        minify: mode === 'production'
-          ? { compress: { dropConsole: true, dropDebugger: true } }
-          : false,
+export default defineConfig(({ mode, command }) => {
+  const build = buildInfo(command)
+  return {
+    plugins: [react(), pwaServiceWorker(), versionFile(build)],
+    define: { __APP_BUILD__: JSON.stringify(build) },
+    // Keep the browser console empty in the live app. Vite 8 minifies with Oxc, which ignores the
+    // old `esbuild.drop` option, so console/debugger are dropped by the minifier itself.
+    build: {
+      rolldownOptions: {
+        output: {
+          minify: mode === 'production'
+            ? { compress: { dropConsole: true, dropDebugger: true } }
+            : false,
+        },
       },
     },
-  },
-}))
+  }
+})
