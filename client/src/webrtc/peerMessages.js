@@ -27,7 +27,8 @@ export function createPeerMessageHandler(ctx) {
                     username: data.username || `User_${targetPeerId.slice(0, 4)}`,
                     isHost: Boolean(data.isHost),
                     isMuted: Boolean(data.isMuted),
-                    ...(data.proto ? { proto: data.proto } : {})
+                    ...(data.proto ? { proto: data.proto } : {}),
+                    ...(typeof data.build === 'string' ? { build: data.build.slice(0, 20) } : {})
                 }
             }));
             if (!data.isReply) {

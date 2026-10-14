@@ -17,6 +17,7 @@ import { attachRemoteAudio } from './remoteAudio';
 import { attachPeerRecovery } from './peerRecovery';
 import { createPeerMessageHandler } from './peerMessages';
 import { processSignalingMessage } from './signalingMessages';
+import { BUILD } from '../version';
 import { useSignalingConnection } from '../hooks/useSignalingConnection';
 
 const WAITING_TEXT = 'Waiting for peer to enter 5-digit code...';
@@ -89,6 +90,7 @@ export function usePeerMesh(ctx) {
         isHost: isHostRef.current,
         isMuted: isMicMutedRef.current,
         proto: PROTOCOL_VERSION,
+        build: BUILD.number,
         ...(identityFieldsRef.current?.() || {})
     }), [peerIdRef, isHostRef, isMicMutedRef]);
 

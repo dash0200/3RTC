@@ -10797,3 +10797,33 @@ video::cue {
 .chat-quick-reactions-dock::-webkit-scrollbar { display: none; }
 .chat-quick-reactions-dock .quick-reaction-dock-btn { flex: 0 1 auto; min-width: 26px; height: auto; aspect-ratio: 1; }
 .quick-reaction-edit-btn { color: var(--text-secondary); }
+
+/* Build number (home footer, Peers tab): which deploy this is */
+.build-label {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  text-align: center;
+  opacity: 0.8;
+}
+.card-build {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.card-build.is-older { color: #f2c94c; }
+.card-build-tag {
+  padding: 0 5px;
+  border-radius: 5px;
+  background: rgba(242, 183, 5, 0.18);
+  color: #f2c94c;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

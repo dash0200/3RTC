@@ -44,6 +44,7 @@ import ActivityStage from './features/activities/ActivityStage';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
+import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 
 const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
 // Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
@@ -84,6 +85,7 @@ export default function App() {
     // ---- the room: who is connected, and the bus every feature talks through ------------------
     const notices = useNotices();
     const { showToast, addSystemMessage } = notices;
+    useNewVersionNotice(showToast);
     const peerIdRef = useRef(crypto.randomUUID());
     const peersRef = useRef(new Map()); // peerId -> peer entry (webrtc/usePeerMesh.js)
     const isHostRef = useRef(false);
@@ -273,7 +275,8 @@ export default function App() {
                 isHost: Boolean(meta.isHost),
                 isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceState.isMuted !== undefined ? voiceState.isMuted : true),
                 volume: peerVolumes[peerId] !== undefined ? peerVolumes[peerId] : 1.0,
-                isLocalMuted: Boolean(localMutedPeers[peerId])
+                isLocalMuted: Boolean(localMutedPeers[peerId]),
+                build: meta.build || null
             });
         }
         return list;
