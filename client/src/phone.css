@@ -1048,3 +1048,12 @@
   height: 72dvh;
   max-height: none;
 }
+/* "Chat" on in the game bar: a smaller game, so the chat messages fit below it */
+.phone-app .stage-section.stage-phone:has(.stage-activity.is-chat-split) {
+  height: 56dvh;
+}
+/* Phone bar: the three buttons stay on one line */
+.phone-app .activity-bar { gap: 6px; padding: 8px 10px; }
+.phone-app .activity-bar-meta { display: none; }
+.phone-app .activity-bar .activity-bar-btn,
+.phone-app .activity-bar .activity-close-btn { padding: 6px 10px; }
