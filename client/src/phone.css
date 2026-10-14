@@ -1029,3 +1029,22 @@
   width: 100%;
   margin-bottom: 10px;
 }
+
+.phone-app .phone-lock-pill {
+  margin-left: auto;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.phone-app .phone-lock-pill + .phone-status-pill {
+  margin-left: 6px;
+}
+
+/* An activity (game) open: the stage grows so the board fits; the activity scrolls inside */
+.phone-app .stage-section.stage-phone:has(.stage-activity) {
+  aspect-ratio: auto;
+  height: 72dvh;
+  max-height: none;
+}
