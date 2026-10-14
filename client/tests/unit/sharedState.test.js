@@ -1,0 +1,145 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { createSharedStore, pickAuthority } from '../../src/core/sharedState.js';
+import { createFakeNetwork } from './fakeRoom.js';
+
+// A tiny turn-based game: only the player whose turn it is may add; only the host may reset
+const initial = { total: 0, turn: null };
+function reducer(state, action, meta) {
+    if (action.kind === 'add') {
+        if (state.turn && state.turn !== meta.by) return state; // not your turn
+        return { total: state.total + action.n, turn: action.next || null };
+    }
+    if (action.kind === 'reset') return meta.isHost ? initial : state;
+    return state;
+}
+
+function room3() {
+    const net = createFakeNetwork();
+    const apps = [net.addPeer('h', { isHost: true }), net.addPeer('a'), net.addPeer('b')];
+    const stores = {};
+    for (const app of apps) stores[app.id] = createSharedStore(app.bus, app.room, 'game', { initial, reducer });
+    net.connect('h', 'a');
+    net.connect('h', 'b');
+    net.connect('a', 'b');
+    return { net, apps, stores };
+}
+
+describe('pickAuthority', () => {
+    it('is the host when present', () => {
+        assert.equal(pickAuthority('a', false, [{ peerId: 'z', isHost: true }, { peerId: 'b', isHost: false }]), 'z');
+        assert.equal(pickAuthority('a', true, [{ peerId: 'z', isHost: false }]), 'a');
+    });
+    it('falls back to the smallest id, so every app picks the same peer', () => {
+        assert.equal(pickAuthority('m', false, [{ peerId: 'q' }, { peerId: 'c' }]), 'c');
+        assert.equal(pickAuthority('a', false, []), 'a');
+    });
+});
+
+describe('shared state', () => {
+    it("a guest's action goes to the host, and everyone ends with the same state", async () => {
+        const { net, stores } = room3();
+        await net.flush();
+        stores.a.dispatch({ kind: 'add', n: 5 });
+        await net.flush();
+        for (const id of ['h', 'a', 'b']) {
+            assert.deepEqual(stores[id].getState(), { total: 5, turn: null });
+            assert.equal(stores[id].getVersion(), 1);
+        }
+    });
+
+    it('the reducer rejects actions using who really sent them', async () => {
+        const { net, stores } = room3();
+        stores.h.dispatch({ kind: 'add', n: 1, next: 'a' }); // now it's a's turn
+        await net.flush();
+        stores.b.dispatch({ kind: 'add', n: 100 });          // b may not
+        await net.flush();
+        assert.equal(stores.h.getState().total, 1);
+        stores.a.dispatch({ kind: 'add', n: 2 });
+        await net.flush();
+        assert.equal(stores.b.getState().total, 3);
+        stores.a.dispatch({ kind: 'reset' });                // only the host may reset
+        await net.flush();
+        assert.equal(stores.h.getState().total, 3);
+    });
+
+    it('a late joiner gets the current state', async () => {
+        const { net, stores } = room3();
+        stores.h.dispatch({ kind: 'add', n: 7 });
+        await net.flush();
+        const late = net.addPeer('late');
+        const lateStore = createSharedStore(late.bus, late.room, 'game', { initial, reducer });
+        net.connect('h', 'late');
+        await net.flush();
+        assert.equal(lateStore.getState().total, 7);
+    });
+
+    it('a store created after connecting asks for the state (lazy-loaded feature)', async () => {
+        const net = createFakeNetwork();
+        const host = net.addPeer('h', { isHost: true });
+        const guest = net.addPeer('g');
+        const hostStore = createSharedStore(host.bus, host.room, 'game', { initial, reducer });
+        net.connect('h', 'g');
+        hostStore.dispatch({ kind: 'add', n: 4 });
+        await net.flush();
+        const guestStore = createSharedStore(guest.bus, guest.room, 'game', { initial, reducer });
+        await net.flush();
+        assert.equal(guestStore.getState().total, 4);
+    });
+
+    it('when the host leaves, the next authority carries on', async () => {
+        const { net, stores } = room3();
+        stores.a.dispatch({ kind: 'add', n: 1 });
+        await net.flush();
+        net.disconnect('h', 'a');
+        net.disconnect('h', 'b');
+        stores.b.dispatch({ kind: 'add', n: 1 });            // 'a' (smallest id) decides now
+        await net.flush();
+        assert.equal(stores.a.getState().total, 2);
+        assert.equal(stores.b.getState().total, 2);
+    });
+
+    it('ignores older versions and other keys', async () => {
+        const { net, apps, stores } = room3();
+        stores.h.dispatch({ kind: 'add', n: 3 });
+        await net.flush();
+        const a = apps[1];
+        a.bus.dispatch({ type: 'room-state', key: 'game', v: 1, state: { total: 999 } }, 'h');
+        a.bus.dispatch({ type: 'room-state', key: 'other', v: 50, state: { total: 999 } }, 'h');
+        assert.equal(stores.a.getState().total, 3);
+    });
+
+    it('actions sent to a peer that is not the authority are ignored', async () => {
+        const { net, apps, stores } = room3();
+        apps[2].bus.dispatch({ type: 'room-state-action', key: 'game', action: { kind: 'add', n: 50 } }, 'a');
+        await net.flush();
+        assert.equal(stores.b.getState().total, 0);
+    });
+
+    it('a throwing reducer never breaks the room', () => {
+        const net = createFakeNetwork();
+        const host = net.addPeer('h', { isHost: true });
+        const store = createSharedStore(host.bus, host.room, 'x', { initial: 0, reducer: () => { throw new Error('bad'); } });
+        assert.doesNotThrow(() => store.dispatch({}));
+        assert.equal(store.getState(), 0);
+    });
+
+    it('leaving the room resets it', async () => {
+        const { net, apps, stores } = room3();
+        stores.h.dispatch({ kind: 'add', n: 3 });
+        await net.flush();
+        apps[1].bus.emitEvent('room-left');
+        assert.deepEqual(stores.a.getState(), initial);
+        assert.equal(stores.a.getVersion(), 0);
+    });
+
+    it('subscribers hear about every change', async () => {
+        const { net, stores } = room3();
+        let heard = 0;
+        stores.b.subscribe(() => { heard += 1; });
+        stores.a.dispatch({ kind: 'add', n: 1 });
+        stores.a.dispatch({ kind: 'add', n: 1 });
+        await net.flush();
+        assert.equal(heard, 2);
+    });
+});
