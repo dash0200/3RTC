@@ -1041,3 +1041,10 @@
 .phone-app .phone-lock-pill + .phone-status-pill {
   margin-left: 6px;
 }
+
+/* An activity (game) open: the stage grows so the board fits; the activity scrolls inside */
+.phone-app .stage-section.stage-phone:has(.stage-activity) {
+  aspect-ratio: auto;
+  height: 72dvh;
+  max-height: none;
+}

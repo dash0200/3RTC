@@ -37,6 +37,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `host_controls` | "only I control playback", wake lock, chat timestamps |
 | `queue` | Quick Watch queue buttons, Play queue, browse window, phone sheet |
 | `activities` | start, shared state, late joiner, host lock, close, leave (dev sample activity) |
+| `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
 | `room_basics` | reactions, soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
 | `stream` | sharing a local video: on-demand streaming, seeking, cancel |
