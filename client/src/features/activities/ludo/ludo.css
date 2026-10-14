@@ -51,10 +51,13 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   color: var(--text-primary);
+  /* sized to fit next to the board; on a very short window it still scrolls, just without a bar */
+  scrollbar-width: none;
 }
-.ludo-status { margin: 0; font-size: 15px; line-height: 1.4; min-height: 42px; }
+.ludo-panel::-webkit-scrollbar { display: none; }
+.ludo-status { margin: 0; font-size: 15px; line-height: 1.4; }
 
 .ludo-dice-row { display: flex; align-items: center; gap: 14px; }
 .ludo-dice { width: 56px; height: 56px; flex: none; }
@@ -74,11 +77,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-radius: 10px;
   background: var(--bg-surface);
   border: 1px solid transparent;
-  min-height: 40px;
+  min-height: 36px;
 }
 .ludo-seat.is-turn { border-color: var(--border-active); background: var(--bg-hover); }
 .ludo-seat-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; display: inline-block; vertical-align: middle; }
@@ -101,13 +104,25 @@
 }
 .ludo-mini-btn:hover { background: var(--bg-hover); }
 
-.ludo-rules { display: flex; flex-direction: column; gap: 6px; }
+.ludo-rules { display: flex; flex-direction: column; gap: 4px; }
 .ludo-rules-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-top: 4px; }
-.ludo-rule { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-secondary); cursor: pointer; }
+.ludo-rule { display: flex; align-items: center; gap: 8px; font-size: 13.5px; line-height: 1.35; color: var(--text-secondary); cursor: pointer; }
 .ludo-rule input { accent-color: var(--accent-red); width: 16px; height: 16px; }
 .ludo-start-btn { margin-top: 8px; }
 .ludo-hint { color: var(--text-muted); font-size: 13px; margin: 4px 0 0; }
 .ludo-over ol { margin: 0 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+
+/* Short desktop windows: tighten the lobby so it still fits beside the board */
+@media (min-width: 761px) and (max-height: 760px) {
+  .ludo { padding: 10px 16px; }
+  .ludo-panel { gap: 8px; }
+  .ludo-seats { gap: 4px; }
+  .ludo-seat { min-height: 32px; padding: 4px 10px; }
+  .ludo-rules { gap: 2px; }
+  .ludo-rule { font-size: 13px; }
+  .ludo-rules-title { margin-top: 2px; font-size: 11px; }
+  .ludo-start-btn { margin-top: 4px; }
+}
 
 /* Narrow (phones, small windows): board on top, panel below */
 @media (max-width: 760px) {

@@ -153,14 +153,12 @@ export function useStreamTransfer({ room, playback }) {
                 : `📡 Streaming "${data.fileName}" from ${data.sender || 'peer'} (plays while it loads).`);
             return;
         }
-        // Whole file pushed in chunks
-        room.log(`📡 Receiving video stream from ${data.sender || 'Peer'}: "${data.fileName}" (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB)`);
-        room.notify(`Streaming "${data.fileName}"...`);
+        // Whole file pushed in chunks (this browser can't stream on demand): plays when it's all here
+        room.log(`📡 Downloading "${data.fileName}" (${(data.fileSize / (1024 * 1024)).toFixed(1)} MB) from ${data.sender || 'Peer'}: this browser can't stream on demand, so it plays when the download finishes`);
+        room.notify('This browser can\'t stream on demand: the video plays once it has downloaded. Reloading the page may fix it.');
         const receiver = new P2PStreamReceiver(data, {
-            onReady: (blobUrl, meta) => {
-                setStreamVideoUrl(blobUrl);
-                setStreamProgress((prev) => ({ ...(prev || {}), isReady: true, percent: meta.percent }));
-            },
+            // A partial file can't be played (no length, no index), so the player gets it when complete
+            onReady: () => { },
             onProgress: (prog) => setStreamProgress((prev) => ({ ...(prev || {}), ...prog })),
             onComplete: (blobUrl, meta) => {
                 setStreamVideoUrl(blobUrl);
@@ -176,7 +174,7 @@ export function useStreamTransfer({ room, playback }) {
         streamReceiverRef.current = receiver;
         setStreamProgress({
             percent: 0, speedMBs: 0, receivedBytes: 0, totalBytes: data.fileSize, receivedChunksCount: 0,
-            totalChunks: data.totalChunks, fileName: data.fileName, isReady: false
+            totalChunks: data.totalChunks, fileName: data.fileName, isReady: false, wholeFile: true
         });
     });
 

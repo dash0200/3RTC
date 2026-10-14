@@ -2,6 +2,15 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
 import FloatingReactions from './FloatingReactions';
 
+// Whole-file download (no on-demand streaming in this browser): rough time left
+const wholeFileEta = (p) => {
+  const left = (p.totalBytes || 0) - (p.receivedBytes || 0);
+  const speed = (p.speedMBs || 0) * 1024 * 1024;
+  if (!(left > 0) || !(speed > 0)) return '';
+  const min = Math.ceil(left / speed / 60);
+  return min >= 60 ? `, ~${Math.floor(min / 60)} h ${min % 60} min left` : `, ~${min} min left`;
+};
+
 export function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
   const mins = Math.floor(seconds / 60);
@@ -1088,9 +1097,11 @@ export default function LocalVideoSyncPlayer({
                           <span className="p2p-pulse-dot"></span>
                           {streamProgress.isCompleted
                             ? '✅ Ready to play!'
-                            : streamProgress.isReady
-                              ? '▶️ Buffered initial chunks!'
-                              : '📡 Receiving chunks...'}
+                            : streamProgress.wholeFile
+                              ? `⬇️ Downloading, plays when done${wholeFileEta(streamProgress)}`
+                              : streamProgress.isReady
+                                ? '▶️ Buffered initial chunks!'
+                                : '📡 Receiving chunks...'}
                         </span>
                         <span className="p2p-stream-prog-percent">{streamProgress.percent || 0}%</span>
                       </div>
@@ -1297,7 +1308,9 @@ export default function LocalVideoSyncPlayer({
             <span className="local-filename-text">{activeFileName}</span>
             {streamProgress && (
               <span className="local-filesize-text">
-                ({streamProgress.percent}% {streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`})
+                {streamProgress.wholeFile && !streamProgress.isCompleted
+                  ? `(downloading ${streamProgress.percent || 0}% • plays when done${wholeFileEta(streamProgress)})`
+                  : `(${streamProgress.percent}% ${streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`})`}
               </span>
             )}
             <button
