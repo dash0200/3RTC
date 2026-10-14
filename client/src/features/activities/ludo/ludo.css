@@ -138,4 +138,9 @@
   .ludo-phase-playing .ludo-seat { padding: 6px 8px; min-height: 0; gap: 6px; }
   .ludo-phase-playing .ludo-seat-name { font-size: 13px; }
   .ludo-phase-playing .ludo-seat-home { font-size: 11px; }
+  /* Chat shown below the game: smaller board; while playing, the seats give way (the board and
+     the status line already say whose turn it is) */
+  .is-chat-split .ludo-board-wrap { width: min(100%, calc(56dvh - 150px)); }
+  .is-chat-split .ludo-phase-playing .ludo-seats { display: none; }
+  .is-chat-split .ludo-status { font-size: 13px; }
 }
