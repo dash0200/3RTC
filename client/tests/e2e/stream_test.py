@@ -99,6 +99,27 @@ with sync_playwright() as p:
     back = wait(lambda: 2 < (vstate(guest) or {}).get('t', 99) < 10 and vstate(guest)['rs'] >= 3, 20, 0.2)
     check('seeking back into watched part works', back, f'guest {vstate(guest)} | {pill(guest)}')
     print('progress pill:', pill(guest))
+
+    # A viewer whose page was hard-refreshed (Ctrl+Shift+R): the service worker doesn't control it,
+    # which used to fall back to downloading the whole file before anything played
+    late = b.new_context().new_page()
+    late.add_init_script(INIT); late.on('dialog', lambda d: d.accept())
+    late.goto(f'{BASE}/?room={room}')
+    wait(lambda: late.evaluate('!!navigator.serviceWorker.controller'), 10)
+    cdp = late.context.new_cdp_session(late)
+    cdp.send('Network.enable'); cdp.send('Network.setBypassServiceWorker', {'bypass': True})
+    late.reload(); late.wait_for_timeout(1500)
+    cdp.send('Network.setBypassServiceWorker', {'bypass': False})
+    check('hard-refreshed page starts without the service worker', not late.evaluate('!!navigator.serviceWorker.controller'))
+    late.get_by_role('button', name='Join Room').click()
+    lbtn = late.get_by_role('button', name=re.compile('Stream from Peer'))
+    check('hard-refreshed viewer offered the stream', wait(lambda: lbtn.count() > 0, 20))
+    t2 = time.time()
+    lbtn.first.click()
+    late_ready = wait(lambda: (vstate(late) or {}).get('rs', 0) >= 3, 30, 0.1)
+    check('hard-refreshed viewer still streams on demand (plays quickly, not after a full download)',
+          late_ready and time.time() - t2 < 12 and 'downloading' not in pill(late),
+          f'{time.time() - t2:.1f}s, controller={late.evaluate("!!navigator.serviceWorker.controller")}, {pill(late)}')
     b.close()
 
 print(f"\n{sum(results)}/{len(results)} passed")

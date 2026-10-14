@@ -140,6 +140,11 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'p2p-stream-ping' && event.ports[0]) {
     event.ports[0].postMessage({ p2pStreaming: true });
   }
+  // A page this worker doesn't control yet (hard refresh, or opened before the worker started)
+  // asks to be taken over, so it can stream on demand
+  if (event.data?.type === 'p2p-claim') {
+    event.waitUntil(self.clients.claim());
+  }
 });
 
 /** Ask a page for the stream; resolves with { port, meta } from the page that has it. */
