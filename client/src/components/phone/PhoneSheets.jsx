@@ -234,6 +234,7 @@ function SwitchRow({ icon, title, sub, checked, onChange }) {
 }
 
 const MoreIcon = {
+  lock: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>,
   noise: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h3l3-7 4 14 3-7h5" /></svg>,
   ptt: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>,
   sliders: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" /></svg>,
@@ -256,7 +257,12 @@ export function MoreSheet({
   onOpenQrCode,
   roomId,
   onOpenServerSettings,
-  onLeaveRoom
+  onLeaveRoom,
+  isHost = false,
+  playbackLock = false,
+  onTogglePlaybackLock,
+  activityMenu = [],
+  onStartActivity
 }) {
   const isolationOn = Boolean(audioSettings?.voiceIsolation);
   const isPtt = audioSettings?.inputMode === 'ptt';
@@ -291,8 +297,49 @@ export function MoreSheet({
         </button>
       </div>
 
+      {roomId && activityMenu.length > 0 && (
+        <>
+          <div className="phone-section-label">PLAY TOGETHER</div>
+          <div className="phone-group">
+            {activityMenu.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="phone-row"
+                disabled={Boolean(a.disabledReason) || a.isOpen}
+                onClick={then(() => onStartActivity?.(a.id))}
+              >
+                <span className="phone-row-icon" aria-hidden="true">{a.icon}</span>
+                <span className="phone-row-text">
+                  <span>{a.name}</span>
+                  <span className="phone-row-sub">{a.isOpen ? 'Open now' : (a.disabledReason || a.description)}</span>
+                </span>
+                {Chevron}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       <div className="phone-section-label">ROOM</div>
       <div className="phone-group">
+        {isHost ? (
+          <SwitchRow
+            icon={MoreIcon.lock}
+            title="Only I control playback"
+            sub="Others can't pause, seek or change the video"
+            checked={playbackLock}
+            onChange={onTogglePlaybackLock}
+          />
+        ) : playbackLock ? (
+          <div className="phone-row phone-row-static">
+            <span className="phone-row-icon" aria-hidden="true">{MoreIcon.lock}</span>
+            <span className="phone-row-text">
+              <span>The host controls playback</span>
+              <span className="phone-row-sub">You can still chat, talk and add to the queue</span>
+            </span>
+          </div>
+        ) : null}
         <button type="button" className="phone-row" onClick={then(onOpenSoundboard)}>
           <span className="phone-row-icon" aria-hidden="true">{MoreIcon.music}</span>
           <span className="phone-row-text">Soundboard</span>

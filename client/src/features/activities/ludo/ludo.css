@@ -1,0 +1,126 @@
+/* Ludo (features/activities/ludo). Loaded with the game, not with the app. */
+.ludo {
+  --ludo-red: #e53935;
+  --ludo-green: #2e9e48;
+  --ludo-yellow: #f2b705;
+  --ludo-blue: #1e7fe0;
+  display: flex;
+  gap: 20px;
+  padding: 16px;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.ludo-board-wrap {
+  flex: 0 1 auto;
+  height: 100%;
+  max-height: 100%;
+  aspect-ratio: 1;
+  min-width: 0;
+  display: flex;
+}
+.ludo-board { width: 100%; height: 100%; display: block; border-radius: 10px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45); }
+.ludo-board-bg { fill: #f6f1e7; }
+.ludo-cell { fill: #fffdf8; stroke: #c9c1b1; stroke-width: 0.03; }
+.ludo-star { font-size: 0.62px; fill: #9a907e; pointer-events: none; }
+.ludo-start-dot { fill: rgba(255, 255, 255, 0.85); pointer-events: none; }
+
+.ludo-c-red { fill: var(--ludo-red); background: var(--ludo-red); }
+.ludo-c-green { fill: var(--ludo-green); background: var(--ludo-green); }
+.ludo-c-yellow { fill: var(--ludo-yellow); background: var(--ludo-yellow); }
+.ludo-c-blue { fill: var(--ludo-blue); background: var(--ludo-blue); }
+.ludo-c-none { fill: #ddd; }
+
+.ludo-base { stroke: rgba(0, 0, 0, 0.12); stroke-width: 0.04; transition: filter 0.3s; }
+.ludo-base.is-turn { filter: brightness(1.12) saturate(1.15); }
+.ludo-base-inner { fill: #fffdf8; }
+.ludo-slot { opacity: 0.28; }
+.ludo-tri { stroke: rgba(0, 0, 0, 0.1); stroke-width: 0.03; }
+
+.ludo-token { transition: transform 0.12s ease-out; }
+.ludo-token-body { stroke: #fff; stroke-width: 0.09; filter: drop-shadow(0 0.05px 0.06px rgba(0, 0, 0, 0.45)); }
+.ludo-token-dot { fill: rgba(255, 255, 255, 0.55); }
+.ludo-token.is-movable { cursor: pointer; }
+.ludo-token-ring { fill: none; stroke: #111; stroke-width: 0.07; stroke-dasharray: 0.25 0.15; animation: ludo-spin 1.6s linear infinite; }
+@keyframes ludo-spin { to { stroke-dashoffset: -2; } }
+
+.ludo-panel {
+  flex: 0 0 280px;
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--text-primary);
+}
+.ludo-status { margin: 0; font-size: 15px; line-height: 1.4; min-height: 42px; }
+
+.ludo-dice-row { display: flex; align-items: center; gap: 14px; }
+.ludo-dice { width: 56px; height: 56px; flex: none; }
+.ludo-dice-face { stroke: rgba(255, 255, 255, 0.85); stroke-width: 0.1; }
+.ludo-dice-pip { fill: #fff; }
+.ludo-dice.is-rolling { animation: ludo-roll 0.45s ease-out; }
+@keyframes ludo-roll {
+  0% { transform: rotate(0) scale(0.8); }
+  50% { transform: rotate(200deg) scale(1.1); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+.ludo-roll-btn { min-width: 110px; font-size: 16px; }
+.ludo-dice-note { color: var(--text-secondary); font-size: 14px; }
+
+.ludo-seats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ludo-seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg-surface);
+  border: 1px solid transparent;
+  min-height: 40px;
+}
+.ludo-seat.is-turn { border-color: var(--border-active); background: var(--bg-hover); }
+.ludo-seat-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; display: inline-block; vertical-align: middle; }
+.ludo-seat-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.ludo-seat-name em { color: var(--text-muted); font-style: normal; }
+.ludo-seat-home { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ludo-seat-actions { display: flex; gap: 6px; }
+.ludo-tag { margin-left: 6px; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--bg-hover); color: var(--text-secondary); }
+.ludo-tag-place { background: rgba(242, 183, 5, 0.18); color: #f2c94c; }
+.ludo-mini-btn {
+  border: 1px solid var(--border-active);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ludo-mini-btn:hover { background: var(--bg-hover); }
+
+.ludo-rules { display: flex; flex-direction: column; gap: 6px; }
+.ludo-rules-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-top: 4px; }
+.ludo-rule { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-secondary); cursor: pointer; }
+.ludo-rule input { accent-color: var(--accent-red); width: 16px; height: 16px; }
+.ludo-start-btn { margin-top: 8px; }
+.ludo-hint { color: var(--text-muted); font-size: 13px; margin: 4px 0 0; }
+.ludo-over ol { margin: 0 0 12px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+
+/* Narrow (phones, small windows): board on top, panel below */
+@media (max-width: 760px) {
+  .ludo { flex-direction: column; align-items: stretch; padding: 10px; gap: 10px; overflow-y: auto; justify-content: flex-start; }
+  /* board, then dice: both visible without scrolling (the stage is ~72% of the screen) */
+  .ludo-board-wrap { width: min(100%, calc(72dvh - 190px)); height: auto; max-height: none; align-self: center; }
+  .ludo-panel { flex: none; max-height: none; overflow: visible; gap: 10px; }
+  .ludo-status { min-height: 0; font-size: 14px; }
+  .ludo-dice { width: 46px; height: 46px; }
+  .ludo-dice-row { gap: 12px; }
+  /* during a game the four seats fit in two rows */
+  .ludo-phase-playing .ludo-seats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .ludo-phase-playing .ludo-seat { padding: 6px 8px; min-height: 0; gap: 6px; }
+  .ludo-phase-playing .ludo-seat-name { font-size: 13px; }
+  .ludo-phase-playing .ludo-seat-home { font-size: 11px; }
+}

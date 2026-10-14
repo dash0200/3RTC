@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
 import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
-import FloatingReactions, { LIVE_REACTIONS } from './FloatingReactions';
+import FloatingReactions from './FloatingReactions';
+import { useReactionSet, openReactionsEditor } from '../features/reactions/reactionSet';
 import { PeerAudioPopover, getInitials } from './PeerVoiceRoster';
 import { getAvatarColor } from '../utils/sound';
 import { useLiveVoiceUsers } from '../utils/speakingActivity';
@@ -34,6 +35,8 @@ export default function Stage({
   onCloseLocalVideo,
   onBroadcastAction,
   remoteAction,
+  playbackLock = false,
+  onTogglePlaybackLock,
   onRegisterStateGetter,
   isMicMuted = true,
   isAudioBlocked = false,
@@ -48,7 +51,7 @@ export default function Stage({
   onOpenQueue,
   activeVideoTitle = '',
   username = '',
-  floatingReactions = [],
+  reactionFeed,
   onSendReaction,
   // Feature 1.4: WebRTC Direct Video Streaming
   streamProgress = null,
@@ -75,9 +78,15 @@ export default function Stage({
   // Phone layout: only the video area (the phone shell has its own bars); overlays for the
   // empty state and for a peer's video offer sit on top of the still-mounted players
   layout = 'desktop',
-  onOpenAddVideo
+  onOpenAddVideo,
+  // Activities (features/activities): the open one is shown over the stage; the menu starts one
+  activitySlot = null,
+  activityMenu = [],
+  onStartActivity
 }) {
   const isPhone = layout === 'phone';
+  const quickReactions = useReactionSet();
+  const reactionKeysLabel = quickReactions.length >= 10 ? '1-9, 0' : `1-${quickReactions.length}`;
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const localFileInputRef = useRef(null);
 
@@ -240,7 +249,7 @@ export default function Stage({
 
               <h1 className="stage-title">3RTC Watch Party</h1>
               <p className="stage-subtitle">
-                Create a room or enter an existing room with code to connect directly peer-to-peer (up to 6 people).
+                Watch together online: create a room or enter a code to connect directly peer-to-peer (up to 6 people).
                 Watch YouTube videos together.
               </p>
 
@@ -268,6 +277,7 @@ export default function Stage({
               <nav className="site-links" aria-label="About 3RTC">
                 <a href="/about">About</a>
                 <a href="/youtube-watch-party">YouTube watch party</a>
+                <a href="/watch-movies-together">Movie night</a>
                 <a href="/watch-videos-together">Your own videos</a>
                 <a href="/privacy">Privacy</a>
               </nav>
@@ -289,7 +299,7 @@ export default function Stage({
             onRequestP2PStream={onRequestP2PStream}
             onCancelP2PStream={onCancelP2PStream}
             isHost={isHost}
-            floatingReactions={floatingReactions}
+            reactionFeed={reactionFeed}
             onSendReaction={onSendReaction}
             roomId={roomId}
             isPttSpaceActive={isPttMode && (audioSettings?.pttKey === 'Space' || audioSettings?.pttKey === ' ')}
@@ -327,9 +337,11 @@ export default function Stage({
           />
         )}
 
+        {roomId && activitySlot}
+
         {/* Floating Live Reactions Overlay */}
         <FloatingReactions
-          reactions={floatingReactions}
+          feed={reactionFeed}
           onSendReaction={onSendReaction}
           showDock={false}
           hasMedia={isMediaActive}
@@ -590,19 +602,66 @@ export default function Stage({
                   <span className="dropdown-item-icon">📱</span>
                   <span>Mobile Join QR Code</span>
                 </button>
+                {roomId && (isHost ? (
+                  <button
+                    type="button"
+                    className={`dropdown-item ${playbackLock ? 'is-on' : ''}`}
+                    role="menuitemcheckbox"
+                    aria-checked={playbackLock}
+                    onClick={() => {
+                      setIsMoreMenuOpen(false);
+                      onTogglePlaybackLock?.();
+                    }}
+                    title="When on, others can't play, pause, seek or change the video (they can still chat, talk and add to the queue)"
+                  >
+                    <span className="dropdown-item-icon">{playbackLock ? '🔒' : '🔓'}</span>
+                    <span>Only I control playback</span>
+                    <span className={`dropdown-switch ${playbackLock ? 'on' : ''}`} aria-hidden="true" />
+                  </button>
+                ) : playbackLock ? (
+                  <div className="dropdown-item dropdown-item-static" role="note">
+                    <span className="dropdown-item-icon">🔒</span>
+                    <span>The host controls playback</span>
+                  </div>
+                ) : null)}
+                {roomId && activityMenu.length > 0 && (
+                  <>
+                    <div className="dropdown-divider" />
+                    <div className="dropdown-label">Play together</div>
+                    {activityMenu.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={`dropdown-item ${a.isOpen ? 'is-on' : ''}`}
+                        disabled={Boolean(a.disabledReason) || a.isOpen}
+                        title={a.disabledReason || a.description}
+                        onClick={() => {
+                          setIsMoreMenuOpen(false);
+                          onStartActivity?.(a.id);
+                        }}
+                      >
+                        <span className="dropdown-item-icon">{a.icon}</span>
+                        <span>{a.name}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
                 <div className="dropdown-divider" />
-                <div className="dropdown-label">Quick Reactions (Press 1-6):</div>
+                <div className="dropdown-label dropdown-label-row">
+                  <span>Quick reactions (keys {reactionKeysLabel})</span>
+                  <button type="button" className="dropdown-label-btn" onClick={() => { setIsMoreMenuOpen(false); openReactionsEditor(); }}>Edit</button>
+                </div>
                 <div className="dropdown-reactions-row">
-                  {LIVE_REACTIONS.map((r) => (
+                  {quickReactions.map((r) => (
                     <button
-                      key={r.id}
+                      key={r.emoji}
                       type="button"
                       className="dropdown-react-btn"
                       onClick={() => {
                         handleSelectReaction(r.emoji);
                         setIsMoreMenuOpen(false);
                       }}
-                      title={`${r.label} (Press ${r.key})`}
+                      title={`React ${r.emoji} (press ${r.key})`}
                     >
                       {r.emoji}
                     </button>

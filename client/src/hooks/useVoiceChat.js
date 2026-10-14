@@ -550,6 +550,26 @@ export function useVoiceChat(ctx) {
 
     // Construct connected peers list with volume, mute, identity & speaking status
 
+    // Leaving the room: release the mic and forget per-peer voice settings
+    const resetVoice = useCallback(() => {
+        micPipeline.teardown();
+        try {
+            localStreamRef.current?.getTracks().forEach((track) => track.stop());
+        } catch { }
+        localStreamRef.current = null;
+        for (const ref of [localSourceNodeRef, localAnalyserRef]) {
+            try { ref.current?.disconnect(); } catch { }
+            ref.current = null;
+        }
+        setIsMicMuted(true);
+        setIsAudioBlocked(false);
+        setPeerVoiceStates({});
+        setPeerVolumes({});
+        setLocalMutedPeers({});
+        speakingActivity.clearPeers();
+        speakingActivity.resetLocal();
+    }, []);
+
     return {
         isMicMuted,
         setIsMicMuted,
@@ -589,6 +609,7 @@ export function useVoiceChat(ctx) {
         handlePttPressEnd,
         toggleBlockAudio,
         handleSetPeerVolume,
-        handleToggleMutePeer
+        handleToggleMutePeer,
+        resetVoice
     };
 }

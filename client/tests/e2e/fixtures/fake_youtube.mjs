@@ -1,0 +1,48 @@
+// Fake YouTube Data API v3: /search and /videos, with a few videos that must be filtered out.
+import http from 'node:http';
+const calls = { search: 0, videos: 0, chart: 0, badKey: 0, queries: [], maxIdsPerCheck: 0 };
+const QUOTA_AFTER = Number(process.env.QUOTA_AFTER || 1e9);
+const id = (n) => (`vid${n}`.padEnd(11, 'x')).slice(0, 11);
+const BAD = { [id(2)]: 'private', [id(3)]: 'age', [id(4)]: 'region', [id(5)]: 'noembed', [id(6)]: 'upcoming' };
+function video(vid, q) {
+  const bad = BAD[vid];
+  return {
+    id: vid,
+    snippet: { title: `${q} & "friends" — a longer video title to check wrapping ${vid}`, channelTitle: 'Some Channel', liveBroadcastContent: bad === 'upcoming' ? 'upcoming' : 'none' },
+    status: { privacyStatus: bad === 'private' ? 'private' : 'public', embeddable: bad !== 'noembed', uploadStatus: 'processed' },
+    contentDetails: {
+      contentRating: bad === 'age' ? { ytRating: 'ytAgeRestricted' } : {},
+      ...(bad === 'region' ? { regionRestriction: { blocked: ['IN', 'PK'] } } : {})
+    }
+  };
+}
+http.createServer((req, res) => {
+  const u = new URL(req.url, 'http://x');
+  res.setHeader('Content-Type', 'application/json');
+  if (u.pathname === '/__calls') return res.end(JSON.stringify(calls));
+  if (u.searchParams.get('key') !== 'test-key') { calls.badKey++; res.statusCode = 400; return res.end(JSON.stringify({ error: { message: 'API key not valid' } })); }
+  if (u.pathname === '/search') {
+    if (calls.search >= QUOTA_AFTER) { res.statusCode = 403; return res.end(JSON.stringify({ error: { errors: [{ reason: 'quotaExceeded' }], message: 'quota' } })); }
+    calls.search++; calls.queries.push(u.searchParams.get('q'));
+    const ok = u.searchParams.get('videoEmbeddable') === 'true' && u.searchParams.get('type') === 'video' && u.searchParams.get('regionCode') === 'IN';
+    if (!ok) { res.statusCode = 400; return res.end('{}'); }
+    const base = calls.search * 100;
+    const items = Array.from({ length: 12 }, (_, i) => ({ id: { videoId: i < 6 ? id(i + 1) : id(base + i) } }));
+    return res.end(JSON.stringify({ items }));
+  }
+  if (u.pathname === '/videos') {
+    if (u.searchParams.get('chart') === 'mostPopular') {
+      calls.chart++;
+      calls.charts = calls.charts || {}; const cat = u.searchParams.get('videoCategoryId'); calls.charts[cat] = (calls.charts[cat] || 0) + 1;
+      if (cat === '28') { res.statusCode = 404; return res.end(JSON.stringify({ error: { errors: [{ reason: 'videoChartNotFound' }], message: 'chart not found' } })); }
+      const base = 900 + Number(cat) * 10;
+      return res.end(JSON.stringify({ items: [id(3), id(base), id(base + 1), id(base + 2), id(4)].map((v) => video(v, 'Trending ' + cat)) }));
+      return res.end(JSON.stringify({ items: [id(3), id(900), id(901), id(4)].map((v) => video(v, 'Top hit')) }));
+    }
+    calls.videos++;
+    const ids = u.searchParams.get('id').split(',');
+    calls.maxIdsPerCheck = Math.max(calls.maxIdsPerCheck, ids.length);
+    return res.end(JSON.stringify({ items: ids.map((v) => video(v, 'Result')) }));
+  }
+  res.statusCode = 404; res.end('{}');
+}).listen(9911, () => console.log('fake youtube on 9911'));

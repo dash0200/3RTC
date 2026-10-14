@@ -9,6 +9,8 @@
     "build": "vite build",
     "deploy": "python deploy_vercel.py",
     "lint": "oxlint",
+    "test": "node --import ./tests/unit/setup.mjs --test \"tests/unit/*.test.js\"",
+    "test:e2e": "python tests/e2e/run_all.py",
     "preview": "vite preview"
   },
   "dependencies": {

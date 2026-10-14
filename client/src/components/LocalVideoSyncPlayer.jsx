@@ -36,7 +36,7 @@ export default function LocalVideoSyncPlayer({
   onRequestP2PStream,
   onCancelP2PStream,
   isHost = false,
-  floatingReactions = [],
+  reactionFeed,
   onSendReaction,
   roomId = null,
   isPttSpaceActive = false
@@ -956,6 +956,67 @@ export default function LocalVideoSyncPlayer({
   const activeVideoSrc = streamVideoUrl || objectUrl;
   const isStreamed = Boolean(streamVideoUrl && !objectUrl);
   const activeFileName = file?.name || remoteMeta?.fileName || streamProgress?.fileName || 'Local Video';
+
+  // Lock screen, notification and headphone controls (Media Session API). The actions go through
+  // the normal video events, so they are synced to the room and respect the host controls lock.
+  const mediaSessionRef = useRef({});
+  mediaSessionRef.current = { seekDelta: handleSeekDelta };
+  useEffect(() => {
+    const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : null;
+    const vid = videoRef.current;
+    if (!ms || !vid || !activeVideoSrc) return undefined;
+    try {
+      ms.metadata = new MediaMetadata({
+        title: activeFileName.replace(/\.[a-z0-9]{2,4}$/i, ''),
+        artist: '3RTC · watching together',
+        artwork: [
+          { src: '/icons/pwa-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icons/pwa-512.png', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+    } catch { }
+    const actions = {
+      play: () => { vid.play().catch(() => { }); },
+      pause: () => vid.pause(),
+      seekbackward: (d) => mediaSessionRef.current.seekDelta?.(-(d?.seekOffset || 10)),
+      seekforward: (d) => mediaSessionRef.current.seekDelta?.(d?.seekOffset || 10),
+      // the 'seeked' event that follows broadcasts the new position
+      seekto: (d) => {
+        if (typeof d?.seekTime === 'number') vid.currentTime = d.seekTime;
+      }
+    };
+    for (const [name, handler] of Object.entries(actions)) {
+      try { ms.setActionHandler(name, handler); } catch { }
+    }
+    let lastPosition = 0;
+    const updatePosition = () => {
+      const now = Date.now();
+      if (now - lastPosition < 1000 || !Number.isFinite(vid.duration) || vid.duration <= 0) return;
+      lastPosition = now;
+      try {
+        ms.setPositionState({ duration: vid.duration, position: Math.min(vid.currentTime, vid.duration), playbackRate: vid.playbackRate || 1 });
+      } catch { }
+    };
+    const onPlayState = () => {
+      try { ms.playbackState = vid.paused ? 'paused' : 'playing'; } catch { }
+      lastPosition = 0;
+      updatePosition();
+    };
+    vid.addEventListener('timeupdate', updatePosition);
+    vid.addEventListener('play', onPlayState);
+    vid.addEventListener('pause', onPlayState);
+    vid.addEventListener('seeked', onPlayState);
+    return () => {
+      vid.removeEventListener('timeupdate', updatePosition);
+      vid.removeEventListener('play', onPlayState);
+      vid.removeEventListener('pause', onPlayState);
+      vid.removeEventListener('seeked', onPlayState);
+      for (const name of Object.keys(actions)) {
+        try { ms.setActionHandler(name, null); } catch { }
+      }
+      try { ms.metadata = null; ms.playbackState = 'none'; } catch { }
+    };
+  }, [activeVideoSrc, activeFileName]);
   const activeFileSize = file?.size || remoteMeta?.fileSize || streamProgress?.totalBytes || 0;
 
   // Case A: User has not loaded their copy of the video file yet AND no active stream URL
@@ -1925,7 +1986,7 @@ export default function LocalVideoSyncPlayer({
       {/* Floating Live Reactions in Fullscreen */}
       {isFullscreen && typeof onSendReaction === 'function' && (
         <FloatingReactions
-          reactions={floatingReactions}
+          feed={reactionFeed}
           onSendReaction={onSendReaction}
           showDock={Boolean(roomId)}
           hasMedia={true}
