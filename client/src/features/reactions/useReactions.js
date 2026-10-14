@@ -1,5 +1,6 @@
 /**
- * Floating emoji reactions over the video, keys 1-6 or the buttons.
+ * Floating emoji reactions over the video: keys 1-9 and 0, or the buttons. Each person picks their
+ * own set of up to 10 (reactionSet.js); any single emoji is accepted from others.
  *
  * Spam-safe by design:
  * - sending: at most ~8 a second per person (holding a key streams at that rate)
@@ -14,14 +15,14 @@ import { useCallback, useEffect, useRef } from 'react';
 import { sound } from '../../utils/sound';
 import { usePeerMessageOn } from '../../core/RoomContext';
 import { createReactionFeed } from './reactionFeed';
-import { LIVE_REACTIONS } from '../../components/FloatingReactions';
+import { isSingleEmoji } from '../../utils/emoji';
+import { getReactionSet } from './reactionSet';
 
 const SEND_GAP_MS = 115;          // ~8.7 per second while holding a key
 const COMBO_WINDOW_MS = 1200;     // same emoji again within this: the combo grows
 const BUCKET_SIZE = 10;           // incoming: burst allowance per person
 const BUCKET_REFILL_PER_S = 10;   // incoming: sustained rate per person
 const SOUND_GAP_MS = 70;
-const ALLOWED = new Set(LIVE_REACTIONS.map((r) => r.emoji));
 
 const isTypingTarget = (el) => {
     const tag = el?.tagName?.toLowerCase();
@@ -57,7 +58,7 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
     };
 
     usePeerMessageOn(bus, 'reaction', (data, from) => {
-        if (!data || !ALLOWED.has(data.emoji)) return;
+        if (!data || !isSingleEmoji(data.emoji)) return; // any one emoji: everyone picks their own set
         // token bucket per person: a flood is cut down to a steady trickle
         const now = performance.now();
         const bucket = bucketsRef.current.get(from) || { tokens: BUCKET_SIZE, at: now };
@@ -84,7 +85,7 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
 
     /** Returns the combo count (1 = first of a burst), or 0 when dropped by the rate limit. */
     const sendReaction = useCallback((emoji) => {
-        if (!ALLOWED.has(emoji)) return 0;
+        if (!isSingleEmoji(emoji)) return 0;
         const now = performance.now();
         if (now - lastSentRef.current < SEND_GAP_MS) return 0;
         lastSentRef.current = now;
@@ -99,12 +100,12 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
         return combo;
     }, [bus, feed, pop, room]);
 
-    // Keys 1-6 (holding one streams reactions at the send rate)
+    // Keys 1-9, 0 (holding one streams reactions at the send rate)
     useEffect(() => {
         if (!inRoom) return undefined;
         const onKey = (e) => {
             if (e.ctrlKey || e.metaKey || e.altKey || isTypingTarget(document.activeElement)) return;
-            const match = LIVE_REACTIONS.find((r) => r.key === e.key);
+            const match = getReactionSet().find((r) => r.key === e.key); // 1-9, 0
             if (!match) return;
             e.preventDefault();
             sendReaction(match.emoji);
