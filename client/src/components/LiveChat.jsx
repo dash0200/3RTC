@@ -576,17 +576,10 @@ export default function LiveChat({
     e.target.style.height = `${Math.min(e.target.scrollHeight, 80)}px`;
   };
 
+  // The quick-reaction row only sends a floating reaction: nothing goes into the chat or the
+  // message box (the 😊 button in the message box is for emojis in messages)
   const handleReactionClick = (emoji) => {
-    // The first tap of a burst also goes into the chat; the rest only float (no chat flood)
-    const combo = typeof onSendReaction === 'function' ? onSendReaction(emoji) : 1;
-    if (isP2PConnected && combo !== 1) return;
-    if (isP2PConnected) {
-      onSendMessage(emoji);
-      setActiveTab('chat');
-      setUnreadChatCount(0);
-    } else {
-      setInputText((prev) => prev + emoji);
-    }
+    if (typeof onSendReaction === 'function') onSendReaction(emoji);
   };
 
   return (
