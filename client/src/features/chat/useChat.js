@@ -45,7 +45,16 @@ export function useChat({ room, isChatOpen }) {
         prevLengthRef.current = messages.length;
     }, [messages.length, isChatOpen]);
 
-    usePeerMessageOn(bus, 'chat', (data) => {
+    // Older apps also post every reaction-button tap as a chat message (the reaction first, then
+    // the same emoji as text): skip those so the chat isn't flooded while people update
+    const lastReactionRef = useRef(new Map()); // peerId -> { emoji, at }
+    usePeerMessageOn(bus, 'reaction', (data, from) => {
+        if (typeof data?.emoji === 'string') lastReactionRef.current.set(from, { emoji: data.emoji, at: Date.now() });
+    });
+
+    usePeerMessageOn(bus, 'chat', (data, from) => {
+        const reaction = lastReactionRef.current.get(from);
+        if (reaction && typeof data.text === 'string' && data.text.trim() === reaction.emoji && Date.now() - reaction.at < 2500) return;
         setMessages((prev) => appendCapped(prev, { ...data, isSelf: false }));
         sound.playPop();
     });
