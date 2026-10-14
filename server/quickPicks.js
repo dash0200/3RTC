@@ -15,8 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The server searches YouTube for each category and every client reads the cached result from
 // GET /api/quick-picks, so YouTube API quota depends only on the refresh schedule, never on how
 // many people use the app. The schedule is worked out from a daily budget (default 9,000 of the
-// 10,000 free units, leaving room for restarts and retries): one refresh is 11 searches x 101
-// units + 8 one-unit trending charts = 1,119 units, so 8 refreshes a day, one every 3 hours.
+// 10,000 free units, leaving room for restarts and retries): one refresh is 11 searches x 102
+// units (search 100 + two 1-unit detail calls) + 8 one-unit trending charts = 1,130 units, so 7
+// refreshes a day, about one every 3.5 hours.
 //
 // Each refresh uses the next search phrase of every category, and new results are merged into a
 // rolling set of up to QUICK_PICKS_POOL_SIZE videos (newest first), so frequent refreshes keep
@@ -54,7 +55,7 @@ const QUICK_PICK_CATEGORIES = [
 const QUICK_PICKS_POOL_SIZE = 20; // videos kept per category (newest first)
 const QUICK_PICKS_REGION = (process.env.QUICK_PICKS_REGION || 'IN').toUpperCase(); // trending chart + region checks
 const QUICK_PICKS_DAILY_UNITS = Math.min(10000, Number(process.env.QUICK_PICKS_DAILY_UNITS) || 9000);
-const QUICK_PICKS_UNITS_PER_REFRESH = QUICK_PICK_CATEGORIES.reduce((sum, c) => sum + (c.chart ? 1 : 101), 0); // 1,119
+const QUICK_PICKS_UNITS_PER_REFRESH = QUICK_PICK_CATEGORIES.reduce((sum, c) => sum + (c.chart ? 1 : 102), 0); // 1,130
 const QUICK_PICKS_REFRESH_MS = Number(process.env.QUICK_PICKS_REFRESH_MINUTES) > 0
   ? Number(process.env.QUICK_PICKS_REFRESH_MINUTES) * 60 * 1000
   : Math.max(30 * 60 * 1000, Math.ceil((24 * 3600 * 1000) / Math.max(1, Math.floor(QUICK_PICKS_DAILY_UNITS / QUICK_PICKS_UNITS_PER_REFRESH))));
@@ -63,7 +64,7 @@ const QUICK_PICKS_CACHE_FILE = path.join(__dirname, 'quick-picks-cache.json');
 // Changes whenever the categories, phrases or region change, so a saved list from an older setup
 // is refreshed at startup instead of being served until the next scheduled refresh
 const QUICK_PICKS_CONFIG_ID = crypto.createHash('sha256')
-  .update(JSON.stringify({ region: QUICK_PICKS_REGION, categories: QUICK_PICK_CATEGORIES })).digest('hex').slice(0, 12);
+  .update(JSON.stringify({ region: QUICK_PICKS_REGION, categories: QUICK_PICK_CATEGORIES, filters: 'no-shorts-1' })).digest('hex').slice(0, 12);
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 
 let quickPicks = null; // { updatedAt, region, rotation: { [categoryId]: n }, categories: [{ id, name, videos: [{ id, title, channel }] }] }
@@ -104,35 +105,70 @@ function isPlayableEverywhere(video) {
   return true;
 }
 
+// ---- No Shorts ----------------------------------------------------------------------------
+// YouTube has no "is a Short" flag, so: a vertical (or square) picture is a Short (the embed size
+// YouTube reports for a 480-wide player shows the shape), so is anything tagged #shorts, and so
+// is anything a minute or shorter (too short for watching together anyway). Live streams have no
+// length, so the length rule skips them.
+const MIN_SECONDS = 61;
+
+/** ISO 8601 duration (PT4M13S) in seconds, or null. */
+export function parseDuration(iso) {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(iso || '');
+  if (!m) return null;
+  return (Number(m[1]) || 0) * 86400 + (Number(m[2]) || 0) * 3600 + (Number(m[3]) || 0) * 60 + (Number(m[4]) || 0);
+}
+
+export function isShort(video) {
+  const snippet = video.snippet || {};
+  const text = `${snippet.title || ''} ${snippet.description || ''} ${(snippet.tags || []).join(' ')}`;
+  if (/#shorts?\b/i.test(text)) return true;
+  const width = Number(video.player?.embedWidth);
+  const height = Number(video.player?.embedHeight);
+  if (width > 0 && height > 0 && height >= width * 0.9) return true;
+  if (snippet.liveBroadcastContent !== 'live') {
+    const seconds = parseDuration(video.contentDetails?.duration);
+    if (seconds !== null && seconds > 0 && seconds < MIN_SECONDS) return true;
+  }
+  return false;
+}
+
+const isGoodPick = (video) => isPlayableEverywhere(video) && !isShort(video);
+
 function toPick(video) {
   return { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
 }
 
 /** New videos for a category merged with its saved ones (re-checked), newest first. */
 async function fetchCategory(category, key, previousVideos, rotation) {
-  const details = 'snippet,status,contentDetails';
+  // player + maxWidth: YouTube reports the embed size, which shows vertical videos (Shorts)
+  const details = { part: 'snippet,status,contentDetails,player', maxWidth: 480 };
   if (category.chart) {
-    // 1 unit; the chart itself changes through the day
+    // 1 unit; the chart itself changes through the day (50: room to drop Shorts)
     const chart = await youtubeApi('videos', {
-      part: details, chart: 'mostPopular', videoCategoryId: category.chart, regionCode: QUICK_PICKS_REGION, maxResults: 30
+      ...details, chart: 'mostPopular', videoCategoryId: category.chart, regionCode: QUICK_PICKS_REGION, maxResults: 50
     }, key);
-    return (chart.items || []).filter(isPlayableEverywhere).slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
+    return (chart.items || []).filter(isGoodPick).slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
   }
-  // search: 100 units (YouTube filters to videos that can play outside youtube.com)
+  // search: 100 units whatever the count, so ask for 50 (room to drop Shorts). YouTube filters
+  // to videos that can play outside youtube.com.
   const query = category.queries[rotation % category.queries.length];
   const search = await youtubeApi('search', {
-    part: 'id', type: 'video', q: query, maxResults: 20, safeSearch: 'moderate',
+    part: 'id', type: 'video', q: query, maxResults: 50, safeSearch: 'moderate',
     videoEmbeddable: 'true', videoSyndicated: 'true', regionCode: QUICK_PICKS_REGION,
     ...(category.order ? { order: category.order } : {}),
     ...(category.recentDays ? { publishedAfter: new Date(Date.now() - category.recentDays * 86400000).toISOString() } : {})
   }, key);
   const newIds = (search.items || []).map((item) => item.id?.videoId).filter(Boolean);
-  // One 1-unit details call checks the new results and re-checks the saved ones (max 50 ids)
-  const ids = [...new Set([...newIds, ...previousVideos.map((v) => v.id)])].slice(0, 50);
+  // Details for the new results and a re-check of the saved ones: 1 unit per 50 ids
+  const ids = [...new Set([...newIds, ...previousVideos.map((v) => v.id)])];
   if (ids.length === 0) return [];
-  const videos = await youtubeApi('videos', { part: details, id: ids.join(',') }, key);
-  const byId = new Map((videos.items || []).map((v) => [v.id, v]));
-  return ids.map((id) => byId.get(id)).filter((v) => v && isPlayableEverywhere(v))
+  const byId = new Map();
+  for (let i = 0; i < ids.length; i += 50) {
+    const videos = await youtubeApi('videos', { ...details, id: ids.slice(i, i + 50).join(',') }, key);
+    for (const v of videos.items || []) byId.set(v.id, v);
+  }
+  return ids.map((id) => byId.get(id)).filter((v) => v && isGoodPick(v))
     .slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
 }
 
