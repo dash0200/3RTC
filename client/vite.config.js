@@ -71,7 +71,15 @@ function pwaServiceWorker() {
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: [react(), pwaServiceWorker()],
-  esbuild: {
-    drop: mode === 'production' ? ['console', 'debugger'] : [],
+  // Keep the browser console empty in the live app. Vite 8 minifies with Oxc, which ignores the
+  // old `esbuild.drop` option, so console/debugger are dropped by the minifier itself.
+  build: {
+    rolldownOptions: {
+      output: {
+        minify: mode === 'production'
+          ? { compress: { dropConsole: true, dropDebugger: true } }
+          : false,
+      },
+    },
   },
 }))

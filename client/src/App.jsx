@@ -67,6 +67,8 @@ const LOCKED_PLAYBACK_ACTIONS = new Set(['play', 'pause', 'seek', 'load', 'close
 const isLockedPlaybackAction = (type, action, payload = {}) =>
     (type === 'yt-action' || type === 'local-video-action') && LOCKED_PLAYBACK_ACTIONS.has(action) && !payload.byVote;
 
+const MAX_SYSTEM_LOGS = 200;
+
 export default function App() {
     const [signalUrl, setSignalUrl] = useState(() => {
         if (!IS_LOCAL) return DEFAULT_SIGNAL_URL;
@@ -220,8 +222,9 @@ export default function App() {
     }, []);
 
     const addSystemMessage = useCallback((text, category = 'system') => {
+        // Keep only the most recent entries so the Logs tab doesn't grow for the whole session
         setSystemLogs((prev) => [
-            ...prev,
+            ...prev.slice(-(MAX_SYSTEM_LOGS - 1)),
             {
                 id: crypto.randomUUID(),
                 text,
