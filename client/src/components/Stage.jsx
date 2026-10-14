@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
 import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
-import FloatingReactions, { LIVE_REACTIONS } from './FloatingReactions';
+import FloatingReactions from './FloatingReactions';
+import { useReactionSet, openReactionsEditor } from '../features/reactions/reactionSet';
 import { PeerAudioPopover, getInitials } from './PeerVoiceRoster';
 import { getAvatarColor } from '../utils/sound';
 import { useLiveVoiceUsers } from '../utils/speakingActivity';
@@ -84,6 +85,8 @@ export default function Stage({
   onStartActivity
 }) {
   const isPhone = layout === 'phone';
+  const quickReactions = useReactionSet();
+  const reactionKeysLabel = quickReactions.length >= 10 ? '1-9, 0' : `1-${quickReactions.length}`;
   const isPttMode = audioSettings?.inputMode === 'ptt';
   const localFileInputRef = useRef(null);
 
@@ -644,18 +647,21 @@ export default function Stage({
                   </>
                 )}
                 <div className="dropdown-divider" />
-                <div className="dropdown-label">Quick Reactions (Press 1-6):</div>
+                <div className="dropdown-label dropdown-label-row">
+                  <span>Quick reactions (keys {reactionKeysLabel})</span>
+                  <button type="button" className="dropdown-label-btn" onClick={() => { setIsMoreMenuOpen(false); openReactionsEditor(); }}>Edit</button>
+                </div>
                 <div className="dropdown-reactions-row">
-                  {LIVE_REACTIONS.map((r) => (
+                  {quickReactions.map((r) => (
                     <button
-                      key={r.id}
+                      key={r.emoji}
                       type="button"
                       className="dropdown-react-btn"
                       onClick={() => {
                         handleSelectReaction(r.emoji);
                         setIsMoreMenuOpen(false);
                       }}
-                      title={`${r.label} (Press ${r.key})`}
+                      title={`React ${r.emoji} (press ${r.key})`}
                     >
                       {r.emoji}
                     </button>

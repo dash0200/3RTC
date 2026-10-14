@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { splitTimestamps } from '../utils/chatTimestamps';
 import QuickPicksModal from './QuickPicksModal';
 import { getAvatarColor } from '../utils/sound';
+import { EMOJI_CATEGORIES } from '../utils/emoji';
+import { useReactionSet, openReactionsEditor } from '../features/reactions/reactionSet';
 
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
 const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]|\s)+$/u;
@@ -26,57 +28,7 @@ import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal from './ImageLightboxModal';
 import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 
-const QUICK_REACTIONS = ['👍', '❤️', '🔥', '👏', '😂', '🎉'];
 
-const EMOJI_CATEGORIES = [
-  {
-    id: 'smileys',
-    name: 'Smileys',
-    icon: '😀',
-    emojis: [
-      '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣', '🥹', '😊',
-      '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙',
-      '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎',
-      '🥸', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁',
-      '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😮‍💨', '😤',
-      '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰',
-      '😥', '😓', '🤗', '🫡', '🤔', '🫣', '🤭', '🫢', '🤫', '🫠'
-    ]
-  },
-  {
-    id: 'gestures',
-    name: 'Gestures',
-    icon: '👋',
-    emojis: [
-      '👋', '🤚', '🖐️', '✋', '🖖', '🫱', '🫲', '🫳', '🫴', '👌',
-      '🤌', '🤏', '✌️', '🤞', '🫰', '🤟', '🤘', '🤙', '👈', '👉',
-      '👆', '🖕', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜',
-      '👏', '🙌', '🫶', '👐', '🤲', '🤝', '🙏', '✍️', '💅', '🤳',
-      '💪', '🦾', '🦿', '🦵', '🦶', '👂', '🦻', '👃', '👀', '👁️'
-    ]
-  },
-  {
-    id: 'hearts',
-    name: 'Hearts & Vibes',
-    icon: '❤️',
-    emojis: [
-      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔',
-      '❤️‍🔥', '❤️‍🩹', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝',
-      '💟', '✨', '🌟', '⭐', '💫', '🔥', '💥', '⚡', '🎉', '🎊',
-      '🎈', '🎁', '🏆', '🥇', '👑', '💎', '💯', '💢', '💬', '🗯️'
-    ]
-  },
-  {
-    id: 'fun',
-    name: 'Fun & Food',
-    icon: '🎮',
-    emojis: [
-      '🎮', '🕹️', '🎲', '🎯', '🎳', '🎧', '🎵', '🎶', '🎤', '🎬',
-      '🍿', '🍕', '🍔', '🍟', '🌭', '🍣', '🍦', '🍩', '🍪', '🍫',
-      '🍻', '🥂', '🍾', '☕', '🧃', '🥤', '🚀', '🛸', '🏎️', '🛵'
-    ]
-  }
-];
 
 // "Look at 12:34": video timestamps become links that jump everyone there (while a video is loaded)
 function renderMessageText(text, onSeekTo) {
@@ -578,6 +530,7 @@ export default function LiveChat({
 
   // The quick-reaction row only sends a floating reaction: nothing goes into the chat or the
   // message box (the 😊 button in the message box is for emojis in messages)
+  const quickReactions = useReactionSet();
   const handleReactionClick = (emoji) => {
     if (typeof onSendReaction === 'function') onSendReaction(emoji);
   };
@@ -1021,17 +974,26 @@ export default function LiveChat({
 
               {/* Quick Reactions Dock Directly Below Input */}
               <div className="chat-quick-reactions-dock">
-                {QUICK_REACTIONS.map((emoji) => (
+                {quickReactions.map(({ emoji, key }) => (
                   <button
                     key={emoji}
                     type="button"
                     className="quick-reaction-dock-btn"
                     onClick={() => handleReactionClick(emoji)}
-                    title={`Send ${emoji}`}
+                    title={`React ${emoji} (key ${key})`}
                   >
                     {emoji}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="quick-reaction-dock-btn quick-reaction-edit-btn"
+                  onClick={openReactionsEditor}
+                  title="Choose your reactions"
+                  aria-label="Choose your reactions"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" /></svg>
+                </button>
               </div>
             </div>
           </>

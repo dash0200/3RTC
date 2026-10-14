@@ -41,6 +41,7 @@ import { useMediaSync } from './features/playback/useMediaSync';
 import { useQueue } from './features/queue/useQueue';
 import { useActivities } from './features/activities/useActivities';
 import ActivityStage from './features/activities/ActivityStage';
+import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
 
@@ -612,6 +613,8 @@ export default function App() {
                 roomId={roomId}
                 username={username}
             />
+
+            <ReactionsEditor />
 
             {notices.toastMessage && <div className="toast">{notices.toastMessage}</div>}
         </div>

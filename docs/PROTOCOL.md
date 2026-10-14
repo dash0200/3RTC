@@ -32,7 +32,7 @@ file/video frames on the bulk channel.
 |---|---|
 | `chat` | `id, sender, isHost, text` |
 | `p2p-image-start` (bulk) | `id, transferId, fileName, fileSize, mimeType, caption, …`, then binary frames starting with `IMG1` |
-| `reaction` | `id, emoji, lane, combo` (one of the six reaction emojis; receivers allow ~10 a second per person) |
+| `reaction` | `id, emoji, lane, combo` (any single emoji: each person picks their own set of up to 10; receivers allow ~10 a second per person) |
 | `soundboard-sfx` | `soundId, soundName, emoji` |
 
 ### Playback

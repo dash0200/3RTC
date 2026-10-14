@@ -9134,10 +9134,25 @@ video::cue {
 
 .dropdown-reactions-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
   padding: 4px 6px;
 }
+
+.dropdown-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dropdown-label-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent-blue);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.dropdown-label-btn:hover { background: rgba(62, 166, 255, 0.12); }
 
 .dropdown-react-btn {
   background: rgba(255, 255, 255, 0.06);
@@ -10768,3 +10783,13 @@ video::cue {
 .activity-sample-count { font-size: 64px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .activity-sample-actions { display: flex; gap: 10px; }
 .activity-sample-last { color: var(--text-secondary); margin: 0; }
+
+/* Quick reactions row under the chat box: up to 10 + the edit button; scrolls if it must */
+.chat-quick-reactions-dock {
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 4px;
+}
+.chat-quick-reactions-dock::-webkit-scrollbar { display: none; }
+.chat-quick-reactions-dock .quick-reaction-dock-btn { flex: 0 1 auto; min-width: 26px; height: auto; aspect-ratio: 1; }
+.quick-reaction-edit-btn { color: var(--text-secondary); }
