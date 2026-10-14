@@ -7,6 +7,7 @@ import { PeerAudioPopover, getInitials } from './PeerVoiceRoster';
 import { getAvatarColor } from '../utils/sound';
 import { useLiveVoiceUsers } from '../utils/speakingActivity';
 import SoundboardTray from './SoundboardTray';
+import { BUILD, BUILD_LABEL } from '../version';
 import { PhoneEmptyMedia, PhoneStreamOffer } from './phone/PhoneMediaOverlays';
 
 export default function Stage({
@@ -281,6 +282,7 @@ export default function Stage({
                 <a href="/watch-videos-together">Your own videos</a>
                 <a href="/privacy">Privacy</a>
               </nav>
+              <p className="build-label" title={BUILD.time ? `Built ${new Date(BUILD.time).toLocaleString()}${BUILD.branch ? ` from ${BUILD.branch}` : ''}` : undefined}>{BUILD_LABEL}</p>
             </div>
           </div>
         ) : (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) ? (
