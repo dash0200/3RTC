@@ -77,7 +77,11 @@ export default function Stage({
   // Phone layout: only the video area (the phone shell has its own bars); overlays for the
   // empty state and for a peer's video offer sit on top of the still-mounted players
   layout = 'desktop',
-  onOpenAddVideo
+  onOpenAddVideo,
+  // Activities (features/activities): the open one is shown over the stage; the menu starts one
+  activitySlot = null,
+  activityMenu = [],
+  onStartActivity
 }) {
   const isPhone = layout === 'phone';
   const isPttMode = audioSettings?.inputMode === 'ptt';
@@ -329,6 +333,8 @@ export default function Stage({
             onPickFile={onLocalFileSelect}
           />
         )}
+
+        {roomId && activitySlot}
 
         {/* Floating Live Reactions Overlay */}
         <FloatingReactions
@@ -615,6 +621,28 @@ export default function Stage({
                     <span>The host controls playback</span>
                   </div>
                 ) : null)}
+                {roomId && activityMenu.length > 0 && (
+                  <>
+                    <div className="dropdown-divider" />
+                    <div className="dropdown-label">Play together</div>
+                    {activityMenu.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={`dropdown-item ${a.isOpen ? 'is-on' : ''}`}
+                        disabled={Boolean(a.disabledReason) || a.isOpen}
+                        title={a.disabledReason || a.description}
+                        onClick={() => {
+                          setIsMoreMenuOpen(false);
+                          onStartActivity?.(a.id);
+                        }}
+                      >
+                        <span className="dropdown-item-icon">{a.icon}</span>
+                        <span>{a.name}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
                 <div className="dropdown-divider" />
                 <div className="dropdown-label">Quick Reactions (Press 1-6):</div>
                 <div className="dropdown-reactions-row">

@@ -4,6 +4,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES } from '../utils/networkMonitor';
+import { usePeerMessageOn } from '../core/RoomContext';
 
 // Polling produces fresh objects every time; keep the old one when nothing changed so React
 // doesn't re-render the app for identical stats
@@ -16,7 +17,7 @@ function keepIfSame(prev, next) {
 }
 
 export function useNetworkStats(ctx) {
-    const { activeVideoId, localVideoFile, peerMetadata, peersRef, roomId, showToast } = ctx;
+    const { activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast } = ctx;
 
     const [networkStats, setNetworkStats] = useState({
         avgPingMs: null,
@@ -223,6 +224,14 @@ export function useNetworkStats(ctx) {
         }
         showToast('Ping probe sent to mesh peers');
     }, [showToast]);
+
+    // Ping probes over the data channel: answer theirs, time ours
+    usePeerMessageOn(bus, 'net-ping', (data, from) => {
+        bus.send(from, 'net-pong', { pingId: data.pingId, sendTime: data.sendTime });
+    });
+    usePeerMessageOn(bus, 'net-pong', (data, from) => {
+        recordPeerPing(from, Math.max(1, Math.round(performance.now() - (data.sendTime || 0))));
+    });
 
     return {
         networkStats,
