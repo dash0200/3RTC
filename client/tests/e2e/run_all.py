@@ -19,7 +19,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ORDER = [
     'connection', 'chat_attach', 'youtube_sync', 'youtube_unavailable', 'host_controls', 'queue',
-    'activities', 'room_basics', 'phone_layout', 'stream', 'local_video_sync', 'media_session', 'six_people',
+    'activities', 'ludo', 'room_basics', 'phone_layout', 'stream', 'local_video_sync', 'media_session', 'six_people',
 ]
 
 

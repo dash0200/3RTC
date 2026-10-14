@@ -15,7 +15,7 @@
  */
 
 const SHIPPED = [
-    // { id: 'chess', name: 'Chess', icon: '♟️', description: 'Two players, everyone else watches', minPeople: 2, load: () => import('./chess/index.jsx') },
+    { id: 'ludo', name: 'Ludo', icon: '🎲', description: '2–4 players (or play the computer), everyone else watches', minPeople: 1, load: () => import('./ludo/index.jsx') },
 ];
 
 // Development-only example (localhost / dev builds): shows the whole flow end to end

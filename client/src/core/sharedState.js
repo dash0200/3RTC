@@ -14,8 +14,10 @@
  *   if the result is a new object, it bumps the version and broadcasts the whole state. Returning
  *   the same state rejects the action (illegal move, not your turn...). `meta.by` is the peer the
  *   action really came from (taken from the connection, not from the message), so a player can't
- *   act for someone else. meta also has `isHost` (of that peer), `selfId` and `settings` (room
- *   settings such as { playbackLock }, as the authority sees them).
+ *   act for someone else. meta also has `isHost` (of that peer), `selfId` (the authority itself,
+ *   so `meta.by === meta.selfId` means the authority sent it), `hostId` (null if the host is
+ *   away), `present` (ids of everyone connected, the authority included) and `settings` (room
+ *   settings such as { playbackLock }), all as the authority sees them.
  * - Versions only go up; a peer keeps the highest version it has seen.
  * - Late joiners: a new store asks the room for its state, and the authority sends its state to
  *   every peer whose channel opens. A reset is just another action, so it also syncs.
@@ -50,7 +52,15 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
     const apply = (action, by) => {
         let next;
         try {
-            next = reducer(state, action, { by, isHost: room.isPeerHost(by), selfId: room.getSelfId(), settings: room.getRoomSettings() });
+            const selfId = room.getSelfId();
+            next = reducer(state, action, {
+                by,
+                isHost: room.isPeerHost(by),
+                selfId,
+                hostId: room.getSelf().isHost ? selfId : room.getHostPeerId(),
+                present: [selfId, ...bus.connectedPeerIds()],
+                settings: room.getRoomSettings()
+            });
         } catch {
             return; // a broken action never breaks the room
         }

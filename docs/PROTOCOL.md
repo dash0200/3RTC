@@ -74,7 +74,9 @@ Binary frames on the bulk channel carry the blocks (`utils/p2pStreamer.js`).
 | `room-state-request` | `key` | "send me `key` if you have it" (a store created late) |
 
 Keys in use: `activity` (which activity is open: `{ current: { id, startedBy, startedByName, startedAt } | null }`),
-`act:<activity-id>` for each activity's own state.
+`act:<activity-id>` for each activity's own state, e.g. `act:ludo` (seats, rules, tokens, turn,
+dice; actions `sit`, `stand`, `add-bot`, `clear-seat`, `rules`, `start`, `roll`, `move`, `auto`,
+`again`, see `features/activities/ludo/rules.js`).
 
 ## Signaling messages (`server/server.js`)
 

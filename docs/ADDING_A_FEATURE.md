@@ -8,7 +8,11 @@ layer (`webrtc/`), and older app versions in the same room keep working.
 The room opens one activity at a time over the stage; videos keep playing underneath.
 
 1. **Copy the example:** `client/src/features/activities/sample/` → `features/activities/<id>/`.
-   `index.jsx` default-exports the component. It receives `activityId`.
+   `index.jsx` default-exports the component. It receives `activityId`. For a full game, read
+   `features/activities/ludo/`: rules and dice in `rules.js` (tested in `tests/unit/ludo.test.js`),
+   board geometry in `board.js`, UI and move animation in `index.jsx`, and the pattern for
+   computer players / people who left (the authority's app dispatches an `auto` action that the
+   reducer accepts only from the authority: `meta.by === meta.selfId`).
 2. **Keep game state in shared state.** All the state everyone must agree on goes in one reducer:
 
    ```jsx
@@ -39,6 +43,7 @@ The room opens one activity at a time over the stage; videos keep playing undern
    ```
 
    Rules for the reducer: no side effects, don't mutate `state`, plain JSON in and out.
+   `meta.present` (who is connected) and `meta.hostId` let it handle people who left.
    Randomness (dice, shuffles) is fine inside the reducer: only the authority runs it and
    everyone receives the result.
 3. **Register it** in `features/activities/registry.js`:
