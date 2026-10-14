@@ -370,13 +370,37 @@ const BLOCK_MAX_TRIES = 4;
 const RELAY_WAIT_MS = 5000;           // a parent viewer that takes longer than this: fetch from the owner
 export const RELAY_FANOUT = 2;        // viewers fed directly by the owner, or by one relaying viewer
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Make sure this page is controlled by the service worker. A page opened with a hard refresh
+ * (Ctrl+Shift+R), or before the worker finished starting, isn't: ask the worker to take it over.
+ * Resolves with the controller, or null (no service workers here, or it took too long).
+ */
+async function ensureController(sw, timeoutMs = 6000) {
+  if (sw.controller) return sw.controller;
+  // No worker registered for this site (dev builds, blocked): don't wait for one
+  const existing = await sw.getRegistration().catch(() => null);
+  if (!existing) return null;
+  const changed = new Promise((resolve) => sw.addEventListener('controllerchange', resolve, { once: true }));
+  const deadline = sleep(timeoutMs);
+  const registration = await Promise.race([sw.ready.catch(() => null), deadline]);
+  if (!registration?.active) return sw.controller;
+  try { registration.active.postMessage({ type: 'p2p-claim' }); } catch { /* old worker */ }
+  await Promise.race([changed, deadline]);
+  return sw.controller;
+}
+
 /**
  * True when this page is controlled by a service worker that can serve P2P streams
- * (the current one, not an older cached version). Resolves within ~1.5 s.
+ * (the current one, not an older cached version). Takes up to ~7 s when the page has to be
+ * taken over first, ~1.5 s at most otherwise.
  */
-export function detectOnDemandStreaming() {
-  const controller = typeof navigator !== 'undefined' ? navigator.serviceWorker?.controller : null;
-  if (!controller || typeof MessageChannel === 'undefined') return Promise.resolve(false);
+export async function detectOnDemandStreaming() {
+  const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+  if (!sw || typeof MessageChannel === 'undefined') return false;
+  const controller = await ensureController(sw);
+  if (!controller) return false;
   return new Promise((resolve) => {
     const { port1, port2 } = new MessageChannel();
     const timer = setTimeout(() => { port1.close(); resolve(false); }, 1500);
