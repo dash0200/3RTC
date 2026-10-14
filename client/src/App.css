@@ -10801,3 +10801,53 @@ video::cue {
 .chat-timestamp:hover {
   color: #7cc4ff;
 }
+
+/* ---- Activities (features/activities): shown over the stage, video keeps playing beneath ---- */
+.stage-activity {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+.activity-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  min-height: 48px;
+}
+.activity-bar-icon { font-size: 20px; line-height: 1; }
+.activity-bar-name { font-weight: 600; color: var(--text-primary); }
+.activity-bar-meta { color: var(--text-muted); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-close-btn {
+  border: 1px solid var(--border-active);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.activity-close-btn:hover { background: var(--bg-hover); }
+.activity-body { flex: 1; min-height: 0; overflow: auto; display: flex; }
+.activity-body > * { flex: 1; }
+.activity-message {
+  margin: auto;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+/* Dev-only sample activity */
+.activity-sample { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; }
+.activity-sample-count { font-size: 64px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.activity-sample-actions { display: flex; gap: 10px; }
+.activity-sample-last { color: var(--text-secondary); margin: 0; }

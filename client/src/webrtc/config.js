@@ -10,6 +10,10 @@ export const ICE_SERVERS = [
 // main channel and never queue behind file data. (High id: in-band channels use ids 0, 1, 2...)
 export const BULK_CHANNEL_ID = 512;
 
+// Version of the peer-to-peer message format, sent in 'peer-identity'. Bump it only for a change
+// older apps can't safely ignore; new message types alone don't need it (see docs/PROTOCOL.md).
+export const PROTOCOL_VERSION = 2;
+
 // People per room (the signaling server enforces the same number)
 export const MAX_ROOM_SIZE = 6;
 

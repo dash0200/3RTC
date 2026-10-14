@@ -260,7 +260,9 @@ export function MoreSheet({
   onLeaveRoom,
   isHost = false,
   playbackLock = false,
-  onTogglePlaybackLock
+  onTogglePlaybackLock,
+  activityMenu = [],
+  onStartActivity
 }) {
   const isolationOn = Boolean(audioSettings?.voiceIsolation);
   const isPtt = audioSettings?.inputMode === 'ptt';
@@ -294,6 +296,30 @@ export function MoreSheet({
           {Chevron}
         </button>
       </div>
+
+      {roomId && activityMenu.length > 0 && (
+        <>
+          <div className="phone-section-label">PLAY TOGETHER</div>
+          <div className="phone-group">
+            {activityMenu.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="phone-row"
+                disabled={Boolean(a.disabledReason) || a.isOpen}
+                onClick={then(() => onStartActivity?.(a.id))}
+              >
+                <span className="phone-row-icon" aria-hidden="true">{a.icon}</span>
+                <span className="phone-row-text">
+                  <span>{a.name}</span>
+                  <span className="phone-row-sub">{a.isOpen ? 'Open now' : (a.disabledReason || a.description)}</span>
+                </span>
+                {Chevron}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="phone-section-label">ROOM</div>
       <div className="phone-group">
