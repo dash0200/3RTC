@@ -50,6 +50,14 @@ function runReactionLayer(layer, feed) {
     return !fs || fs.contains(layer);
   };
 
+  const retire = (entry) => {
+    const i = live.indexOf(entry);
+    if (i >= 0) live.splice(i, 1);
+    entry.anim.onfinish = null;
+    entry.anim.cancel();
+    entry.el.remove();
+  };
+
   const spawn = (item) => {
     if (!visible() || typeof layer.animate !== 'function') return;
     const height = layer.clientHeight || 400;
@@ -87,13 +95,10 @@ function runReactionLayer(layer, feed) {
     const anim = el.animate(frames, { duration: calm ? 1400 : rand(2700, 3300), fill: 'forwards' });
     const entry = { el, anim };
     live.push(entry);
-    anim.onfinish = () => {
-      el.remove();
-      const i = live.indexOf(entry);
-      if (i >= 0) live.splice(i, 1);
-    };
-    // Too many on screen: the oldest go first
-    while (live.length > maxLive) live[0].anim.finish();
+    anim.onfinish = () => retire(entry);
+    // Too many on screen: drop the oldest right now. (Removed here, synchronously: the
+    // animation's own finish event only fires later, so waiting for it would loop forever.)
+    while (live.length > maxLive) retire(live[0]);
 
     if (!calm && isMilestone(item.combo)) burst(item);
   };
@@ -156,7 +161,7 @@ function runReactionLayer(layer, feed) {
   });
   return () => {
     off();
-    for (const { anim } of [...live]) anim.cancel();
+    for (const entry of [...live]) retire(entry);
     for (const c of combos.values()) clearTimeout(c.timer);
     layer.replaceChildren();
   };

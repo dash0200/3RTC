@@ -71,6 +71,35 @@ with sync_playwright() as p:
     check('a flood of 200 at once shows only a handful', flood_items <= 30, flood_items)
     check('the app is still responsive after the flood', guest.evaluate('1 + 1') == 2 and guest.locator('.stage-voice-chip').count() >= 2)
 
+    # phone: tapping a reaction fast enough to pass the on-screen cap (14 on phones) must not hang
+    phone = b.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True).new_page()
+    phone.add_init_script(YT)
+    phone.on('pageerror', lambda e: errors.append(str(e)))
+    phone.goto(f'{BASE}?room={room}'); phone.wait_for_timeout(1200); phone.get_by_role('button', name='Join room').click()
+    wait(lambda: phone.locator('.phone-status-pill').count() and 'P2P' in phone.locator('.phone-status-pill').inner_text(), 20)
+    time.sleep(1)
+    phone.evaluate("""() => { window.__maxPhone = 0; window.__tick = 0;
+        setInterval(() => { window.__tick++; window.__maxPhone = Math.max(window.__maxPhone, document.querySelectorAll('.floating-reaction-item').length); }, 50); }""")
+    btn = phone.locator('.quick-reaction-dock-btn').first
+    # 45 taps at ~8.5 a second (faster than the screen cap can absorb on a phone)
+    phone.evaluate("""() => { const b = document.querySelector('.quick-reaction-dock-btn'); let n = 0;
+        const t = setInterval(() => { b.click(); if (++n >= 45) clearInterval(t); }, 118); }""")
+    time.sleep(6)
+    try:
+        t0 = phone.evaluate('window.__tick')
+        phone.wait_for_function(f'window.__tick > {t0} + 3', timeout=4000)
+        alive = True
+    except Exception as e:  # noqa: BLE001 - a frozen page times out
+        alive, t0 = False, str(e)[:60]
+    check('phone: 45 fast taps, the page keeps running (no freeze)', alive, t0)
+    check('phone: no more than 14 on screen', 0 < phone.evaluate('window.__maxPhone') <= 14, phone.evaluate('window.__maxPhone'))
+    time.sleep(0.8)
+    emoji_msgs = host.evaluate("""(e) => [...document.querySelectorAll('.chat-messages-container *')].filter(n => n.children.length === 0 && n.textContent.trim() === e).length""", btn.inner_text().strip())
+    check('phone: a burst puts the emoji in chat once, not 45 times', emoji_msgs <= 2, emoji_msgs)
+    phone.context.close()
+    wait(lambda: host.locator('.stage-voice-chip').count() == 2 and guest.locator('.stage-voice-chip').count() == 2, 20)
+    time.sleep(1)
+
     # soundboard
     host.locator('.stage-soundboard-wrap .circle-action-btn').click()
     host.locator('.sfx-card').first.click()

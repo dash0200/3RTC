@@ -577,9 +577,9 @@ export default function LiveChat({
   };
 
   const handleReactionClick = (emoji) => {
-    if (typeof onSendReaction === 'function') {
-      onSendReaction(emoji);
-    }
+    // The first tap of a burst also goes into the chat; the rest only float (no chat flood)
+    const combo = typeof onSendReaction === 'function' ? onSendReaction(emoji) : 1;
+    if (isP2PConnected && combo !== 1) return;
     if (isP2PConnected) {
       onSendMessage(emoji);
       setActiveTab('chat');

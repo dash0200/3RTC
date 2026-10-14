@@ -82,10 +82,11 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
         });
     });
 
+    /** Returns the combo count (1 = first of a burst), or 0 when dropped by the rate limit. */
     const sendReaction = useCallback((emoji) => {
-        if (!ALLOWED.has(emoji)) return;
+        if (!ALLOWED.has(emoji)) return 0;
         const now = performance.now();
-        if (now - lastSentRef.current < SEND_GAP_MS) return;
+        if (now - lastSentRef.current < SEND_GAP_MS) return 0;
         lastSentRef.current = now;
         const combo = nextCombo(myComboRef.current, emoji, now);
         const item = { id: crypto.randomUUID(), emoji, lane: 20 + Math.random() * 60, combo };
@@ -95,6 +96,7 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
         } catch { /* no haptics */ }
         feed.emit({ ...item, sender: room.getSelf().username, isSelf: true, peerKey: 'self' });
         bus.broadcast('reaction', item);
+        return combo;
     }, [bus, feed, pop, room]);
 
     // Keys 1-6 (holding one streams reactions at the send rate)
