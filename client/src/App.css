@@ -3014,8 +3014,8 @@
   position: absolute;
   right: 28px;
   bottom: 24px;
-  width: 160px;
-  height: 420px;
+  width: 180px;
+  height: min(420px, calc(100% - 40px));
   pointer-events: none;
   overflow: hidden;
   z-index: 60;
@@ -3024,166 +3024,83 @@
   justify-content: flex-end;
 }
 
+/* One floating reaction (animated by components/FloatingReactions.jsx with the Web Animations
+   API: only transform and opacity change, so it stays on the GPU) */
 .floating-reaction-item {
   position: absolute;
   bottom: 0;
-  left: var(--lane, 50%);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 3px;
   user-select: none;
   pointer-events: none;
   will-change: transform, opacity;
-  animation-duration: 2.6s;
-  animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  animation-fill-mode: forwards;
+  transform: translate3d(-50%, 0, 0);
+  opacity: 0;
+  contain: layout style;
 }
 
 .floating-reaction-item .reaction-emoji {
-  font-size: 1.85rem;
+  font-size: 2rem;
   line-height: 1;
-  display: inline-block;
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
+  display: block;
+  /* cheap shadow (text-shadow, not a filter) */
+  text-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
 }
 
 .floating-reaction-item .reaction-sender-tag {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(18, 18, 22, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(14, 14, 18, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   color: #f1f5f9;
   white-space: nowrap;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
   letter-spacing: 0.2px;
 }
 
-/* 4 Organic Sway Variants */
-.floating-reaction-item.drift-1 {
-  animation-name: floatReactionDrift1;
+/* Mini emojis thrown out at a combo milestone */
+.floating-reaction-spark {
+  position: absolute;
+  bottom: 8px;
+  font-size: 1.05rem;
+  line-height: 1;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transform: translate3d(-50%, 0, 0);
 }
 
-.floating-reaction-item.drift-2 {
-  animation-name: floatReactionDrift2;
+/* Combo counter (x3, x4 ...) for whoever is spamming one emoji */
+.floating-reaction-combo {
+  position: absolute;
+  bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 4px 7px;
+  border-radius: 999px;
+  background: rgba(14, 14, 18, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  transform: translate3d(-50%, 0, 0);
+  transition: opacity 0.35s ease;
+  will-change: transform;
 }
-
-.floating-reaction-item.drift-3 {
-  animation-name: floatReactionDrift3;
+.floating-reaction-combo .combo-emoji { font-size: 1.1rem; line-height: 1; }
+.floating-reaction-combo .combo-count {
+  background: linear-gradient(180deg, #fff 30%, #ffd166);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
-
-.floating-reaction-item.drift-4 {
-  animation-name: floatReactionDrift4;
-}
-
-@keyframes floatReactionDrift1 {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0) scale(0.6) rotate(0deg);
-  }
-
-  12% {
-    opacity: 1;
-    transform: translate3d(-10px, -45px, 0) scale(var(--scale, 1.2)) rotate(calc(var(--rot, 0deg) * 0.5));
-  }
-
-  45% {
-    opacity: 0.95;
-    transform: translate3d(14px, -170px, 0) scale(var(--scale, 1.2)) rotate(var(--rot, 0deg));
-  }
-
-  75% {
-    opacity: 0.8;
-    transform: translate3d(-8px, -290px, 0) scale(calc(var(--scale, 1.2) * 0.95)) rotate(calc(var(--rot, 0deg) * 1.2));
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(12px, -390px, 0) scale(0.75) rotate(calc(var(--rot, 0deg) * 1.5));
-  }
-}
-
-@keyframes floatReactionDrift2 {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0) scale(0.55) rotate(0deg);
-  }
-
-  14% {
-    opacity: 1;
-    transform: translate3d(15px, -50px, 0) scale(var(--scale, 1.25)) rotate(calc(var(--rot, 0deg) * 0.6));
-  }
-
-  48% {
-    opacity: 0.95;
-    transform: translate3d(-12px, -180px, 0) scale(var(--scale, 1.25)) rotate(var(--rot, 0deg));
-  }
-
-  80% {
-    opacity: 0.75;
-    transform: translate3d(10px, -300px, 0) scale(calc(var(--scale, 1.25) * 0.92)) rotate(calc(var(--rot, 0deg) * 1.3));
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(-8px, -400px, 0) scale(0.7) rotate(calc(var(--rot, 0deg) * 1.6));
-  }
-}
-
-@keyframes floatReactionDrift3 {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0) scale(0.65) rotate(0deg);
-  }
-
-  10% {
-    opacity: 1;
-    transform: translate3d(-14px, -40px, 0) scale(var(--scale, 1.2)) rotate(calc(var(--rot, 0deg) * -0.5));
-  }
-
-  50% {
-    opacity: 0.95;
-    transform: translate3d(16px, -165px, 0) scale(var(--scale, 1.2)) rotate(var(--rot, 0deg));
-  }
-
-  78% {
-    opacity: 0.7;
-    transform: translate3d(-10px, -285px, 0) scale(calc(var(--scale, 1.2) * 0.9)) rotate(calc(var(--rot, 0deg) * -1.2));
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(6px, -385px, 0) scale(0.72) rotate(calc(var(--rot, 0deg) * -1.5));
-  }
-}
-
-@keyframes floatReactionDrift4 {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, 0, 0) scale(0.6) rotate(0deg);
-  }
-
-  15% {
-    opacity: 1;
-    transform: translate3d(8px, -55px, 0) scale(var(--scale, 1.3)) rotate(calc(var(--rot, 0deg) * 0.4));
-  }
-
-  52% {
-    opacity: 0.92;
-    transform: translate3d(-16px, -190px, 0) scale(var(--scale, 1.3)) rotate(var(--rot, 0deg));
-  }
-
-  82% {
-    opacity: 0.72;
-    transform: translate3d(12px, -315px, 0) scale(calc(var(--scale, 1.3) * 0.95)) rotate(calc(var(--rot, 0deg) * 1.1));
-  }
-
-  100% {
-    opacity: 0;
-    transform: translate3d(-4px, -410px, 0) scale(0.7) rotate(calc(var(--rot, 0deg) * 1.4));
-  }
-}
+.floating-reaction-combo.is-fading { opacity: 0; }
 
 /* Stage Vertical React Panel (Left of Open Live Chat button) */
 
