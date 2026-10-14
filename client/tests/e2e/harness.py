@@ -100,11 +100,36 @@ def _spawn(cmd, cwd, log_name, env=None, name=None):
 def _stop(proc):
     if proc.poll() is not None:
         return
-    proc.terminate()
+    # The whole process group: npx alone would leave its child (vite, node) running
+    _kill_pid(proc.pid)
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+
+
+# Stopped from outside (Ctrl+C, `timeout`): still stop the servers we started
+if not IS_WIN:
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+
+
+def _stop_listener(port):
+    """Stop whatever serves `port` that isn't ours to reuse (a leftover from an earlier run)."""
+    if IS_WIN:
+        return
+    needle = f'--port {port}'
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        try:
+            cmd = open(f'/proc/{entry}/cmdline', 'rb').read().replace(b'\0', b' ').decode('utf-8', 'ignore')
+        except OSError:
+            continue
+        if 'vite' in cmd and needle in cmd and int(entry) != os.getpid():
+            try:
+                os.kill(int(entry), signal.SIGTERM)
+            except OSError:
+                pass
 
 
 @atexit.register
@@ -124,6 +149,12 @@ def stop_all():
     PIDS.write_text('{}')
 
 
+def _wait_gone(url, timeout=15):
+    end = time.time() + timeout
+    while time.time() < end and _answers(url):
+        time.sleep(0.2)
+
+
 def dev():
     """The Vite dev server (app source)."""
     if not _answers(DEV):
@@ -132,9 +163,18 @@ def dev():
     return DEV
 
 
+_preview_fresh = False
+
+
 def preview(build=True):
-    """A production build served like the real site (service worker included)."""
+    """A production build of the current code served like the real site (service worker included).
+    Rebuilt once per test process, so a server left over from an earlier run never serves old code."""
+    global _preview_fresh
+    if build and not _preview_fresh and _answers(PREVIEW):
+        _stop_listener(4173)
+        _wait_gone(PREVIEW)
     if not _answers(PREVIEW):
+        _preview_fresh = True
         if build:
             subprocess.run([shutil.which('npx') or 'npx', 'vite', 'build'], cwd=str(CLIENT), check=True,
                            stdout=open(OUT / 'build.log', 'a'), stderr=subprocess.STDOUT)
@@ -195,7 +235,7 @@ def quickpicks():
 
 def media(name):
     """Test media made with ffmpeg on first use: test.mp4 (720p), test_small.mp4 (180p),
-    speech.wav (talking with pauses), photo.jpg."""
+    uneven.mp4 (heavy first half, calm second), speech.wav (talking with pauses), photo.jpg."""
     path = MEDIA / name
     if path.exists():
         return str(path)
@@ -210,6 +250,10 @@ def media(name):
         'test_small.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=60',
                            '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '2M', '-c:a', 'libopus', '-shortest'],
         'photo.jpg': ['-f', 'lavfi', '-i', 'testsrc2=size=640x480', '-frames:v', '1'],
+        # Uneven bitrate like a real film: a heavy first half (noise), then a calm one
+        'uneven.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=854x480:rate=24:duration=70', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=70',
+                       '-vf', "noise=alls=45:allf=t+u:enable='between(t,0,35)'", '-c:v', 'libvpx-vp9', '-deadline', 'realtime',
+                       '-cpu-used', '8', '-crf', '30', '-b:v', '9M', '-c:a', 'libopus', '-shortest', '-movflags', '+faststart'],
     }[name]
     subprocess.run([ff, '-y', '-loglevel', 'error', *lavfi, str(path)], check=True)
     return str(path)

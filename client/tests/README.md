@@ -40,12 +40,19 @@ server you started), stop it: the connection test restarts the server on purpose
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
 | `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
-| `stream` | sharing a local video: on-demand streaming, seeking, cancel |
+| `stream` | sharing a local video: on-demand streaming, seeking, a hard-refreshed viewer |
+| `stream_uneven` | a film with an uneven bitrate (heavy first half) plays straight through |
 | `local_video_sync` | local video play / pause / seek sync |
 | `media_session` | lock-screen / headset controls |
 | `six_people` | a full room: mesh, voice bitrate, video through the relay tree |
 
 Output (logs per suite, screenshots, generated media): `client/tests/e2e/.out/`.
+
+**Streaming on a realistic connection** (not part of `run_all`, takes minutes):
+`python client/tests/e2e/stream_bench.py [seconds] [MB/s] [one-way delay ms] [freeze s] [file]`
+plays a film with calm and heavy scenes over a simulated internet link (speed limit, delay, a
+short freeze every 20 s) and reports how often and how long the viewer's video stalled. Put your
+own file in `.out/media` to try it.
 Each suite can also be run on its own: `python client/tests/e2e/queue_test.py`.
 
 `harness.py` holds the shared setup (servers, media, `check`, `wait`). The YouTube player is
