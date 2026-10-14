@@ -40,6 +40,19 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(line_buffering=True)
 
 
+
+# Everything the server needs on the VM (server.js imports the others)
+SERVER_FILES = ["server.js", "signaling.js", "quickPicks.js", "log.js", "package.json"]
+
+
+def update_command(server_files):
+    """Shell command run on the VM: move the uploaded files into place, install new dependencies
+    if package.json changed, restart the service."""
+    moves = " && ".join(f"sudo mv /tmp/{f.name} /opt/webrtc-server/{f.name}" for f in server_files)
+    return (f"{moves} && cd /opt/webrtc-server"
+            " && (sudo npm install --omit=dev --no-audit --no-fund --silent || echo 'npm install failed: keeping the installed modules')"
+            " && sudo systemctl restart webrtc-signaling")
+
 def print_step(title):
     print(f"\n{'=' * 60}")
     print(f" {title}")
@@ -94,14 +107,12 @@ def check_prerequisites():
 
     # 2. Local signaling server files
     script_dir = Path(__file__).resolve().parent
-    server_js = script_dir / "server.js"
-    package_json = script_dir / "package.json"
-
-    if not server_js.exists() or not package_json.exists():
-        print(f"[ERROR] Missing server files in {script_dir}.")
-        print("Please ensure 'server.js' and 'package.json' are located in the same directory.")
+    server_files = [script_dir / name for name in SERVER_FILES]
+    missing = [f.name for f in server_files if not f.exists()]
+    if missing:
+        print(f"[ERROR] Missing server files in {script_dir}: {', '.join(missing)}")
         sys.exit(1)
-    print("[OK] Local server.js and package.json found.")
+    print(f"[OK] Local server files found: {', '.join(SERVER_FILES)}")
 
     # 3. Check Google Cloud CLI (gcloud)
     gcloud_bin = find_gcloud()
@@ -136,7 +147,7 @@ def check_prerequisites():
         gcloud_bin = find_gcloud()
 
     print(f"[OK] Google Cloud CLI found at: {gcloud_bin}")
-    return gcloud_bin, server_js, package_json
+    return gcloud_bin, server_files
 
 
 def authenticate_gcp(gcloud):
@@ -273,13 +284,14 @@ def ensure_firewall(gcloud):
 
 
 
-def build_startup_script(server_js_path, package_json_path):
-    """Embed server.js and package.json into cloud-init startup script with Node.js & Caddy TLS."""
-    with open(server_js_path, "r", encoding="utf-8") as f:
-        server_b64 = base64.b64encode(f.read().encode("utf-8")).decode("utf-8")
-
-    with open(package_json_path, "r", encoding="utf-8") as f:
-        pkg_b64 = base64.b64encode(f.read().encode("utf-8")).decode("utf-8")
+def build_startup_script(server_files):
+    """Embed the server files into a cloud-init startup script with Node.js & Caddy TLS."""
+    unpack_lines = []
+    for path in server_files:
+        with open(path, "r", encoding="utf-8") as f:
+            b64 = base64.b64encode(f.read().encode("utf-8")).decode("utf-8")
+        unpack_lines.append(f'echo "{b64}" | base64 -d > {path.name}')
+    unpack = "\n".join(unpack_lines)
 
     script = f"""#!/bin/bash
 set -e
@@ -322,8 +334,7 @@ echo "[App] Writing application code..."
 mkdir -p /opt/webrtc-server
 cd /opt/webrtc-server
 
-echo "{pkg_b64}" | base64 -d > package.json
-echo "{server_b64}" | base64 -d > server.js
+{unpack}
 
 echo "[App] Installing npm dependencies..."
 npm install --omit=dev
@@ -381,7 +392,7 @@ echo "[Done] WebRTC Signaling Server initialization finished successfully!"
     return script
 
 
-def deploy_vm(gcloud, zone, server_js, package_json):
+def deploy_vm(gcloud, zone, server_files):
     print_step("Step 6: Deploying Forever Free e2-micro Instance")
 
     # Detect existing instances in the zone
@@ -410,17 +421,13 @@ def deploy_vm(gcloud, zone, server_js, package_json):
         if c == "1":
             print(f"\nUploading latest server files to '{instance_name}'...")
             run_cmd([
-                gcloud, "compute", "scp", str(server_js), f"{instance_name}:/tmp/server.js",
-                f"--zone={zone}", "--quiet"
-            ], capture_output=False)
-            run_cmd([
-                gcloud, "compute", "scp", str(package_json), f"{instance_name}:/tmp/package.json",
+                gcloud, "compute", "scp", *[str(f) for f in server_files], f"{instance_name}:/tmp/",
                 f"--zone={zone}", "--quiet"
             ], capture_output=False)
             print("Restarting webrtc-signaling service...")
             run_cmd([
                 gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
-                "--command=sudo mv /tmp/server.js /opt/webrtc-server/server.js && sudo mv /tmp/package.json /opt/webrtc-server/package.json && sudo systemctl restart webrtc-signaling",
+                f"--command={update_command(server_files)}",
                 "--quiet"
             ], capture_output=False)
             print("[OK] Server updated and restarted successfully!")
@@ -435,7 +442,7 @@ def deploy_vm(gcloud, zone, server_js, package_json):
             sys.exit(0)
 
     # Generate startup script
-    startup_script = build_startup_script(server_js, package_json)
+    startup_script = build_startup_script(server_files)
     temp_script_path = Path(__file__).resolve().parent / "_startup_script.sh"
     with open(temp_script_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(startup_script)
@@ -570,12 +577,12 @@ def main():
  WebRTC Signaling Server - GCP Always Free Tier Deployer
 ============================================================
 """)
-    gcloud, server_js, package_json = check_prerequisites()
+    gcloud, server_files = check_prerequisites()
     authenticate_gcp(gcloud)
     select_or_create_project(gcloud)
     zone = choose_region_and_zone()
     ensure_firewall(gcloud)
-    instance_name, external_ip = deploy_vm(gcloud, zone, server_js, package_json)
+    instance_name, external_ip = deploy_vm(gcloud, zone, server_files)
     wait_for_ready(external_ip)
     configure_quick_picks(gcloud, zone, instance_name)
 
