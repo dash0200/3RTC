@@ -10755,7 +10755,8 @@ video::cue {
 .activity-bar-icon { font-size: 20px; line-height: 1; }
 .activity-bar-name { font-weight: 600; color: var(--text-primary); }
 .activity-bar-meta { color: var(--text-muted); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-close-btn {
+.activity-close-btn,
+.activity-bar-btn {
   border: 1px solid var(--border-active);
   background: transparent;
   color: var(--text-primary);
@@ -10765,7 +10766,10 @@ video::cue {
   font-size: 13px;
   cursor: pointer;
 }
-.activity-close-btn:hover { background: var(--bg-hover); }
+.activity-close-btn:hover,
+.activity-bar-btn:hover { background: var(--bg-hover); }
+/* Full screen (activity bar button): the whole stage, so reactions still float over the game */
+.stage-section:fullscreen { background: var(--bg-primary); }
 .activity-body { flex: 1; min-height: 0; overflow: auto; display: flex; }
 .activity-body > * { flex: 1; }
 .activity-message {
