@@ -71,6 +71,20 @@ with sync_playwright() as p:
     check('a flood of 200 at once shows only a handful', flood_items <= 30, flood_items)
     check('the app is still responsive after the flood', guest.evaluate('1 + 1') == 2 and guest.locator('.stage-voice-chip').count() >= 2)
 
+    # an older app posts each reaction tap to the chat too (reaction, then the same emoji as text)
+    time.sleep(2.5)
+    count_msgs = "(t) => [...document.querySelectorAll('.chat-messages-container *')].filter(n => n.children.length === 0 && n.textContent.trim() === t).length"
+    host.evaluate("""() => { const c = (window.__chan || []).find((c) => c.label.startsWith('chat') && c.readyState === 'open');
+        for (let i = 0; i < 3; i++) { c.send(JSON.stringify({ type: 'reaction', id: 'old' + i, emoji: '🫶', lane: 50, sender: 'Old app' }));
+            c.send(JSON.stringify({ type: 'chat', id: 'oldmsg' + i, sender: 'Old app', text: '🫶', timestamp: Date.now() })); } }""")
+    time.sleep(1)
+    guest.locator('.chat-tab-btn', has_text='Chat').first.click()
+    check("an older app's reaction taps don't fill the chat", guest.evaluate(count_msgs, '🫶') == 0, guest.evaluate(count_msgs, '🫶'))
+    time.sleep(2.6)
+    host.evaluate("""() => { const c = (window.__chan || []).find((c) => c.label.startsWith('chat') && c.readyState === 'open');
+        c.send(JSON.stringify({ type: 'chat', id: 'realmsg', sender: 'Old app', text: '🫶', timestamp: Date.now() })); }""")
+    check('...but the same emoji typed as a message still shows', wait(lambda: guest.evaluate(count_msgs, '🫶') == 1, 4))
+
     # phone: tapping a reaction fast enough to pass the on-screen cap (14 on phones) must not hang
     phone = b.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True).new_page()
     phone.add_init_script(YT)
