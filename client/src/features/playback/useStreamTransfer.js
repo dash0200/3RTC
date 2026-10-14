@@ -9,11 +9,14 @@
  * 'p2p-stream-complete', 'p2p-stream-cancel', 'p2p-relay-gone', plus binary chunks on the bulk channel.
  */
 import { useRef, useEffect } from 'react';
-import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver } from '../../utils/p2pStreamer';
+import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver, STREAM_CACHE_BYTES, STREAM_CACHE_BYTES_PHONE, BUFFER_AHEAD_BYTES, BUFFER_AHEAD_BYTES_PHONE } from '../../utils/p2pStreamer';
 import { addViewer, detachViewer, markDirect } from '../../webrtc/streamTree';
 import { usePeerMessageOn } from '../../core/RoomContext';
 
 const IMAGE_MAGIC = 0x494D4731; // 'IMG1' frames belong to chat images
+const isPhoneLike = () => {
+    try { return window.matchMedia('(hover: none) and (pointer: coarse)').matches; } catch { return false; }
+};
 
 export function useStreamTransfer({ room, playback }) {
     const { bus } = room;
@@ -126,6 +129,9 @@ export function useStreamTransfer({ room, playback }) {
                 ownerId: from,
                 sourceId: relayId || from,
                 getChannel: bulkChannelTo,
+                // Phones get less memory for the stream
+                cacheLimit: isPhoneLike() ? STREAM_CACHE_BYTES_PHONE : STREAM_CACHE_BYTES,
+                bufferAhead: isPhoneLike() ? BUFFER_AHEAD_BYTES_PHONE : BUFFER_AHEAD_BYTES,
                 onSourceChange: (_id, reason) => {
                     if (streamReceiverRef.current !== receiver) return;
                     room.log(`📡 Now streaming straight from ${data.sender || 'the owner'} (${reason}).`);
@@ -133,13 +139,6 @@ export function useStreamTransfer({ room, playback }) {
                 onProgress: (prog) => {
                     if (streamReceiverRef.current !== receiver) return;
                     setStreamProgress((prev) => ({ ...(prev || {}), ...prog }));
-                },
-                // Where playback is, so the player is only fed ~10 s ahead
-                getPlaybackInfo: () => {
-                    const video = [...document.querySelectorAll('video')].find((v) => (v.currentSrc || '').includes(receiver.url));
-                    if (!video || !Number.isFinite(video.duration) || video.duration <= 0) return null;
-                    const bytesPerSec = receiver.fileSize / video.duration;
-                    return { byte: video.currentTime * bytesPerSec, bytesPerSec };
                 }
             });
             streamReceiverRef.current = receiver;
