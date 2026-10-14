@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { BUILD_LABEL } from '../../version';
 
 const CODE_LENGTH = 5;
 
@@ -116,6 +117,7 @@ export default function PhoneHome({ username, initialPin = '', onCreate, onJoin,
           <a href="/watch-videos-together">Your own videos</a>
           <a href="/privacy">Privacy</a>
         </nav>
+        <p className="build-label">{BUILD_LABEL}</p>
       </footer>
     </div>
   );

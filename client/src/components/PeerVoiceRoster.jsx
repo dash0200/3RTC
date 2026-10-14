@@ -1,6 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { getAvatarColor } from '../utils/sound';
 import { useLiveVoiceUsers } from '../utils/speakingActivity';
+import { BUILD, BUILD_LABEL, compareBuilds } from '../version';
+
+
+/** Which version of 3RTC a peer runs; flags an older one (they should reload). */
+function PeerBuild({ build }) {
+  if (BUILD.number === 'dev' && !build) return null;
+  const older = !build || compareBuilds(build, BUILD.number) < 0;
+  return (
+    <span className={`card-build ${older ? 'is-older' : ''}`} title={older ? 'Older version of 3RTC: ask them to reload the page' : '3RTC version'}>
+      {!build ? 'Older build' : build === 'dev' ? 'Development build' : `Build ${build}`}
+      {older && <span className="card-build-tag">update</span>}
+    </span>
+  );
+}
 
 export function getInitials(name) {
   if (!name) return '??';
@@ -404,6 +418,7 @@ export function PeerVoicePanel({
                         ? '🔇 Mic Muted'
                         : '🟢 Ready / Silent'}
                 </span>
+                <span className="card-build" title="Your 3RTC version">{BUILD_LABEL}</span>
               </div>
             </div>
 
@@ -496,6 +511,7 @@ export function PeerVoicePanel({
                               ? '🔇 Muted by them'
                               : '🟢 Active'}
                       </span>
+                      <PeerBuild build={peer.build} />
                     </div>
                   </div>
 

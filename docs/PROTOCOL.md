@@ -22,7 +22,7 @@ file/video frames on the bulk channel.
 ### Connection (handled in `webrtc/peerMessages.js`)
 | type | fields | meaning |
 |---|---|---|
-| `peer-identity` | `peerId, username, isHost, isMuted, proto, isReply?, playbackLock?` | sent when a channel opens; the other side replies with `isReply: true`. The host adds `playbackLock`. |
+| `peer-identity` | `peerId, username, isHost, isMuted, proto, build, isReply?, playbackLock?` | sent when a channel opens; the other side replies with `isReply: true`. The host adds `playbackLock`. `build` is the app's build number (YYMMDD.HHMM, shown in the Peers tab; older apps leave it out). |
 | `peer-voice-status` | `peerId, sender, isMuted` | mic muted / unmuted |
 | `peer-bye` | – | leaving on purpose (don't try to reconnect) |
 | `net-ping` / `net-pong` | `pingId, sendTime` | latency probe (Network HUD) |
