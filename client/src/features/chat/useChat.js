@@ -10,6 +10,20 @@ import { P2PImageSender, p2pImageReceiver } from '../../utils/p2pImageShare';
 import { usePeerMessageOn } from '../../core/RoomContext';
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+const MAX_MESSAGES = 300; // older ones are dropped (and their image memory freed)
+
+// Append and keep the list bounded
+const appendCapped = (prev, item) => {
+    const next = prev.concat([item]);
+    if (next.length <= MAX_MESSAGES) return next;
+    const dropped = next.splice(0, next.length - MAX_MESSAGES);
+    for (const m of dropped) {
+        if (m.image?.url?.startsWith('blob:')) {
+            try { URL.revokeObjectURL(m.image.url); } catch { /* already gone */ }
+        }
+    }
+    return next;
+};
 const IMAGE_MAGIC = 0x494D4731; // 'IMG1'
 
 const setTransferPercent = (transferId, percent) => (prev) => prev.map((m) =>
@@ -32,13 +46,13 @@ export function useChat({ room, isChatOpen }) {
     }, [messages.length, isChatOpen]);
 
     usePeerMessageOn(bus, 'chat', (data) => {
-        setMessages((prev) => [...prev, { ...data, isSelf: false }]);
+        setMessages((prev) => appendCapped(prev, { ...data, isSelf: false }));
         sound.playPop();
     });
 
     usePeerMessageOn(bus, 'p2p-image-start', (data) => {
         p2pImageReceiver.handleStart(data);
-        setMessages((prev) => [...prev, {
+        setMessages((prev) => appendCapped(prev, {
             type: 'chat',
             id: data.id,
             transferId: data.transferId,
@@ -48,7 +62,7 @@ export function useChat({ room, isChatOpen }) {
             imageTransfer: { transferId: data.transferId, isTransferring: true, percent: 0, fileName: data.fileName, fileSize: data.fileSize },
             isSelf: false,
             timestamp: data.timestamp || Date.now()
-        }]);
+        }));
         sound.playChime();
     });
 
@@ -72,7 +86,7 @@ export function useChat({ room, isChatOpen }) {
         const { username, isHost } = room.getSelf();
         const msg = { type: 'chat', id: crypto.randomUUID(), sender: username, isHost, text, timestamp: Date.now() };
         if (bus.broadcast('chat', msg) > 0) {
-            setMessages((prev) => [...prev, { ...msg, isSelf: true }]);
+            setMessages((prev) => appendCapped(prev, { ...msg, isSelf: true }));
             sound.playPop();
         } else {
             room.notify('Waiting for peer to connect before sending');
@@ -95,7 +109,7 @@ export function useChat({ room, isChatOpen }) {
         const messageId = crypto.randomUUID();
         const transferId = crypto.randomUUID();
         const fileName = file.name || 'screenshot.png';
-        setMessages((prev) => [...prev, {
+        setMessages((prev) => appendCapped(prev, {
             type: 'chat',
             id: messageId,
             transferId,
@@ -106,7 +120,7 @@ export function useChat({ room, isChatOpen }) {
             imageTransfer: { transferId, isTransferring: true, percent: 0, fileName, fileSize: file.size },
             isSelf: true,
             timestamp: Date.now()
-        }]);
+        }));
         sound.playPop();
 
         new P2PImageSender(file, () => channels, {
