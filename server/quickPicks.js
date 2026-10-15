@@ -16,8 +16,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // GET /api/quick-picks, so YouTube API quota depends only on the refresh schedule, never on how
 // many people use the app. The schedule is worked out from a daily budget (default 9,000 of the
 // 10,000 free units, leaving room for restarts and retries): one refresh is 11 searches x 102
-// units (search 100 + two 1-unit detail calls) + 8 one-unit trending charts = 1,130 units, so 7
-// refreshes a day, about one every 3.5 hours.
+// units (search 100 + two 1-unit detail calls) + 8 trending charts x 10 countries x 1 unit =
+// 1,202 units, so 7 refreshes a day, about one every 3.5 hours.
+//
+// Trending is per country: each visitor's app asks for its country (?region=IN), worked out from
+// the device's time zone and language, and gets that country's charts; a country we don't fetch
+// gets a worldwide mix of all of them (only videos that play in every one of those countries).
 //
 // Each refresh uses the next search phrase of every category, and new results are merged into a
 // rolling set of up to QUICK_PICKS_POOL_SIZE videos (newest first), so frequent refreshes keep
@@ -29,8 +33,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // uploads it). Without a key the endpoint returns 503 and clients keep their built-in list.
 // ---------------------------------------------------------------------------------------------
 // group: how the app groups the category buttons. chart: YouTube's trending chart for that YouTube
-// category in QUICK_PICKS_REGION (1 unit). queries: search phrases, one per refresh in rotation
-// (100 units each). order/recentDays: optional search options (e.g. newest trailers first).
+// category, fetched for every country in QUICK_PICKS_REGIONS (1 unit each). queries: search
+// phrases, one per refresh in rotation (100 units each). order/recentDays: optional search
+// options (e.g. newest trailers first). region: search as seen from that country, and show the
+// row first there (later in its group elsewhere).
 const QUICK_PICK_CATEGORIES = [
   { id: 'trending-music', group: 'Trending', name: '🔥 Music', chart: 10 },
   { id: 'trending-entertainment', group: 'Trending', name: '🎭 Entertainment', chart: 24 },
@@ -43,8 +49,8 @@ const QUICK_PICK_CATEGORIES = [
   { id: 'lofi', group: 'Music', name: '🎵 Lofi Beats', queries: ['lofi hip hop', 'lofi study beats', 'lofi chill mix', 'lofi rainy night', 'lofi radio live'] },
   { id: 'chill', group: 'Music', name: '🎷 Jazz & Chill', queries: ['jazz lofi chill music', 'coffee shop jazz', 'chillhop mix', 'bossa nova cafe music', 'smooth jazz relaxing'] },
   { id: 'synthwave', group: 'Music', name: '🌆 Synthwave', queries: ['synthwave mix', 'retrowave night drive', 'outrun synthwave', 'chillwave mix', 'darksynth cyberpunk mix'] },
-  { id: 'bollywood', group: 'Music', name: '🎤 Bollywood', queries: ['bollywood hit songs', 'new hindi songs', 'bollywood romantic songs', 'hindi party songs', 'arijit singh songs'] },
-  { id: 'south', group: 'Music', name: '🌴 South Hits', queries: ['tamil hit songs', 'telugu hit songs', 'malayalam hit songs', 'kannada hit songs', 'anirudh songs'] },
+  { id: 'bollywood', group: 'Music', name: '🎤 Bollywood', region: 'IN', queries: ['bollywood hit songs', 'new hindi songs', 'bollywood romantic songs', 'hindi party songs', 'arijit singh songs'] },
+  { id: 'south', group: 'Music', name: '🌴 South Hits', region: 'IN', queries: ['tamil hit songs', 'telugu hit songs', 'malayalam hit songs', 'kannada hit songs', 'anirudh songs'] },
   { id: 'trailers', group: 'Watch', name: '🍿 New Trailers', queries: ['official movie trailer', 'official trailer hindi', 'official teaser trailer', 'series official trailer', 'animated movie trailer'], order: 'date', recentDays: 45 },
   { id: 'standup', group: 'Watch', name: '🎙️ Stand-up', queries: ['stand up comedy india', 'stand up comedy special', 'standup comedy crowd work', 'hindi stand up comedy', 'comedy sketch'] },
   { id: 'movies', group: 'Watch', name: '🎬 Short Films', queries: ['animated short film', 'cgi animated short', 'sci-fi short film', 'pixar style short film', 'award winning short film'] },
@@ -53,9 +59,12 @@ const QUICK_PICK_CATEGORIES = [
   { id: 'nature', group: 'Relax', name: '🌧️ Rain & Nature', queries: ['rain sounds for sleeping', 'nature sounds 4k', 'ocean waves relaxing', 'forest ambience', 'thunderstorm sounds'] }
 ];
 const QUICK_PICKS_POOL_SIZE = 20; // videos kept per category (newest first)
-const QUICK_PICKS_REGION = (process.env.QUICK_PICKS_REGION || 'IN').toUpperCase(); // trending chart + region checks
+// Countries with their own trending charts (ISO 3166 codes); everyone else gets the worldwide mix
+export const QUICK_PICKS_REGIONS = [...new Set((process.env.QUICK_PICKS_REGIONS || 'IN,US,GB,CA,AU,DE,FR,BR,JP,KR')
+  .split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)))];
+export const GLOBAL_REGION = 'GLOBAL';
 const QUICK_PICKS_DAILY_UNITS = Math.min(10000, Number(process.env.QUICK_PICKS_DAILY_UNITS) || 9000);
-const QUICK_PICKS_UNITS_PER_REFRESH = QUICK_PICK_CATEGORIES.reduce((sum, c) => sum + (c.chart ? 1 : 102), 0); // 1,130
+const QUICK_PICKS_UNITS_PER_REFRESH = QUICK_PICK_CATEGORIES.reduce((sum, c) => sum + (c.chart ? QUICK_PICKS_REGIONS.length : 102), 0); // 1,202
 const QUICK_PICKS_REFRESH_MS = Number(process.env.QUICK_PICKS_REFRESH_MINUTES) > 0
   ? Number(process.env.QUICK_PICKS_REFRESH_MINUTES) * 60 * 1000
   : Math.max(30 * 60 * 1000, Math.ceil((24 * 3600 * 1000) / Math.max(1, Math.floor(QUICK_PICKS_DAILY_UNITS / QUICK_PICKS_UNITS_PER_REFRESH))));
@@ -64,12 +73,15 @@ const QUICK_PICKS_CACHE_FILE = path.join(__dirname, 'quick-picks-cache.json');
 // Changes whenever the categories, phrases or region change, so a saved list from an older setup
 // is refreshed at startup instead of being served until the next scheduled refresh
 const QUICK_PICKS_CONFIG_ID = crypto.createHash('sha256')
-  .update(JSON.stringify({ region: QUICK_PICKS_REGION, categories: QUICK_PICK_CATEGORIES, filters: 'no-shorts-1' })).digest('hex').slice(0, 12);
+  .update(JSON.stringify({ regions: QUICK_PICKS_REGIONS, categories: QUICK_PICK_CATEGORIES, filters: 'no-shorts-1' })).digest('hex').slice(0, 12);
 const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis.com/youtube/v3';
 
-let quickPicks = null; // { updatedAt, region, rotation: { [categoryId]: n }, categories: [{ id, name, videos: [{ id, title, channel }] }] }
+// { updatedAt, config, rotation: { [categoryId]: n },
+//   categories: [{ id, group, name, videos: [{ id, title, channel }] }]   (search rows)
+//   trending: { [region | 'GLOBAL']: [{ id, group, name, videos }] } }
+let quickPicks = null;
 let quickPicksTimer = null;
-const unavailableCharts = new Set(); // trending charts YouTube doesn't publish for this region
+const unavailableCharts = new Set(); // `${region}:${categoryId}`: charts YouTube doesn't publish for that country
 
 function readYouTubeApiKey() {
   if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY.trim();
@@ -93,14 +105,17 @@ async function youtubeApi(endpoint, params, key) {
 }
 
 // Only keep videos that will actually play inside 3RTC: public, embeddable, not blocked in the
-// region, not age-restricted (age-gated videos never play in embeds), not an upcoming premiere.
-function isPlayableEverywhere(video) {
+// given countries, not age-restricted (age-gated videos never play in embeds), not an upcoming
+// premiere.
+export function isPlayableIn(video, regions) {
   const status = video.status || {};
   if (status.privacyStatus !== 'public' || status.embeddable === false || status.uploadStatus === 'rejected') return false;
   if (video.contentDetails?.contentRating?.ytRating === 'ytAgeRestricted') return false;
   const restriction = video.contentDetails?.regionRestriction;
-  if (restriction?.blocked?.includes(QUICK_PICKS_REGION)) return false;
-  if (restriction?.allowed && !restriction.allowed.includes(QUICK_PICKS_REGION)) return false;
+  for (const region of regions) {
+    if (restriction?.blocked?.includes(region)) return false;
+    if (restriction?.allowed && !restriction.allowed.includes(region)) return false;
+  }
   if (video.snippet?.liveBroadcastContent === 'upcoming') return false;
   return true;
 }
@@ -133,29 +148,53 @@ export function isShort(video) {
   return false;
 }
 
-const isGoodPick = (video) => isPlayableEverywhere(video) && !isShort(video);
+const isGoodPick = (video, regions = QUICK_PICKS_REGIONS) => isPlayableIn(video, regions) && !isShort(video);
 
 function toPick(video) {
   return { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
 }
 
 /** New videos for a category merged with its saved ones (re-checked), newest first. */
-async function fetchCategory(category, key, previousVideos, rotation) {
-  // player + maxWidth: YouTube reports the embed size, which shows vertical videos (Shorts)
-  const details = { part: 'snippet,status,contentDetails,player', maxWidth: 480 };
-  if (category.chart) {
-    // 1 unit; the chart itself changes through the day (50: room to drop Shorts)
-    const chart = await youtubeApi('videos', {
-      ...details, chart: 'mostPopular', videoCategoryId: category.chart, regionCode: QUICK_PICKS_REGION, maxResults: 50
-    }, key);
-    return (chart.items || []).filter(isGoodPick).slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
+// player + maxWidth: YouTube reports the embed size, which shows vertical videos (Shorts)
+const DETAILS = { part: 'snippet,status,contentDetails,player', maxWidth: 480 };
+
+/** One country's trending chart for a category (1 unit; 50: room to drop Shorts): the videos that play there, in order. */
+async function fetchChart(category, region, key) {
+  const chart = await youtubeApi('videos', {
+    ...DETAILS, chart: 'mostPopular', videoCategoryId: category.chart, regionCode: region, maxResults: 50
+  }, key);
+  return (chart.items || []).filter((v) => isGoodPick(v, [region]));
+}
+
+/**
+ * The worldwide mix for a category from the countries' charts: their top videos taken in turn
+ * (1st of each country, then 2nd...), each video once, only ones that play in all those countries.
+ */
+export function mixCharts(chartsByRegion, size = QUICK_PICKS_POOL_SIZE) {
+  const lists = Object.values(chartsByRegion);
+  const regions = Object.keys(chartsByRegion);
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; out.length < size && lists.some((l) => i < l.length); i++) {
+    for (const list of lists) {
+      const v = list[i];
+      if (!v || seen.has(v.id)) continue;
+      seen.add(v.id);
+      if (isPlayableIn(v, regions)) out.push(v);
+      if (out.length >= size) break;
+    }
   }
+  return out;
+}
+
+async function fetchCategory(category, key, previousVideos, rotation) {
+  const details = DETAILS;
   // search: 100 units whatever the count, so ask for 50 (room to drop Shorts). YouTube filters
   // to videos that can play outside youtube.com.
   const query = category.queries[rotation % category.queries.length];
   const search = await youtubeApi('search', {
     part: 'id', type: 'video', q: query, maxResults: 50, safeSearch: 'moderate',
-    videoEmbeddable: 'true', videoSyndicated: 'true', regionCode: QUICK_PICKS_REGION,
+    videoEmbeddable: 'true', videoSyndicated: 'true', ...(category.region ? { regionCode: category.region } : {}),
     ...(category.order ? { order: category.order } : {}),
     ...(category.recentDays ? { publishedAfter: new Date(Date.now() - category.recentDays * 86400000).toISOString() } : {})
   }, key);
@@ -180,15 +219,48 @@ async function refreshQuickPicks() {
   }
   const rotation = { ...(quickPicks?.rotation || {}) };
   const categories = [];
+  const trending = Object.fromEntries([...QUICK_PICKS_REGIONS, GLOBAL_REGION].map((r) => [r, []]));
   let refreshed = 0;
   let quotaHit = false;
-  for (const category of QUICK_PICK_CATEGORIES) {
-    const previous = quickPicks?.categories.find((c) => c.id === category.id);
-    if (category.chart && unavailableCharts.has(category.id)) continue;
+  const noteError = (err) => {
+    if (/quota/i.test(err.message)) quotaHit = true; // no point spending more calls today
+  };
+
+  // Trending: every country's chart for each category, and the worldwide mix of them
+  for (const category of QUICK_PICK_CATEGORIES.filter((c) => c.chart)) {
+    const charts = {};
+    for (const region of QUICK_PICKS_REGIONS) {
+      if (!quotaHit && !unavailableCharts.has(`${region}:${category.id}`)) {
+        try {
+          charts[region] = await fetchChart(category, region, key);
+        } catch (err) {
+          log('WARN', `Quick picks: ${category.id} ${region}: ${err.message}`);
+          noteError(err);
+          if (/chartNotFound|notFound|invalid/i.test(err.message)) unavailableCharts.add(`${region}:${category.id}`);
+        }
+      }
+      const videos = charts[region]?.slice(0, QUICK_PICKS_POOL_SIZE).map(toPick);
+      const previous = quickPicks?.trending?.[region]?.find((c) => c.id === category.id);
+      if (videos?.length) {
+        trending[region].push({ id: category.id, group: category.group, name: category.name, videos });
+        refreshed += 1;
+      } else if (previous) {
+        trending[region].push({ ...previous, group: category.group, name: category.name }); // keep its last good list
+      }
+    }
+    const mixed = mixCharts(Object.fromEntries(Object.entries(charts).filter(([, list]) => list.length))).map(toPick);
+    const previousMix = quickPicks?.trending?.[GLOBAL_REGION]?.find((c) => c.id === category.id);
+    if (mixed.length) trending[GLOBAL_REGION].push({ id: category.id, group: category.group, name: category.name, videos: mixed });
+    else if (previousMix) trending[GLOBAL_REGION].push({ ...previousMix, group: category.group, name: category.name });
+  }
+
+  // Search rows: the same for everyone
+  for (const category of QUICK_PICK_CATEGORIES.filter((c) => !c.chart)) {
+    const previous = quickPicks?.categories?.find((c) => c.id === category.id);
     if (!quotaHit) {
       try {
         const videos = await fetchCategory(category, key, previous?.videos || [], rotation[category.id] || 0);
-        if (!category.chart) rotation[category.id] = (rotation[category.id] || 0) + 1;
+        rotation[category.id] = (rotation[category.id] || 0) + 1;
         if (videos.length > 0) {
           categories.push({ id: category.id, group: category.group, name: category.name, videos });
           refreshed += 1;
@@ -196,22 +268,22 @@ async function refreshQuickPicks() {
         }
       } catch (err) {
         log('WARN', `Quick picks: ${category.id}: ${err.message}`);
-        if (/quota/i.test(err.message)) quotaHit = true; // no point spending more calls today
-        if (category.chart && /chartNotFound|notFound|invalid/i.test(err.message)) unavailableCharts.add(category.id);
+        noteError(err);
       }
     }
     // Couldn't refresh this one: keep its last good list rather than dropping it
     if (previous) categories.push({ ...previous, group: category.group, name: category.name });
   }
   // Nothing new (bad key, quota used up, YouTube down): keep serving the last list, retry soon
-  if (refreshed === 0 || categories.length === 0) return false;
-  quickPicks = { updatedAt: new Date().toISOString(), region: QUICK_PICKS_REGION, config: QUICK_PICKS_CONFIG_ID, rotation, categories };
+  if (refreshed === 0 || (categories.length === 0 && trending[GLOBAL_REGION].length === 0)) return false;
+  quickPicks = { updatedAt: new Date().toISOString(), config: QUICK_PICKS_CONFIG_ID, rotation, categories, trending };
   try {
     fs.writeFileSync(QUICK_PICKS_CACHE_FILE, JSON.stringify(quickPicks));
   } catch (err) {
     log('WARN', `Quick picks: could not save cache: ${err.message}`);
   }
-  log('INFO', `Quick picks refreshed: ${categories.map((c) => `${c.id}=${c.videos.length}`).join(' ')}`);
+  log('INFO', `Quick picks refreshed: ${categories.map((c) => `${c.id}=${c.videos.length}`).join(' ')}; trending rows ${
+    Object.entries(trending).map(([r, list]) => `${r}=${list.length}`).join(' ')}`);
   return true;
 }
 
@@ -236,7 +308,7 @@ export function startQuickPicks() {
   let delay = 0;
   try {
     const saved = JSON.parse(fs.readFileSync(QUICK_PICKS_CACHE_FILE, 'utf8'));
-    if (saved?.categories?.length && saved.region === QUICK_PICKS_REGION) {
+    if (saved?.categories?.length) {
       quickPicks = saved; // served until the refresh below, and its videos seed the new lists
       if (saved.config === QUICK_PICKS_CONFIG_ID) {
         const age = Date.now() - Date.parse(saved.updatedAt);
@@ -249,6 +321,32 @@ export function startQuickPicks() {
     // no saved list yet
   }
   scheduleQuickPicks(delay);
+}
+
+/**
+ * What one visitor gets: their country's trending rows (or the worldwide mix) first, then the
+ * search rows, with rows made for their country first in their group and rows made for another
+ * country last in it. (pure, for tests)
+ */
+export function picksFor(data, requested) {
+  const region = QUICK_PICKS_REGIONS.includes(requested) ? requested : GLOBAL_REGION;
+  // A list saved by an older server has no per-country trending: its rows are used as they are
+  const trending = data.trending ? (data.trending[region]?.length ? data.trending[region] : data.trending[GLOBAL_REGION] || []) : [];
+  const rank = (row) => {
+    const def = QUICK_PICK_CATEGORIES.find((d) => d.id === row.id);
+    return def?.region ? (def.region === region ? 0 : 2) : 1;
+  };
+  const groupOrder = [...new Set((data.categories || []).map((c) => c.group))];
+  const rows = (data.categories || [])
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => (groupOrder.indexOf(a.row.group) - groupOrder.indexOf(b.row.group)) || (rank(a.row) - rank(b.row)) || (a.index - b.index))
+    .map(({ row }) => row);
+  return {
+    updatedAt: data.updatedAt,
+    region,
+    regions: QUICK_PICKS_REGIONS,
+    categories: [...trending, ...rows]
+  };
 }
 
 export function serveQuickPicks(req, res) {
@@ -265,6 +363,12 @@ export function serveQuickPicks(req, res) {
     res.writeHead(503, { ...headers, 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ categories: [] }));
   }
+  let requested = '';
+  try {
+    requested = (new URL(req.url, 'http://x').searchParams.get('region') || '').toUpperCase();
+  } catch {
+    // unreadable address: the worldwide list
+  }
   res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=900' });
-  res.end(JSON.stringify(quickPicks));
+  res.end(JSON.stringify(picksFor(quickPicks, requested)));
 }
