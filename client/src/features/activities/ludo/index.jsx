@@ -3,6 +3,7 @@
  * the authority). This file draws the board and the panel, animates moves, and, on the
  * authority's app only, plays for computers, people who left and players who went idle.
  */
+import { getClientId } from '../../../utils/clientId';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRoom, useSharedState } from '../../../core/RoomContext';
 import { sound } from '../../../utils/sound';
@@ -200,6 +201,16 @@ export default function Ludo({ activityId }) {
     }, [isAuthority, state.phase, state.turn, state.seq, state.seats, state.rules.awayMode, present, dispatch]);
 
     const sit = (color) => dispatch({ kind: 'sit', color, name: room.username });
+
+    // Back after a reload or rejoin: the seat you had (the same app) is yours again, automatically
+    const myCid = getClientId();
+    const myOldSeat = !myColor ? COLORS.find((c) => seatAway(c) && state.seats[c].cid === myCid) || null : null;
+    const reclaimKey = myOldSeat ? `${myOldSeat}:${state.seats[myOldSeat].id}` : '';
+    useEffect(() => {
+        if (!reclaimKey) return;
+        dispatch({ kind: 'sit', color: reclaimKey.split(':')[0], name: room.username });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [reclaimKey]);
     const seated = seatedColors(state);
 
     return (

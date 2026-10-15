@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { splitTimestamps } from '../utils/chatTimestamps';
+import { splitLinks } from '../utils/chatLinks';
 import QuickPicksModal from './QuickPicksModal';
 import { getAvatarColor } from '../utils/sound';
 import { EMOJI_CATEGORIES } from '../utils/emoji';
@@ -31,16 +32,17 @@ import { useBackLayer } from '../core/backStack';
 
 
 
-// "Look at 12:34": video timestamps become links that jump everyone there (while a video is loaded)
-function renderMessageText(text, onSeekTo) {
+// Web links open in a new tab (right-click to copy them); "Look at 12:34": video timestamps become
+// links that jump everyone there (while a video is loaded)
+function renderTimestamps(text, onSeekTo, keyBase) {
   if (!onSeekTo) return text;
   const parts = splitTimestamps(text);
   if (parts.length === 1 && parts[0].seconds === undefined) return text;
   return parts.map((part, idx) => (part.seconds === undefined ? (
-    <React.Fragment key={idx}>{part.text}</React.Fragment>
+    <React.Fragment key={`${keyBase}-${idx}`}>{part.text}</React.Fragment>
   ) : (
     <button
-      key={idx}
+      key={`${keyBase}-${idx}`}
       type="button"
       className="chat-timestamp"
       onClick={() => onSeekTo(part.seconds)}
@@ -48,6 +50,16 @@ function renderMessageText(text, onSeekTo) {
     >
       {part.text}
     </button>
+  )));
+}
+
+function renderMessageText(text, onSeekTo) {
+  const pieces = splitLinks(text);
+  if (pieces.length === 1 && !pieces[0].href) return renderTimestamps(text, onSeekTo, 't');
+  return pieces.map((piece, idx) => (piece.href ? (
+    <a key={idx} className="chat-link" href={piece.href} target="_blank" rel="noopener noreferrer nofollow">{piece.text}</a>
+  ) : (
+    <React.Fragment key={idx}>{renderTimestamps(piece.text, onSeekTo, idx)}</React.Fragment>
   )));
 }
 

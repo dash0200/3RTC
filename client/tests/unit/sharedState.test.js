@@ -143,3 +143,31 @@ describe('shared state', () => {
         assert.equal(heard, 2);
     });
 });
+
+it('a host coming back (new connection, empty store) gets the game from the others', async () => {
+    const net = createFakeNetwork();
+    const reducer = (state, action) => (action.kind === 'add' ? { n: state.n + 1 } : state);
+    const host = net.addPeer('h', { isHost: true });
+    const guest = net.addPeer('g');
+    const hs = createSharedStore(host.bus, host.room, 'game', { initial: { n: 0 }, reducer });
+    const gs = createSharedStore(guest.bus, guest.room, 'game', { initial: { n: 0 }, reducer });
+    net.connect('h', 'g');
+    await net.flush();
+    for (let i = 0; i < 3; i++) gs.dispatch({ kind: 'add' });
+    await net.flush();
+    assert.equal(hs.getState().n, 3);
+    // The host leaves: the guest carries on as the authority
+    net.disconnect('h', 'g');
+    host.bus.emitEvent('room-left');
+    gs.dispatch({ kind: 'add' });
+    await net.flush();
+    assert.equal(gs.getState().n, 4);
+    assert.equal(hs.getState().n, 0);
+    // ...and comes back: authority again, and it has the game as it is now
+    net.connect('h', 'g');
+    await net.flush();
+    assert.equal(hs.getState().n, 4);
+    gs.dispatch({ kind: 'add' });
+    await net.flush();
+    assert.deepEqual([hs.getState().n, gs.getState().n], [5, 5]);
+});
