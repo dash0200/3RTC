@@ -65,6 +65,19 @@ with sync_playwright() as p:
 
     host.locator('.ludo-start-btn').click()
     check('the game starts for both', wait(lambda: host.locator('[data-testid=ludo-status]').count() and guest.locator('[data-testid=ludo-status]').count() and board(host) == board(guest) and board(host), 8))
+    # The dice is in the colour of whoever's turn it is (before they roll)
+    dice = "document.querySelector('.ludo-dice-face').getAttribute('class')"
+    for _ in range(3):
+        wait(lambda: any(pg.locator('.ludo-roll-btn').count() for pg in (host, guest)), 25)
+        mover, color = (host, 'red') if host.locator('.ludo-roll-btn').count() else (guest, 'blue')
+        time.sleep(1.8)  # after the last roll's result has been shown
+        check(f"{color}'s turn: the dice is {color} for everyone", all(f'ludo-c-{color}' in pg.evaluate(dice) for pg in (host, guest)),
+              [pg.evaluate(dice) for pg in (host, guest)])
+        mover.locator('.ludo-roll-btn').click(); time.sleep(0.3)
+        check(f'{color} rolls: the result shows in {color}', all(f'ludo-c-{color}' in pg.evaluate(dice) for pg in (host, guest)))
+        time.sleep(1.5)
+        if mover.locator('.ludo-token.is-movable').count():
+            mover.locator('.ludo-token.is-movable').first.click(); time.sleep(0.8)
     for _ in range(4):  # a few turns
         for pg in (host, guest):
             if pg.locator('.ludo-roll-btn').count():
