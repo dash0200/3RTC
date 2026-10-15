@@ -45,6 +45,9 @@ import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
 import { useNewVersionNotice } from './pwa/useNewVersionNotice';
+import { useBackLayer, useRoomBackGuard } from './core/backStack';
+import LeaveRoomDialog from './components/LeaveRoomDialog';
+import { saveLastRoom, readLastRoom, forgetLastRoom } from './utils/lastRoom';
 
 const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
 // Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
@@ -240,13 +243,74 @@ export default function App() {
         setShowJoinModal(false);
         mesh.joinRoom(pin);
     };
-    const handleLeaveRoom = () => {
-        if (!window.confirm('Leave this room and end P2P connection?')) return;
+    const leaveRoomNow = () => {
+        setShowLeaveDialog(false);
         voice.resetVoice();
         mesh.leaveRoom(); // emits 'room-left': every feature resets itself
         addSystemMessage('You left the room.');
         showToast('Left room');
     };
+    const handleLeaveRoom = () => {
+        if (!window.confirm('Leave this room and end P2P connection?')) return;
+        leaveRoomNow();
+    };
+
+    // ---- Back button, rejoining, closing the tab -----------------------------------------------
+    // Back in a room closes what's open on top, else asks before leaving (core/backStack.js).
+    // Playing videos are never closed by Back: they have their own Exit button.
+    const [showLeaveDialog, setShowLeaveDialog] = useState(false);
+    const closeLeaveDialog = useCallback(() => setShowLeaveDialog(false), []);
+    useRoomBackGuard(roomId, () => setShowLeaveDialog(true));
+    useEffect(() => { if (!roomId) setShowLeaveDialog(false); }, [roomId]);
+    useBackLayer(Boolean(phoneSheet), closePhoneSheet);
+    useBackLayer(showCreateModal, () => setShowCreateModal(false));
+    useBackLayer(showJoinModal, () => setShowJoinModal(false));
+    useBackLayer(showSettingsModal, () => setShowSettingsModal(false));
+    useBackLayer(showAudioSettingsModal, () => setShowAudioSettingsModal(false));
+    useBackLayer(showNetworkHudModal, () => setShowNetworkHudModal(false));
+    useBackLayer(showQrModal, () => setShowQrModal(false));
+    useBackLayer(isPhone && activityChatSplit && Boolean(activities.current), () => setActivityChatSplit(false));
+
+    // The room you were last in: "Rejoin" on the home screen for a while (utils/lastRoom.js)
+    const [lastRoom, setLastRoom] = useState(() => readLastRoom());
+    useEffect(() => {
+        if (!roomId) {
+            setLastRoom(readLastRoom());
+            return undefined;
+        }
+        const save = () => saveLastRoom(roomId, isHost);
+        save();
+        const timer = setInterval(save, 60 * 1000);
+        window.addEventListener('pagehide', save);
+        return () => {
+            save(); // left: the 30 minutes count from now
+            clearInterval(timer);
+            window.removeEventListener('pagehide', save);
+        };
+    }, [roomId, isHost]);
+    const rejoin = !roomId && lastRoom ? {
+        ...lastRoom,
+        onRejoin: () => {
+            if (lastRoom.wasHost) mesh.createRoom(lastRoom.roomId);
+            else mesh.joinRoom(lastRoom.roomId);
+        },
+        onDismiss: () => {
+            forgetLastRoom();
+            setLastRoom(null);
+        }
+    } : null;
+
+    // Closing or reloading the tab mid-video or mid-game: the browser asks first
+    const busyInRoom = Boolean(roomId) && (isMediaActive || Boolean(activities.current));
+    useEffect(() => {
+        if (!busyInRoom) return undefined;
+        const ask = (e) => {
+            e.preventDefault();
+            e.returnValue = '';
+        };
+        window.addEventListener('beforeunload', ask);
+        return () => window.removeEventListener('beforeunload', ask);
+    }, [busyInRoom]);
 
     const handleCopyRoom = useCallback(async (customVal) => {
         if (!roomId) return;
@@ -341,6 +405,7 @@ export default function App() {
             peerCount={peerCount}
             isP2PConnected={isP2PConnected}
             p2pStatusText={p2pStatusText}
+            rejoin={rejoin}
             onOpenCreate={() => setShowCreateModal(true)}
             onOpenJoin={() => {
                 setInitialJoinPin('');
@@ -500,6 +565,7 @@ export default function App() {
                             onCreate={handleConfirmCreate}
                             onJoin={handleConfirmJoin}
                             onOpenServerSettings={openServerSettings}
+                            rejoin={rejoin}
                         />
                     )}
                     <AddVideoSheet
@@ -652,6 +718,13 @@ export default function App() {
             />
 
             <ReactionsEditor />
+            <LeaveRoomDialog
+                isOpen={showLeaveDialog && Boolean(roomId)}
+                roomId={roomId}
+                isPlaying={isMediaActive || Boolean(activities.current)}
+                onStay={closeLeaveDialog}
+                onLeave={leaveRoomNow}
+            />
 
             {notices.toastMessage && <div className="toast">{notices.toastMessage}</div>}
         </div>

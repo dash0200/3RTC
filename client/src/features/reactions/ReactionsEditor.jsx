@@ -12,9 +12,11 @@ import {
     useReactionsEditorOpen, closeReactionsEditor
 } from './reactionSet';
 import './reactionsEditor.css';
+import { useBackLayer } from '../../core/backStack';
 
 export default function ReactionsEditor() {
     const isOpen = useReactionsEditorOpen();
+    useBackLayer(isOpen, closeReactionsEditor);
     const items = useReactionSet();
     const list = useMemo(() => items.map((i) => i.emoji), [items]);
     const [selected, setSelected] = useState(null); // index of the slot being replaced

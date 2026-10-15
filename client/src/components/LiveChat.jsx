@@ -27,6 +27,7 @@ import { PeerVoicePanel } from './PeerVoiceRoster';
 import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal from './ImageLightboxModal';
 import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
+import { useBackLayer } from '../core/backStack';
 
 
 
@@ -335,6 +336,10 @@ export default function LiveChat({
   // Collaborative queue states
   const [queueInput, setQueueInput] = useState('');
   const [showQuickPicks, setShowQuickPicks] = useState(false);
+  // Back closes these first (core/backStack.js)
+  useBackLayer(isEmojiPickerOpen, () => setIsEmojiPickerOpen(false));
+  useBackLayer(isLightboxOpen, () => setIsLightboxOpen(false));
+  useBackLayer(showQuickPicks, () => setShowQuickPicks(false));
   const [queueError, setQueueError] = useState('');
   const [isAddingQueue, setIsAddingQueue] = useState(false);
 

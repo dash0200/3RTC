@@ -9,8 +9,11 @@ import { useLiveVoiceUsers } from '../utils/speakingActivity';
 import SoundboardTray from './SoundboardTray';
 import { BUILD, BUILD_LABEL } from '../version';
 import { PhoneEmptyMedia, PhoneStreamOffer } from './phone/PhoneMediaOverlays';
+import RejoinCard from './RejoinCard';
+import { useBackLayer } from '../core/backStack';
 
 export default function Stage({
+  rejoin = null,
   roomId,
   isHost,
   peerCount,
@@ -96,6 +99,8 @@ export default function Stage({
   const soundboardContainerRef = useRef(null);
 
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  useBackLayer(isSoundboardOpen, () => setIsSoundboardOpen(false));
+  useBackLayer(isMoreMenuOpen, () => setIsMoreMenuOpen(false));
   const moreMenuRef = useRef(null);
 
   // Close soundboard popover when clicking outside
@@ -254,6 +259,7 @@ export default function Stage({
                 Watch YouTube videos together.
               </p>
 
+              <RejoinCard rejoin={rejoin} />
               <div className="initial-actions">
                 <button className="btn btn-primary" onClick={onOpenCreate}>
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
