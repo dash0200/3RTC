@@ -85,6 +85,10 @@ bus directly: `room.bus.broadcast('chess-cursor', { square })` and
 Components get data and callbacks as props. Something deep in the tree that needs room data can
 use `useRoom()` instead of threading new props through every level.
 
+Anything that opens on top (a dialog, sheet, picker, menu) calls `useBackLayer(isOpen, close)`
+(`core/backStack.js`), so the phone's Back button closes it instead of leaving the room. Don't
+use it for a playing video or the open game: those are only closed by their own buttons.
+
 ## Don'ts
 
 - Don't send on `peer.dataChannel` yourself, or read `peersRef`: use the bus.

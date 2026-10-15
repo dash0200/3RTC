@@ -10885,3 +10885,52 @@ video::cue {
   line-height: 18px;
   text-align: center;
 }
+
+/* Back pressed in a room (components/LeaveRoomDialog.jsx) */
+.leave-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+  animation: leave-dialog-fade 0.15s ease-out;
+}
+.leave-dialog {
+  width: min(100%, 360px);
+  padding: 22px 20px 18px;
+  border-radius: 16px;
+  background: var(--bg-secondary, #1b1b1f);
+  border: 1px solid var(--border-subtle, #2a2a2e);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  color: var(--text-primary, #fff);
+  text-align: center;
+}
+.leave-dialog h2 { margin: 0 0 8px; font-size: 19px; }
+.leave-dialog p { margin: 0 0 18px; color: var(--text-secondary, #aaa); font-size: 14px; line-height: 1.45; }
+.leave-dialog-actions { display: flex; flex-direction: column; gap: 10px; }
+.leave-dialog-actions button { font: inherit; font-size: 15px; font-weight: 600; padding: 12px; border-radius: 12px; cursor: pointer; }
+.leave-dialog-stay { border: 0; background: #fff; color: #111; }
+.leave-dialog-leave { border: 1px solid rgba(255, 23, 68, 0.5); background: transparent; color: #ff5370; }
+@keyframes leave-dialog-fade { from { opacity: 0; } }
+
+/* "Rejoin room" on the home screens after leaving */
+.rejoin-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 auto 16px;
+  padding: 10px 12px 10px 16px;
+  max-width: 420px;
+  border-radius: 14px;
+  background: rgba(124, 196, 255, 0.1);
+  border: 1px solid rgba(124, 196, 255, 0.3);
+  color: var(--text-primary, #fff);
+  text-align: left;
+}
+.rejoin-card-text { flex: 1; min-width: 0; font-size: 14px; line-height: 1.35; }
+.rejoin-card-text small { display: block; color: var(--text-secondary, #aaa); font-size: 12px; }
+.rejoin-card-btn { border: 0; border-radius: 10px; padding: 9px 14px; background: #7cc4ff; color: #0b1b2b; font: inherit; font-weight: 700; font-size: 14px; cursor: pointer; white-space: nowrap; }
+.rejoin-card-dismiss { border: 0; background: transparent; color: var(--text-muted, #888); font-size: 18px; line-height: 1; padding: 4px 6px; cursor: pointer; }

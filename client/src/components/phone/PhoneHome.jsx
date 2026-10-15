@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { BUILD_LABEL } from '../../version';
+import RejoinCard from '../RejoinCard';
 
 const CODE_LENGTH = 5;
 
 /** Phone home: your name, create a room, or join with a 5-digit code. */
-export default function PhoneHome({ username, initialPin = '', onCreate, onJoin, onOpenServerSettings }) {
+export default function PhoneHome({ username, initialPin = '', onCreate, onJoin, onOpenServerSettings, rejoin = null }) {
   const [name, setName] = useState(username || '');
   const [digits, setDigits] = useState(() => {
     const pin = String(initialPin || '').replace(/\D/g, '').slice(0, CODE_LENGTH);
@@ -55,6 +56,8 @@ export default function PhoneHome({ username, initialPin = '', onCreate, onJoin,
           <h1>Watch together</h1>
           <p>Video, voice and chat straight between your devices. Up to 6 people.</p>
         </div>
+
+        <RejoinCard rejoin={rejoin} />
 
         <div className="phone-field">
           <label htmlFor="phone-name" className="phone-label">YOUR NAME</label>

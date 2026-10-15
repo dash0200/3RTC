@@ -53,6 +53,10 @@ Each peer has two data channels: **main** (JSON, small, ordered: chat, sync, gam
 - **`RoomContext.jsx`**: `useRoom()`, `usePeerMessage(type, fn)`, `useBusEvent(name, fn)`,
   `useSharedState(key, { initial, reducer })` for components. Hooks called in App use the `...On`
   variants with the room passed in.
+- **`backStack.js`**: the Back button in a room. One guard entry in the browser history keeps
+  Back inside the app; each press closes the last thing opened (`useBackLayer(isOpen, close)`),
+  or with nothing open asks "Leave room?". The address carries `?room=` while in a room. Videos
+  and the open game are never closed by Back.
 
 The **room object** (built once in `App.jsx`) is what every feature receives:
 

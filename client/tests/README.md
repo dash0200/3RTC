@@ -40,6 +40,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
 | `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
+| `back_button` | phone Back: closes what's open, asks before leaving, never closes a video or game; room code in the address; Rejoin (guest and host); closing the tab mid-video asks |
 | `stream` | sharing a local video: on-demand streaming, seeking, a hard-refreshed viewer |
 | `stream_uneven` | a film with an uneven bitrate (heavy first half) plays straight through |
 | `local_video_sync` | local video play / pause / seek sync |
