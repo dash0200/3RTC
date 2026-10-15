@@ -1,6 +1,7 @@
 /**
  * Shared watch queue and vote-to-skip. Everyone can add; playing from the queue follows the host
  * controls lock; a passed skip vote is the room deciding, so it goes through the lock.
+ * An item is a YouTube video { videoId } or a link source { media } (features/media/sources.js).
  *
  * Wire: 'queue-action' { action: add | remove | reorder | clear | play-item | next | vote-skip | vote-skip-passed, ... }
  * Listens to 'media-changed' (clears skip votes) and 'room-left'.
@@ -9,6 +10,18 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { sound } from '../../utils/sound';
 import { fetchYouTubeTitle } from '../../components/YouTubeSyncPlayer';
 import { usePeerMessageOn } from '../../core/RoomContext';
+import { normalizeMedia, fallbackTitle } from '../media/sources';
+
+// A queue item from someone else: a YouTube video or a link source (checked), else dropped
+const cleanItem = (item) => {
+    if (!item || typeof item.id !== 'string') return null;
+    if (item.media) {
+        const media = normalizeMedia(item.media);
+        return media ? { ...item, media, videoId: undefined } : null;
+    }
+    return typeof item.videoId === 'string' ? item : null;
+};
+const cleanQueue = (list) => list.map(cleanItem).filter(Boolean);
 
 export function useQueue({ room, playback, hostControls, peerCount }) {
     const { bus } = room;
@@ -47,12 +60,14 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
     usePeerMessageOn(bus, 'queue-action', (data) => {
         const who = data.sender || 'Peer';
         switch (data.action) {
-            case 'add':
-                if (!data.item) break;
-                setQueue((prev) => (prev.some((q) => q.id === data.item.id) ? prev : [...prev, data.item]));
-                room.log(`📑 ${who} queued: "${data.item.title}"`);
+            case 'add': {
+                const item = cleanItem(data.item);
+                if (!item) break;
+                setQueue((prev) => (prev.some((q) => q.id === item.id) ? prev : [...prev, item]));
+                room.log(`📑 ${who} queued: "${item.title}"`);
                 room.notify(`📑 ${who} added to queue`);
                 break;
+            }
             case 'remove': {
                 if (!data.itemId) break;
                 const removed = queueRef.current.find((q) => q.id === data.itemId);
@@ -61,7 +76,7 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
                 break;
             }
             case 'reorder':
-                if (Array.isArray(data.queue)) setQueue(data.queue);
+                if (Array.isArray(data.queue)) setQueue(cleanQueue(data.queue));
                 break;
             case 'clear':
                 setQueue([]);
@@ -74,7 +89,7 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
                 }
                 break;
             case 'next':
-                if (Array.isArray(data.remainingQueue)) setQueue(data.remainingQueue);
+                if (Array.isArray(data.remainingQueue)) setQueue(cleanQueue(data.remainingQueue));
                 else if (data.nextVideoId) setQueue((prev) => prev.filter((q) => q.videoId !== data.nextVideoId));
                 setSkipVotes([]);
                 if (data.nextTitle) {
@@ -96,17 +111,21 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
 
     // autoplay: with nothing playing, the first video added starts right away. Quick Watch passes
     // false so several videos can be lined up first (then "Play queue").
-    const addToQueue = useCallback(async ({ videoId, title }, { autoplay = true } = {}) => {
-        if (!videoId) return;
-        const finalTitle = title || await fetchYouTubeTitle(videoId);
-        const nothingPlaying = !playback.activeVideoIdRef.current && !playback.localVideoFile && !playback.remoteLocalVideoMeta;
+    const addToQueue = useCallback(async ({ videoId, media, title }, { autoplay = true } = {}) => {
+        const cleanMedia = media ? normalizeMedia({ ...media, title: title || media.title }) : null;
+        if (!videoId && !cleanMedia) return;
+        const finalTitle = cleanMedia ? (cleanMedia.title || fallbackTitle(cleanMedia)) : (title || await fetchYouTubeTitle(videoId));
+        const nothingPlaying = !playback.activeVideoIdRef.current && !playback.activeMediaRef.current && !playback.localVideoFile && !playback.remoteLocalVideoMeta;
         if (autoplay && nothingPlaying) {
-            playback.playYouTube(videoId, finalTitle);
+            if (cleanMedia) playback.playLink(cleanMedia);
+            else playback.playYouTube(videoId, finalTitle);
             room.notify(`▶️ Now playing: "${finalTitle}"`);
             room.log(`🎬 Now playing: "${finalTitle}"`);
             return;
         }
-        const item = { id: crypto.randomUUID(), videoId, title: finalTitle, addedBy: room.getSelf().username, timestamp: Date.now() };
+        const item = cleanMedia
+            ? { id: crypto.randomUUID(), media: cleanMedia, title: finalTitle, addedBy: room.getSelf().username, timestamp: Date.now() }
+            : { id: crypto.randomUUID(), videoId, title: finalTitle, addedBy: room.getSelf().username, timestamp: Date.now() };
         setQueue((prev) => [...prev, item]);
         send('add', { item });
         room.notify(`📑 Added to queue: "${finalTitle}"`);
@@ -143,7 +162,8 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
             return;
         }
         setQueue((prev) => prev.filter((q) => q.id !== itemId));
-        playback.playYouTube(item.videoId, item.title);
+        if (item.media) playback.playLink(item.media);
+        else playback.playYouTube(item.videoId, item.title);
         send('play-item', { itemId });
         room.notify(`▶️ Now playing from queue: "${item.title}"`);
         room.log(`🎬 Playing queued video: "${item.title}"`);
@@ -162,15 +182,16 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
             return;
         }
         setQueue(remaining);
-        playback.playYouTube(nextItem.videoId, nextItem.title, byVote ? { byVote: true } : {});
-        send('next', { nextVideoId: nextItem.videoId, nextTitle: nextItem.title, remainingQueue: remaining });
+        if (nextItem.media) playback.playLink(nextItem.media, byVote ? { byVote: true } : {});
+        else playback.playYouTube(nextItem.videoId, nextItem.title, byVote ? { byVote: true } : {});
+        send('next', { nextVideoId: nextItem.videoId || null, nextTitle: nextItem.title, remainingQueue: remaining });
         sound.playPop();
         room.notify(`▶️ Next Up: "${nextItem.title}"`);
         room.log(`⏭️ Autoplaying next in queue: "${nextItem.title}"`);
     }, [hostControls, playback, room, send, setQueue]);
 
     const voteSkip = useCallback(() => {
-        if (!playback.activeVideoIdRef.current) return;
+        if (!playback.activeVideoIdRef.current && !playback.activeMediaRef.current) return;
         const { username } = room.getSelf();
         const current = skipVotesRef.current;
         const alreadyVoted = current.includes(username);
@@ -190,9 +211,7 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
         if (queueRef.current.length > 0) {
             playNextInQueue({ byVote: true });
         } else {
-            playback.setActiveVideoId(null);
-            playback.setActiveVideoTitle('');
-            playback.broadcastAction('close', { byVote: true });
+            playback.closeByVote();
             room.log('🎬 Queue ended. Exited video player.');
         }
     }, [peerCount, playback, playNextInQueue, room, send, setSkipVotes]);

@@ -48,7 +48,7 @@ with sync_playwright() as p:
     room = next(m['roomId'] for m in pc.evaluate('window.__sig') if m.get('type') == 'room-created')
     phone.goto(f'http://localhost:5199/?room={room}'); phone.wait_for_timeout(1200); phone.get_by_role('button', name='Join room').click()
     wait(lambda: 'P2P' in phone.locator('.phone-status-pill').inner_text(), 15); time.sleep(1.5)
-    pc.get_by_placeholder(re.compile('Paste YouTube link')).first.fill('https://youtu.be/aqz-KE-bpKQ'); pc.get_by_role('button', name=re.compile('Load for All')).click()
+    pc.get_by_placeholder(re.compile('Paste a link')).first.fill('https://youtu.be/aqz-KE-bpKQ'); pc.get_by_role('button', name=re.compile('Load for All')).click()
     wait(lambda: st(pc) and st(phone), 8); time.sleep(1)
     pc.evaluate('window.__user.play()'); wait(lambda: st(phone)['s'] == 1, 6); time.sleep(2.5)
     steps = [('phone', 'pause'), ('pc', 'play'), ('pc', 'pause'), ('phone', 'play'), ('pc', 'seek', 120), ('phone', 'seek', 200), ('pc', 'pause'), ('phone', 'play'), ('pc', 'pause')]

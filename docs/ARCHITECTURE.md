@@ -81,9 +81,11 @@ Through `useRoom()` components also get `roomId`, `isHost`, `username`, `peers`,
 | `chat/` | messages, images, unread count | `chat`, `p2p-image-start`, binary `IMG1` |
 | `reactions/` | floating emoji | `reaction` |
 | `soundboard/` | shared sound clips | `soundboard-sfx` |
-| `playback/usePlayback` | what's playing, play/pause/seek/load | `yt-action`, `local-video-action` |
+| `playback/usePlayback` | what's playing (YouTube, a local file, or a link source), play/pause/seek/load | `yt-action`, `local-video-action`, `media-action` |
+| `playback/useDriftSync` | automatic re-sync: quietly corrects anyone more than 1.5 s off, for every source | `media-heartbeat` |
+| `media/` | "paste anything": `sources.js` (what a link is), `adapters/` (one small player per source: Vimeo, Twitch, `<video>` + hls.js), `LinkPlayer.jsx` (the sync engine for link sources) | `media-action`, `media-sync-state` |
 | `playback/useHostControls` | "only I control playback" lock | `room-settings` (+ field in `peer-identity`) |
-| `playback/useMediaSync` | catching up people who join | `yt-request-sync`, `yt-sync-state`, `local-video-sync-state` |
+| `playback/useMediaSync` | catching up people who join | `yt-request-sync`, `yt-sync-state`, `local-video-sync-state`, `media-sync-state` |
 | `playback/useStreamTransfer` | sharing a local video P2P | `p2p-*`, binary chunks |
 | `queue/` | watch queue, vote to skip | `queue-action` |
 | `activities/` | games and other things to do together | `room-state*` (via sharedState) |

@@ -48,6 +48,7 @@ import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 import { useBackLayer, useRoomBackGuard } from './core/backStack';
 import LeaveRoomDialog from './components/LeaveRoomDialog';
 import { saveLastRoom, readLastRoom, forgetLastRoom } from './utils/lastRoom';
+import { useDriftSync } from './features/playback/useDriftSync';
 
 const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
 // Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
@@ -152,6 +153,7 @@ export default function App() {
     useStreamTransfer({ room, playback });
     const queueFeature = useQueue({ room, playback, hostControls, peerCount });
     useMediaSync({ room, playback, queue: queueFeature, hostControls });
+    useDriftSync({ room, playback, active: Boolean(roomId) && playback.isMediaActive });
     const {
         activeVideoId, activeVideoTitle, localVideoFile, remoteLocalVideoMeta, remoteAction, streamProgress, streamVideoUrl, isMediaActive
     } = playback;
@@ -418,6 +420,10 @@ export default function App() {
             unreadChatCount={chat.unreadChatCount}
             chatCount={chat.unreadChatCount}
             activeVideoId={activeVideoId}
+            activeMedia={playback.activeMedia}
+            onPlayLink={playback.playLink}
+            onQueueLink={(media) => queueFeature.addToQueue({ media, title: media.title })}
+            onExitVideo={playback.exitVideo}
             activeVideoTitle={activeVideoTitle}
             onVideoChange={playback.changeVideo}
             localVideoFile={localVideoFile}
@@ -490,6 +496,7 @@ export default function App() {
             onOpenSettings={openServerSettings}
             queue={queue}
             activeVideoId={activeVideoId}
+            activeMedia={playback.activeMedia}
             activeVideoTitle={activeVideoTitle}
             onAddToQueue={queueFeature.addToQueue}
             onRemoveFromQueue={queueFeature.removeFromQueue}
@@ -577,6 +584,8 @@ export default function App() {
                             playback.broadcastAction('load', { newVideoId: id, title });
                         }}
                         onQueueYouTube={(id, title) => queueFeature.addToQueue({ videoId: id, title })}
+                        onLoadLink={playback.playLink}
+                        onQueueLink={(media) => queueFeature.addToQueue({ media, title: media.title })}
                         onQueuePick={(id, title) => queueFeature.addToQueue({ videoId: id, title }, { autoplay: false })}
                         queuedIds={queue.map((item) => item.videoId)}
                         onPlayQueue={queue.length > 0 && !isMediaActive ? queueFeature.playNextInQueue : undefined}

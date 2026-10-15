@@ -11,7 +11,8 @@ import { defineConfig } from 'vite'
 // Optional on-demand assets (the RNNoise voice isolation model and its worklet) are left out
 // of the precache so visitors who never enable it don't download them; the service worker
 // caches them on first use instead.
-const ON_DEMAND_ASSET = /(^|\/)(rnnoise[^/]*\.wasm|workletProcessor-[^/]*\.js)$/
+// hls.js (HLS links) too: only people who play a .m3u8 stream need it
+const ON_DEMAND_ASSET = /(^|\/)(rnnoise[^/]*\.wasm|workletProcessor-[^/]*\.js|hls-[^/]*\.js)$/
 // Files for search engines and link previews; the app itself never needs them
 const NOT_PRECACHED = /^(og-image\.png|robots\.txt|sitemap\.xml|404\.html)$/
 
