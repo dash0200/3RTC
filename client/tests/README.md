@@ -37,7 +37,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `youtube_unavailable` | blocked videos skipped and remembered |
 | `host_controls` | "only I control playback", wake lock, chat timestamps |
 | `queue` | Quick Watch queue buttons, Play queue, browse window, phone sheet |
-| `quick_picks_region` | trending for the viewer's country (time zone / language), worldwide mix elsewhere, "Trending in" choice remembered, India's rows first in India |
+| `quick_picks_region` | trending is a worldwide mix by default; "Trending in" switches to a country (remembered); India's rows first when India is chosen |
 | `activities` | start, shared state, late joiner, host lock, close, leave (dev sample activity) |
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
 | `ludo_stack` | phone: tokens sharing a square stay visible, the movable ones on top, tapping one moves exactly that one (rigged dice) |
