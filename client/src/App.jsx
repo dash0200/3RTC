@@ -43,6 +43,7 @@ import { useFileFormat } from './features/files/useFileFormat';
 import { useQueue } from './features/queue/useQueue';
 import { useActivities } from './features/activities/useActivities';
 import ActivityStage from './features/activities/ActivityStage';
+import { nextActivityView } from './features/activities/activityHost';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
@@ -168,12 +169,30 @@ export default function App() {
     const [sidebarTab, setSidebarTab] = useState('chat');
     const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
     const isPhone = useIsPhone();
+    // How the open game is shown here: over the stage, in a small window, or as a bubble
+    // (only on this device; the game itself is the same for everyone). See activityHost.js.
+    const [activityView, setActivityView] = useState('full');
+    const viewMemoRef = useRef({ media: false, key: null });
+    const activityKey = activities.current ? `${activities.current.id}:${activities.current.startedAt}` : null;
+    useEffect(() => {
+        const memo = viewMemoRef.current;
+        setActivityView((view) => nextActivityView({
+            view,
+            mediaActive: isMediaActive,
+            wasMediaActive: memo.media,
+            isPhone,
+            activityOpen: Boolean(activityKey),
+            activityJustOpened: Boolean(activityKey) && activityKey !== memo.key
+        }));
+        viewMemoRef.current = { media: isMediaActive, key: activityKey };
+    }, [isMediaActive, activityKey, isPhone]);
+    const activityAside = Boolean(activities.current) && activityView !== 'full';
     const [activityChatSplit, setActivityChatSplit] = useState(() => {
         try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
     });
     // Unread count: on phones the chat list is on screen when its tab is picked (and, with a game
     // open, when the game's "Chat" view is on); on computers when the chat panel is open
-    const phoneChatOnScreen = sidebarTab === 'chat' && (!activities.current || activityChatSplit);
+    const phoneChatOnScreen = sidebarTab === 'chat' && (!activities.current || activityAside || activityChatSplit);
     const chat = useChat({ room, isChatOpen: isPhone ? phoneChatOnScreen : isChatOpen });
     const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
     const soundboard = useSoundboard({ room, isAudioBlockedRef });
@@ -277,6 +296,8 @@ export default function App() {
     useBackLayer(showNetworkHudModal, () => setShowNetworkHudModal(false));
     useBackLayer(showQrModal, () => setShowQrModal(false));
     useBackLayer(isPhone && activityChatSplit && Boolean(activities.current), () => setActivityChatSplit(false));
+    // Phone, a game open over a video: Back puts the game into its bubble (the game goes on)
+    useBackLayer(isPhone && Boolean(activities.current) && isMediaActive && activityView === 'full', () => setActivityView('bubble'));
 
     // The room you were last in: "Rejoin" on the home screen for a while (utils/lastRoom.js)
     const [lastRoom, setLastRoom] = useState(() => readLastRoom());
@@ -399,7 +420,10 @@ export default function App() {
         } : undefined
     };
     const activitySlot = roomId && activities.current ? (
-        <ActivityStage activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat} />
+        <ActivityStage
+            activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat}
+            view={activityView} onViewChange={setActivityView} isPhone={isPhone} mediaActive={isMediaActive}
+        />
     ) : null;
 
     // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)

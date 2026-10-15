@@ -147,3 +147,14 @@
   .is-chat-split .ludo-phase-playing .ludo-seats { display: none; }
   .is-chat-split .ludo-status { font-size: 13px; }
 }
+
+/* In the small window over a video: board on top, then the status and the dice; the seats give
+   way while playing (the board and the status already say whose turn it is) */
+.stage-activity.is-window .ludo { flex-direction: column; align-items: stretch; justify-content: flex-start; padding: 8px; gap: 8px; }
+.stage-activity.is-window .ludo-board-wrap { width: 100%; height: auto; max-height: none; align-self: center; }
+.stage-activity.is-window .ludo-panel { flex: none; max-height: none; overflow: visible; gap: 8px; }
+.stage-activity.is-window .ludo-phase-playing .ludo-seats { display: none; }
+.stage-activity.is-window .ludo-status { font-size: 13px; }
+.stage-activity.is-window .ludo-dice { width: 40px; height: 40px; }
+.stage-activity.is-window .ludo-dice-row { gap: 10px; }
+.stage-activity.is-window .ludo-roll-btn { min-width: 90px; min-height: 36px; font-size: 14px; }
