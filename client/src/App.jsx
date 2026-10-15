@@ -38,6 +38,7 @@ import { useHostControls } from './features/playback/useHostControls';
 import { usePlayback } from './features/playback/usePlayback';
 import { useStreamTransfer } from './features/playback/useStreamTransfer';
 import { useMediaSync } from './features/playback/useMediaSync';
+import { useFileFormat } from './features/files/useFileFormat';
 import { useQueue } from './features/queue/useQueue';
 import { useActivities } from './features/activities/useActivities';
 import ActivityStage from './features/activities/ActivityStage';
@@ -154,6 +155,7 @@ export default function App() {
     const queueFeature = useQueue({ room, playback, hostControls, peerCount });
     useMediaSync({ room, playback, queue: queueFeature, hostControls });
     useDriftSync({ room, playback, active: Boolean(roomId) && playback.isMediaActive });
+    const fileFormat = useFileFormat({ room, playback });
     const {
         activeVideoId, activeVideoTitle, localVideoFile, remoteLocalVideoMeta, remoteAction, streamProgress, streamVideoUrl, isMediaActive
     } = playback;
@@ -436,6 +438,7 @@ export default function App() {
                 playback.syncStateGetterRef.current = getter;
             }}
             streamProgress={streamProgress}
+            fileFormat={fileFormat}
             streamVideoUrl={streamVideoUrl}
             onRequestP2PStream={playback.requestStream}
             onCancelP2PStream={playback.cancelStream}

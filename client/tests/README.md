@@ -10,7 +10,7 @@ npm test
 Node's built-in test runner, no extra packages. `tests/unit/fakeRoom.js` wires several in-memory
 "apps" together with fake data channels, so multi-person behaviour (shared state, the host
 leaving, late joiners) is tested in milliseconds. Put tests for pure logic (game reducers,
-parsers, the relay tree) here.
+parsers, the relay tree, the stream swarm, MKV/MP4 headers) here.
 
 The signaling server has its own tests: `cd server && npm test`.
 
@@ -19,7 +19,7 @@ The signaling server has its own tests: `cd server && npm test`.
 ```
 pip install playwright        # once
 playwright install chromium   # once
-python client/tests/e2e/run_all.py              # every suite (~10 min)
+python client/tests/e2e/run_all.py              # every suite (~25 min)
 python client/tests/e2e/run_all.py queue        # just one: <name>_test.py
 ```
 
@@ -46,8 +46,10 @@ server you started), stop it: the connection test restarts the server on purpose
 | `media_links` | paste anything: video files, HLS, Vimeo, Twitch in sync (computer + phone), late joiner, queue, unplayable links explained, host lock, automatic re-sync (links and YouTube) |
 | `stream_uneven` | a film with an uneven bitrate (heavy first half) plays straight through |
 | `local_video_sync` | local video play / pause / seek sync |
+| `file_format` | format check (AC-3 audio: "no sound" for viewers before they stream, and who is affected for the sharer; AVI won't play), MKV subtitle tracks picked by anyone and shared (SRT and ASS), late joiner gets the format |
+| `swarm` | viewers fetch the film from each other (owner sends far less), a viewer sending damaged blocks is caught by the owner's checksums and ignored, an older app in the same room still streams, a viewer leaving |
 | `media_session` | lock-screen / headset controls |
-| `six_people` | a full room: mesh, voice bitrate, video through the relay tree |
+| `six_people` | a full room: mesh, voice bitrate, video shared between the viewers |
 
 Output (logs per suite, screenshots, generated media): `client/tests/e2e/.out/`.
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
 import FloatingReactions from './FloatingReactions';
+import FileFormatNotice from '../features/files/FileFormatNotice';
 
 // Whole-file download (no on-demand streaming in this browser): rough time left
 const wholeFileEta = (p) => {
@@ -48,7 +49,8 @@ export default function LocalVideoSyncPlayer({
   reactionFeed,
   onSendReaction,
   roomId = null,
-  isPttSpaceActive = false
+  isPttSpaceActive = false,
+  fileFormat = null // what's in the file, can it play here, its subtitle tracks (features/files)
 }) {
   const [file, setFile] = useState(initialFile);
   const [objectUrl, setObjectUrl] = useState(null);
@@ -108,6 +110,8 @@ export default function LocalVideoSyncPlayer({
   const idleTimeoutRef = useRef(null);
   const fileRef = useRef(file);
   fileRef.current = file;
+  // What the room was doing before our video could play (joined mid-film), applied once it can
+  const pendingRoomStateRef = useRef(null);
 
   // 1. Create or revoke object URL when local file changes
   useEffect(() => {
@@ -294,7 +298,21 @@ export default function LocalVideoSyncPlayer({
     }
 
     const vid = videoRef.current;
-    if (!vid) return;
+    if (!vid || vid.readyState < 1) {
+      // No video yet (the stream starts in a moment): do it once it's there
+      if (action === 'play' || action === 'pause' || action === 'seek') {
+        const prev = pendingRoomStateRef.current;
+        pendingRoomStateRef.current = {
+          playing: action === 'seek' ? Boolean(prev?.playing) : action === 'play',
+          time: typeof currentTime === 'number' ? currentTime : (prev?.time || 0),
+          at: Date.now(),
+          sender
+        };
+      }
+      if (!vid) return;
+    } else {
+      pendingRoomStateRef.current = null;
+    }
 
     isRemoteActionRef.current = true;
 
@@ -338,31 +356,49 @@ export default function LocalVideoSyncPlayer({
   }, [remoteAction, onClose]);
 
   // 4. File drag and drop handlers
+  /** Show these subtitles here and send them to the room. */
+  const shareSubtitles = (parsed) => {
+    setSubtitles((prev) => {
+      if (prev?.vttUrl) {
+        try { URL.revokeObjectURL(prev.vttUrl); } catch (e) { }
+      }
+      return parsed;
+    });
+    setSubtitlesVisible(true);
+    setSyncStatus(`Subtitles loaded: ${parsed.fileName}`);
+
+    // Broadcast subtitle to room peers via WebRTC DataChannel
+    if (typeof onBroadcastAction === 'function') {
+      onBroadcastAction('subtitle-share', {
+        type: 'local-video-action',
+        subAction: 'share',
+        fileName: parsed.fileName,
+        vttString: parsed.vttString
+      });
+    }
+  };
+
   const handleLoadSubtitleFile = async (subFile) => {
     if (!subFile) return;
     try {
-      const parsed = await parseSubtitleFile(subFile);
-      if (subtitles?.vttUrl) {
-        try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) { }
-      }
-      setSubtitles(parsed);
-      setSubtitlesVisible(true);
-      setSyncStatus(`Subtitles loaded: ${parsed.fileName}`);
-
-      // Broadcast subtitle to room peers via WebRTC DataChannel
-      if (typeof onBroadcastAction === 'function') {
-        onBroadcastAction('subtitle-share', {
-          type: 'local-video-action',
-          subAction: 'share',
-          fileName: parsed.fileName,
-          vttString: parsed.vttString
-        });
-      }
+      shareSubtitles(await parseSubtitleFile(subFile));
     } catch (err) {
       console.error('Subtitle file load failed:', err);
       setSyncStatus('Failed to parse subtitle file');
     }
   };
+
+  // Subtitles read out of the video file (picked here or by someone in the room): use and share them
+  const pendingSubtitle = fileFormat?.pendingSubtitle;
+  useEffect(() => {
+    if (!pendingSubtitle?.vttString) return;
+    try {
+      shareSubtitles(parseSubtitleString(pendingSubtitle.vttString, pendingSubtitle.fileName));
+    } catch (err) {
+      setSyncStatus('Failed to load the subtitles from the file');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSubtitle?.id]);
 
   const handleToggleSubtitles = () => {
     if (!subtitles) {
@@ -475,9 +511,23 @@ export default function LocalVideoSyncPlayer({
   };
 
   const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      setDurationSec(videoRef.current.duration || 0);
-      setSyncStatus('Ready to play');
+    const vid = videoRef.current;
+    if (!vid) return;
+    setDurationSec(vid.duration || 0);
+    setSyncStatus('Ready to play');
+    // Joined while the room was watching: start from where the room is now
+    const pending = pendingRoomStateRef.current;
+    pendingRoomStateRef.current = null;
+    if (!pending) return;
+    const target = pending.playing ? pending.time + (Date.now() - pending.at) / 1000 : pending.time;
+    if (target > 0.5 && Math.abs(vid.currentTime - target) > 0.8) {
+      expectEcho('seeked', 8000);
+      vid.currentTime = Math.min(target, Math.max(0, (vid.duration || target) - 0.5));
+    }
+    if (pending.playing) {
+      expectEcho('play');
+      vid.play().then(() => setIsPlaying(true)).catch(() => { });
+      setSyncStatus(`▶️ Playing with ${pending.sender || 'the room'}`);
     }
   };
 
@@ -1064,6 +1114,7 @@ export default function LocalVideoSyncPlayer({
                 <p className="local-waiting-subtitle">
                   {remoteMeta.sender || 'A peer'} loaded this video file. Choose how you want to join the watch party:
                 </p>
+                {fileFormat && <FileFormatNotice info={fileFormat} hasSubtitles compact />}
               </div>
 
               <div className="p2p-stream-options-grid">
@@ -1311,7 +1362,7 @@ export default function LocalVideoSyncPlayer({
               <span className="local-filesize-text">
                 {streamProgress.wholeFile && !streamProgress.isCompleted
                   ? `(downloading ${streamProgress.percent || 0}% • plays when done${wholeFileEta(streamProgress)})`
-                  : `(${streamProgress.percent}% ${streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`})`}
+                  : `(${streamProgress.percent}% ${streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`}${streamProgress.fromPeersPercent > 0 ? ` • ${streamProgress.fromPeersPercent}% from viewers` : ''})`}
               </span>
             )}
             <button
@@ -1421,6 +1472,11 @@ export default function LocalVideoSyncPlayer({
         onClick={togglePlayPause}
         onDoubleClick={toggleFullscreen}
       >
+        {fileFormat && (
+          <div className="file-notice-anchor" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+            <FileFormatNotice info={fileFormat} hasSubtitles={Boolean(subtitles)} />
+          </div>
+        )}
         <video
           ref={videoRef}
           src={activeVideoSrc}

@@ -34,7 +34,7 @@ explains how the code is organised so new features can be added without reshapin
 | `peerMessages.js` | Everything arriving on a data channel. Handles only `peer-bye`, `peer-identity`, `peer-voice-status`, then hands every message to `bus.dispatch`. |
 | `peerRecovery.js` | ICE restarts and rebuilding broken connections. |
 | `remoteAudio.js`, `sdp.js`, `peerEntry.js` | Voice playback, codec tuning, teardown. |
-| `streamTree.js` | Relay tree for sharing a local video in big rooms (pure functions). |
+| `streamTree.js` | Relay tree for sharing a local video with viewers on older apps (pure functions); newer viewers use the swarm in `utils/p2pStreamer.js`. |
 | `config.js` | ICE servers, room size, protocol version, recovery timings. |
 
 Each peer has two data channels: **main** (JSON, small, ordered: chat, sync, games) and **bulk**
@@ -86,7 +86,8 @@ Through `useRoom()` components also get `roomId`, `isHost`, `username`, `peers`,
 | `media/` | "paste anything": `sources.js` (what a link is), `adapters/` (one small player per source: Vimeo, Twitch, `<video>` + hls.js), `LinkPlayer.jsx` (the sync engine for link sources) | `media-action`, `media-sync-state` |
 | `playback/useHostControls` | "only I control playback" lock | `room-settings` (+ field in `peer-identity`) |
 | `playback/useMediaSync` | catching up people who join | `yt-request-sync`, `yt-sync-state`, `local-video-sync-state`, `media-sync-state` |
-| `playback/useStreamTransfer` | sharing a local video P2P | `p2p-*`, binary chunks |
+| `playback/useStreamTransfer` | sharing a local video P2P: on-demand blocks, fetched from the owner and (swarm) from other viewers, checked against the owner's SHA-256 | `p2p-*`, binary chunks |
+| `files/` | what's inside a local video (`formats.js`: MP4/MOV/MKV/WebM headers, can this browser play it), subtitle tracks read out of an MKV in a worker, the warning / subtitle-picker card | `file-format`, `file-format-report`, `file-subtitle-*` |
 | `queue/` | watch queue, vote to skip | `queue-action` |
 | `activities/` | games and other things to do together | `room-state*` (via sharedState) |
 
