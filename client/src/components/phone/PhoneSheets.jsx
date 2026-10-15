@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SoundboardTray from '../SoundboardTray';
-import { extractYouTubeId, fetchYouTubeTitle } from '../YouTubeSyncPlayer';
+import { resolvePastedLink, PASTE_PLACEHOLDER } from '../../features/media/resolveLink';
 import { groupQuickPicks, isVideoUnavailable, useQuickPicks, youtubeThumb } from '../../utils/quickPicks';
 
 /** Bottom sheet frame: backdrop (tap to close), drag handle, title, close button, Escape closes. */
@@ -39,8 +39,8 @@ const Chevron = (
   <svg className="phone-row-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
 );
 
-/** Add video: YouTube link, quick picks, or a video file from the phone. */
-export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, onQueueYouTube, onQueuePick, queuedIds = [], onPlayQueue, onPickFile, onStopVideo }) {
+/** Add video: any link (YouTube, Vimeo, Twitch, a video file), quick picks, or a file from the phone. */
+export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, onQueueYouTube, onLoadLink, onQueueLink, onQueuePick, queuedIds = [], onPlayQueue, onPickFile, onStopVideo }) {
   const queuedSet = new Set(queuedIds);
   const queuePick = onQueuePick || onQueueYouTube;
   const [link, setLink] = useState('');
@@ -55,18 +55,21 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
   const group = groups.find((g) => g.group === groupName) || groups[0];
   const category = group?.categories.find((c) => c.id === categoryId) || group?.categories[0];
 
+  // Any link: YouTube, Vimeo, Twitch, a video file (features/media)
   const submitLink = async (mode) => {
-    const id = extractYouTubeId(link.trim());
-    if (!id) {
-      setError('That doesn’t look like a YouTube link.');
-      return;
-    }
     setError('');
     setBusy(true);
     try {
-      const title = await fetchYouTubeTitle(id);
-      if (mode === 'queue') onQueueYouTube?.(id, title);
-      else onLoadYouTube?.(id, title);
+      const res = await resolvePastedLink(link);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      if (res.kind === 'media') {
+        if (mode === 'queue') onQueueLink?.(res.media);
+        else onLoadLink?.(res.media);
+      } else if (mode === 'queue') onQueueYouTube?.(res.videoId, res.title);
+      else onLoadYouTube?.(res.videoId, res.title);
       setLink('');
       onClose?.();
     } finally {
@@ -83,13 +86,13 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
           submitLink('play');
         }}
       >
-        <label htmlFor="phone-yt-link" className="phone-label">YouTube link</label>
+        <label htmlFor="phone-yt-link" className="phone-label">Video link</label>
         <input
           id="phone-yt-link"
           className="phone-input"
           type="url"
           inputMode="url"
-          placeholder="Paste a YouTube link"
+          placeholder={PASTE_PLACEHOLDER}
           value={link}
           onChange={(e) => {
             setLink(e.target.value);
@@ -99,7 +102,7 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
         {error && <div className="phone-form-error" role="alert">{error}</div>}
         <div className="phone-link-actions">
           <button type="submit" className="phone-btn phone-btn-primary" disabled={!link.trim() || busy}>
-            Play for everyone
+            {busy ? 'Checking…' : 'Play for everyone'}
           </button>
           {isMediaActive && (
             <button type="button" className="phone-btn phone-btn-ghost" disabled={!link.trim() || busy} onClick={() => submitLink('queue')}>

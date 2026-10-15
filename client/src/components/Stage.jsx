@@ -9,8 +9,13 @@ import { useLiveVoiceUsers } from '../utils/speakingActivity';
 import SoundboardTray from './SoundboardTray';
 import { BUILD, BUILD_LABEL } from '../version';
 import { PhoneEmptyMedia, PhoneStreamOffer } from './phone/PhoneMediaOverlays';
+import RejoinCard from './RejoinCard';
+import LinkPlayer from '../features/media/LinkPlayer';
+import { mediaKey } from '../features/media/sources';
+import { useBackLayer } from '../core/backStack';
 
 export default function Stage({
+  rejoin = null,
   roomId,
   isHost,
   peerCount,
@@ -29,6 +34,10 @@ export default function Stage({
   chatCount = 0,
   unreadChatCount = 0,
   activeVideoId,
+  activeMedia = null,  // a link source (Vimeo, Twitch, a video file...): features/media
+  onPlayLink,
+  onQueueLink,
+  onExitVideo,
   onVideoChange,
   localVideoFile,
   remoteLocalVideoMeta,
@@ -96,6 +105,8 @@ export default function Stage({
   const soundboardContainerRef = useRef(null);
 
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  useBackLayer(isSoundboardOpen, () => setIsSoundboardOpen(false));
+  useBackLayer(isMoreMenuOpen, () => setIsMoreMenuOpen(false));
   const moreMenuRef = useRef(null);
 
   // Close soundboard popover when clicking outside
@@ -122,7 +133,7 @@ export default function Stage({
     return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [isMoreMenuOpen]);
 
-  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl);
+  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl || activeMedia);
   const showTheater = Boolean(roomId);
 
   const handleSelectReaction = (emoji) => {
@@ -254,6 +265,7 @@ export default function Stage({
                 Watch YouTube videos together.
               </p>
 
+              <RejoinCard rejoin={rejoin} />
               <div className="initial-actions">
                 <button className="btn btn-primary" onClick={onOpenCreate}>
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
@@ -285,6 +297,30 @@ export default function Stage({
               <p className="build-label" title={BUILD.time ? `Built ${new Date(BUILD.time).toLocaleString()}${BUILD.branch ? ` from ${BUILD.branch}` : ''}` : undefined}>{BUILD_LABEL}</p>
             </div>
           </div>
+        ) : activeMedia ? (
+          /* Case 2C: a link source, in sync through features/media */
+          <LinkPlayer
+            key={mediaKey(activeMedia)}
+            media={activeMedia}
+            remoteAction={remoteAction}
+            onBroadcastAction={(action, payload = {}) => onBroadcastAction(action, { ...payload, type: 'media-action' })}
+            onRegisterStateGetter={onRegisterStateGetter}
+            onExit={onExitVideo}
+            onEnded={onPlayNextInQueue ? () => onPlayNextInQueue({ auto: true }) : undefined}
+            onVoteSkip={onVoteSkip}
+            skipVotes={skipVotes}
+            peerCount={peerCount}
+            username={username}
+            paste={isPhone ? null : {
+              onPlayLink,
+              onQueueLink,
+              onPlayYouTube: (id, title) => {
+                onVideoChange(id, title);
+                onBroadcastAction('load', { newVideoId: id, title });
+              },
+              onQueueYouTube: onAddToQueue ? (id, title) => onAddToQueue({ videoId: id, title }) : undefined
+            }}
+          />
         ) : (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) ? (
           /* Case 2A: Local Video Drag-and-Drop Sync Player or P2P Streamed Video */
           <LocalVideoSyncPlayer
@@ -325,6 +361,8 @@ export default function Stage({
             peerCount={peerCount}
             username={username}
             onOpenQueue={onOpenQueue}
+            onPlayLink={onPlayLink}
+            onQueueLink={onQueueLink}
           />
         )}
 

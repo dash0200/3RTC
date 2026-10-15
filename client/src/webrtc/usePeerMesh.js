@@ -223,7 +223,8 @@ export function usePeerMesh(ctx) {
 
     useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
 
-    const createRoom = useCallback(() => sendSignal({ type: 'create-room', peerId: peerIdRef.current }), [peerIdRef, sendSignal]);
+    // With a code: a host coming back gets that room again (the server's resume path)
+    const createRoom = useCallback((resumeRoomId) => sendSignal({ type: 'create-room', peerId: peerIdRef.current, ...(resumeRoomId ? { roomId: String(resumeRoomId) } : {}) }), [peerIdRef, sendSignal]);
     const joinRoom = useCallback((pin) => sendSignal({ type: 'join', roomId: pin, peerId: peerIdRef.current }), [peerIdRef, sendSignal]);
 
     /** Leave on purpose: tell the server and every peer, drop all connections, reset features. */

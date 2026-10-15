@@ -80,10 +80,26 @@ bus directly: `room.bus.broadcast('chess-cursor', { square })` and
    show it.
 6. Document the new message types in `docs/PROTOCOL.md`.
 
+## B2. A new video source (a site to paste links from)
+
+1. `features/media/sources.js`: a matcher that turns its links into `{ provider: 'name', url, … }`
+   (and a line in `PROVIDERS`). Add cases to `tests/unit/mediaSources.test.js`.
+2. `features/media/adapters/<name>.js`: `create…Adapter(container, media, emit)` that loads the
+   site's player and answers `play, pause, seek(t), getTime, isPaused, isBuffering, getDuration,
+   isLive, destroy`, calling `emit({ type: 'ready' | 'play' | 'pause' | 'seek' | 'ended' | 'error' })`.
+   Don't autoplay: `LinkPlayer` starts it once ready. Register it in `adapters/index.js`.
+3. Nothing else: sync, the queue, late joiners, the host controls lock and the automatic re-sync
+   already work for every source. Add a stand-in for the site's player API to
+   `tests/e2e/media_links_test.py` (see the Vimeo one) and a few checks.
+
 ## C. A UI-only change (a new modal, a setting)
 
 Components get data and callbacks as props. Something deep in the tree that needs room data can
 use `useRoom()` instead of threading new props through every level.
+
+Anything that opens on top (a dialog, sheet, picker, menu) calls `useBackLayer(isOpen, close)`
+(`core/backStack.js`), so the phone's Back button closes it instead of leaving the room. Don't
+use it for a playing video or the open game: those are only closed by their own buttons.
 
 ## Don'ts
 

@@ -1,18 +1,22 @@
 /**
- * What the room is watching: a YouTube video, or a local video file one person shares (played by
- * the others through the P2P stream, see useStreamTransfer). Holds that state, sends play / pause /
+ * What the room is watching: a YouTube video, a local video file one person shares (played by
+ * the others through the P2P stream, see useStreamTransfer), or a link source (Vimeo, Twitch, a
+ * direct video file, an HLS stream: features/media). Holds that state, sends play / pause /
  * seek / load / close to the room, and applies the ones that arrive.
  *
  * Players get remote commands through `remoteAction` (a new object each time) and report local
  * changes through `broadcastAction`.
  *
- * Wire: 'yt-action' and 'local-video-action' { action, fromHost, ...details }.
+ * Wire: 'yt-action', 'local-video-action' and 'media-action' { action, fromHost, ...details }
+ * ('media-action' load carries { media }, see features/media/sources.js). YouTube and local files
+ * keep their own message types so apps from before link sources still sync them.
  * Events: emits 'media-changed' whenever the video changes or closes.
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { fetchYouTubeTitle } from '../../components/YouTubeSyncPlayer';
 import { detectOnDemandStreaming } from '../../utils/p2pStreamer';
 import { usePeerMessageOn } from '../../core/RoomContext';
+import { normalizeMedia, fallbackTitle } from '../media/sources';
 
 const isPhoneLikeDevice = () => {
     try {
@@ -33,6 +37,7 @@ export function usePlayback({ room, hostControls }) {
     const [remoteAction, setRemoteAction] = useState(null);
     const [streamProgress, setStreamProgress] = useState(null);
     const [streamVideoUrl, setStreamVideoUrl] = useState(null);
+    const [activeMedia, setActiveMediaState] = useState(null); // a link source, see features/media
 
     const activeVideoIdRef = useRef(null);
     activeVideoIdRef.current = activeVideoId;
@@ -42,6 +47,13 @@ export function usePlayback({ room, hostControls }) {
     localVideoFileRef.current = localVideoFile;
     const streamVideoUrlRef = useRef(null);
     streamVideoUrlRef.current = streamVideoUrl;
+    const activeMediaRef = useRef(null);
+    const setActiveMedia = useCallback((m) => {
+        activeMediaRef.current = m;
+        setActiveMediaState(m);
+    }, []);
+    // When playback last changed (by anyone): the auto re-sync leaves a moment after a change alone
+    const lastChangeAtRef = useRef(0);
     // The player's current state, for people joining later (registered by the player)
     const syncStateGetterRef = useRef(null);
     // P2P stream of a local video (owned by useStreamTransfer, reset here when the video changes)
@@ -70,12 +82,14 @@ export function usePlayback({ room, hostControls }) {
     const broadcastAction = useCallback((action, payload = {}) => {
         const type = payload.type || 'yt-action';
         if (!hostControls.allowPlaybackChange(type, action, payload)) return;
+        lastChangeAtRef.current = Date.now();
         bus.broadcast(type, { action, fromHost: room.getSelf().isHost, ...payload, type });
     }, [bus, room, hostControls]);
 
     // ---- remote changes ---------------------------------------------------------------------
     usePeerMessageOn(bus, 'yt-action', async (data) => {
         if (!hostControls.acceptRemotePlayback(data)) return;
+        lastChangeAtRef.current = Date.now();
         const who = data.sender || 'Peer';
         if (data.action === 'close' || data.action === 'unload') {
             setActiveVideoId(null);
@@ -89,6 +103,7 @@ export function usePlayback({ room, hostControls }) {
         if (data.action === 'load') {
             setLocalVideoFile(null);
             setRemoteLocalVideoMeta(null);
+            setActiveMedia(null);
             const newId = data.newVideoId || data.videoId;
             setActiveVideoId(newId);
             mediaChanged();
@@ -108,9 +123,11 @@ export function usePlayback({ room, hostControls }) {
 
     usePeerMessageOn(bus, 'local-video-action', (data) => {
         if (!hostControls.acceptRemotePlayback(data)) return;
+        lastChangeAtRef.current = Date.now();
         const who = data.sender || 'Peer';
         if (data.action === 'load') {
             setActiveVideoId(null);
+            setActiveMedia(null);
             setRemoteLocalVideoMeta({ fileName: data.fileName, fileSize: data.fileSize, sender: data.sender });
             mediaChanged();
             setRemoteAction(data);
@@ -135,12 +152,49 @@ export function usePlayback({ room, hostControls }) {
         }
     });
 
+    usePeerMessageOn(bus, 'media-action', (data) => {
+        if (!hostControls.acceptRemotePlayback(data)) return;
+        lastChangeAtRef.current = Date.now();
+        const who = data.sender || 'Peer';
+        if (data.action === 'load') {
+            const media = normalizeMedia(data.media);
+            if (!media) return;
+            setActiveVideoId(null);
+            setActiveVideoTitle('');
+            setLocalVideoFile(null);
+            setRemoteLocalVideoMeta(null);
+            stopReceiving();
+            setActiveMedia(media);
+            mediaChanged();
+            setRemoteAction(data);
+            const title = media.title || fallbackTitle(media);
+            room.log(`🎬 ${who} opened: "${title}"`);
+            room.notify(`${who} opened ${title}`);
+            return;
+        }
+        if (data.action === 'close' || data.action === 'unload') {
+            if (!activeMediaRef.current) return;
+            setActiveMedia(null);
+            mediaChanged();
+            setRemoteAction(data);
+            room.log(`🎬 ${who} exited the video`);
+            room.notify(`${who} exited the video`);
+            return;
+        }
+        if (!activeMediaRef.current) return;
+        if (data.action === 'play') room.log(`▶️ ${who} played the video`);
+        else if (data.action === 'pause') room.log(`⏸️ ${who} paused the video`);
+        else if (data.action === 'seek') room.log(`⏩ ${who} seeked to ${clock(data.currentTime)}`);
+        setRemoteAction(data);
+    });
+
     // ---- local changes ----------------------------------------------------------------------
     /** Show a YouTube video here (the caller tells the room). `newId` null closes it. */
     const changeVideo = useCallback(async (newId, customTitle = '') => {
         if (newId) {
             setLocalVideoFile(null);
             setRemoteLocalVideoMeta(null);
+            setActiveMedia(null);
         }
         setActiveVideoId(newId);
         mediaChanged();
@@ -158,24 +212,45 @@ export function usePlayback({ room, hostControls }) {
     const playYouTube = useCallback((videoId, title, extra = {}) => {
         setLocalVideoFile(null);
         setRemoteLocalVideoMeta(null);
+        setActiveMedia(null);
         setActiveVideoId(videoId);
         setActiveVideoTitle(title);
         mediaChanged();
         broadcastAction('load', { type: 'yt-action', action: 'load', newVideoId: videoId, title, ...extra });
-    }, [broadcastAction, mediaChanged]);
+    }, [broadcastAction, mediaChanged, setActiveMedia]);
+
+    /** Open a link source here and tell the room (paste box, queue). */
+    const playLink = useCallback((media, extra = {}) => {
+        const clean = normalizeMedia(media);
+        if (!clean) return;
+        if (hostControls.isLockedForMe() && !extra.byVote) {
+            hostControls.onBlocked();
+            return;
+        }
+        setActiveVideoId(null);
+        setActiveVideoTitle('');
+        setLocalVideoFile(null);
+        setRemoteLocalVideoMeta(null);
+        stopReceiving();
+        setActiveMedia(clean);
+        mediaChanged();
+        broadcastAction('load', { type: 'media-action', media: clean, ...extra });
+        room.log(`🎬 You opened: "${clean.title || fallbackTitle(clean)}"`);
+    }, [broadcastAction, hostControls, mediaChanged, room, setActiveMedia, stopReceiving]);
 
     const selectLocalFile = useCallback((file) => {
         if (!file) return;
         localVideoFileRef.current = file;
         stopReceiving();
         setActiveVideoId(null);
+        setActiveMedia(null);
         setLocalVideoFile(file);
         setRemoteLocalVideoMeta(null);
         mediaChanged();
         room.log(`📁 You loaded local video: "${file.name}"`);
         room.notify(`Loaded "${file.name}"`);
         broadcastAction('load', { type: 'local-video-action', fileName: file.name, fileSize: file.size });
-    }, [broadcastAction, room, stopReceiving, mediaChanged]);
+    }, [broadcastAction, room, stopReceiving, mediaChanged, setActiveMedia]);
 
     const closeLocalVideo = useCallback(() => {
         setLocalVideoFile(null);
@@ -212,22 +287,40 @@ export function usePlayback({ room, hostControls }) {
         room.notify('Stream cancelled');
     }, [bus, room, stopReceiving]);
 
-    const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl);
+    const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl || activeMedia);
 
     const exitVideo = useCallback(() => {
-        if (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) {
+        if (activeMediaRef.current) {
+            setActiveMedia(null);
+            mediaChanged();
+            broadcastAction('close', { type: 'media-action' });
+            room.log('🎬 You exited the video');
+        } else if (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) {
             closeLocalVideo();
             broadcastAction('close', { type: 'local-video-action' });
         } else if (activeVideoId) {
             changeVideo(null);
             broadcastAction('close', {});
         }
-    }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, closeLocalVideo, changeVideo, broadcastAction]);
+    }, [localVideoFile, remoteLocalVideoMeta, streamVideoUrl, activeVideoId, closeLocalVideo, changeVideo, broadcastAction, mediaChanged, room, setActiveMedia]);
+
+    /** A passed skip vote with nothing queued: close what's playing for everyone. */
+    const closeByVote = useCallback(() => {
+        if (activeMediaRef.current) {
+            setActiveMedia(null);
+            mediaChanged();
+            broadcastAction('close', { type: 'media-action', byVote: true });
+        } else {
+            setActiveVideoId(null);
+            setActiveVideoTitle('');
+            broadcastAction('close', { byVote: true });
+        }
+    }, [broadcastAction, mediaChanged, setActiveMedia]);
 
     /** A timestamp clicked in chat: jump everyone there (respects the host controls lock). */
     const seekEveryone = useCallback((seconds) => {
         if (!hostControls.allowPlaybackChange(null)) return;
-        const type = activeVideoIdRef.current ? 'yt-action' : 'local-video-action';
+        const type = activeVideoIdRef.current ? 'yt-action' : activeMediaRef.current ? 'media-action' : 'local-video-action';
         const self = room.getSelf();
         setRemoteAction({ action: 'seek', currentTime: seconds, type, fromHost: self.isHost, sender: self.username, timestamp: Date.now() });
         broadcastAction('seek', { type, currentTime: seconds });
@@ -241,9 +334,10 @@ export function usePlayback({ room, hostControls }) {
         setRemoteLocalVideoMeta(null);
         setActiveVideoId(null);
         setActiveVideoTitle('');
+        setActiveMedia(null);
         mediaChanged();
         setRemoteAction({ action: 'close', type: 'yt-action', fromHost: true });
-    }, [mediaChanged]);
+    }, [mediaChanged, setActiveMedia]);
 
     useEffect(() => bus.onEvent('room-left', () => {
         setActiveVideoId(null);
@@ -251,21 +345,23 @@ export function usePlayback({ room, hostControls }) {
         setLocalVideoFile(null);
         setRemoteLocalVideoMeta(null);
         setRemoteAction(null);
+        setActiveMedia(null);
         stopReceiving();
         stopSending();
-    }), [bus, stopReceiving, stopSending]);
+    }), [bus, stopReceiving, stopSending, setActiveMedia]);
 
     return {
         // state
         activeVideoId, activeVideoTitle, localVideoFile, remoteLocalVideoMeta, remoteAction,
-        streamProgress, streamVideoUrl, isMediaActive,
+        streamProgress, streamVideoUrl, isMediaActive, activeMedia,
         // setters used by sync and streaming
         setActiveVideoId, setActiveVideoTitle, setLocalVideoFile, setRemoteLocalVideoMeta, setRemoteAction,
-        setStreamProgress, setStreamVideoUrl,
+        setStreamProgress, setStreamVideoUrl, setActiveMedia,
         // refs
         activeVideoIdRef, activeVideoTitleRef, localVideoFileRef, syncStateGetterRef, streamReceiverRef, activeStreamSendersRef,
+        activeMediaRef, lastChangeAtRef,
         // actions
-        broadcastAction, changeVideo, playYouTube, selectLocalFile, closeLocalVideo, requestStream, cancelStream,
-        exitVideo, seekEveryone, closeAllQuietly, stopReceiving
+        broadcastAction, changeVideo, playYouTube, playLink, selectLocalFile, closeLocalVideo, requestStream, cancelStream,
+        exitVideo, closeByVote, seekEveryone, closeAllQuietly, stopReceiving
     };
 }
