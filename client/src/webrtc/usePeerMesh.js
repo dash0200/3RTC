@@ -6,6 +6,7 @@
  * hook feeds: every message that arrives goes to bus.dispatch, a channel opening emits
  * 'peer-open', a peer going away emits 'peer-close', and leaving the room emits 'room-left'.
  */
+import { getClientId } from '../utils/clientId';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { sound } from '../utils/sound';
 import { micPipeline } from '../utils/micPipeline';
@@ -91,6 +92,7 @@ export function usePeerMesh(ctx) {
         isMuted: isMicMutedRef.current,
         proto: PROTOCOL_VERSION,
         build: BUILD.number,
+        clientId: getClientId(),
         ...(identityFieldsRef.current?.() || {})
     }), [peerIdRef, isHostRef, isMicMutedRef]);
 

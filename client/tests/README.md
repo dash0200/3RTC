@@ -32,7 +32,7 @@ server you started), stop it: the connection test restarts the server on purpose
 |---|---|
 | `connection` | two people: P2P link, bulk channel, voice, speaking ring, chat, signaling restart, ICE restart, rebuild, leaving |
 | `devices` | choosing the microphone and speaker: quick menu by the mic button and Audio settings, the chosen mic used and switched live, voices and new media on the chosen speaker, mic test, remembered after a reload |
-| `chat_attach` | sending an image (desktop and phone) |
+| `chat_attach` | sending an image (desktop and phone); links in messages open in a new tab, message text can be selected and copied |
 | `youtube_sync` | play / pause / seek sync, computer and phone |
 | `youtube_unavailable` | blocked videos skipped and remembered |
 | `host_controls` | "only I control playback", wake lock, chat timestamps |
@@ -40,6 +40,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `activities` | start, shared state, late joiner, host lock, close, leave (dev sample activity) |
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
 | `ludo_stack` | phone: tokens sharing a square stay visible, the movable ones on top, tapping one moves exactly that one (rigged dice) |
+| `ludo_rejoin` | the host reloads and rejoins (lobby and mid-game): gets the game, its colour back, stays in charge; the guest keeps its colour and gets no host buttons |
 | `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
 | `back_button` | phone Back: closes what's open, asks before leaving, never closes a video or game; room code in the address; Rejoin (guest and host); closing the tab mid-video asks |

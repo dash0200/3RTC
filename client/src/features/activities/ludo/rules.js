@@ -206,15 +206,19 @@ export function reducer(state, action, meta) {
             const color = action.color;
             if (!COLORS.includes(color)) return state;
             const current = state.seats[color];
-            // A free seat, or (during a game) the seat of someone who left: take it over / come back
-            const takeOver = current && !current.bot && !meta.present?.includes(current.id) && state.phase === 'playing';
+            const cid = meta.clientOf?.(meta.by) || null;
+            const away = current && !current.bot && !meta.present?.includes(current.id);
+            // Your own seat, after a reload or rejoin (same app, new connection): always yours again
+            const comingBack = away && cid && current.cid === cid;
+            // A free seat, or (during a game) the seat of someone who left: take it over
+            const takeOver = comingBack || (away && state.phase === 'playing');
             if (current && !takeOver) return state;
             if (state.phase === 'playing' && !takeOver) return state;
             const seats = { ...state.seats };
             const mine = seatOf(state, meta.by);
-            if (mine && state.phase === 'lobby') seats[mine] = null; // switching colour
-            if (mine && state.phase === 'playing') return state;    // already playing another colour
-            seats[color] = { id: meta.by, name: cleanName(action.name, COLOR_NAMES[color]) };
+            if (mine && (state.phase === 'lobby' || comingBack)) seats[mine] = null; // switching colour
+            else if (mine && state.phase === 'playing') return state;               // already playing another colour
+            seats[color] = { id: meta.by, name: comingBack ? current.name : cleanName(action.name, COLOR_NAMES[color]), ...(cid ? { cid } : {}) };
             return bump(state, { seats });
         }
         case 'stand': {
