@@ -1,4 +1,5 @@
 import React, { useRef } from 'react';
+import FileFormatNotice from '../../features/files/FileFormatNotice';
 
 function formatSize(bytes) {
   if (!bytes) return '';
@@ -29,7 +30,7 @@ export function PhoneEmptyMedia({ onAddVideo }) {
  * Phone video area when a peer loaded a local video file: stream it from them, or use your own
  * copy of the same file.
  */
-export function PhoneStreamOffer({ meta, streamProgress, onRequestStream, onCancelStream, onPickFile }) {
+export function PhoneStreamOffer({ meta, streamProgress, onRequestStream, onCancelStream, onPickFile, fileFormat = null }) {
   const fileRef = useRef(null);
   const sender = meta?.sender || 'A peer';
   const isRequesting = Boolean(streamProgress);
@@ -49,6 +50,7 @@ export function PhoneStreamOffer({ meta, streamProgress, onRequestStream, onCanc
           {meta?.fileSize > 0 && <span className="phone-offer-size">{formatSize(meta.fileSize)}</span>}
         </div>
       </div>
+      {fileFormat && <FileFormatNotice info={fileFormat} hasSubtitles compact />}
       <div className="phone-offer-actions">
         {isRequesting ? (
           <button type="button" className="phone-btn phone-btn-ghost" onClick={onCancelStream}>

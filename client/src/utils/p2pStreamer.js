@@ -379,6 +379,27 @@ const BLOCK_WAIT_MS = 15000;          // re-request a block that hasn't arrived 
 const BLOCK_MAX_TRIES = 4;
 const RELAY_WAIT_MS = 5000;           // a parent viewer that takes longer than this: fetch from the owner
 export const RELAY_FANOUT = 2;        // viewers fed directly by the owner, or by one relaying viewer
+// Swarm (torrent-like): viewers also fetch blocks from other viewers that have them
+const SWARM_WAIT_MS = 4000;           // a viewer that takes longer than this for a block: ask someone else
+const SWARM_PENALTY_MS = 10000;       // ...and leave that viewer alone for a while (the player was waiting)
+const SWARM_SLOW_MS = 5000;           // ...or a short while (only the background buffer was waiting)
+const SWARM_PEER_IN_FLIGHT = 12;      // blocks asked from one viewer at a time
+const SWARM_URGENT_IN_FLIGHT = 4;     // a block the player waits for only goes to a viewer this idle
+const SWARM_NEAR_BLOCKS = 2;         // the next blocks are fetched in order; past them each viewer has its own order
+const OWNER_BIAS = 3;                 // the owner counts as this much busier: its upload is the one everyone shares
+const HASH_WAIT_MS = 10000;           // the owner's checksum for a block
+const SWARM_HASH_AHEAD = 64;          // checksums asked for ahead of the blocks themselves
+
+/** Checksums need crypto.subtle (https or localhost); without it there's no swarm. */
+export const canChecksum = () => typeof crypto !== 'undefined' && Boolean(crypto.subtle);
+
+/** SHA-256 of a block, as hex (the owner's checksums; checks blocks that came from other viewers). */
+export async function sha256Hex(data) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  let hex = '';
+  for (const byte of digest) hex += byte.toString(16).padStart(2, '0');
+  return hex;
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -449,6 +470,9 @@ export class P2PRangeSender {
         .then((buf) => new Uint8Array(buf));
     });
     this.onRequest = options.onRequest || null;   // relay: fetch the requested blocks upstream early
+    this.onMiss = options.onMiss || null;         // swarm: a block we don't have (any more)
+    this.onBlockRead = options.onBlockRead || null; // owner: each block read from the file (checksums)
+    this.headerExtra = options.headerExtra || {};
     this.cancelType = options.cancelType || 'p2p-stream-cancel';
     this.isRelay = Boolean(options.readBlock);
     this.queue = [];
@@ -477,7 +501,7 @@ export class P2PRangeSender {
   /** Announce the stream (skipped when re-attaching to a rebuilt connection). */
   start() {
     try {
-      this.dataChannel.send(JSON.stringify(P2PRangeSender.header(this.file, this.streamNo, this.senderName)));
+      this.dataChannel.send(JSON.stringify(P2PRangeSender.header(this.file, this.streamNo, this.senderName, this.headerExtra)));
     } catch (err) {
       this.onError(err);
     }
@@ -530,10 +554,14 @@ export class P2PRangeSender {
         try {
           data = await this.readBlock(block);
         } catch (err) {
-          if (this.isRelay) continue; // relay couldn't get it in time: the child asks the owner
+          if (this.isRelay) { // relay couldn't get it in time / swarm: we don't have it: the peer asks someone else
+            this.onMiss?.(block);
+            continue;
+          }
           throw err;
         }
         if (this.isAborted) break;
+        this.onBlockRead?.(block, data);
         for (let offset = 0; offset < data.length && !this.isAborted; offset += RANGE_PACKET_PAYLOAD) {
           await this._waitForDrain();
           if (this.isAborted || this.dataChannel.readyState !== 'open') break;
@@ -599,6 +627,34 @@ export class P2PRangeReceiver {
     this.lastProgressBytes = 0;
     this.lastSpeed = 0;
     this.url = `${P2P_STREAM_URL_PREFIX}${this.streamNo}/${encodeURIComponent(this.fileName)}`;
+
+    // Swarm: only when we asked for it and the owner's app does it too (older owners: as before)
+    this.swarm = Boolean(options.swarm) && header.swarm === true;
+    this.sendTo = options.sendTo || ((peerId, msg) => {
+      const channel = this.getChannel?.(peerId);
+      if (!channel) return false;
+      try { channel.send(JSON.stringify(msg)); return true; } catch { return false; }
+    });
+    this.hashBlock = options.hashBlock || sha256Hex;
+    this.onBadBlock = options.onBadBlock || (() => { });
+    this.sourceOf = new Map();   // block -> peer we asked for it
+    this.peerHave = new Map();   // viewer -> Uint8Array (1 = has that block)
+    this.lastDataFrom = new Map(); // viewer -> when its last packet arrived
+    this.banned = new Set();     // viewers that sent a block that didn't match the owner's checksum
+    this.penalty = new Map();    // viewer -> time until which it isn't asked
+    this.hashes = new Map();     // block -> hex (from the owner)
+    this.hashWaiters = new Map();
+    this.hashAsked = new Map();
+    this.hashBatch = null;
+    this.haveVersion = 0;        // changes when the blocks we hold change (for announcing them)
+    this.haveAdded = [];         // since the last announcement
+    this.haveRemoved = [];
+    this.gettingAdded = [];      // blocks we asked the owner for, since the last announcement
+    this.peerGetting = new Map(); // viewer -> Map(block -> when it said it's getting it from the owner)
+    this.seed = options.seed ?? Math.random();
+    this.stats = { fromOwner: 0, fromPeers: 0, rejected: 0 };
+    // Why blocks went where (for tests and tuning)
+    this.counts = { ownerUrgent: 0, ownerRest: 0, peerUrgent: 0, peerRest: 0, slow: 0, slowUrgent: 0, misses: 0, waitBusy: 0, waitGetting: 0, bumps: 0 };
   }
 
   get isRelayed() {
@@ -637,19 +693,373 @@ export class P2PRangeReceiver {
   /** A peer left or its connection broke. */
   handlePeerGone(peerId) {
     if (this.isRelayed && peerId === this.sourceId) this.useOwner('parent left');
+    if (this.swarm) this.dropPeer(peerId);
+  }
+
+  // ---- swarm ------------------------------------------------------------------------------------
+
+  /** Blocks asked from this peer that may still come (late ones don't count). */
+  _load(peerId) {
+    const now = Date.now();
+    let n = 0;
+    for (const [b, at] of this.pending) if (this.sourceOf.get(b) === peerId && !this._late(b, at, now)) n++;
+    return n;
+  }
+
+  /** Who to ask for a block: the least busy viewer that has it, else the owner. A block the
+   *  player waits for goes to a viewer only if it's about as idle as the owner. */
+  _pickSource(block, urgent) {
+    if (!this.swarm) return this.sourceId;
+    let best = this.ownerId;
+    let bestLoad = urgent ? Math.min(SWARM_URGENT_IN_FLIGHT, this._load(this.ownerId) + OWNER_BIAS) : SWARM_PEER_IN_FLIGHT;
+    const now = Date.now();
+    for (const [peerId, have] of this.peerHave) {
+      if (!have[block] || this.banned.has(peerId) || (this.penalty.get(peerId) || 0) > now) continue;
+      const load = this._load(peerId);
+      if (load < bestLoad) {
+        best = peerId;
+        bestLoad = load;
+      }
+    }
+    return best;
+  }
+
+  /** Blocks asked from other viewers that didn't come in time: cancel there, leave them alone a while. */
+  _penalizeSlow(blocks, ms = SWARM_SLOW_MS) {
+    if (!this.swarm || !blocks.length) return;
+    const slow = [];
+    for (const b of blocks) {
+      const source = this.sourceOf.get(b);
+      if (source === undefined || source === this.ownerId) continue;
+      this.penalty.set(source, Math.max(this.penalty.get(source) || 0, Date.now() + ms));
+      this.counts[ms === SWARM_SLOW_MS ? 'slow' : 'slowUrgent']++;
+      slow.push(b);
+    }
+    if (!slow.length) return;
+    this._cancel(slow);
+    for (const b of slow) {
+      const entry = this.blocks.get(b);
+      if (entry && !entry.done && entry.peer) this._resetBlock(entry);
+    }
+  }
+
+  /** Ask for blocks (from the source, or in a swarm from whoever is best for each). */
+  _ask(blocks, urgent = false) {
+    if (!blocks.length) return;
+    if (!this.swarm) {
+      for (const b of blocks) {
+        this.sourceOf.set(b, this.sourceId);
+        if (urgent) this._block(b).urgent = true;
+      }
+      this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks, urgent });
+      return;
+    }
+    const groups = new Map();
+    for (const b of blocks) {
+      const source = this._pickSource(b, urgent);
+      this.counts[(source === this.ownerId ? 'owner' : 'peer') + (urgent ? 'Urgent' : 'Rest')]++;
+      if (source === this.ownerId) this.gettingAdded.push(b);
+      this.sourceOf.set(b, source);
+      if (urgent) this._block(b).urgent = true;
+      if (!groups.has(source)) groups.set(source, []);
+      groups.get(source).push(b);
+    }
+    for (const [source, list] of groups) {
+      if (source === this.ownerId) {
+        this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: list, urgent });
+      } else if (this.sendTo(source, { type: 'p2p-range-request', streamNo: this.streamNo, blocks: list, urgent, swarm: true })) {
+        this._needHashes(list);
+      } else {
+        this.dropPeer(source); // asks the owner instead
+      }
+    }
+  }
+
+  /** No longer needed: tell whoever we asked. */
+  _cancel(blocks) {
+    if (!blocks.length) return;
+    if (!this.swarm) {
+      this.sendControl({ type: 'p2p-range-cancel', streamNo: this.streamNo, blocks });
+      return;
+    }
+    const groups = new Map();
+    for (const b of blocks) {
+      const source = this.sourceOf.get(b) ?? this.ownerId;
+      this.sourceOf.delete(b);
+      if (!groups.has(source)) groups.set(source, []);
+      groups.get(source).push(b);
+    }
+    for (const [source, list] of groups) {
+      if (source === this.ownerId) this.sendControl({ type: 'p2p-range-cancel', streamNo: this.streamNo, blocks: list });
+      else this.sendTo(source, { type: 'p2p-range-cancel', streamNo: this.streamNo, blocks: list, swarm: true });
+    }
+  }
+
+  /** Has a requested block taken too long? From another viewer: only if that viewer has stopped
+   *  sending anything (a block far down its queue is fine while it keeps delivering). */
+  _late(block, at, now = Date.now()) {
+    if (this.swarm) {
+      const source = this.sourceOf.get(block);
+      if (source !== undefined && source !== this.ownerId) {
+        const lastData = Math.max(at, this.lastDataFrom.get(source) || 0);
+        return now - lastData > SWARM_WAIT_MS || now - at > BLOCK_WAIT_MS;
+      }
+    }
+    return now - at > this._waitMs(block);
+  }
+
+  /** How long to wait for a block before asking again (or someone else). */
+  _waitMs(block) {
+    if (this.swarm) {
+      const source = this.sourceOf.get(block);
+      if (source !== undefined && source !== this.ownerId) return SWARM_WAIT_MS;
+    }
+    return this.isRelayed ? RELAY_WAIT_MS : BLOCK_WAIT_MS;
+  }
+
+  /** Ask again, elsewhere, for blocks we were waiting on from `peerId`. */
+  _reroute(peerId, only = null) {
+    const urgent = [];
+    const rest = [];
+    for (const b of [...this.pending.keys()]) {
+      if (this.sourceOf.get(b) !== peerId || (only && !only.has(b))) continue;
+      const entry = this.blocks.get(b);
+      this.pending.delete(b);
+      this.sourceOf.delete(b);
+      if (!entry || entry.done) continue;
+      if (entry.received) this._resetBlock(entry); // part came from them: start over
+      if (entry.waiters.length) urgent.push(b);
+      else if (entry.background || entry.forRelay) rest.push(b);
+    }
+    const now = Date.now();
+    for (const b of [...urgent, ...rest]) this.pending.set(b, now);
+    this._ask(urgent, true);
+    this._ask(rest, false);
+  }
+
+  _resetBlock(entry) {
+    entry.urgent = false;
+    entry.data = new Uint8Array(entry.data.length);
+    entry.received = 0;
+    entry.got = new Set();
+    entry.peer = null;
+    entry.checking = false;
+  }
+
+  /** A viewer said which blocks it has (`ranges`: [first, last, first, last, ...]). */
+  setPeerHave(peerId, ranges) {
+    if (!this.swarm || peerId === this.ownerId || !Array.isArray(ranges)) return;
+    const have = new Uint8Array(this.totalBlocks);
+    for (let i = 0; i + 1 < ranges.length && i < 40000; i += 2) {
+      const first = Math.max(0, ranges[i] >>> 0);
+      const last = Math.min(this.totalBlocks - 1, ranges[i + 1] >>> 0);
+      for (let b = first; b <= last; b++) have[b] = 1;
+    }
+    this.peerHave.set(peerId, have);
+  }
+
+  /** A viewer's blocks changed: `add` / `remove` lists (after a full `setPeerHave`), and the
+   *  blocks it is `getting` from the owner right now. */
+  updatePeerHave(peerId, add = [], remove = [], getting = []) {
+    const have = this.peerHave.get(peerId);
+    if (!have) return;
+    const gets = this.peerGetting.get(peerId);
+    for (const b of Array.isArray(add) ? add.slice(0, 20000) : []) {
+      if ((b >>> 0) < have.length) have[b >>> 0] = 1;
+      gets?.delete(b >>> 0);
+    }
+    for (const b of Array.isArray(remove) ? remove.slice(0, 20000) : []) if ((b >>> 0) < have.length) have[b >>> 0] = 0;
+    this.notePeerGetting(peerId, getting);
+  }
+
+  notePeerGetting(peerId, blocks) {
+    if (!this.swarm || !Array.isArray(blocks) || !blocks.length) return;
+    if (!this.peerGetting.has(peerId)) this.peerGetting.set(peerId, new Map());
+    const gets = this.peerGetting.get(peerId);
+    const now = Date.now();
+    for (const b of blocks.slice(0, 2000)) if ((b >>> 0) < this.totalBlocks) gets.set(b >>> 0, now);
+  }
+
+  /** Is another viewer getting this block from the owner right now (so it'll have it soon)? */
+  _someoneGetting(b, now = Date.now()) {
+    for (const [peerId, gets] of this.peerGetting) {
+      const at = gets.get(b);
+      if (at === undefined) continue;
+      if (now - at > 2 * SWARM_WAIT_MS || this.banned.has(peerId) || !this.peerHave.has(peerId)) {
+        gets.delete(b);
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** What changed since the last announcement (and forget it): { add, remove, getting } */
+  takeHaveChanges() {
+    const out = { add: this.haveAdded, remove: this.haveRemoved, getting: this.gettingAdded };
+    this.haveAdded = [];
+    this.haveRemoved = [];
+    this.gettingAdded = [];
+    return out;
+  }
+
+  /** Blocks we're getting from the owner now (for a full announcement). */
+  gettingNow() {
+    const out = [];
+    for (const b of this.pending.keys()) if ((this.sourceOf.get(b) ?? this.ownerId) === this.ownerId) out.push(b);
+    return out;
+  }
+
+  /** The blocks we hold, for announcing: [first, last, first, last, ...] */
+  haveRanges() {
+    const done = [];
+    for (const [b, entry] of this.blocks) if (entry.done) done.push(b);
+    done.sort((a, b) => a - b);
+    const ranges = [];
+    for (const b of done) {
+      if (ranges.length && ranges[ranges.length - 1] === b - 1) ranges[ranges.length - 1] = b;
+      else ranges.push(b, b);
+    }
+    return ranges;
+  }
+
+  /** A block we hold (for another viewer), or null. */
+  getCachedBlock(index) {
+    const entry = this.blocks.get(index);
+    return entry?.done ? entry.data : null;
+  }
+
+  /** A viewer doesn't have these blocks (any more): ask someone else. */
+  handleMiss(peerId, blocks = []) {
+    this.counts.misses += blocks.length;
+    const have = this.peerHave.get(peerId);
+    const set = new Set();
+    for (const b of blocks) {
+      const i = b >>> 0;
+      if (have && i < have.length) have[i] = 0;
+      set.add(i);
+    }
+    this._reroute(peerId, set);
+  }
+
+  /** A viewer stopped (left, closed the video): forget what it has, ask elsewhere. */
+  dropPeer(peerId) {
+    if (!this.swarm || peerId === this.ownerId) return;
+    this.peerHave.delete(peerId);
+    this.peerGetting.delete(peerId);
+    this._reroute(peerId);
+  }
+
+  _needHashes(blocks) {
+    const now = Date.now();
+    for (const b of blocks) {
+      if (this.hashes.has(b)) continue;
+      const at = this.hashAsked.get(b);
+      if (at !== undefined && now - at < HASH_WAIT_MS) continue;
+      this.hashAsked.set(b, now);
+      if (!this.hashBatch) {
+        this.hashBatch = [];
+        Promise.resolve().then(() => {
+          const list = this.hashBatch;
+          this.hashBatch = null;
+          if (list.length && !this.isAborted) this.sendControl({ type: 'p2p-hash-request', streamNo: this.streamNo, blocks: list });
+        });
+      }
+      this.hashBatch.push(b);
+    }
+  }
+
+  /** The owner's checksums: [[block, hex], ...] */
+  addHashes(list = []) {
+    for (const item of list) {
+      if (!Array.isArray(item) || typeof item[1] !== 'string') continue;
+      const b = item[0] >>> 0;
+      this.hashes.set(b, item[1]);
+      const waiters = this.hashWaiters.get(b);
+      if (waiters) {
+        this.hashWaiters.delete(b);
+        for (const w of waiters) w(item[1]);
+      }
+    }
+  }
+
+  _hashFor(index) {
+    if (this.hashes.has(index)) return Promise.resolve(this.hashes.get(index));
+    this._needHashes([index]);
+    return new Promise((resolve) => {
+      if (!this.hashWaiters.has(index)) this.hashWaiters.set(index, []);
+      const list = this.hashWaiters.get(index);
+      list.push(resolve);
+      setTimeout(() => {
+        const i = list.indexOf(resolve);
+        if (i !== -1) {
+          list.splice(i, 1);
+          resolve(null);
+        }
+      }, HASH_WAIT_MS);
+    });
+  }
+
+  /** A block from another viewer: keep it only if it matches the owner's checksum. */
+  async _check(index, entry) {
+    entry.checking = true;
+    const peerId = entry.peer;
+    const t0 = Date.now();
+    const expected = await this._hashFor(index);
+    this.counts.hashMaxMs = Math.max(this.counts.hashMaxMs || 0, Date.now() - t0);
+    const actual = expected ? await this.hashBlock(entry.data) : null;
+    if (this.isAborted || this.blocks.get(index) !== entry || !entry.checking) return;
+    entry.checking = false;
+    if (expected && actual === expected) {
+      this._finish(index, entry, peerId);
+      return;
+    }
+    // Damaged, or no checksum to compare with: don't use it, get it from the owner
+    if (expected) {
+      this.stats.rejected++;
+      this.banned.add(peerId);
+      this.peerHave.delete(peerId);
+      this.onBadBlock(peerId, index);
+    } else {
+      this.penalty.set(peerId, Date.now() + SWARM_PENALTY_MS);
+    }
+    this._resetBlock(entry);
+    this.pending.delete(index);
+    this.sourceOf.delete(index);
+    if (entry.waiters.length || entry.background || entry.forRelay) {
+      this.pending.set(index, Date.now());
+      this._ask([index], entry.waiters.length > 0);
+    }
+  }
+
+  _finish(index, entry, from) {
+    entry.done = true;
+    this.pending.delete(index);
+    this.sourceOf.delete(index);
+    this.cachedBytes += entry.data.length;
+    if (this.swarm && from !== undefined && from !== null && from !== this.ownerId) this.stats.fromPeers += entry.data.length;
+    else this.stats.fromOwner += entry.data.length;
+    this.haveVersion++;
+    if (this.swarm) this.haveAdded.push(index);
+    entry.got = null;
+    const waiters = entry.waiters;
+    entry.waiters = [];
+    for (const w of waiters) w.resolve();
+    this._reportProgress();
+    if (entry.background) this._topUp();
   }
 
   _block(index) {
     let entry = this.blocks.get(index);
     if (!entry) {
       const size = Math.min(this.blockSize, this.fileSize - index * this.blockSize);
-      entry = { data: new Uint8Array(size), received: 0, done: false, waiters: [] };
+      entry = { data: new Uint8Array(size), received: 0, done: false, waiters: [], got: new Set() };
       this.blocks.set(index, entry);
     }
     return entry;
   }
 
-  handleChunk(arrayBuffer) {
+  handleChunk(arrayBuffer, fromPeerId = null) {
     if (this.isAborted || arrayBuffer.byteLength < RANGE_HEADER_BYTES) return;
     const view = new DataView(arrayBuffer);
     if (view.getUint32(0, false) !== RANGE_PACKET_MAGIC) return;
@@ -659,20 +1069,21 @@ export class P2PRangeReceiver {
     if (index >= this.totalBlocks) return;
 
     const entry = this._block(index);
-    if (entry.done) return;
+    if (entry.done || entry.checking) return;
     const payload = new Uint8Array(arrayBuffer, RANGE_HEADER_BYTES);
     if (offset + payload.length > entry.data.length) return;
+    if (entry.got.has(offset)) return; // the same part twice (asked again, two senders)
+    entry.got.add(offset);
     entry.data.set(payload, offset);
     entry.received += payload.length;
+    // Any part from another viewer (not the owner): the whole block gets checked
+    if (this.swarm && fromPeerId !== null && fromPeerId !== this.ownerId) {
+      entry.peer = fromPeerId;
+      this.lastDataFrom.set(fromPeerId, Date.now());
+    }
     if (entry.received >= entry.data.length) {
-      entry.done = true;
-      this.pending.delete(index);
-      this.cachedBytes += entry.data.length;
-      const waiters = entry.waiters;
-      entry.waiters = [];
-      for (const w of waiters) w.resolve();
-      this._reportProgress();
-      if (entry.background) this._topUp();
+      if (entry.peer) this._check(index, entry);
+      else this._finish(index, entry, fromPeerId);
     }
   }
 
@@ -692,7 +1103,7 @@ export class P2PRangeReceiver {
     }
     if (stale.length) {
       for (const b of stale) this.pending.delete(b);
-      this.sendControl({ type: 'p2p-range-cancel', streamNo: this.streamNo, blocks: stale });
+      this._cancel(stale);
     }
     this._topUp();
   }
@@ -702,18 +1113,90 @@ export class P2PRangeReceiver {
     if (this.isAborted || !this.window) return;
     const now = Date.now();
     let inFlight = 0;
-    for (const at of this.pending.values()) if (now - at <= BLOCK_WAIT_MS) inFlight++;
-    const wanted = [];
-    for (let b = this.window.first; b <= this.window.last && inFlight + wanted.length < BUFFER_IN_FLIGHT_BLOCKS; b++) {
-      const entry = this.blocks.get(b);
-      if (entry?.done) continue;
-      const at = this.pending.get(b);
-      if (at !== undefined && now - at <= BLOCK_WAIT_MS) continue;
+    let ownerInFlight = 0;
+    for (const [b, at] of this.pending) {
+      if (this._late(b, at, now)) continue;
+      inFlight++;
+      if ((this.sourceOf.get(b) ?? this.ownerId) === this.ownerId) ownerInFlight++;
+    }
+    const { first, last } = this.window;
+    if (!this.swarm || !this.peerHave.size) {
+      // Alone (or no swarm): nearest first
+      const wanted = [];
+      for (let b = first; b <= last && inFlight + wanted.length < BUFFER_IN_FLIGHT_BLOCKS; b++) {
+        if (this._needsFetch(b, now)) wanted.push(b);
+      }
+      this._askBackground(wanted, now);
+      return;
+    }
+    // Swarm: blocks other viewers have go to them (up to what each takes at a time); the owner
+    // gets only blocks nobody has, a few at a time. Past the next few blocks each viewer goes
+    // through the window in its own order, so viewers watching together fetch different parts
+    // from the owner and then swap them, instead of all asking the owner for the same ones.
+    const limit = BUFFER_IN_FLIGHT_BLOCKS + Math.min(3, this.peerHave.size) * SWARM_PEER_IN_FLIGHT;
+    const ownerLimit = Math.ceil(BUFFER_IN_FLIGHT_BLOCKS / 2);
+    const fromPeers = [];
+    const fromOwner = [];
+    const planned = new Map(); // viewer -> blocks this round
+    const near = Math.min(last, first + SWARM_NEAR_BLOCKS - 1);
+    const span = last - near;
+    const offset = span > 0 ? Math.floor(this.seed * span) : 0;
+    for (let i = 0; i <= last - first && inFlight + fromPeers.length + fromOwner.length < limit; i++) {
+      const b = first + i <= near ? first + i : near + 1 + ((i - (near - first + 1) + offset) % span);
+      if (!this._needsFetch(b, now)) continue;
+      const holders = this._holders(b, now, planned);
+      if (holders.free) {
+        fromPeers.push(b);
+        planned.set(holders.free, (planned.get(holders.free) || 0) + 1);
+      }
+      else if (holders.any) this.counts.waitBusy++; // they're busy: wait for them, not the owner
+      else if (this._someoneGetting(b, now)) this.counts.waitGetting++; // another viewer is getting it from the owner
+      else if (ownerInFlight + fromOwner.length < ownerLimit) fromOwner.push(b);
+    }
+    this.counts.bgOwner = (this.counts.bgOwner || 0) + fromOwner.length;
+    this._askBackground([...fromPeers, ...fromOwner], now);
+    // Checksums for what's coming, before other viewers' blocks arrive (so checking them doesn't wait)
+    const hashesAhead = [];
+    for (let b = first; b <= last && hashesAhead.length < SWARM_HASH_AHEAD; b++) {
+      if (!this.hashes.has(b) && !this.blocks.get(b)?.done) hashesAhead.push(b);
+    }
+    this._needHashes(hashesAhead);
+  }
+
+  /** Not here, not checking, and not asked for (or asked too long ago). */
+  _needsFetch(b, now) {
+    const entry = this.blocks.get(b);
+    if (entry?.done || entry?.checking) return false;
+    const at = this.pending.get(b);
+    return at === undefined || this._late(b, at, now);
+  }
+
+  _askBackground(blocks, now) {
+    const again = blocks.filter((b) => this.pending.has(b));
+    this._penalizeSlow(again);
+    for (const b of blocks) {
       this.pending.set(b, now);
       this._block(b).background = true;
-      wanted.push(b);
     }
-    if (wanted.length) this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: wanted, urgent: false });
+    this._ask(blocks, false);
+  }
+
+  /** Viewers that have block `b`: { any, free } (free: the least busy one that can take another
+   *  request, counting `planned` ones not sent yet). */
+  _holders(b, now = Date.now(), planned = null) {
+    let any = false;
+    let free = null;
+    let freeLoad = SWARM_PEER_IN_FLIGHT;
+    for (const [peerId, have] of this.peerHave) {
+      if (!have[b] || this.banned.has(peerId) || (this.penalty.get(peerId) || 0) > now) continue;
+      any = true;
+      const load = this._load(peerId) + (planned?.get(peerId) || 0);
+      if (load < freeLoad) {
+        free = peerId;
+        freeLoad = load;
+      }
+    }
+    return { any, free };
   }
 
   /** Legacy push-stream completion message: not used in on-demand mode. */
@@ -736,7 +1219,12 @@ export class P2PRangeReceiver {
       totalChunks: this.totalBlocks,
       speedMBs: Math.max(0, this.lastSpeed),
       isReady: true,
-      isCompleted: this.cachedBytes >= this.fileSize
+      isCompleted: this.cachedBytes >= this.fileSize,
+      ...(this.swarm ? {
+        fromPeersPercent: Math.round((100 * this.stats.fromPeers) / Math.max(1, this.stats.fromPeers + this.stats.fromOwner)),
+        swarmPeers: [...this.peerHave.keys()].filter((id) => !this.banned.has(id)).length,
+        rejectedBlocks: this.stats.rejected
+      } : {})
     });
   }
 
@@ -755,35 +1243,59 @@ export class P2PRangeReceiver {
     }
     if (stale.length) {
       for (const b of stale) this.pending.delete(b);
-      this.sendControl({ type: 'p2p-range-cancel', streamNo: this.streamNo, blocks: stale });
+      this._cancel(stale);
     }
 
+    const again = [];
     const isMissing = (b) => {
       const entry = this.blocks.get(b);
-      if (entry?.done) return false;
+      if (entry?.done || entry?.checking) return false;
       const at = this.pending.get(b);
-      return at === undefined || now - at > BLOCK_WAIT_MS;
+      const late = at !== undefined && this._late(b, at, now);
+      if (late) again.push(b);
+      return at === undefined || late;
     };
     if (isMissing(index)) {
+      this._penalizeSlow(again);
+      again.length = 0;
       this.pending.set(index, now);
-      this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: [index], urgent: true });
+      this._ask([index], true);
+    } else {
+      // Already asked for (read-ahead or background, maybe far down someone's queue): the player
+      // waits for it now, so move it to the front
+      const entry = this._block(index);
+      if (!entry.done && !entry.checking && !entry.urgent && this.pending.has(index)) {
+        entry.urgent = true;
+        this.counts.bumps++;
+        this.pending.set(index, now);
+        const source = this.sourceOf.get(index) ?? this.sourceId;
+        const msg = { type: 'p2p-range-request', streamNo: this.streamNo, blocks: [index], urgent: true };
+        if (this.swarm && source !== this.ownerId) this.sendTo(source, { ...msg, swarm: true });
+        else this.sendControl(msg);
+      }
     }
     const prefetch = [];
-    for (let b = index + 1; b <= last; b++) {
+    // Swarm with others watching: the background buffer (which shares the work out) covers this
+    const others = this.swarm && this.peerHave.size > 0;
+    const byBackground = others && this.window && this.window.first <= index + 1 && this.window.last >= last;
+    // ...and before it starts, read ahead only a little, leaving what others are fetching to them
+    const prefetchTo = others ? Math.min(last, index + SWARM_NEAR_BLOCKS) : last;
+    for (let b = index + 1; b <= prefetchTo && !byBackground; b++) {
+      if (others && !this._holders(b, now).free && this._someoneGetting(b, now)) continue;
       if (isMissing(b)) {
         this.pending.set(b, now);
         prefetch.push(b);
       }
     }
-    if (prefetch.length) {
-      this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: prefetch, urgent: false });
-    }
+    this._penalizeSlow(again);
+    this.counts.prefetch = (this.counts.prefetch || 0) + prefetch.length;
+    this._ask(prefetch, false);
   }
 
   _waitForBlock(index) {
     const entry = this._block(index);
     if (entry.done) return Promise.resolve();
-    const waitMs = this.isRelayed ? RELAY_WAIT_MS : BLOCK_WAIT_MS;
+    const waitMs = this._waitMs(index);
     return new Promise((resolve, reject) => {
       const waiter = { resolve, reject };
       entry.waiters.push(waiter);
@@ -800,6 +1312,7 @@ export class P2PRangeReceiver {
   /** Bytes from `position` (at most `maxLength`, never past the end of its block). */
   async read(position, maxLength) {
     const index = Math.floor(position / this.blockSize);
+    let patience = 2;
     for (let attempt = 1; ; attempt++) {
       if (this.isAborted) throw new Error('aborted');
       this._request(index);
@@ -808,9 +1321,18 @@ export class P2PRangeReceiver {
         break;
       } catch (err) {
         if (this.isAborted) throw err;
+        const source = this.sourceOf.get(index);
         if (this.isRelayed) {
           this.useOwner('parent too slow'); // doesn't count as a failed try
           attempt -= 1;
+        } else if (this.swarm && source !== undefined && source !== this.ownerId) {
+          attempt -= 1; // not a failed try
+          const at = this.pending.get(index);
+          if (at !== undefined && !this._late(index, at) && patience-- > 0) { // it's busy sending us data: give it a moment
+            this.counts.patience = (this.counts.patience || 0) + 1;
+            continue;
+          }
+          this._penalizeSlow([index], SWARM_PENALTY_MS); // too slow: ask elsewhere
         } else if (attempt >= BLOCK_MAX_TRIES) {
           throw err;
         }
@@ -839,6 +1361,8 @@ export class P2PRangeReceiver {
       if (this.cachedBytes <= this.cacheLimit * 0.9) break;
       this.cachedBytes -= this.blocks.get(b).data.length;
       this.blocks.delete(b);
+      this.haveVersion++;
+      if (this.swarm) this.haveRemoved.push(b);
     }
   }
 
@@ -853,12 +1377,12 @@ export class P2PRangeReceiver {
       if (entry.done) continue;
       entry.forRelay = true;
       const at = this.pending.get(b);
-      if (at === undefined || now - at > (this.isRelayed ? RELAY_WAIT_MS : BLOCK_WAIT_MS)) {
+      if (at === undefined || this._late(b, at, now)) {
         this.pending.set(b, now);
         missing.push(b);
       }
     }
-    if (missing.length) this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: missing, urgent });
+    this._ask(missing, urgent);
   }
 
   /** Relay: the data of one block, fetching it from our source if needed. */
@@ -922,5 +1446,9 @@ export class P2PRangeReceiver {
     }
     this.blocks.clear();
     this.pending.clear();
+    this.sourceOf.clear();
+    this.peerHave.clear();
+    for (const list of this.hashWaiters.values()) for (const w of list) w(null);
+    this.hashWaiters.clear();
   }
 }

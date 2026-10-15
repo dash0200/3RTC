@@ -19,7 +19,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ORDER = [
     'connection', 'chat_attach', 'youtube_sync', 'youtube_unavailable', 'host_controls', 'queue',
-    'activities', 'ludo', 'room_basics', 'phone_layout', 'stream', 'local_video_sync', 'media_session', 'six_people',
+    'activities', 'ludo', 'ludo_stack', 'room_basics', 'phone_layout', 'back_button', 'media_links', 'stream', 'stream_uneven',
+    'local_video_sync', 'file_format', 'swarm', 'media_session', 'six_people',
 ]
 
 

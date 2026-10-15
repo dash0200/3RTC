@@ -262,6 +262,8 @@ def media(name):
         raise RuntimeError('ffmpeg is needed to make test media (or put the file in ' + str(MEDIA) + ')')
     if name == 'speech.wav':
         return _make_speech(ff, path)
+    if name == 'subs.mkv':
+        return _make_subs_mkv(ff, path)
     lavfi = {
         'test.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=30:duration=60', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=60',
                      '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '4M', '-c:a', 'libopus', '-shortest'],
@@ -272,8 +274,39 @@ def media(name):
         'uneven.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=854x480:rate=24:duration=70', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=70',
                        '-vf', "noise=alls=45:allf=t+u:enable='between(t,0,35)'", '-c:v', 'libvpx-vp9', '-deadline', 'realtime',
                        '-cpu-used', '8', '-crf', '30', '-b:v', '9M', '-c:a', 'libopus', '-shortest', '-movflags', '+faststart'],
+        # Plays as video, but its audio (AC-3) doesn't play in Chromium: the format check warns
+        'ac3.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=20', '-f', 'lavfi', '-i', 'sine=frequency=330:duration=20',
+                    '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '1M', '-c:a', 'ac3', '-shortest'],
+        # Plays nowhere in a browser (MPEG-4 Part 2 video in AVI)
+        'old.avi': ['-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=25:duration=5', '-c:v', 'mpeg4', '-an'],
     }[name]
     subprocess.run([ff, '-y', '-loglevel', 'error', *lavfi, str(path)], check=True)
+    return str(path)
+
+
+SRT_LINES = [(1, 3, 'Hello from the English track'), (4, 6, 'Second line\nwith two rows'), (8, 10, 'Third English line')]
+ASS_LINES = [(1, 3, 'Hola desde la pista'), (5, 7, '{\\i1}Segunda{\\i0} linea')]
+
+
+def _make_subs_mkv(ff, path):
+    """An MKV (VP9 + two Opus audio tracks) with an English SRT track and a Spanish ASS track."""
+    clock = lambda s: f'00:00:{s:02d},000'
+    srt = MEDIA / 'subs_en.srt'
+    srt.write_text(''.join(f'{i + 1}\n{clock(a)} --> {clock(b)}\n{t}\n\n' for i, (a, b, t) in enumerate(SRT_LINES)))
+    ass = MEDIA / 'subs_es.ass'
+    ass.write_text('[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n'
+                   'Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1\n\n'
+                   '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n'
+                   + ''.join(f'Dialogue: 0,0:00:{a:02d}.00,0:00:{b:02d}.00,Default,,0,0,0,,{t}\n' for a, b, t in ASS_LINES))
+    subprocess.run([ff, '-y', '-loglevel', 'error',
+                    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=20',
+                    '-f', 'lavfi', '-i', 'sine=frequency=330:duration=20', '-f', 'lavfi', '-i', 'sine=frequency=550:duration=20',
+                    '-i', str(srt), '-i', str(ass),
+                    '-map', '0:v', '-map', '1:a', '-map', '2:a', '-map', '3:s', '-map', '4:s',
+                    '-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8', '-b:v', '1M', '-c:a', 'libopus', '-c:s:0', 'srt', '-c:s:1', 'ass',
+                    '-metadata:s:a:0', 'language=eng', '-metadata:s:a:1', 'language=hin', '-metadata:s:a:1', 'title=Hindi dub',
+                    '-metadata:s:s:0', 'language=eng', '-metadata:s:s:1', 'language=spa', '-metadata:s:s:1', 'title=Spanish',
+                    '-t', '20', str(path)], check=True)
     return str(path)
 
 
