@@ -11317,6 +11317,7 @@ video::cue {
 .stage-activity.is-window.needs-you .activity-bar-meta { color: var(--bubble-ring, #3ea6ff); font-weight: 700; }
 .stage-activity.is-window .activity-body { overflow-y: auto; }
 .activity-icon-btn { min-width: 32px; padding: 4px 8px !important; font-size: 15px; line-height: 1; }
+.activity-video-btn { border-color: #e53935 !important; color: #fff !important; background: rgba(229, 57, 53, 0.22) !important; font-weight: 600; }
 .activity-resize {
   position: absolute;
   top: 0;
