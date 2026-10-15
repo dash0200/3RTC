@@ -140,6 +140,10 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
     const shown = view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
     const { box, startDrag } = useFloatingBox(rootRef, shown === 'window');
     const setView = (v) => onViewChange?.(v);
+    const backToVideo = () => {
+        if (isFull) toggleFull(); // the bubble sits over the stage, not in the game's full screen
+        setView('bubble');
+    };
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
     const showPeek = chat && shown === 'full' && (isFull || !chat.isListVisible);
     if (!activity) return null;
@@ -184,8 +188,14 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 {shown === 'window' && (
                     <button type="button" className="activity-bar-btn activity-icon-btn activity-full-btn" onClick={() => setView('full')} title="Show the game full size" aria-label="Full size">⤢</button>
                 )}
-                {(shown === 'window' || (shown === 'full' && mediaActive)) && (
+                {shown === 'window' && (
                     <button type="button" className="activity-bar-btn activity-icon-btn activity-min-btn" onClick={() => setView('bubble')} title="Minimise: you get a nudge when it's your turn" aria-label="Minimise">–</button>
+                )}
+                {shown === 'full' && mediaActive && (
+                    // Over a video: a plain way back to it (the game shrinks to a bubble)
+                    <button type="button" className="activity-bar-btn activity-video-btn" onClick={backToVideo} title="Watch the video: the game becomes a bubble that nudges you on your turn">
+                        ▶ Video
+                    </button>
                 )}
                 {chat?.onToggleSplitView && !isFull && shown === 'full' && (
                     <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
@@ -193,7 +203,7 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                         💬 Chat{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
                     </button>
                 )}
-                {canFullscreen() && shown === 'full' && (
+                {canFullscreen() && shown === 'full' && !(isPhone && mediaActive) && (
                     <button type="button" className="activity-bar-btn activity-fullscreen-btn" onClick={toggleFull} title={isFull ? 'Exit full screen (Esc)' : 'Full screen'} aria-pressed={isFull}>
                         {isFull ? 'Exit full screen' : 'Full screen'}
                     </button>
