@@ -12,7 +12,26 @@ MEDIA = harness.media_server()
 FILE = f'{MEDIA}/test_small.mp4'
 INIT = harness.signal_init(harness.signaling())
 RIG = "(() => { const real = Math.random; window.__dice = []; Math.random = () => (window.__dice.length && /ludo\\/rules/.test(new Error().stack || '')) ? (window.__dice.shift() - 1) / 6 + 0.01 : real(); })();"
+_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'media_links_test.py')).read()
+FAKES = _src.split('FAKES = r"""', 1)[1].split('"""', 1)[0]  # fake YouTube / Vimeo / Twitch players
 errors = []
+
+
+def swipe(pg, x, y, dy, dx=0, steps=8):
+    """A finger drag (real touch events)."""
+    cdp = pg.context.new_cdp_session(pg)
+    cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
+    for i in range(1, steps + 1):
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x + dx * i / steps, 'y': y + dy * i / steps}]}); time.sleep(0.02)
+    mid = pg.evaluate("document.querySelector('.stage-activity').style.transform")
+    cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+    cdp.detach()
+    return mid
+
+
+def on_top(pg, sel):
+    """Is the middle of `sel` the thing a tap there would hit?"""
+    return pg.evaluate(f"(() => {{ const el = document.querySelector('{sel}'); if (!el) return false; const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!hit && el.contains(hit); }})()")
 
 
 def view(pg):
@@ -31,8 +50,8 @@ with sync_playwright() as p:
     b = p.chromium.launch(args=harness.CHROMIUM_ARGS)
     host = b.new_context(viewport={'width': 1440, 'height': 900}).new_page()
     phone = b.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2).new_page()
-    host.add_init_script(INIT + RIG + "localStorage.removeItem('3rtc_activity_window');")
-    phone.add_init_script(INIT)
+    host.add_init_script(INIT + RIG + "localStorage.removeItem('3rtc_activity_window');"); host.add_init_script(FAKES)
+    phone.add_init_script(INIT); phone.add_init_script(FAKES)
     for pg in (host, phone):
         pg.on('pageerror', lambda e: errors.append(str(e)))
         pg.on('dialog', lambda d: d.accept())
@@ -104,33 +123,39 @@ with sync_playwright() as p:
     check('back and forth as often as you like', wait(lambda: view(phone) == 'full', 5))
     phone.locator('.activity-video-btn').click()
     check('...bubble again; the room is still there', wait(lambda: view(phone) == 'bubble', 5) and phone.locator('.phone-actionbar').count() == 1)
-    # Swipe the title bar down, like the YouTube app
+    # Swipe the game down anywhere, like the YouTube app (real touch events)
     phone.locator('.activity-bubble').click()
     wait(lambda: view(phone) == 'full', 5)
     check('the open game shows a grab handle', phone.locator('.activity-grab').is_visible())
-    bar = phone.locator('.stage-activity .activity-bar').bounding_box()
-    x, y = bar['x'] + 60, bar['y'] + 10
-    phone.mouse.move(x, y); phone.mouse.down(); phone.mouse.move(x, y + 25, steps=10); time.sleep(0.4); phone.mouse.up(); time.sleep(0.4)
-    check('a small pull springs back', view(phone) == 'full' and not phone.evaluate("document.querySelector('.stage-activity').style.transform"))
-    phone.mouse.move(x, y); phone.mouse.down(); phone.mouse.move(x, y + 80, steps=6)
-    mid = phone.evaluate("document.querySelector('.stage-activity').style.transform")
-    phone.mouse.move(x, y + 180, steps=6); phone.mouse.up()
-    check('the game follows the finger, and a swipe down puts it away', 'translateY' in (mid or '') and wait(lambda: view(phone) == 'bubble', 5), mid)
-    # The same with a real finger (touch events)
+    board = phone.locator('.ludo-board').bounding_box()
+    cx, cy = board['x'] + board['width'] / 2, board['y'] + board['height'] / 3
+    swipe(phone, cx, cy, 25); time.sleep(0.4)
+    check('a small pull on the board springs back', view(phone) == 'full' and not phone.evaluate("document.querySelector('.stage-activity').style.transform"))
+    swipe(phone, cx, cy, -40, dx=180); time.sleep(0.3)
+    check('a sideways drag is not a swipe', view(phone) == 'full')
+    swipe(phone, cx, cy + 200, -200); time.sleep(0.4)
+    check('dragging up (to scroll the game) is not a swipe', view(phone) == 'full')
+    mid = swipe(phone, cx, cy, 220)
+    check('a swipe down on the board: the game follows the finger and goes away', 'translateY' in (mid or '') and wait(lambda: view(phone) == 'bubble', 5), mid)
     phone.locator('.activity-bubble').click()
     wait(lambda: view(phone) == 'full', 5)
-    cdp = phone.context.new_cdp_session(phone)
     bar = phone.locator('.stage-activity .activity-bar').bounding_box()
-    x, y = bar['x'] + 60, bar['y'] + 10
-    cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
-    for i in range(1, 9):
-        cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x, 'y': y + i * 25}]}); time.sleep(0.02)
-    cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
-    check('a finger swipe down puts it away too', wait(lambda: view(phone) == 'bubble', 5))
+    swipe(phone, bar['x'] + 60, bar['y'] + 12, 200)
+    check('...and on the title bar', wait(lambda: view(phone) == 'bubble', 5))
+    phone.locator('.activity-bubble').click()
+    wait(lambda: view(phone) == 'full', 5)
+    # (a shorter phone: the game scrolls)
+    scrolled = phone.evaluate("(() => { const b = document.querySelector('.stage-activity .activity-body'); b.style.maxHeight = '300px'; const e = b.querySelector('.ludo'); e.scrollTop = 120; return e.scrollTop; })()")
+    swipe(phone, cx, cy, 200); time.sleep(0.4)
+    check('scrolled down inside the game, a pull down scrolls instead of closing', scrolled > 0 and view(phone) == 'full', scrolled)
+    phone.evaluate("(() => { const b = document.querySelector('.stage-activity .activity-body'); b.querySelector('.ludo').scrollTop = 0; b.style.maxHeight = ''; })()")
+    swipe(phone, cx, cy, 220)
+    check('...back at the top it swipes away', wait(lambda: view(phone) == 'bubble', 5))
     t0 = (vt(phone) or {}).get('t', 0); time.sleep(1)
     check('...the video is still playing', (vt(phone) or {}).get('t', 0) > t0 + 0.5)
     phone.go_back(); time.sleep(0.8)
-    check('Back after using the button does not leave a stale step (still in the room)', phone.locator('.phone-actionbar').count() == 1 or 'room' in phone.url, phone.url)
+    check('Back after that has nothing of the game left to close: it asks before leaving the room', phone.get_by_role('button', name='Stay').is_visible())
+    phone.get_by_role('button', name='Stay').click(); time.sleep(0.3)
 
     # Window: drag, resize, full size, minimise
     bar = host.locator('.stage-activity .activity-bar').bounding_box()
@@ -155,6 +180,20 @@ with sync_playwright() as p:
     # The video ends: the game comes back
     host.get_by_role('button', name=re.compile('Exit Video')).first.click()
     check('exiting the video brings the game back full size for everyone', wait(lambda: view(host) == 'full' and view(phone) == 'full', 8), [view(host), view(phone)])
+    # A YouTube video: the game opens above YouTube's own bar
+    phone.get_by_role('button', name='Add video').last.click()
+    phone.locator('input[placeholder*="Paste a link"]:visible').last.fill('https://youtu.be/aqz-KE-bpKQ')
+    phone.get_by_role('button', name=re.compile('Play for everyone')).click()
+    check('YouTube: the game shrinks to the bubble again', wait(lambda: view(phone) == 'bubble' and phone.locator('.yt-stage-topbar').count() == 1, 10), view(phone))
+    phone.locator('.activity-bubble').click()
+    check("YouTube: the open game's bar is on top, not under YouTube's bar",
+          wait(lambda: view(phone) == 'full' and on_top(phone, '.stage-activity .activity-video-btn') and on_top(phone, '.stage-activity .activity-close-btn'), 10))  # (after any notice fades)
+    phone.screenshot(path=str(harness.OUT / 'ludo_video_youtube_open.png'))
+    board = phone.locator('.ludo-board').bounding_box()
+    swipe(phone, board['x'] + board['width'] / 2, board['y'] + 80, 220)
+    check('YouTube: swipe down goes back to the video', wait(lambda: view(phone) == 'bubble', 5))
+    phone.locator('.yt-stage-topbar .exit-video-btn').click()
+    check('...exit it: the game is back full size', wait(lambda: view(phone) == 'full', 8))
     check('the game went on all along', host.locator('[data-testid=ludo-status]').count() == 1 and phone.locator('.ludo-board').count() == 1)
     check('no page errors', not errors, errors[:3])
     b.close()

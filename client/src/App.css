@@ -10738,7 +10738,7 @@ video::cue {
 .stage-activity {
   position: absolute;
   inset: 0;
-  z-index: 6;
+  z-index: 12; /* above the video players' own bars (YouTube's is 10) */
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
