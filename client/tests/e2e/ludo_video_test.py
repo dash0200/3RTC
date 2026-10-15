@@ -104,6 +104,31 @@ with sync_playwright() as p:
     check('back and forth as often as you like', wait(lambda: view(phone) == 'full', 5))
     phone.locator('.activity-video-btn').click()
     check('...bubble again; the room is still there', wait(lambda: view(phone) == 'bubble', 5) and phone.locator('.phone-actionbar').count() == 1)
+    # Swipe the title bar down, like the YouTube app
+    phone.locator('.activity-bubble').click()
+    wait(lambda: view(phone) == 'full', 5)
+    check('the open game shows a grab handle', phone.locator('.activity-grab').is_visible())
+    bar = phone.locator('.stage-activity .activity-bar').bounding_box()
+    x, y = bar['x'] + 60, bar['y'] + 10
+    phone.mouse.move(x, y); phone.mouse.down(); phone.mouse.move(x, y + 25, steps=10); time.sleep(0.4); phone.mouse.up(); time.sleep(0.4)
+    check('a small pull springs back', view(phone) == 'full' and not phone.evaluate("document.querySelector('.stage-activity').style.transform"))
+    phone.mouse.move(x, y); phone.mouse.down(); phone.mouse.move(x, y + 80, steps=6)
+    mid = phone.evaluate("document.querySelector('.stage-activity').style.transform")
+    phone.mouse.move(x, y + 180, steps=6); phone.mouse.up()
+    check('the game follows the finger, and a swipe down puts it away', 'translateY' in (mid or '') and wait(lambda: view(phone) == 'bubble', 5), mid)
+    # The same with a real finger (touch events)
+    phone.locator('.activity-bubble').click()
+    wait(lambda: view(phone) == 'full', 5)
+    cdp = phone.context.new_cdp_session(phone)
+    bar = phone.locator('.stage-activity .activity-bar').bounding_box()
+    x, y = bar['x'] + 60, bar['y'] + 10
+    cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': x, 'y': y}]})
+    for i in range(1, 9):
+        cdp.send('Input.dispatchTouchEvent', {'type': 'touchMove', 'touchPoints': [{'x': x, 'y': y + i * 25}]}); time.sleep(0.02)
+    cdp.send('Input.dispatchTouchEvent', {'type': 'touchEnd', 'touchPoints': []})
+    check('a finger swipe down puts it away too', wait(lambda: view(phone) == 'bubble', 5))
+    t0 = (vt(phone) or {}).get('t', 0); time.sleep(1)
+    check('...the video is still playing', (vt(phone) or {}).get('t', 0) > t0 + 0.5)
     phone.go_back(); time.sleep(0.8)
     check('Back after using the button does not leave a stale step (still in the room)', phone.locator('.phone-actionbar').count() == 1 or 'room' in phone.url, phone.url)
 
