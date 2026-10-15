@@ -7,6 +7,7 @@
  *   window a small window over the video, dragged and resized (computers, while a video plays)
  *   bubble a round button; it pulses when the game needs you ("Your turn"), tap to open
  * The activity stays mounted in every view, so its timers and sounds keep working.
+ * Phone, game open over a video: swipe the title bar down to put it away (like the YouTube app).
  */
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPeek from './ChatPeek';
@@ -26,6 +27,46 @@ function readWindowBox() {
 }
 
 /** The small window's size and place: dragged by its bar, resized from its top-left corner. */
+/**
+ * Swipe the title bar down to put the game away (phones, over a video). The game follows the
+ * finger; let go far or fast enough and `onDone` runs, else it springs back. Buttons on the bar
+ * still work as taps.
+ */
+function useSwipeDown(ref, active, onDone) {
+    const doneRef = useRef(onDone);
+    doneRef.current = onDone;
+    return useCallback((e) => {
+        const el = ref.current;
+        if (!active || !el || e.button > 0 || e.target.closest('button')) return;
+        const y0 = e.clientY;
+        const t0 = performance.now();
+        let dy = 0;
+        el.style.transition = 'none';
+        const move = (ev) => {
+            dy = Math.max(0, ev.clientY - y0);
+            el.style.transform = dy ? `translateY(${dy}px)` : '';
+            el.style.opacity = String(Math.max(0.35, 1 - dy / 500));
+        };
+        const end = (ev) => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', end);
+            window.removeEventListener('pointercancel', end);
+            const speed = dy / Math.max(1, performance.now() - t0);
+            const away = ev.type === 'pointerup' && (dy > 90 || (dy > 30 && speed > 0.5));
+            el.style.transition = 'transform 0.18s ease, opacity 0.18s ease';
+            el.style.transform = '';
+            el.style.opacity = '';
+            if (away) {
+                el.style.transition = '';
+                doneRef.current?.();
+            }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', end);
+        window.addEventListener('pointercancel', end);
+    }, [ref, active]);
+}
+
 function useFloatingBox(ref, active) {
     const [box, setBox] = useState(readWindowBox);
     const boxRef = useRef(box);
@@ -144,6 +185,8 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
         if (isFull) toggleFull(); // the bubble sits over the stage, not in the game's full screen
         setView('bubble');
     };
+    const canSwipeAway = isPhone && shown === 'full' && mediaActive;
+    const swipeStart = useSwipeDown(rootRef, canSwipeAway, backToVideo);
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
     const showPeek = chat && shown === 'full' && (isFull || !chat.isListVisible);
     if (!activity) return null;
@@ -175,7 +218,9 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
             {shown === 'window' && (
                 <span className="activity-resize" onPointerDown={(e) => startDrag(e, 'resize')} title="Drag to resize" aria-hidden="true" />
             )}
-            <div className="activity-bar" onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : undefined}>
+            <div className={`activity-bar ${canSwipeAway ? 'can-swipe' : ''}`} onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : canSwipeAway ? swipeStart : undefined}
+                title={canSwipeAway ? 'Swipe down to go back to the video' : undefined}>
+                {canSwipeAway && <span className="activity-grab" aria-hidden="true" />}
                 <span className="activity-bar-icon" aria-hidden="true">{definition.icon}</span>
                 <span className="activity-bar-name">{definition.name}</span>
                 {shown === 'full' && <span className="activity-bar-meta">started by {startedBy}</span>}
