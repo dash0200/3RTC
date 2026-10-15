@@ -11064,3 +11064,77 @@ video::cue {
   font-size: 12.5px;
   line-height: 1.4;
 }
+
+/* ---- File format check & subtitles inside the file (features/files) ---- */
+.file-notice-anchor {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 6;
+  display: flex;
+  justify-content: flex-start;
+  pointer-events: none;
+}
+.file-notice-anchor > .file-notice { pointer-events: auto; }
+.file-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(460px, 100%);
+  text-align: left;
+}
+.file-notice.is-compact { margin: 10px auto 0; max-width: 520px; width: 100%; }
+.file-notice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  border-radius: 10px;
+  background: rgba(20, 22, 28, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e8eaed;
+  font-size: 13px;
+  line-height: 1.35;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.file-notice-row.is-no-video { border-color: rgba(255, 82, 82, 0.6); }
+.file-notice-row.is-no-audio, .file-notice-row.is-others { border-color: rgba(255, 193, 7, 0.55); }
+.file-notice-icon { font-size: 16px; line-height: 1.2; }
+.file-notice-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.file-notice-text strong { font-weight: 600; color: #fff; }
+.file-notice-meta { color: #9aa0a6; font-size: 12px; }
+.file-notice-person { color: #ffd666; }
+.file-notice-tracks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+.file-notice-track {
+  background: rgba(62, 166, 255, 0.15);
+  border: 1px solid rgba(62, 166, 255, 0.45);
+  color: #cfe8ff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-notice-track:hover:not(:disabled) { background: rgba(62, 166, 255, 0.3); }
+.file-notice-track:disabled { opacity: 0.55; cursor: default; }
+.file-notice-track.is-busy { opacity: 1; border-color: #3ea6ff; }
+.file-notice-close {
+  background: none;
+  border: none;
+  color: #9aa0a6;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+}
+.file-notice-close:hover { color: #fff; }
+.local-fullstage-player.is-playing .file-notice-row.is-info,
+.local-fullstage-player.is-playing .file-notice-row.is-others { opacity: 0.85; }
+@media (max-width: 600px) {
+  .file-notice-row { font-size: 12px; padding: 7px 8px 7px 10px; }
+  .file-notice-anchor { top: 6px; left: 6px; right: 6px; }
+}

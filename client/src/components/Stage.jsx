@@ -41,6 +41,7 @@ export default function Stage({
   onVideoChange,
   localVideoFile,
   remoteLocalVideoMeta,
+  fileFormat,
   onLocalFileSelect,
   onCloseLocalVideo,
   onBroadcastAction,
@@ -334,6 +335,7 @@ export default function Stage({
             onRegisterStateGetter={onRegisterStateGetter}
             streamProgress={streamProgress}
             streamVideoUrl={streamVideoUrl}
+            fileFormat={fileFormat}
             onRequestP2PStream={onRequestP2PStream}
             onCancelP2PStream={onCancelP2PStream}
             isHost={isHost}
@@ -370,6 +372,7 @@ export default function Stage({
         {phoneOverlay === 'offer' && (
           <PhoneStreamOffer
             meta={remoteLocalVideoMeta}
+            fileFormat={fileFormat}
             streamProgress={streamProgress}
             onRequestStream={onRequestP2PStream}
             onCancelStream={onCancelP2PStream}
