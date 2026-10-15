@@ -1,3 +1,5 @@
+import { routeAudioContext } from './audioDevices';
+
 /**
  * Synchronized Soundboard (Mini SFX Tray) - Web Audio Engine
  * Plays authentic, high-fidelity Discord soundboard audio clips and classic Discord SFX.
@@ -158,6 +160,7 @@ class SoundboardEngine {
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
     }
+    routeAudioContext(this.ctx); // plays through the chosen speaker
     return this.ctx;
   }
 

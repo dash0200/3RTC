@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PTT_PRESET_KEYS, getPttKeyLabel, matchesPttKey } from '../utils/audioSettings';
 import { sound } from '../utils/sound';
 import { useSpeakingActivity } from '../utils/speakingActivity';
+import AudioDevicePicker from './AudioDevicePicker';
 
 /** Live mic level for the push-to-talk test; only this re-renders as the level changes. */
 function PttTestMeter({ isTransmitting }) {
@@ -26,6 +27,7 @@ export default function AudioSettingsModal({
   onClose,
   audioSettings,
   onUpdateAudioSettings,
+  onSelectOutput,
   isMicMuted = true,
   isPttActive = false,
   voiceIsolationSupported = false,
@@ -111,7 +113,12 @@ export default function AudioSettingsModal({
       pttKey: 'Space',
       pttKeyLabel: 'Space',
       pttReleaseDelay: 200,
-      pttChime: true
+      pttChime: true,
+      // the devices stay as chosen
+      inputDeviceId: audioSettings.inputDeviceId || '',
+      inputDeviceLabel: audioSettings.inputDeviceLabel || '',
+      outputDeviceId: audioSettings.outputDeviceId || '',
+      outputDeviceLabel: audioSettings.outputDeviceLabel || ''
     });
   };
 
@@ -162,6 +169,22 @@ export default function AudioSettingsModal({
 
         {/* Modal Body */}
         <div className="modal-body audio-settings-body">
+          {/* Input / output devices */}
+          <div className="settings-section">
+            <div className="section-header-row">
+              <div className="section-title-wrap">
+                <span className="section-tag-badge">DEVICES</span>
+                <h4 className="settings-section-title">Microphone & Speaker</h4>
+              </div>
+            </div>
+            <AudioDevicePicker
+              audioSettings={audioSettings}
+              onUpdateAudioSettings={onUpdateAudioSettings}
+              onSelectOutput={onSelectOutput}
+              isMicLive={!isMicMuted}
+            />
+          </div>
+
           {/* Voice Transmission Mode (Open Mic vs Push-to-Talk) */}
           <div className="settings-section">
             <div className="section-header-row">
