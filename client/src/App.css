@@ -11231,29 +11231,58 @@ video::cue {
 }
 .chat-link:hover { color: #7fd0f5; }
 
-/* "Trending in" country choice (quick picks) */
-.qp-region {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  padding: 0 4px 0 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.05);
-  font-size: 0.8rem;
-  color: #aab;
-  white-space: nowrap;
+/* "Trending in" country choice (quick picks): a chip like the others, with a small menu */
+.qp-region { position: relative; flex: 0 0 auto; }
+.qp-region-btn svg { margin-right: -4px; opacity: 0.8; }
+.qp-region-btn.is-open { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.qp-region-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 12px;
+  background: #1b1d23;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
-.qp-region select {
-  background: transparent;
+.qp-region-title { padding: 6px 10px 4px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: #8b8f98; }
+.qp-region-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
   border: none;
+  border-radius: 8px;
+  background: none;
   color: #e8eaed;
   font: inherit;
-  font-weight: 600;
-  padding: 6px 4px;
+  font-size: 0.85rem;
+  text-align: left;
   cursor: pointer;
 }
-.qp-region select:focus-visible { outline: 2px solid #3ea6ff; border-radius: 6px; }
-.qp-region select option { background: #1b1d23; color: #e8eaed; }
-.qp-region.is-phone { margin: 0 0 8px; align-self: flex-start; }
+.qp-region-option:hover, .qp-region-option:focus-visible { background: rgba(255, 255, 255, 0.08); outline: none; }
+.qp-region-option.is-on { font-weight: 600; }
+.qp-region-check { margin-left: auto; color: #3ea6ff; }
+.qp-region.is-phone { align-self: flex-start; margin: 0 0 8px; }
+.qp-region.is-phone .qp-region-menu { left: 0; right: auto; }
+.qp-head .qp-region { margin-left: auto; }
+
+.qp-region-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+.qp-region-badge.is-globe { background: none; padding: 0; min-width: 0; font-size: 0.95rem; }
