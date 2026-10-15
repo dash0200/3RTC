@@ -3,6 +3,7 @@
  * out the desktop or phone screen. Feature logic lives in features/*, connection logic in
  * webrtc/*, and the shared plumbing in core/* (see docs/ARCHITECTURE.md).
  */
+import { getClientId } from './utils/clientId';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Header from './components/Header';
 import Stage from './components/Stage';
@@ -121,6 +122,8 @@ export default function App() {
             isPeerHost: (id) => (id === peerIdRef.current ? isHostRef.current : Boolean(peerMetadataRef.current[id]?.isHost)),
             getHostPeerId: () => Object.entries(peerMetadataRef.current).find(([, m]) => m?.isHost)?.[0] || null,
             peerName: (id) => peerMetadataRef.current[id]?.username || null,
+            // The app's stable id (same after a reload or rejoin; the peer id isn't)
+            clientIdOf: (id) => (id === peerIdRef.current ? getClientId() : peerMetadataRef.current[id]?.clientId || null),
             // Message format version of a peer's app (1 = from before versions were sent)
             peerProtocol: (id) => (id === peerIdRef.current ? PROTOCOL_VERSION : (peerMetadataRef.current[id]?.proto || 1)),
             getAuthorityId: () => pickAuthority(peerIdRef.current, isHostRef.current, connectedPeers()),
