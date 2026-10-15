@@ -42,6 +42,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
 | `back_button` | phone Back: closes what's open, asks before leaving, never closes a video or game; room code in the address; Rejoin (guest and host); closing the tab mid-video asks |
 | `stream` | sharing a local video: on-demand streaming, seeking, a hard-refreshed viewer |
+| `media_links` | paste anything: video files, HLS, Vimeo, Twitch in sync (computer + phone), late joiner, queue, unplayable links explained, host lock, automatic re-sync (links and YouTube) |
 | `stream_uneven` | a film with an uneven bitrate (heavy first half) plays straight through |
 | `local_video_sync` | local video play / pause / seek sync |
 | `media_session` | lock-screen / headset controls |

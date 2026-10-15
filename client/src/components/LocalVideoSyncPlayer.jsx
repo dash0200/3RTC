@@ -251,6 +251,7 @@ export default function LocalVideoSyncPlayer({
           fileSize: fileRef.current?.size || remoteMeta?.fileSize || 0,
           currentTime: vid ? vid.currentTime : 0,
           isPlaying: vid ? !vid.paused : false,
+          isBuffering: vid ? vid.seeking || vid.readyState < 3 : false,
           subtitleInfo: subtitles ? { fileName: subtitles.fileName, vttString: subtitles.vttString } : null
         };
       });

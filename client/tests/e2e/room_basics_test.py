@@ -150,7 +150,7 @@ with sync_playwright() as p:
         host.mouse.click(5, 5)
 
     # vote to skip: with two people one vote is enough
-    host.get_by_placeholder(re.compile('Paste YouTube link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
+    host.get_by_placeholder(re.compile('Paste a link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
     host.get_by_role('button', name=re.compile('Load for All')).click()
     check('a video loads for both', wait(lambda: video_id(host) == 'aqz-KE-bpKQ' and video_id(guest) == 'aqz-KE-bpKQ', 10))
     host.evaluate("document.querySelector('.yt-sync-wrapper')")
@@ -158,7 +158,7 @@ with sync_playwright() as p:
     check('vote to skip with nothing queued closes the video for both', wait(lambda: host.locator('.yt-fullstage-player').count() == 0 and guest.locator('.yt-fullstage-player').count() == 0, 8))
 
     # leaving resets what the room had
-    host.get_by_placeholder(re.compile('Paste YouTube link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
+    host.get_by_placeholder(re.compile('Paste a link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
     host.get_by_role('button', name=re.compile('Load for All')).click()
     wait(lambda: video_id(guest) == 'aqz-KE-bpKQ', 10)
     guest.get_by_role('button', name=re.compile('Leave', re.I)).first.click()

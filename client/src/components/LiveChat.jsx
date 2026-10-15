@@ -22,7 +22,7 @@ function isEmojiOnly(text) {
   return [...text.trim()].length <= 6;
 }
 import { copyToClipboard } from '../utils/clipboard';
-import { extractYouTubeId, fetchYouTubeTitle } from './YouTubeSyncPlayer';
+import { resolvePastedLink } from '../features/media/resolveLink';
 import { PeerVoicePanel } from './PeerVoiceRoster';
 import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal from './ImageLightboxModal';
@@ -69,6 +69,7 @@ export default function LiveChat({
   onOpenSettings,
   queue = [],
   activeVideoId = null,
+  activeMedia = null, // a link source playing (features/media)
   activeVideoTitle = '',
   onAddToQueue,
   onRemoveFromQueue,
@@ -348,18 +349,17 @@ export default function LiveChat({
     const trimmed = queueInput.trim();
     if (!trimmed) return;
 
-    const id = extractYouTubeId(trimmed);
-    if (!id) {
-      setQueueError('Please enter a valid YouTube link or 11-char ID');
-      return;
-    }
-
     setQueueError('');
     setIsAddingQueue(true);
     try {
-      const title = await fetchYouTubeTitle(id);
+      // Any link: YouTube, Vimeo, Twitch, a video file (features/media)
+      const res = await resolvePastedLink(trimmed);
+      if (res.error) {
+        setQueueError(res.error);
+        return;
+      }
       if (typeof onAddToQueue === 'function') {
-        onAddToQueue({ videoId: id, title });
+        onAddToQueue(res.kind === 'media' ? { media: res.media, title: res.media.title } : { videoId: res.videoId, title: res.title });
       }
       setQueueInput('');
     } finally {
@@ -1016,7 +1016,7 @@ export default function LiveChat({
                   <span className="equalizer-bar bar3"></span>
                   NOW PLAYING
                 </span>
-                {activeVideoId && (
+                {(activeVideoId || activeMedia) && (
                   <button
                     type="button"
                     className={`btn-vote-skip ${hasVotedSkip ? 'voted' : ''}`}
@@ -1061,6 +1061,22 @@ export default function LiveChat({
                     </div>
                   </div>
                 </div>
+              ) : activeMedia ? (
+                <div className="now-playing-body">
+                  <span className="now-playing-thumb queue-item-thumb-link" aria-hidden="true">{activeMedia.provider === 'twitch' ? '📺' : activeMedia.provider === 'vimeo' ? '🎞️' : '🔗'}</span>
+                  <div className="now-playing-info">
+                    <div className="now-playing-title" title={activeMedia.url}>{activeMedia.title || activeMedia.url}</div>
+                    <div className="now-playing-sub">
+                      <span className="now-playing-sync-dot"></span>
+                      <span>Synced P2P</span>
+                      {queue.length > 0 && typeof onPlayNextInQueue === 'function' && (
+                        <button type="button" className="btn-next-inline" onClick={onPlayNextInQueue} title={`Skip immediately to: "${queue[0].title}"`}>
+                          Next ⏭
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <div className="now-playing-empty">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="#666">
@@ -1070,7 +1086,7 @@ export default function LiveChat({
                 </div>
               )}
 
-              {activeVideoId && requiredVotes > 0 && (
+              {(activeVideoId || activeMedia) && requiredVotes > 0 && (
                 <div className="skip-progress-track" title={`${skipVotes.length} of ${requiredVotes} votes to skip`}>
                   <div
                     className="skip-progress-fill"
@@ -1103,7 +1119,7 @@ export default function LiveChat({
                 <input
                   type="text"
                   className="queue-add-input"
-                  placeholder="Paste YouTube link or video ID..."
+                  placeholder="Paste a link (YouTube, Vimeo, Twitch, .mp4…)"
                   value={queueInput}
                   onChange={(e) => {
                     setQueueInput(e.target.value);
@@ -1157,7 +1173,7 @@ export default function LiveChat({
                   <div className="empty-state-icon">📑</div>
                   <div className="empty-state-title">Queue is empty</div>
                   <div className="empty-state-subtitle">
-                    Paste any YouTube URL or click "+ Queue" on presets to add videos to the collaborative watch party queue.
+                    Paste a YouTube, Vimeo, Twitch or video link, or click "+ Queue" on presets to add videos to the shared queue.
                   </div>
                 </div>
               ) : (
@@ -1165,14 +1181,20 @@ export default function LiveChat({
                   {queue.map((item, index) => (
                     <div key={item.id} className="queue-item-card">
                       <span className="queue-item-index">#{index + 1}</span>
-                      <img
-                        className="queue-item-thumb"
-                        src={`https://img.youtube.com/vi/${item.videoId}/default.jpg`}
-                        alt="Thumbnail"
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                        }}
-                      />
+                      {item.videoId ? (
+                        <img
+                          className="queue-item-thumb"
+                          src={`https://img.youtube.com/vi/${item.videoId}/default.jpg`}
+                          alt="Thumbnail"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <span className={`queue-item-thumb queue-item-thumb-link is-${item.media?.provider || 'file'}`} aria-hidden="true">
+                          {item.media?.provider === 'twitch' ? '📺' : item.media?.provider === 'vimeo' ? '🎞️' : '🔗'}
+                        </span>
+                      )}
                       <div className="queue-item-details">
                         <div className="queue-item-title" title={item.title}>
                           {item.title}

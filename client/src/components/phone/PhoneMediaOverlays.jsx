@@ -17,7 +17,7 @@ export function PhoneEmptyMedia({ onAddVideo }) {
         </svg>
       </span>
       <div className="phone-media-title">Nothing playing yet</div>
-      <div className="phone-media-sub">Pick a YouTube video or a video from your phone.</div>
+      <div className="phone-media-sub">Paste a video link (YouTube, Vimeo, Twitch…) or pick one from your phone.</div>
       <button type="button" className="phone-btn phone-btn-primary phone-btn-sm" onClick={onAddVideo}>
         Add video
       </button>
