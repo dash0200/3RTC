@@ -19,8 +19,11 @@
  *   away), `present` (ids of everyone connected, the authority included) and `settings` (room
  *   settings such as { playbackLock }), all as the authority sees them.
  * - Versions only go up; a peer keeps the highest version it has seen.
- * - Late joiners: a new store asks the room for its state, and the authority sends its state to
- *   every peer whose channel opens. A reset is just another action, so it also syncs.
+ * - Late joiners: a new store asks the room for its state, and everyone with a state sends it to
+ *   every peer whose channel opens (so a host who comes back gets the game it left). A reset is
+ *   just another action, so it also syncs.
+ * - meta.clientOf(peerId): the app's stable id (same after a reload or a rejoin, unlike the peer
+ *   id), so a game can give a returning player their seat back.
  * - Leaving the room ('room-left' event) puts the store back to `initial`, version 0.
  *
  * Wire messages (all on the main channel):
@@ -59,6 +62,7 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
                 selfId,
                 hostId: room.getSelf().isHost ? selfId : room.getHostPeerId(),
                 present: [selfId, ...bus.connectedPeerIds()],
+                clientOf: (id) => room.clientIdOf?.(id) || null,
                 settings: room.getRoomSettings()
             });
         } catch {
@@ -82,8 +86,11 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
             if (msg.key !== key || version === 0) return;
             bus.send(fromPeerId, 'room-state', { key, v: version, state });
         }),
+        // Everyone who has a state sends it to a peer whose channel opens, not only the authority:
+        // a host coming back (after leaving or reloading) is the authority again at once but has
+        // nothing, so it must get the room's state from the others. The highest version wins.
         bus.onEvent('peer-open', (peerId) => {
-            if (version > 0 && isAuthority()) bus.send(peerId, 'room-state', { key, v: version, state });
+            if (version > 0) bus.send(peerId, 'room-state', { key, v: version, state });
         }),
         bus.onEvent('room-left', () => set(initial, 0))
     ];

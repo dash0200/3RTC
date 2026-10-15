@@ -11213,3 +11213,20 @@ video::cue {
   cursor: pointer;
 }
 .header-devices-more:hover { text-decoration: underline; }
+
+/* Chat text can be selected and copied (the page itself is not selectable); links open in a new tab */
+.wa-text,
+.room-log-content {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+  cursor: text;
+}
+.chat-link {
+  color: #53bdeb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+  cursor: pointer;
+}
+.chat-link:hover { color: #7fd0f5; }

@@ -28,7 +28,8 @@ export function createPeerMessageHandler(ctx) {
                     isHost: Boolean(data.isHost),
                     isMuted: Boolean(data.isMuted),
                     ...(data.proto ? { proto: data.proto } : {}),
-                    ...(typeof data.build === 'string' ? { build: data.build.slice(0, 20) } : {})
+                    ...(typeof data.build === 'string' ? { build: data.build.slice(0, 20) } : {}),
+                    ...(typeof data.clientId === 'string' ? { clientId: data.clientId.slice(0, 64) } : {})
                 }
             }));
             if (!data.isReply) {

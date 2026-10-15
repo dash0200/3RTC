@@ -252,3 +252,27 @@ it('a token alone keeps its full size and place', () => {
     const t = at(placed, 'red', 0);
     assert.equal(t.r, 0.36);
 });
+
+describe('ludo: coming back after a reload or rejoin', () => {
+    const cids = { h: 'app-h', h2: 'app-h', a: 'app-a', x: 'app-x' };
+    const m = (by, present) => ({ clientOf: (id) => cids[id] || null, present });
+    it('your seat is yours again (lobby): same app, new connection', () => {
+        let s = act(INITIAL, 'h', { kind: 'sit', color: 'red', name: 'Host' }, m('h', ['h', 'a']));
+        s = act(s, 'a', { kind: 'sit', color: 'blue', name: 'Asha' }, m('a', ['h', 'a']));
+        assert.equal(s.seats.red.cid, 'app-h');
+        // The host reloads: new peer id h2; someone else can't take the red seat in the lobby
+        assert.equal(act(s, 'x', { kind: 'sit', color: 'red', name: 'X' }, m('x', ['h2', 'a', 'x'])), s);
+        const back = act(s, 'h2', { kind: 'sit', color: 'red', name: 'Host' }, { ...m('h2', ['h2', 'a']), isHost: true });
+        assert.deepEqual(back.seats.red, { id: 'h2', name: 'Host', cid: 'app-h' });
+        assert.equal(back.seats.blue.id, 'a', 'the others keep their colours');
+    });
+    it('during a game too, with the tokens as they were', () => {
+        const s = { ...game({ red: [5, -1, -1, -1] }), seats: { red: { id: 'h', name: 'Host', cid: 'app-h' }, green: null, yellow: { id: 'a', name: 'Asha', cid: 'app-a' }, blue: null } };
+        const back = act(s, 'h2', { kind: 'sit', color: 'red', name: 'Host' }, m('h2', ['h2', 'a']));
+        assert.equal(back.seats.red.id, 'h2');
+        assert.deepEqual(back.tokens.red, [5, -1, -1, -1]);
+        assert.equal(back.turn, 'red');
+        // while the old connection is still there, nobody takes it
+        assert.equal(act(s, 'h2', { kind: 'sit', color: 'red', name: 'Host' }, m('h2', ['h', 'h2', 'a'])), s);
+    });
+});

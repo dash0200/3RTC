@@ -22,7 +22,7 @@ file/video frames on the bulk channel.
 ### Connection (handled in `webrtc/peerMessages.js`)
 | type | fields | meaning |
 |---|---|---|
-| `peer-identity` | `peerId, username, isHost, isMuted, proto, build, isReply?, playbackLock?` | sent when a channel opens; the other side replies with `isReply: true`. The host adds `playbackLock`. `build` is the app's build number (YYMMDD.HHMM, shown in the Peers tab; older apps leave it out). |
+| `peer-identity` | `peerId, username, isHost, isMuted, proto, build, clientId, isReply?, playbackLock?` | sent when a channel opens; the other side replies with `isReply: true`. The host adds `playbackLock`. `build` is the app's build number (YYMMDD.HHMM, shown in the Peers tab; older apps leave it out). `clientId` is the app's stable id (same after a reload or rejoin, unlike `peerId`): games use it to give a returning player their seat back. |
 | `peer-voice-status` | `peerId, sender, isMuted` | mic muted / unmuted |
 | `peer-bye` | – | leaving on purpose (don't try to reconnect) |
 | `net-ping` / `net-pong` | `pingId, sendTime` | latency probe (Network HUD) |
@@ -109,7 +109,7 @@ format with `cleanFormat` (known fields, short strings, bounded lists) before us
 ### Shared state (`core/sharedState.js`): games, polls, the open activity
 | type | fields | meaning |
 |---|---|---|
-| `room-state` | `key, v, state` | full state, version `v` (only higher versions are accepted) |
+| `room-state` | `key, v, state` | full state, version `v` (only higher versions are accepted). Sent by everyone who has a state to each peer whose channel opens, so a host who comes back gets the game it left. |
 | `room-state-action` | `key, action` | to the authority (host, else smallest peer id) |
 | `room-state-request` | `key` | "send me `key` if you have it" (a store created late) |
 
