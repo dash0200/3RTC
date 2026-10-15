@@ -4,6 +4,7 @@
  * music while playing). A crash inside an activity only replaces the activity with a message.
  */
 import { Component, Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import ChatPeek from './ChatPeek';
 
 // Full screen takes the whole stage (so floating reactions still show over the game)
 const fullscreenTarget = (el) => el?.closest('.stage-section') || el;
@@ -60,10 +61,12 @@ class ActivityErrorBoundary extends Component {
     }
 }
 
-export default function ActivityStage({ activity, definition, onClose, selfId }) {
+export default function ActivityStage({ activity, definition, onClose, selfId, chat = null }) {
     const ActivityComponent = useMemo(() => (definition ? lazyFor(definition) : null), [definition]);
     const rootRef = useRef(null);
     const [isFull, toggleFull] = useStageFullscreen(rootRef);
+    // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
+    const showPeek = chat && (isFull || !chat.isListVisible);
     if (!activity) return null;
     if (!definition) {
         // Started from a newer version of the app
@@ -79,11 +82,17 @@ export default function ActivityStage({ activity, definition, onClose, selfId })
     }
     const startedBy = activity.startedBy === selfId ? 'you' : (activity.startedByName || 'someone');
     return (
-        <div className={`stage-activity ${isFull ? 'is-fullscreen' : ''}`} role="region" aria-label={definition.name} ref={rootRef}>
+        <div className={`stage-activity ${isFull ? 'is-fullscreen' : ''} ${chat?.splitView ? 'is-chat-split' : ''}`} role="region" aria-label={definition.name} ref={rootRef}>
             <div className="activity-bar">
                 <span className="activity-bar-icon" aria-hidden="true">{definition.icon}</span>
                 <span className="activity-bar-name">{definition.name}</span>
                 <span className="activity-bar-meta">started by {startedBy}</span>
+                {chat?.onToggleSplitView && !isFull && (
+                    <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
+                        aria-pressed={chat.splitView} title={chat.splitView ? 'Bigger board (hide chat messages)' : 'Show chat messages below the game'}>
+                        💬 Chat{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
+                    </button>
+                )}
                 {canFullscreen() && (
                     <button type="button" className="activity-bar-btn activity-fullscreen-btn" onClick={toggleFull} title={isFull ? 'Exit full screen (Esc)' : 'Full screen'} aria-pressed={isFull}>
                         {isFull ? 'Exit full screen' : 'Full screen'}
@@ -98,6 +107,7 @@ export default function ActivityStage({ activity, definition, onClose, selfId })
                     </Suspense>
                 </ActivityErrorBoundary>
             </div>
+            {showPeek && <ChatPeek messages={chat.messages} onOpenChat={isFull ? toggleFull : chat.onOpenChat} />}
         </div>
     );
 }

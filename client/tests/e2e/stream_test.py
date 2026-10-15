@@ -79,11 +79,11 @@ with sync_playwright() as p:
     played = wait(lambda: (vstate(guest) or {}).get('t', 0) > 3 and not vstate(guest)['paused'], 25, 0.25)
     check('guest plays along with host', played, f'guest {vstate(guest)} | {pill(guest)}')
 
-    # read-ahead stays bounded: after a few seconds of playing, much less than the file is fetched
+    # a buffer builds up ahead of playback (more fetched than played); how far is capped (unit tests)
     time.sleep(4)
     g = vstate(guest)
     p_play = pct(guest)
-    check('only streams a little ahead of playback', p_play is not None and p_play < 60,
+    check('builds a buffer ahead of playback', p_play is not None and p_play > g['t'] / 60 * 100 + 10,
           f'at {g["t"]}s of 60s: {p_play}% fetched | {pill(guest)}')
 
     # seek far ahead (into data never fetched): host jumps to 50 s, guest follows

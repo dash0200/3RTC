@@ -156,11 +156,18 @@ export default function App() {
 
     const [isChatOpen, setIsChatOpen] = useState(() => !(typeof window !== 'undefined' && window.innerWidth <= 768));
     const [sidebarTab, setSidebarTab] = useState('chat');
-    const chat = useChat({ room, isChatOpen });
+    const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
+    const isPhone = useIsPhone();
+    const [activityChatSplit, setActivityChatSplit] = useState(() => {
+        try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
+    });
+    // Unread count: on phones the chat list is on screen when its tab is picked (and, with a game
+    // open, when the game's "Chat" view is on); on computers when the chat panel is open
+    const phoneChatOnScreen = sidebarTab === 'chat' && (!activities.current || activityChatSplit);
+    const chat = useChat({ room, isChatOpen: isPhone ? phoneChatOnScreen : isChatOpen });
     const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
     const soundboard = useSoundboard({ room, isAudioBlockedRef });
     const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast });
-    const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
 
     // ---- screens and dialogs -----------------------------------------------------------------
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -176,8 +183,11 @@ export default function App() {
     const openQrCode = useCallback(() => setShowQrModal(true), []);
 
     // Phone layout (its own app shell; desktop layout unchanged) and its open bottom sheet
-    const isPhone = useIsPhone();
     const [phoneSheet, setPhoneSheet] = useState(null); // 'add' | 'more' | 'soundboard' | null
+    useEffect(() => {
+        try { localStorage.setItem('3rtc_activity_chat', activityChatSplit ? '1' : '0'); } catch { /* private mode */ }
+    }, [activityChatSplit]);
+    const chatSeenCountRef = useRef(0);
     const closePhoneSheet = useCallback(() => setPhoneSheet(null), []);
 
     // Resume the shared AudioContext on any user interaction (browsers start it suspended)
@@ -293,8 +303,32 @@ export default function App() {
         [room, roomId, isHost, username, connectedPeers, playbackLock]);
 
     // ---- layout ------------------------------------------------------------------------------
+    // Chat while an activity is open: new messages pop up over it when the chat list isn't in view;
+    // on phones a "Chat" button shrinks the game so the messages fit below it
+    const chatListVisible = isPhone ? activityChatSplit && sidebarTab === 'chat' : isChatOpen && sidebarTab === 'chat';
+    const activityChatUnread = useMemo(() => {
+        if (chatListVisible) return 0;
+        return chat.messages.slice(chatSeenCountRef.current).filter((m) => !m.isSelf).length;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chat.messages, chatListVisible]);
+    if (chatListVisible) chatSeenCountRef.current = chat.messages.length;
+    const activityChat = {
+        messages: chat.messages,
+        isListVisible: chatListVisible,
+        unread: activityChatUnread,
+        splitView: isPhone && activityChatSplit,
+        onOpenChat: () => {
+            setSidebarTab('chat');
+            if (isPhone) setActivityChatSplit(true);
+            else setIsChatOpen(true);
+        },
+        onToggleSplitView: isPhone ? () => {
+            setActivityChatSplit((on) => !on);
+            setSidebarTab('chat');
+        } : undefined
+    };
     const activitySlot = roomId && activities.current ? (
-        <ActivityStage activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} />
+        <ActivityStage activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat} />
     ) : null;
 
     // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)

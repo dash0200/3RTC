@@ -334,10 +334,15 @@ export class P2PStreamReceiver {
    --------------------------------------------------------------------------
    The guest's <video> plays a virtual URL (/__p2p-stream/...) that the service worker answers.
    Every range the player asks for is fetched from the host's file over the bulk data channel,
-   in 256 KB blocks, plus a small read-ahead. So playback starts after the first few blocks,
-   seeking works anywhere (including MP4s whose index sits at the end of the file), and only
-   what is actually watched gets transferred. Received blocks stay in memory until the stream
-   is closed (video change / leaving), so rewinding or re-watching never re-downloads.
+   in 256 KB blocks, plus a small read-ahead. So playback starts after the first few blocks and
+   seeking works anywhere (including MP4s whose index sits at the end of the file).
+   The player's reads are never held back (holding them by guessing where playback is in the
+   file froze films whose bitrate isn't even: the guess lagged the real position and the player
+   waited on a read we held). The browser buffers a little ahead on its own; beyond that, the
+   viewer keeps fetching in the background up to BUFFER_AHEAD bytes past where the player reads,
+   using spare connection time in calm scenes to carry playback through heavy ones and short
+   network hiccups. Received blocks are kept for rewinding, up to a memory limit; past it, the
+   ones furthest from where the player reads are dropped.
 
    Wire format (bulk channel):
      guest -> host  JSON {type:'p2p-range-request', streamNo, blocks:[...], urgent}
@@ -354,11 +359,16 @@ export class P2PStreamReceiver {
 
 export const RANGE_BLOCK_SIZE = 256 * 1024;
 export const RANGE_PREFETCH_BYTES = 2 * 1024 * 1024; // block read-ahead past the player's position
-// The player is fed at most this far past the playback position (it would otherwise pull the
-// whole file as fast as the connection allows). ~8 s + the 2 MB read-ahead = ~10 s buffered.
-const PLAYER_AHEAD_SEC = 8;
-const PLAYER_AHEAD_MIN_BYTES = 2 * 1024 * 1024;
-const INDEX_READ_BYTES = 2 * 1024 * 1024; // reads far from playback (file index, seek) are never held
+// Memory for received blocks (kept for rewinding); past it the ones furthest from the player's
+// reading position are dropped, never the stretch just behind it
+export const STREAM_CACHE_BYTES = 700 * 1024 * 1024;       // computers
+export const STREAM_CACHE_BYTES_PHONE = 200 * 1024 * 1024; // phones
+const KEEP_BEHIND_SHARE = 0.25;
+// Background buffer past the player's reading position (a ~95 min 1080p film: ~5 min on a computer)
+export const BUFFER_AHEAD_BYTES = 96 * 1024 * 1024;
+export const BUFFER_AHEAD_BYTES_PHONE = 40 * 1024 * 1024;
+const BUFFER_IN_FLIGHT_BLOCKS = 16;           // 4 MB asked for at a time: keeps a slow link busy, seeks stay quick
+const ANCHOR_MIN_BYTES = 1024 * 1024;         // a reader counts as "playback" once it has read this much (not a quick index read)
 export const P2P_STREAM_URL_PREFIX = '/__p2p-stream/';
 const RANGE_PACKET_MAGIC = 0x524E4731; // 'RNG1'
 const RANGE_HEADER_BYTES = 16;
@@ -577,8 +587,9 @@ export class P2PRangeReceiver {
     this.sendControl = options.sendControl || ((msg) => this._send(msg));
     this.onProgress = options.onProgress || (() => { });
     this.onError = options.onError || (() => { });
-    // () => { byte, bytesPerSec } of the video using this stream, or null if unknown yet
-    this.getPlaybackInfo = options.getPlaybackInfo || (() => null);
+    this.cacheLimit = options.cacheLimit || STREAM_CACHE_BYTES;
+    this.bufferAhead = Math.min(options.bufferAhead || BUFFER_AHEAD_BYTES, this.cacheLimit * 0.5);
+    this.window = null; // { first, last } blocks the background buffer keeps filled
 
     this.blocks = new Map();   // block -> { data, received, done, waiters }
     this.pending = new Map();  // block -> time requested
@@ -661,7 +672,48 @@ export class P2PRangeReceiver {
       entry.waiters = [];
       for (const w of waiters) w.resolve();
       this._reportProgress();
+      if (entry.background) this._topUp();
     }
+  }
+
+  /** The player reads at `index`: the background buffer follows. */
+  _noteReading(index) {
+    if (this.window && this.window.first === index + 1) return;
+    const last = Math.min(this.totalBlocks - 1, index + Math.ceil(this.bufferAhead / this.blockSize));
+    this.window = { first: index + 1, last };
+    // Background requests for parts nobody needs now (the player moved, e.g. a seek): cancel them
+    const stale = [];
+    for (const b of this.pending.keys()) {
+      const entry = this.blocks.get(b);
+      if (entry?.background && (b < index || b > last) && !entry.waiters.length && !entry.forRelay) {
+        stale.push(b);
+        entry.background = false;
+      }
+    }
+    if (stale.length) {
+      for (const b of stale) this.pending.delete(b);
+      this.sendControl({ type: 'p2p-range-cancel', streamNo: this.streamNo, blocks: stale });
+    }
+    this._topUp();
+  }
+
+  /** Keep a few background blocks in flight, nearest first. */
+  _topUp() {
+    if (this.isAborted || !this.window) return;
+    const now = Date.now();
+    let inFlight = 0;
+    for (const at of this.pending.values()) if (now - at <= BLOCK_WAIT_MS) inFlight++;
+    const wanted = [];
+    for (let b = this.window.first; b <= this.window.last && inFlight + wanted.length < BUFFER_IN_FLIGHT_BLOCKS; b++) {
+      const entry = this.blocks.get(b);
+      if (entry?.done) continue;
+      const at = this.pending.get(b);
+      if (at !== undefined && now - at <= BLOCK_WAIT_MS) continue;
+      this.pending.set(b, now);
+      this._block(b).background = true;
+      wanted.push(b);
+    }
+    if (wanted.length) this.sendControl({ type: 'p2p-range-request', streamNo: this.streamNo, blocks: wanted, urgent: false });
   }
 
   /** Legacy push-stream completion message: not used in on-demand mode. */
@@ -698,7 +750,8 @@ export class P2PRangeReceiver {
     const stale = [];
     for (const b of this.pending.keys()) {
       const entry = this.blocks.get(b);
-      if ((b < index || b > last) && !(entry && (entry.waiters.length || entry.forRelay))) stale.push(b);
+      const inWindow = this.window && b >= this.window.first && b <= this.window.last;
+      if ((b < index || b > last) && !inWindow && !(entry && (entry.waiters.length || entry.forRelay))) stale.push(b);
     }
     if (stale.length) {
       for (const b of stale) this.pending.delete(b);
@@ -767,7 +820,26 @@ export class P2PRangeReceiver {
     const entry = this.blocks.get(index);
     const from = position - index * this.blockSize;
     const to = Math.min(entry.data.length, from + maxLength);
-    return entry.data.slice(from, to).buffer;
+    const out = entry.data.slice(from, to).buffer;
+    this._evict(index);
+    return out;
+  }
+
+  /** Over the memory limit: drop the blocks furthest from `index` (where the player reads). */
+  _evict(index) {
+    if (this.cachedBytes <= this.cacheLimit) return;
+    const keepFrom = index - Math.ceil((this.cacheLimit * KEEP_BEHIND_SHARE) / this.blockSize);
+    const keepTo = Math.max(index + Math.ceil(RANGE_PREFETCH_BYTES / this.blockSize), this.window?.last ?? 0);
+    const victims = [];
+    for (const [b, entry] of this.blocks) {
+      if (entry.done && !entry.waiters.length && !entry.forRelay && (b < keepFrom || b > keepTo)) victims.push(b);
+    }
+    victims.sort((a, b) => Math.abs(b - index) - Math.abs(a - index));
+    for (const b of victims) {
+      if (this.cachedBytes <= this.cacheLimit * 0.9) break;
+      this.cachedBytes -= this.blocks.get(b).data.length;
+      this.blocks.delete(b);
+    }
   }
 
   /** Relay: a child asked us for these blocks; fetch the ones we don't have from our source. */
@@ -805,20 +877,6 @@ export class P2PRangeReceiver {
     }
   }
 
-  /** Hold a read while it is far enough ahead of playback; returns when it may proceed. */
-  async _paceRead(cursor, readerStart, isClosed) {
-    for (;;) {
-      if (this.isAborted || isClosed()) return;
-      const info = this.getPlaybackInfo();
-      if (!info) return;
-      const ahead = Math.max(PLAYER_AHEAD_MIN_BYTES, info.bytesPerSec * PLAYER_AHEAD_SEC);
-      // A reader that started far from playback is reading the file index or a fresh seek target
-      if (Math.abs(readerStart - info.byte) > ahead && cursor - readerStart < INDEX_READ_BYTES) return;
-      if (cursor <= info.byte + ahead) return;
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-  }
-
   /** Answer one service-worker range request over `port` (bytes start..end inclusive). */
   serve(port, start, end) {
     if (this.isAborted || start >= this.fileSize) {
@@ -828,6 +886,7 @@ export class P2PRangeReceiver {
     const last = end === null || end === undefined ? this.fileSize - 1 : Math.min(end, this.fileSize - 1);
     let cursor = start;
     let closed = false;
+    let served = 0;
     port.onmessage = async (event) => {
       const msg = event.data || {};
       if (msg.type === 'cancel') {
@@ -841,11 +900,11 @@ export class P2PRangeReceiver {
         port.postMessage({ done: true });
         return;
       }
-      await this._paceRead(cursor, start, () => closed);
-      if (closed) return;
       try {
         const buffer = await this.read(cursor, Math.min(msg.want || this.blockSize, last - cursor + 1));
         cursor += buffer.byteLength;
+        served += buffer.byteLength;
+        if (served >= ANCHOR_MIN_BYTES) this._noteReading(Math.floor((cursor - 1) / this.blockSize));
         port.postMessage({ data: buffer }, [buffer]);
       } catch {
         port.postMessage({ error: true });
