@@ -1,6 +1,6 @@
-"""Quick picks: YouTube trending for the viewer's own country (from the time zone / language),
-a worldwide mix elsewhere, and a "Trending in" choice that is remembered. Uses the fake YouTube
-API: each country's chart has its own videos (India vid10xx, US vid20xx ... for Music)."""
+"""Quick picks: YouTube trending is a worldwide mix by default (wherever you are), and "Trending in"
+switches to one country's charts, remembered. Uses the fake YouTube API: each country's chart has
+its own videos (India vid10xx, US vid20xx ... Japan vid90xx for Music)."""
 import os, re, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness  # noqa: E402
@@ -36,40 +36,38 @@ def open_page(b, tz, locale='en-US', keep=False):
 
 with sync_playwright() as p:
     b = p.chromium.launch(args=harness.CHROMIUM_ARGS)
-
-    india = open_page(b, 'Asia/Kolkata')
     sel = lambda pg: pg.locator('.qp-region select')
-    check('India time zone: "Trending in India"', sel(india).input_value() == 'IN', sel(india).input_value())
+
+    india = open_page(b, 'Asia/Kolkata', locale='en-IN')
+    check('by default: Worldwide, even in India', sel(india).input_value() == 'GLOBAL', sel(india).input_value())
     ids = trending_ids(india)
-    check("...India's trending videos", len([i for i in ids if i.startswith('vid10')]) >= 3 and not any(i.startswith('vid20') for i in ids), ids)
+    check('...a mix of the countries\' trending', len({i[:4] for i in ids}) >= 3, ids)
+    us = open_page(b, 'America/New_York')
+    check('...and in the US', sel(us).input_value() == 'GLOBAL', sel(us).input_value())
+
+    # Picking a country
+    sel(india).select_option('IN')
+    check("choosing India shows India's trending", wait(lambda: (lambda x: len([i for i in x if i.startswith('vid10')]) >= 3 and not any(i.startswith('vid20') for i in x))(trending_ids(india)), 8), trending_ids(india))
     india.locator('.qp-group', has_text='Music').click()
     chips = india.locator('.qp-chips .qp-chip').all_inner_texts()
-    check('...Bollywood and South Hits first in Music', len(chips) >= 2 and 'Bollywood' in chips[0] and 'South' in chips[1], chips)
-
-    us = open_page(b, 'America/New_York')
-    check('US time zone: "Trending in United States"', sel(us).input_value() == 'US', sel(us).input_value())
-    ids = trending_ids(us)
-    check("...the US trending videos", len([i for i in ids if i.startswith('vid20')]) >= 3 and not any(i.startswith('vid10') for i in ids), ids)
+    check('...with Bollywood and South Hits first in Music', len(chips) >= 2 and 'Bollywood' in chips[0] and 'South' in chips[1], chips)
     us.locator('.qp-group', has_text='Music').click()
     chips = us.locator('.qp-chips .qp-chip').all_inner_texts()
-    check('...Bollywood and South Hits still there, later in Music', 'Bollywood' in ' '.join(chips) and 'Bollywood' not in chips[0], chips)
+    check('Worldwide: Bollywood and South Hits still there, later in Music', 'Bollywood' in ' '.join(chips) and 'Bollywood' not in chips[0], chips)
+    trending_ids(us)  # back on the Trending tab, where the choice is
+    sel(us).select_option('JP')
+    check("choosing Japan shows Japan's trending", wait(lambda: len([i for i in trending_ids(us) if i.startswith('vid90')]) >= 3, 8), trending_ids(us))
 
-    dubai = open_page(b, 'Asia/Dubai', locale='ar-AE')
-    check('a country without its own list: Worldwide', sel(dubai).input_value() == 'GLOBAL', sel(dubai).input_value())
-    ids = trending_ids(dubai)
-    check('...a mix of the countries\' trending', len({i[:4] for i in ids}) >= 3, ids)
-
-    # Picking another country
-    sel(dubai).select_option('JP')
-    check('choosing Japan shows Japan\'s trending', wait(lambda: len([i for i in trending_ids(dubai) if i.startswith('vid90')]) >= 3, 8), trending_ids(dubai))
-    dubai.goto(BASE + '/about')  # leave, and come back another day
-    dubai.goto(BASE)
-    dubai.wait_for_timeout(1200)
-    dubai.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    dubai.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
-    dubai.wait_for_selector('.qp-card')
-    check('...and it is remembered', wait(lambda: sel(dubai).count() and sel(dubai).input_value() == 'JP', 10), sel(dubai).input_value() if sel(dubai).count() else None)
-    dubai.screenshot(path=str(harness.OUT / 'quick_picks_region.png'))
+    us.goto(BASE + '/about')  # leave, and come back another day
+    us.goto(BASE)
+    us.wait_for_timeout(1200)
+    us.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
+    us.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    us.wait_for_selector('.qp-card')
+    check('...and the choice is remembered', wait(lambda: sel(us).count() and sel(us).input_value() == 'JP', 10), sel(us).input_value() if sel(us).count() else None)
+    sel(us).select_option('GLOBAL')
+    check('back to Worldwide', wait(lambda: len({i[:4] for i in trending_ids(us)}) >= 3, 8))
+    us.screenshot(path=str(harness.OUT / 'quick_picks_region.png'))
     check('no page errors', not errors, errors[:3])
     b.close()
 harness.summary()
