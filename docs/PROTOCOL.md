@@ -128,4 +128,4 @@ Server → browser: `room-created {roomId}`, `room-resumed {roomId, peers}`, `jo
 `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
 `pong`, `error {message}`.
 
-HTTP: `GET /api/quick-picks` (cached YouTube picks, CORS open).
+HTTP: `GET /api/quick-picks?region=IN` (cached YouTube picks, CORS open): `{ updatedAt, region, regions, categories }`. Trending rows are that country's charts (`region` is one of `regions`), or a worldwide mix (`region: 'GLOBAL'`) for any other or no country; the app picks the country from the device's time zone and language, or the viewer's "Trending in" choice.

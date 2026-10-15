@@ -100,7 +100,7 @@ Features talk to each other through explicit arguments (the queue gets `playback
 |---|---|
 | `server.js` | Entry point: HTTP (quick picks endpoint; in production redirects page visits to 3rtc.me), starts the two below |
 | `signaling.js` | WebSocket rooms (5-digit codes, up to `MAX_ROOM_USERS`), relays offer / answer / ICE, heartbeat |
-| `quickPicks.js` | Fetches YouTube quick picks on a daily-quota budget, caches them, serves `GET /api/quick-picks` |
+| `quickPicks.js` | Fetches YouTube quick picks on a daily-quota budget (trending charts for 10 countries + a worldwide mix, search rows for everyone), caches them, serves `GET /api/quick-picks?region=` |
 | `log.js` | Timestamped log lines |
 | `deploy_gcp.py` | Creates or updates the VM; uploads every file in `SERVER_FILES` (add new server files there) |
 

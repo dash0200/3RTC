@@ -1,7 +1,7 @@
-// Quick picks filtering: no Shorts.
+// Quick picks: no Shorts; trending per country.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isShort, parseDuration } from '../quickPicks.js';
+import { isShort, parseDuration, isPlayableIn, mixCharts, picksFor, QUICK_PICKS_REGIONS } from '../quickPicks.js';
 
 const video = ({ title = 'A video', description = '', duration = 'PT4M10S', w = 480, h = 270, live = 'none', tags } = {}) => ({
     snippet: { title, description, liveBroadcastContent: live, tags },
@@ -32,5 +32,46 @@ describe('no Shorts in quick picks', () => {
     });
     it('keeps live streams (they have no length)', () => {
         assert.equal(isShort(video({ duration: 'P0D', live: 'live' })), false);
+    });
+});
+
+
+const v = (id, restriction) => ({ id, status: { privacyStatus: 'public', embeddable: true }, contentDetails: restriction ? { regionRestriction: restriction } : {}, snippet: {} });
+
+describe('trending per country', () => {
+    it('a video blocked (or not allowed) in a country does not play there', () => {
+        assert.equal(isPlayableIn(v('a', { blocked: ['DE'] }), ['IN']), true);
+        assert.equal(isPlayableIn(v('a', { blocked: ['DE'] }), ['IN', 'DE']), false);
+        assert.equal(isPlayableIn(v('a', { allowed: ['IN', 'US'] }), ['US']), true);
+        assert.equal(isPlayableIn(v('a', { allowed: ['IN', 'US'] }), ['US', 'GB']), false);
+    });
+    it('the worldwide mix takes the countries\' top videos in turn, once each, only ones that play everywhere', () => {
+        const mix = mixCharts({
+            IN: [v('in1'), v('shared'), v('in3')],
+            US: [v('us1'), v('us2', { blocked: ['IN'] }), v('shared')],
+            GB: [v('shared'), v('gb2')]
+        }, 10).map((x) => x.id);
+        assert.deepEqual(mix, ['in1', 'us1', 'shared', 'gb2', 'in3']);
+        assert.equal(mixCharts({ IN: [v('a'), v('b'), v('c')] }, 2).length, 2);
+    });
+    it('each visitor gets their country\'s trending (or the worldwide mix), then the other rows', () => {
+        const row = (id, group) => ({ id, group, name: id, videos: [{ id: 'xxxxxxxxxxx' }] });
+        const data = {
+            updatedAt: 'now',
+            trending: { IN: [row('trending-music', 'Trending')], US: [row('trending-music', 'Trending'), row('trending-film', 'Trending')], GLOBAL: [row('trending-comedy', 'Trending')] },
+            categories: [row('lofi', 'Music'), row('chill', 'Music'), row('bollywood', 'Music'), row('south', 'Music'), row('trailers', 'Watch')]
+        };
+        assert.ok(QUICK_PICKS_REGIONS.includes('IN') && QUICK_PICKS_REGIONS.includes('US'));
+        const india = picksFor(data, 'IN');
+        assert.equal(india.region, 'IN');
+        assert.deepEqual(india.categories.map((c) => c.id), ['trending-music', 'bollywood', 'south', 'lofi', 'chill', 'trailers']);
+        const us = picksFor(data, 'US');
+        assert.deepEqual(us.categories.map((c) => c.id), ['trending-music', 'trending-film', 'lofi', 'chill', 'bollywood', 'south', 'trailers']);
+        const elsewhere = picksFor(data, 'NZ');
+        assert.equal(elsewhere.region, 'GLOBAL');
+        assert.equal(elsewhere.categories[0].id, 'trending-comedy');
+        assert.equal(picksFor(data, '').region, 'GLOBAL');
+        // a list saved by an older server (no per-country trending) still works
+        assert.deepEqual(picksFor({ categories: [row('trending-music', 'Trending'), row('lofi', 'Music')] }, 'US').categories.map((c) => c.id), ['trending-music', 'lofi']);
     });
 });

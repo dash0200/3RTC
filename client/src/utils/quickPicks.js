@@ -5,6 +5,10 @@
  * result (GET /api/quick-picks); every client reads that cache, so YouTube's API quota never
  * depends on how many people use the app. Until the server's list arrives, or if the server has
  * no API key or can't be reached, the app uses the last list it downloaded, then the built-in one.
+ *
+ * Trending is per country: the app asks for the country it works out from the device's time zone
+ * (then its language), or the one the person picked ("Trending in…"); the server answers with that
+ * country's charts, or a worldwide mix for countries it doesn't track.
  */
 import { useSyncExternalStore } from 'react';
 
@@ -71,6 +75,56 @@ export const BUILTIN_QUICK_PICKS = [
 ];
 
 const STORAGE_KEY = '3rtc_quick_picks';
+const REGION_KEY = '3rtc_qp_region'; // the country picked by hand, if any
+
+export const GLOBAL_REGION = 'GLOBAL';
+export const REGION_NAMES = {
+  IN: 'India', US: 'United States', GB: 'United Kingdom', CA: 'Canada', AU: 'Australia', DE: 'Germany',
+  FR: 'France', BR: 'Brazil', JP: 'Japan', KR: 'South Korea', [GLOBAL_REGION]: 'Worldwide'
+};
+export const regionName = (code) => REGION_NAMES[code] || code;
+
+// Time zones that belong to one country (the common ones; others fall back to the language)
+const ZONE_COUNTRY = [
+  [/^Asia\/(Kolkata|Calcutta)$/, 'IN'],
+  [/^America\/(New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Detroit|Boise|Indiana\/.+|Kentucky\/.+|North_Dakota\/.+|Menominee|Juneau|Sitka|Nome|Adak)$|^Pacific\/Honolulu$|^US\//, 'US'],
+  [/^America\/(Toronto|Vancouver|Edmonton|Winnipeg|Halifax|St_Johns|Regina|Montreal|Moncton|Whitehorse|Yellowknife|Iqaluit|Glace_Bay|Goose_Bay|Swift_Current|Dawson_Creek)$|^Canada\//, 'CA'],
+  [/^Europe\/(London|Belfast)$|^GB$/, 'GB'],
+  [/^Australia\//, 'AU'],
+  [/^Europe\/(Berlin|Busingen)$/, 'DE'],
+  [/^Europe\/Paris$/, 'FR'],
+  [/^America\/(Sao_Paulo|Fortaleza|Recife|Bahia|Belem|Manaus|Cuiaba|Campo_Grande|Porto_Velho|Boa_Vista|Rio_Branco|Maceio|Araguaina|Santarem|Noronha|Eirunepe)$|^Brazil\//, 'BR'],
+  [/^Asia\/Tokyo$|^Japan$/, 'JP'],
+  [/^Asia\/Seoul$|^ROK$/, 'KR']
+];
+
+/**
+ * The country for this device's trending list: from the time zone, else the language
+ * (en-GB -> GB), else '' (the server then sends its worldwide mix). (pure, for tests)
+ */
+export function detectRegion(timeZone = '', languages = []) {
+  for (const [re, code] of ZONE_COUNTRY) if (re.test(timeZone)) return code;
+  for (const lang of languages) {
+    const m = /^[a-z]{2,3}[-_]([A-Za-z]{2})\b/.exec(String(lang));
+    if (m && REGION_NAMES[m[1].toUpperCase()]) return m[1].toUpperCase();
+  }
+  return '';
+}
+
+function deviceRegion() {
+  let timeZone = '';
+  try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* old browser */ }
+  const languages = typeof navigator !== 'undefined' ? (navigator.languages?.length ? navigator.languages : [navigator.language || '']) : [];
+  return detectRegion(timeZone, languages);
+}
+
+function chosenRegion() {
+  try {
+    const picked = localStorage.getItem(REGION_KEY);
+    if (picked && REGION_NAMES[picked]) return picked;
+  } catch { /* storage blocked */ }
+  return deviceRegion();
+}
 const VIDEO_ID = /^[\w-]{11}$/;
 
 /** Server data is checked before use: a broken or odd response never replaces a working list. */
@@ -97,29 +151,53 @@ function readSaved() {
 }
 
 let current = readSaved() || BUILTIN_QUICK_PICKS;
+// Which country's trending is shown, and which countries the server offers
+let regionInfo = (() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (saved?.region) return { region: saved.region, regions: Array.isArray(saved.regions) ? saved.regions.filter((r) => REGION_NAMES[r]) : [] };
+  } catch { /* nothing saved */ }
+  return { region: null, regions: [] };
+})();
 const listeners = new Set();
+let lastSignalUrls = [];
 
 function setQuickPicks(next) {
   current = next;
   listeners.forEach((fn) => fn());
 }
 
+const subscribe = (fn) => {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+};
+
 export const getQuickPicks = () => current;
 
 export function useQuickPicks() {
-  return useSyncExternalStore((fn) => {
-    listeners.add(fn);
-    return () => listeners.delete(fn);
-  }, getQuickPicks);
+  return useSyncExternalStore(subscribe, getQuickPicks);
+}
+
+/** { region, regions }: the country whose trending is shown (null before the server answered). */
+export function useQuickPicksRegion() {
+  return useSyncExternalStore(subscribe, () => regionInfo);
+}
+
+/** Show another country's trending ("Trending in…"); GLOBAL for the worldwide mix. */
+export async function setQuickPicksRegion(code) {
+  try { localStorage.setItem(REGION_KEY, code); } catch { /* storage blocked: for this visit only */ }
+  regionInfo = { ...regionInfo, region: code };
+  setQuickPicks([...current]);
+  return loadQuickPicks(lastSignalUrls);
 }
 
 /** wss://host:443 -> https://host:443/api/quick-picks (ws:// -> http:// for a local server) */
-export function quickPicksUrl(signalUrl) {
+export function quickPicksUrl(signalUrl, region = '') {
   try {
     const url = new URL(signalUrl);
     url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
     url.pathname = '/api/quick-picks';
-    url.search = '';
+    url.search = region ? `?region=${encodeURIComponent(region)}` : '';
     url.hash = '';
     return url.toString();
   } catch {
@@ -129,23 +207,28 @@ export function quickPicksUrl(signalUrl) {
 
 /** Tries each server address in turn (the same server can be reachable under several names). */
 export async function loadQuickPicks(signalUrls) {
-  for (const signalUrl of [].concat(signalUrls)) {
+  lastSignalUrls = [].concat(signalUrls);
+  for (const signalUrl of lastSignalUrls) {
     if (await loadQuickPicksFrom(signalUrl)) return true;
   }
   return false;
 }
 
 async function loadQuickPicksFrom(signalUrl) {
-  const url = quickPicksUrl(signalUrl);
+  const url = quickPicksUrl(signalUrl, chosenRegion());
   if (!url) return false;
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return false; // 503: the server has no list (no API key yet)
-    const categories = sanitize(await res.json());
+    const data = await res.json();
+    const categories = sanitize(data);
     if (!categories) return false;
+    // Servers from before per-country trending send no region: no "Trending in" choice then
+    const regions = Array.isArray(data.regions) ? data.regions.filter((r) => REGION_NAMES[r]) : [];
+    regionInfo = REGION_NAMES[data.region] ? { region: data.region, regions } : { region: null, regions: [] };
     setQuickPicks(categories);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ categories }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ categories, region: regionInfo.region, regions: regionInfo.regions }));
     } catch {
       // storage full or blocked: the list still works for this visit
     }
