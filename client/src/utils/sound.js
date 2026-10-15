@@ -1,3 +1,5 @@
+import { routeAudioContext } from './audioDevices';
+
 // Web Audio Synthesizer (Sweet Sound Effects for Messages & Connect)
 class SoundFx {
   constructor() {
@@ -8,6 +10,7 @@ class SoundFx {
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) this.ctx = new AudioCtx();
+      routeAudioContext(this.ctx);
     }
   }
 
