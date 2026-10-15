@@ -72,3 +72,39 @@ export function pathOf(from, to) {
     for (let p = from + 1; p <= to; p++) steps.push(p);
     return steps;
 }
+
+// Offsets (in squares) for 1-4 tokens sharing a square, and their size
+const STACK_SLOTS = {
+    1: [[0, 0]],
+    2: [[-0.25, 0], [0.25, 0]],
+    3: [[-0.23, -0.2], [0.23, -0.2], [0, 0.22]],
+    4: [[-0.23, -0.23], [0.23, -0.23], [-0.23, 0.23], [0.23, 0.23]]
+};
+const STACK_RADIUS = { 1: 0.36, 2: 0.21, 3: 0.19, 4: 0.19 };
+
+/**
+ * Where to draw every token: { color, i, p, x, y, r } in drawing order. Tokens sharing a square
+ * are made smaller and spread out (side by side, or 2 x 2) so each stays visible and tappable;
+ * tokens in `movable` (a Set of `${color}${index}`) are drawn last, on top of any others.
+ */
+export function placeTokens(shown, movable = new Set()) {
+    const groups = new Map();
+    for (const color of COLORS) {
+        (shown[color] || []).forEach((p, i) => {
+            const pt = tokenPoint(color, i, p);
+            const key = p >= HOME || p === -1 ? `${color}${i}${p}` : pt.join(',');
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({ color, i, p, pt });
+        });
+    }
+    const placed = [];
+    for (const group of groups.values()) {
+        const n = Math.min(group.length, 4);
+        group.forEach((t, k) => {
+            const [dx, dy] = STACK_SLOTS[n][k % 4] || [0, 0];
+            placed.push({ color: t.color, i: t.i, p: t.p, x: t.pt[0] + dx, y: t.pt[1] + dy, r: t.p >= HOME ? 0.17 : STACK_RADIUS[n] });
+        });
+    }
+    const top = (t) => Number(movable.has(`${t.color}${t.i}`));
+    return placed.sort((a, b) => top(a) - top(b));
+}
