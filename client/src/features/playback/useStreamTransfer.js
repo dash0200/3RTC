@@ -5,11 +5,19 @@
  *   (webrtc/streamTree.js): computers pass the video on to up to RELAY_FANOUT others.
  * - Whole file (no service worker): the owner pushes the file in chunks.
  *
+ * - Swarm (torrent-like, apps from Phase 3 on): a viewer asking with `swarm: true` gets the stream
+ *   straight from the owner (no tree), announces the blocks it holds ('p2p-have') and fetches each
+ *   block from the least busy viewer that has it, the owner being the fallback. Blocks that came
+ *   from another viewer are checked against the owner's SHA-256 ('p2p-hash-request' ->
+ *   'p2p-block-hashes'); a viewer that sent a bad one is never asked again. Older apps in the
+ *   room keep using the relay tree.
+ *
  * Wire: 'p2p-stream-request', 'p2p-stream-header', 'p2p-range-request', 'p2p-range-cancel',
- * 'p2p-stream-complete', 'p2p-stream-cancel', 'p2p-relay-gone', plus binary chunks on the bulk channel.
+ * 'p2p-stream-complete', 'p2p-stream-cancel', 'p2p-relay-gone', 'p2p-have', 'p2p-range-miss',
+ * 'p2p-swarm-gone', 'p2p-hash-request', 'p2p-block-hashes', plus binary chunks on the bulk channel.
  */
 import { useRef, useEffect } from 'react';
-import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver, STREAM_CACHE_BYTES, STREAM_CACHE_BYTES_PHONE, BUFFER_AHEAD_BYTES, BUFFER_AHEAD_BYTES_PHONE } from '../../utils/p2pStreamer';
+import { P2PStreamSender, P2PStreamReceiver, P2PRangeSender, P2PRangeReceiver, sha256Hex, canChecksum, RANGE_BLOCK_SIZE, STREAM_CACHE_BYTES, STREAM_CACHE_BYTES_PHONE, BUFFER_AHEAD_BYTES, BUFFER_AHEAD_BYTES_PHONE } from '../../utils/p2pStreamer';
 import { addViewer, detachViewer, markDirect } from '../../webrtc/streamTree';
 import { usePeerMessageOn } from '../../core/RoomContext';
 
@@ -22,11 +30,19 @@ export function useStreamTransfer({ room, playback }) {
     const { bus } = room;
     const { streamReceiverRef, activeStreamSendersRef, localVideoFileRef, setStreamProgress, setStreamVideoUrl } = playback;
     // Stream number of the file we currently offer, and who fetches it from whom
-    const hostStreamRef = useRef({ file: null, streamNo: 0 });
+    const hostStreamRef = useRef({ file: null, streamNo: 0, hashes: new Map() });
     const streamTreeRef = useRef(new Map());
+    // What other viewers said they hold (kept until our stream starts, see 'p2p-have')
+    const peerHaveRef = useRef(new Map());
 
     const bulkChannelTo = (peerId) => bus.channelOf(peerId, { bulk: true });
     const myName = () => room.getSelf().username;
+
+    // Checksum every block as it goes out: any block a viewer can pass on came from us first, so
+    // its checksum is ready when someone asks for it ('p2p-hash-request')
+    const checksumAsSent = (stream) => (block, data) => {
+        if (!stream.hashes.has(block) && canChecksum()) sha256Hex(data).then((hex) => stream.hashes.set(block, hex)).catch(() => { });
+    };
 
     const stopSenderFor = (peerId) => {
         activeStreamSendersRef.current.get(peerId)?.abort();
@@ -41,10 +57,27 @@ export function useStreamTransfer({ room, playback }) {
         if (data.supportsRange) {
             // On demand: serve only the parts the peer's player asks for
             if (hostStreamRef.current.file !== file) {
-                hostStreamRef.current = { file, streamNo: (Math.random() * 0xffffffff) >>> 0 };
+                hostStreamRef.current = { file, streamNo: (Math.random() * 0xffffffff) >>> 0, hashes: new Map() };
                 streamTreeRef.current.clear();
             }
             stopSenderFor(from);
+            if (data.swarm && canChecksum()) {
+                // Swarm: served by us, and by the other viewers for what they already have
+                detachViewer(streamTreeRef.current, from);
+                const stream = hostStreamRef.current;
+                const sender = new P2PRangeSender(file, channel, {
+                    streamNo: stream.streamNo,
+                    senderName: myName(),
+                    headerExtra: { swarm: true },
+                    onBlockRead: checksumAsSent(stream),
+                    onError: (err) => room.log(`❌ Stream error: ${err.message}`)
+                });
+                activeStreamSendersRef.current.set(from, sender);
+                sender.start();
+                room.log(`📡 Streaming "${file.name}" to ${data.requester || 'peer'} (shared between viewers).`);
+                room.notify(`Streaming video to ${data.requester || 'peer'}...`);
+                return;
+            }
             // Bigger rooms: once we feed RELAY_FANOUT viewers, newer ones fetch through one of them
             const parentId = addViewer(streamTreeRef.current, from, data.canRelay, (id) => Boolean(bulkChannelTo(id)));
             if (parentId) {
@@ -88,11 +121,45 @@ export function useStreamTransfer({ room, playback }) {
         const hostStream = hostStreamRef.current;
         const needsSender = !sender || sender.isAborted || sender.streamNo !== data.streamNo;
         const channel = bulkChannelTo(from);
-        if (needsSender && data.type === 'p2p-range-request' && file && hostStream.file === file && hostStream.streamNo === data.streamNo) {
+        if (needsSender && data.type === 'p2p-range-request' && data.swarm && !file) {
+            // Another viewer asks for blocks we hold (swarm): only from what we have, never fetched for them
+            const receiver = streamReceiverRef.current;
+            if (receiver instanceof P2PRangeReceiver && receiver.swarm && !receiver.isAborted && receiver.streamNo === data.streamNo && channel) {
+                let misses = null;
+                sender = new P2PRangeSender(null, channel, {
+                    streamNo: receiver.streamNo,
+                    fileSize: receiver.fileSize,
+                    blockSize: receiver.blockSize,
+                    readBlock: async (block) => {
+                        // Our current stream of it (it may have restarted since this peer first asked)
+                        const current = swarmReceiver(data.streamNo);
+                        const cached = current ? current.getCachedBlock(block) : null;
+                        if (!cached) throw new Error('not here');
+                        return cached;
+                    },
+                    onMiss: (block) => {
+                        if (!misses) {
+                            misses = [];
+                            Promise.resolve().then(() => {
+                                const blocks = misses;
+                                misses = null;
+                                try { channel.send(JSON.stringify({ type: 'p2p-range-miss', streamNo: receiver.streamNo, blocks })); } catch { }
+                            });
+                        }
+                        misses.push(block);
+                    },
+                    cancelType: 'p2p-swarm-gone'
+                });
+                activeStreamSendersRef.current.set(from, sender);
+            } else if (channel) {
+                try { channel.send(JSON.stringify({ type: 'p2p-range-miss', streamNo: data.streamNo, blocks: data.blocks || [] })); } catch { }
+                return;
+            }
+        } else if (needsSender && data.type === 'p2p-range-request' && file && hostStream.file === file && hostStream.streamNo === data.streamNo) {
             // We own the file: a new channel after a rebuild, or a viewer whose parent dropped out
             markDirect(streamTreeRef.current, from);
             if (channel) {
-                sender = new P2PRangeSender(file, channel, { streamNo: hostStream.streamNo, senderName: myName() });
+                sender = new P2PRangeSender(file, channel, { streamNo: hostStream.streamNo, senderName: myName(), onBlockRead: checksumAsSent(hostStream) });
                 activeStreamSendersRef.current.set(from, sender);
             }
         } else if (needsSender && data.type === 'p2p-range-request' && !file) {
@@ -129,6 +196,10 @@ export function useStreamTransfer({ room, playback }) {
                 ownerId: from,
                 sourceId: relayId || from,
                 getChannel: bulkChannelTo,
+                swarm: true, // used when the owner's app does it too (data.swarm)
+                onBadBlock: (peerId) => {
+                    room.log(`⚠️ A piece of the video from ${room.peerName(peerId) || 'another viewer'} didn't match the original: got it from ${data.sender || 'the owner'} instead.`);
+                },
                 // Phones get less memory for the stream
                 cacheLimit: isPhoneLike() ? STREAM_CACHE_BYTES_PHONE : STREAM_CACHE_BYTES,
                 bufferAhead: isPhoneLike() ? BUFFER_AHEAD_BYTES_PHONE : BUFFER_AHEAD_BYTES,
@@ -142,6 +213,9 @@ export function useStreamTransfer({ room, playback }) {
                 }
             });
             streamReceiverRef.current = receiver;
+            try { if (localStorage.getItem('3rtc_debug') === '1') window.__3rtcStream = receiver; } catch { }
+            // Viewers that already have parts of it
+            for (const [peerId, have] of peerHaveRef.current) if (have.streamNo === receiver.streamNo) receiver.setPeerHave(peerId, have.ranges);
             setStreamProgress({
                 percent: 0, speedMBs: 0, receivedBytes: 0, totalBytes: data.fileSize, receivedChunksCount: 0,
                 totalChunks: receiver.totalBlocks, fileName: data.fileName, isReady: true
@@ -179,6 +253,85 @@ export function useStreamTransfer({ room, playback }) {
 
     usePeerMessageOn(bus, 'p2p-stream-complete', () => streamReceiverRef.current?.handleComplete?.());
 
+    // ---- swarm ---------------------------------------------------------------------------------
+    const swarmReceiver = (streamNo) => {
+        const receiver = streamReceiverRef.current;
+        return receiver instanceof P2PRangeReceiver && receiver.swarm && !receiver.isAborted && (streamNo === undefined || receiver.streamNo === streamNo >>> 0) ? receiver : null;
+    };
+    usePeerMessageOn(bus, 'p2p-have', (data, from) => {
+        if (Array.isArray(data.ranges)) {
+            peerHaveRef.current.set(from, { streamNo: data.streamNo >>> 0, ranges: data.ranges });
+            const receiver = swarmReceiver(data.streamNo);
+            receiver?.setPeerHave(from, data.ranges);
+            receiver?.notePeerGetting(from, data.getting);
+        } else {
+            swarmReceiver(data.streamNo)?.updatePeerHave(from, data.add, data.remove, data.getting);
+        }
+    });
+    usePeerMessageOn(bus, 'p2p-range-miss', (data, from) => swarmReceiver(data.streamNo)?.handleMiss(from, Array.isArray(data.blocks) ? data.blocks : []));
+    usePeerMessageOn(bus, 'p2p-swarm-gone', (_data, from) => swarmReceiver()?.dropPeer(from));
+    usePeerMessageOn(bus, 'p2p-block-hashes', (data, from) => {
+        const receiver = swarmReceiver(data.streamNo);
+        if (receiver && from === receiver.ownerId && Array.isArray(data.hashes)) receiver.addHashes(data.hashes);
+    });
+    // The owner: checksums of blocks, so viewers can check what other viewers sent them
+    usePeerMessageOn(bus, 'p2p-hash-request', async (data, from) => {
+        const file = localVideoFileRef.current;
+        const stream = hostStreamRef.current;
+        if (!file || stream.file !== file || stream.streamNo !== data.streamNo >>> 0 || !Array.isArray(data.blocks)) return;
+        const total = Math.ceil(file.size / RANGE_BLOCK_SIZE);
+        const blocks = data.blocks.slice(0, 512).map((b) => b >>> 0).filter((b) => b < total);
+        const reply = (hashes) => {
+            if (hashes.length && hostStreamRef.current === stream) bus.send(from, 'p2p-block-hashes', { streamNo: stream.streamNo, hashes });
+        };
+        // The ones we already know (usually all: see onBlockRead) right away, then the rest
+        reply(blocks.filter((b) => stream.hashes.has(b)).map((b) => [b, stream.hashes.get(b)]));
+        let out = [];
+        for (const b of blocks.filter((x) => !stream.hashes.has(x))) {
+            const start = b * RANGE_BLOCK_SIZE;
+            try {
+                const hex = await sha256Hex(await file.slice(start, Math.min(start + RANGE_BLOCK_SIZE, file.size)).arrayBuffer());
+                stream.hashes.set(b, hex);
+                out.push([b, hex]);
+            } catch {
+                continue;
+            }
+            if (out.length >= 8) {
+                reply(out);
+                out = [];
+            }
+        }
+        reply(out);
+    });
+
+    // Tell the room which blocks we hold: what changed, often (others can fetch a block from us
+    // soon after we got it); everything now and then, and to newcomers when they connect
+    useEffect(() => {
+        let sent = { receiver: null, version: -1, fullAt: 0 };
+        const timer = setInterval(() => {
+            const receiver = swarmReceiver();
+            if (!receiver || (sent.receiver === receiver && sent.version === receiver.haveVersion && !receiver.gettingAdded.length)) return;
+            const changes = receiver.takeHaveChanges();
+            const now = Date.now();
+            if (sent.receiver !== receiver || now - sent.fullAt > 10000) {
+                bus.broadcast('p2p-have', { streamNo: receiver.streamNo, ranges: receiver.haveRanges(), getting: receiver.gettingNow() });
+                sent.fullAt = now;
+            } else {
+                bus.broadcast('p2p-have', { streamNo: receiver.streamNo, add: changes.add, remove: changes.remove, getting: changes.getting });
+            }
+            sent = { ...sent, receiver, version: receiver.haveVersion };
+        }, 250);
+        const offOpen = bus.onEvent('peer-open', (peerId) => {
+            const receiver = swarmReceiver();
+            if (receiver) bus.send(peerId, 'p2p-have', { streamNo: receiver.streamNo, ranges: receiver.haveRanges() });
+        });
+        return () => {
+            clearInterval(timer);
+            offOpen();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bus]);
+
     // The viewer relaying our stream stopped: fetch straight from the owner
     usePeerMessageOn(bus, 'p2p-relay-gone', (_data, from) => {
         const receiver = streamReceiverRef.current;
@@ -189,6 +342,8 @@ export function useStreamTransfer({ room, playback }) {
     usePeerMessageOn(bus, 'p2p-stream-cancel', (_data, from) => {
         stopSenderFor(from);
         detachViewer(streamTreeRef.current, from);
+        swarmReceiver()?.dropPeer(from);
+        peerHaveRef.current.delete(from);
         const receiver = streamReceiverRef.current;
         const fromOurOwner = !(receiver instanceof P2PRangeReceiver) || receiver.ownerId === from;
         if (receiver && fromOurOwner) {
@@ -200,23 +355,26 @@ export function useStreamTransfer({ room, playback }) {
 
     useEffect(() => {
         // Stream data (anything binary that isn't a chat image)
-        const offBinary = bus.onBinary((arrayBuffer) => {
+        const offBinary = bus.onBinary((arrayBuffer, fromPeerId) => {
             if (arrayBuffer.byteLength >= 4 && new DataView(arrayBuffer).getUint32(0, false) === IMAGE_MAGIC) return false;
-            streamReceiverRef.current?.handleChunk(arrayBuffer);
+            streamReceiverRef.current?.handleChunk(arrayBuffer, fromPeerId);
             return true;
         });
         // A peer is gone: our parent left -> fetch from the owner; a viewer left -> its children do
         const offClose = bus.onEvent('peer-close', (peerId) => {
+            peerHaveRef.current.delete(peerId);
             streamReceiverRef.current?.handlePeerGone?.(peerId);
             detachViewer(streamTreeRef.current, peerId);
             stopSenderFor(peerId);
         });
         // Their channel closed (it may come back): stop sending to it
         const offChannel = bus.onEvent('channel-close', stopSenderFor);
+        const offLeft = bus.onEvent('room-left', () => peerHaveRef.current.clear());
         return () => {
             offBinary();
             offClose();
             offChannel();
+            offLeft();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [bus]);

@@ -1,4 +1,4 @@
-"""Six people in one room: mesh, voice bitrate, local video relayed through the tree."""
+"""Six people in one room: mesh, voice bitrate, local video shared between the viewers (swarm)."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness  # noqa: E402
@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 BASE = 'http://localhost:4173'
 INIT = r"""
 localStorage.setItem('webrtc_signal_url', 'ws://localhost:8080');
-window.__sig = []; window.__rng = 0; window.__pcs = [];
+window.__sig = []; window.__rng = 0; window.__pcs = []; localStorage.setItem('3rtc_debug', '1');
 const OrigWS = window.WebSocket;
 window.WebSocket = class extends OrigWS { constructor(...a) { super(...a);
   this.addEventListener('message', (e) => { try { window.__sig.push(JSON.parse(e.data)); } catch {} }); } };
@@ -87,16 +87,24 @@ with sync_playwright() as p:
     owner.evaluate(f"{VID}.muted = true; {VID}.play()")
     played = wait(lambda: all((vstate(g) or {}).get('t', 0) > 8 for g in guests), 40, 0.5)
     check('all viewers play along', played, [vstate(g) for g in guests])
+    # Once everyone has (nearly) the whole film: how much of it came from the owner
+    def buffered(pg):
+        el = pg.query_selector('.local-filesize-text')
+        m = re.search(r'\((\d+)%', el.inner_text() if el else '')
+        return int(m.group(1)) if m else 0
+    check('every viewer buffers the film', wait(lambda: all(buffered(g) >= 90 for g in guests), 40, 0.5), [buffered(g) for g in guests])
     sent = [pg.evaluate('window.__rng') for pg in pages]
+    for g, nm in zip(guests, names[1:]):
+        print(nm, g.evaluate("(() => { const r = window.__3rtcStream; return r && { swarm: r.swarm, stats: r.stats, counts: r.counts, have: [...r.peerHave].map(([k, h]) => h.reduce((a, x) => a + x, 0)), penalty: r.penalty.size, banned: r.banned.size }; })()"), flush=True)
     total = sum(sent)
     relays = [nm for nm, x in zip(names[1:], sent[1:]) if x > 0]
-    check('2 viewers (computers) relay the video to the others', len(relays) == 2, relays)
+    check('viewers pass the video on to each other', len(relays) >= 2, relays)
     check("owner's upload is a fraction of the total (no longer 5 copies)", sent[0] < 0.55 * total,
           f"owner {sent[0]/1e6:.1f} MB of {total/1e6:.1f} MB sent in total; per person (MB): {[round(x/1e6,1) for x in sent]}")
 
     guests[1].locator('.chat-tab-btn', has_text='Peers').first.click(); guests[1].wait_for_timeout(300); guests[1].mouse.move(10, 10)
     guests[1].screenshot(path=str(harness.OUT / 'six-viewer.png'))
-    # a relaying viewer leaves mid-video: its children keep watching (they fetch from the owner)
+    # a viewer others fetch from leaves mid-video: the rest keep watching
     parents = [i for i, g in enumerate(guests) if sent[i + 1] > 1e6]
     gone = parents[0] if parents else 0
     gone_name = names[gone + 1]

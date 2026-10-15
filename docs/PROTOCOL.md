@@ -70,14 +70,41 @@ An item is `{ id, videoId, title, addedBy, timestamp }` (YouTube) or `{ id, medi
 ### Sharing a local video (`features/playback/useStreamTransfer.js`)
 | type | direction | fields |
 |---|---|---|
-| `p2p-stream-request` | viewer → everyone | `requester, fileName, supportsRange, canRelay` |
-| `p2p-stream-header` (bulk) | owner → viewer | `mode: 'range'` (on demand) with `streamNo, fileSize, blockSize, via?`; or whole-file mode with `totalChunks` |
-| `p2p-range-request` / `p2p-range-cancel` (bulk) | viewer → owner or relay | `streamNo, blocks, urgent?` |
+| `p2p-stream-request` | viewer → everyone | `requester, fileName, supportsRange, canRelay, swarm?` |
+| `p2p-stream-header` (bulk) | owner → viewer | `mode: 'range'` (on demand) with `streamNo, fileSize, blockSize, via?, swarm?`; or whole-file mode with `totalChunks` |
+| `p2p-range-request` / `p2p-range-cancel` (bulk) | viewer → owner, relay, or another viewer | `streamNo, blocks, urgent?, swarm?` |
 | `p2p-stream-complete` | owner → viewer | whole-file mode finished |
 | `p2p-stream-cancel` | either | stop sending to me / I stopped sharing |
 | `p2p-relay-gone` | relay → its child | I can't relay any more: fetch from the owner |
+| `p2p-have` | viewer → everyone | `streamNo` and either `ranges: [first, last, first, last, …]` (all the blocks I hold; every 10 s and to newcomers) or `add, remove` (changes since the last one), plus `getting` (blocks I'm fetching from the owner right now, so others wait for me instead) |
+| `p2p-range-miss` (bulk) | viewer → viewer | `streamNo, blocks`: I don't have these (any more), ask someone else |
+| `p2p-swarm-gone` (bulk) | viewer → viewer | I stopped serving you blocks |
+| `p2p-hash-request` (bulk) | viewer → owner | `streamNo, blocks` |
+| `p2p-block-hashes` | owner → viewer | `streamNo, hashes: [[block, sha256 hex], …]` |
 
 Binary frames on the bulk channel carry the blocks (`utils/p2pStreamer.js`).
+
+Swarm (torrent-like): a viewer asks with `swarm: true`; an owner that knows it answers with
+`swarm: true` in the header and serves that viewer directly (no relay tree). Such viewers announce
+what they hold with `p2p-have` and ask each block from the least busy viewer that has it, the owner
+being the fallback; a request to another viewer carries `swarm: true` and is answered only from
+what it holds (`p2p-range-miss` otherwise), never fetched upstream. Each viewer fills its buffer
+in its own order (past the next couple of blocks), so viewers watching together fetch different
+parts from the owner and swap them. A block that came from another
+viewer is used only if it matches the owner's SHA-256 for it; a viewer that sent a bad one is never
+asked again. An older owner ignores `swarm` (relay tree as before); older viewers never send it, so
+they keep using the tree, which only contains viewers like them.
+
+### Local file format (`features/files/useFileFormat.js`)
+| type | direction | fields |
+|---|---|---|
+| `file-format` | sharer → everyone, and to each newcomer | `fileName, fileSize, format: { container, video, audio[], subtitles[], duration }` |
+| `file-format-report` | viewer → sharer | `fileName, verdict: ok \| maybe \| no-video \| no-audio, message, device` |
+| `file-subtitle-request` | viewer → sharer | `fileName, track`: read this subtitle track out of the file and share it |
+| `file-subtitle-progress` | sharer → everyone | `fileName, track, progress, done?, error?` |
+
+The subtitles themselves go out as the usual `local-video-action` `subtitle-share`. Apps rebuild the
+format with `cleanFormat` (known fields, short strings, bounded lists) before using it.
 
 ### Shared state (`core/sharedState.js`): games, polls, the open activity
 | type | fields | meaning |

@@ -1,0 +1,165 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readVint, readElementHeader } from '../../src/features/files/ebml.js';
+import { parseMkvHeader, extractMkvSubtitles, assEventText } from '../../src/features/files/mkv.js';
+import { parseMp4 } from '../../src/features/files/mp4.js';
+import { probeFile, checkPlayable, cleanFormat, describeFormat, sniffContainer, subtitleTrackLabel, deviceName } from '../../src/features/files/formats.js';
+
+// ---- building test files ----------------------------------------------------------------------
+const enc = new TextEncoder();
+const idBytes = (id) => { const out = []; let v = id; while (v > 0) { out.unshift(v & 0xff); v = Math.floor(v / 256); } return out; };
+const sizeBytes = (n) => { // 8-byte size vint
+    const out = [0x01]; for (let i = 6; i >= 0; i--) out.push(Math.floor(n / 2 ** (8 * i)) & 0xff); return out;
+};
+const el = (id, ...children) => {
+    const body = children.flatMap((c) => (typeof c === 'string' ? [...enc.encode(c)] : Array.isArray(c) ? c : [...c]));
+    return [...idBytes(id), ...sizeBytes(body.length), ...body];
+};
+const uint = (id, v, len = 1) => el(id, Array.from({ length: len }, (_, i) => (v >> (8 * (len - 1 - i))) & 0xff));
+const float8 = (id, v) => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, v); return el(id, [...b]); };
+const block = (track, rel, text) => [0x80 | track, (rel >> 8) & 0xff, rel & 0xff, 0x80, ...enc.encode(text)];
+
+function mkvFile() {
+    const track = (n, type, codec, lang, name = '') => el(0xae, uint(0xd7, n), uint(0x83, type), el(0x86, codec), el(0x22b59c, lang), ...(name ? [el(0x536e, name)] : []));
+    return new Uint8Array([
+        ...el(0x1a45dfa3, el(0x4282, 'matroska')),
+        ...el(0x18538067,
+            el(0x1549a966, uint(0x2ad7b1, 1000000, 3), float8(0x4489, 20000)),
+            el(0x1654ae6b,
+                track(1, 1, 'V_MPEG4/ISO/AVC', 'und'),
+                track(2, 2, 'A_AC3', 'eng'),
+                track(3, 2, 'A_AAC', 'hin', 'Hindi dub'),
+                track(4, 17, 'S_TEXT/UTF8', 'eng'),
+                track(5, 17, 'S_TEXT/ASS', 'spa', 'Latin American'),
+                track(6, 17, 'S_HDMV/PGS', 'eng')),
+            el(0x1f43b675, uint(0xe7, 1000, 2),
+                el(0xa3, block(1, 0, 'videodata')),
+                el(0xa3, block(4, 0, 'First line\r\nsecond row')),
+                el(0xa0, el(0xa1, block(5, 500, '0,0,Default,,0,0,0,,{\\i1}Hola{\\i0}\\Nmundo')), uint(0x9b, 2000, 2))),
+            el(0x1f43b675, uint(0xe7, 5000, 2),
+                el(0xa3, block(4, 0, 'Third')),
+                el(0xa3, block(4, 1000, 'Fourth'))))
+    ]);
+}
+
+const reader = (bytes) => async (pos, len) => bytes.subarray(pos, Math.min(bytes.length, pos + len));
+
+// ---- tests --------------------------------------------------------------------------------------
+test('EBML variable-length integers', () => {
+    assert.deepEqual(readVint(new Uint8Array([0x81]), 0).value, 1);
+    assert.deepEqual(readVint(new Uint8Array([0x40, 0x02]), 0).value, 2);
+    assert.equal(readVint(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]), 0, { keepMarker: true }).value, 0x1a45dfa3);
+    assert.equal(readElementHeader(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), 0).size, -1); // unknown size
+    assert.equal(readVint(new Uint8Array([0x40]), 0), null); // cut off
+});
+
+test('MKV tracks: codecs, languages, names, subtitle kinds', async () => {
+    const bytes = mkvFile();
+    const header = parseMkvHeader(bytes);
+    assert.equal(header.tracks.length, 6);
+    const f = await probeFile({ size: bytes.length }, { readAt: reader(bytes) });
+    assert.equal(f.container, 'matroska');
+    assert.equal(f.duration, 20);
+    assert.equal(f.video.codec, 'h264');
+    assert.deepEqual(f.audio.map((a) => [a.codec, a.language, a.name]), [['ac3', 'eng', ''], ['aac', 'hin', 'Hindi dub']]);
+    assert.deepEqual(f.subtitles.map((s) => [s.number, s.kind, s.label]), [[4, 'text', 'SRT'], [5, 'text', 'ASS'], [6, 'image', 'PGS (picture)']]);
+    assert.equal(subtitleTrackLabel(f.subtitles[1]), 'Spanish – Latin American · ASS');
+    assert.equal(describeFormat(f), 'MKV · H.264 · Dolby Digital (AC-3) + 1 more audio · 3 subtitles');
+});
+
+test('MKV subtitle text: SRT and ASS, timing, durations', async () => {
+    const bytes = mkvFile();
+    const cues = await extractMkvSubtitles(reader(bytes), bytes.length, [{ number: 4, codecId: 'S_TEXT/UTF8' }, { number: 5, codecId: 'S_TEXT/ASS' }]);
+    assert.deepEqual(cues.get(4), [
+        { startSec: 1, endSec: 5, text: 'First line\nsecond row' }, // no duration: until the next one
+        { startSec: 5, endSec: 6, text: 'Third' },
+        { startSec: 6, endSec: 9, text: 'Fourth' }
+    ]);
+    assert.deepEqual(cues.get(5), [{ startSec: 1.5, endSec: 3.5, text: 'Hola\nmundo' }]);
+    assert.equal(assEventText('0,0,Default,,0,0,0,,Hi, there {\\pos(1,2)}you'), 'Hi, there you');
+});
+
+function box(type, ...children) {
+    const body = children.flat();
+    const size = 8 + body.length;
+    return [(size >>> 24) & 0xff, (size >> 16) & 0xff, (size >> 8) & 0xff, size & 0xff, ...enc.encode(type), ...body];
+}
+const zeros = (n) => new Array(n).fill(0);
+function mp4File({ moovAtEnd }) {
+    const hdlr = (h) => box('hdlr', zeros(8), [...enc.encode(h)], zeros(12), [0]);
+    // language 'eng' packed: ((e-0x60)<<10)|((n-0x60)<<5)|(g-0x60)
+    const lang = ((5) << 10) | ((14) << 5) | 7;
+    const mdhd = box('mdhd', zeros(20), [lang >> 8, lang & 0xff], zeros(2));
+    const stsd = (entry) => box('stsd', zeros(4), [0, 0, 0, 1], entry);
+    const trak = (h, entry) => box('trak', box('mdia', mdhd, hdlr(h), box('minf', box('stbl', stsd(entry)))));
+    const esds = box('esds', zeros(4), [0x03, 0x19, 0, 1, 0, 0x04, 0x11, 0x40, 0x15]);
+    const moov = box('moov',
+        box('mvhd', zeros(12), [0, 0, 0x03, 0xe8], [0, 0, 0x75, 0x30], zeros(80)),
+        trak('vide', box('hvc1', zeros(78))),
+        trak('soun', box('mp4a', zeros(28), esds)),
+        trak('soun', box('ec-3', zeros(28))),
+        trak('sbtl', box('tx3g', zeros(30))));
+    const ftyp = box('ftyp', [...enc.encode('isom')], zeros(4));
+    const mdat = box('mdat', zeros(1000));
+    return new Uint8Array(moovAtEnd ? [...ftyp, ...mdat, ...moov] : [...ftyp, ...moov, ...mdat]);
+}
+
+test('MP4 tracks, with moov at the start or the end', async () => {
+    for (const moovAtEnd of [false, true]) {
+        const bytes = mp4File({ moovAtEnd });
+        const info = await parseMp4(reader(bytes), bytes.length);
+        assert.equal(info.moovAtEnd, moovAtEnd);
+        assert.equal(info.duration, 30);
+        assert.deepEqual(info.tracks.map((t) => [t.type, t.codec, t.language]),
+            [['video', 'hevc', 'eng'], ['audio', 'aac', 'eng'], ['audio', 'eac3', 'eng'], ['subtitle', 'tx3g', 'eng']]);
+        const f = await probeFile({ size: bytes.length }, { readAt: reader(bytes) });
+        assert.equal(describeFormat(f), 'MP4 · HEVC (H.265) · AAC + 1 more audio · 1 subtitle');
+    }
+});
+
+test('other containers are recognised by their first bytes', () => {
+    const b = (s) => enc.encode(s.padEnd(400, '\0'));
+    assert.equal(sniffContainer(b('RIFF\0\0\0\0AVI LIST')), 'avi');
+    assert.equal(sniffContainer(b('FLV\x01')), 'flv');
+    const ts = new Uint8Array(400); ts[0] = ts[188] = ts[376] = 0x47;
+    assert.equal(sniffContainer(ts), 'mpegts');
+    assert.equal(sniffContainer(b('hello')), 'unknown');
+});
+
+test('playability: per device, picture vs sound', () => {
+    const chrome = { canPlay: (t) => (/avc1|vp9|vp09|av01|mp4a|opus|vorbis|flac|audio\/mpeg|webm/.test(t) ? 'probably' : ''), chromium: true };
+    const safari = { canPlay: (t) => (/avc1|hvc1|mp4a|ac-3|ec-3|audio\/mpeg|flac/.test(t) ? 'probably' : ''), chromium: false };
+    const fmt = (container, v, ...a) => ({ container, video: v ? { codec: v, label: v } : null, audio: a.map((codec) => ({ codec, label: codec })), subtitles: [] });
+    assert.equal(checkPlayable(fmt('mp4', 'h264', 'aac'), chrome).verdict, 'ok');
+    assert.equal(checkPlayable(fmt('mp4', 'h264', 'ac3'), chrome).verdict, 'no-audio');
+    assert.equal(checkPlayable(fmt('mp4', 'h264', 'ac3'), safari).verdict, 'ok');
+    assert.equal(checkPlayable(fmt('mp4', 'hevc', 'aac'), chrome).verdict, 'no-video');
+    assert.equal(checkPlayable(fmt('mp4', 'hevc', 'aac'), safari).verdict, 'ok');
+    assert.equal(checkPlayable(fmt('matroska', 'h264', 'aac'), chrome).verdict, 'ok');
+    assert.equal(checkPlayable(fmt('matroska', 'h264', 'aac'), safari).verdict, 'maybe');
+    assert.equal(checkPlayable(fmt('avi', 'mpeg4', 'mp3'), chrome).verdict, 'no-video');
+    assert.equal(checkPlayable(fmt('matroska', 'mpeg4', 'mp3'), chrome).verdict, 'no-video');
+    assert.equal(checkPlayable(fmt('mp4', 'h264', 'dts'), chrome).verdict, 'no-audio');
+    assert.match(checkPlayable(fmt('mp4', 'h264', 'ac3'), chrome).message, /no sound/);
+});
+
+test('the format sent to the room is cleaned', () => {
+    const f = cleanFormat({
+        container: 'evil', video: { codec: 'x'.repeat(500) }, audio: new Array(40).fill({ codec: 'aac', language: 'eng', name: 'n'.repeat(300) }),
+        subtitles: [{ number: 'x', kind: 'weird', codec: 'S_TEXT/UTF8' }], duration: -5, extra: 'dropped'
+    });
+    assert.equal(f.container, 'unknown');
+    assert.equal(f.video.codec.length, 40);
+    assert.equal(f.audio.length, 16);
+    assert.equal(f.audio[0].name.length, 80);
+    assert.deepEqual([f.subtitles[0].number, f.subtitles[0].kind], [0, 'text']);
+    assert.equal(f.duration, 0);
+    assert.equal(f.extra, undefined);
+    assert.equal(cleanFormat(null), null);
+});
+
+test('device names', () => {
+    assert.equal(deviceName('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'), 'Safari on iPhone');
+    assert.equal(deviceName('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36 Edg/130.0'), 'Edge on Windows');
+    assert.equal(deviceName('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36'), 'Chrome on Android');
+});

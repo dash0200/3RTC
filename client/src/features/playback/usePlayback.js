@@ -14,7 +14,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { fetchYouTubeTitle } from '../../components/YouTubeSyncPlayer';
-import { detectOnDemandStreaming } from '../../utils/p2pStreamer';
+import { detectOnDemandStreaming, canChecksum } from '../../utils/p2pStreamer';
 import { usePeerMessageOn } from '../../core/RoomContext';
 import { normalizeMedia, fallbackTitle } from '../media/sources';
 
@@ -24,6 +24,11 @@ const isPhoneLikeDevice = () => {
     } catch {
         return false;
     }
+};
+
+// Tests: act like an app from before the swarm (relay tree only), to check both work in one room
+const olderAppForTests = () => {
+    try { return localStorage.getItem('3rtc_no_swarm') === '1'; } catch { return false; }
 };
 
 const clock = (seconds = 0) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
@@ -270,7 +275,9 @@ export function usePlayback({ room, hostControls }) {
             fileName: remoteLocalVideoMeta.fileName,
             supportsRange,
             // Computers can pass the video on to other viewers; phones (battery, upload) don't
-            canRelay: supportsRange && !isPhoneLikeDevice()
+            canRelay: supportsRange && !isPhoneLikeDevice(),
+            // Fetch from other viewers too (owners with an older app ignore it and use the relay tree)
+            swarm: supportsRange && canChecksum() && !olderAppForTests()
         });
         setStreamProgress({
             percent: 0, speedMBs: 0, receivedBytes: 0, totalBytes: remoteLocalVideoMeta.fileSize || 0,
