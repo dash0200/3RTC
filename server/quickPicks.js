@@ -19,9 +19,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // units (search 100 + two 1-unit detail calls) + 8 trending charts x 10 countries x 1 unit =
 // 1,202 units, so 7 refreshes a day, about one every 3.5 hours.
 //
-// Trending is per country: each visitor's app asks for its country (?region=IN), worked out from
-// the device's time zone and language, and gets that country's charts; a country we don't fetch
-// gets a worldwide mix of all of them (only videos that play in every one of those countries).
+// Trending is per country: the app asks for ?region=GLOBAL (a worldwide mix of all the countries'
+// charts, only videos that play in every one of them) unless the viewer picked a country in
+// "Trending in", which gets that country's charts.
 //
 // Each refresh uses the next search phrase of every category, and new results are merged into a
 // rolling set of up to QUICK_PICKS_POOL_SIZE videos (newest first), so frequent refreshes keep

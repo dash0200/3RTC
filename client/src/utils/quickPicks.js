@@ -6,9 +6,8 @@
  * depends on how many people use the app. Until the server's list arrives, or if the server has
  * no API key or can't be reached, the app uses the last list it downloaded, then the built-in one.
  *
- * Trending is per country: the app asks for the country it works out from the device's time zone
- * (then its language), or the one the person picked ("Trending in…"); the server answers with that
- * country's charts, or a worldwide mix for countries it doesn't track.
+ * Trending: a worldwide mix by default; "Trending in…" switches to one country's charts (the
+ * choice is remembered on this device).
  */
 import { useSyncExternalStore } from 'react';
 
@@ -84,46 +83,13 @@ export const REGION_NAMES = {
 };
 export const regionName = (code) => REGION_NAMES[code] || code;
 
-// Time zones that belong to one country (the common ones; others fall back to the language)
-const ZONE_COUNTRY = [
-  [/^Asia\/(Kolkata|Calcutta)$/, 'IN'],
-  [/^America\/(New_York|Chicago|Denver|Los_Angeles|Phoenix|Anchorage|Detroit|Boise|Indiana\/.+|Kentucky\/.+|North_Dakota\/.+|Menominee|Juneau|Sitka|Nome|Adak)$|^Pacific\/Honolulu$|^US\//, 'US'],
-  [/^America\/(Toronto|Vancouver|Edmonton|Winnipeg|Halifax|St_Johns|Regina|Montreal|Moncton|Whitehorse|Yellowknife|Iqaluit|Glace_Bay|Goose_Bay|Swift_Current|Dawson_Creek)$|^Canada\//, 'CA'],
-  [/^Europe\/(London|Belfast)$|^GB$/, 'GB'],
-  [/^Australia\//, 'AU'],
-  [/^Europe\/(Berlin|Busingen)$/, 'DE'],
-  [/^Europe\/Paris$/, 'FR'],
-  [/^America\/(Sao_Paulo|Fortaleza|Recife|Bahia|Belem|Manaus|Cuiaba|Campo_Grande|Porto_Velho|Boa_Vista|Rio_Branco|Maceio|Araguaina|Santarem|Noronha|Eirunepe)$|^Brazil\//, 'BR'],
-  [/^Asia\/Tokyo$|^Japan$/, 'JP'],
-  [/^Asia\/Seoul$|^ROK$/, 'KR']
-];
-
-/**
- * The country for this device's trending list: from the time zone, else the language
- * (en-GB -> GB), else '' (the server then sends its worldwide mix). (pure, for tests)
- */
-export function detectRegion(timeZone = '', languages = []) {
-  for (const [re, code] of ZONE_COUNTRY) if (re.test(timeZone)) return code;
-  for (const lang of languages) {
-    const m = /^[a-z]{2,3}[-_]([A-Za-z]{2})\b/.exec(String(lang));
-    if (m && REGION_NAMES[m[1].toUpperCase()]) return m[1].toUpperCase();
-  }
-  return '';
-}
-
-function deviceRegion() {
-  let timeZone = '';
-  try { timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* old browser */ }
-  const languages = typeof navigator !== 'undefined' ? (navigator.languages?.length ? navigator.languages : [navigator.language || '']) : [];
-  return detectRegion(timeZone, languages);
-}
-
+/** The country picked in "Trending in…", else worldwide. */
 function chosenRegion() {
   try {
     const picked = localStorage.getItem(REGION_KEY);
     if (picked && REGION_NAMES[picked]) return picked;
   } catch { /* storage blocked */ }
-  return deviceRegion();
+  return GLOBAL_REGION;
 }
 const VIDEO_ID = /^[\w-]{11}$/;
 
