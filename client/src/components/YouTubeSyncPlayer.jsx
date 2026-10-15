@@ -1,18 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { findQuickPickTitle, getQuickPicks, isVideoUnavailable, markVideoUnavailable } from '../utils/quickPicks';
 import QuickPicksBrowser from './QuickPicksBrowser';
+import { resolvePastedLink, PASTE_PLACEHOLDER } from '../features/media/resolveLink';
 
-// Extract YouTube ID from various URL formats or raw 11-char ID
-export function extractYouTubeId(urlOrId) {
-  if (!urlOrId) return null;
-  const trimmed = urlOrId.trim();
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-  const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/live\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
-  const match = trimmed.match(regex);
-  return match ? match[1] : null;
-}
+// (Moved to utils/youtubeId.js so plain modules and tests can use it)
+import { extractYouTubeId } from '../utils/youtubeId';
+export { extractYouTubeId };
 
 export function formatTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
@@ -75,7 +68,9 @@ export default function YouTubeSyncPlayer({
   skipVotes = [],
   peerCount = 0,
   username = '',
-  onOpenQueue
+  onOpenQueue,
+  onPlayLink,   // a pasted Vimeo / Twitch / video-file link: play for everyone
+  onQueueLink   // ...or add it to the queue
 }) {
   const [urlInput, setUrlInput] = useState('');
   const [playerReady, setPlayerReady] = useState(false);
@@ -93,6 +88,7 @@ export default function YouTubeSyncPlayer({
   const [hoverPreview, setHoverPreview] = useState(null);
   const [isDropOver, setIsDropOver] = useState(false);
   const [activeSourceTab, setActiveSourceTab] = useState('youtube'); // 'youtube' | 'local'
+  const [isResolving, setIsResolving] = useState(false);
 
   const playerRef = useRef(null);
   const fullstageRef = useRef(null);
@@ -147,7 +143,8 @@ export default function YouTubeSyncPlayer({
         return {
           videoId: currentVideoIdRef.current,
           currentTime: curTime,
-          isPlaying: state === 1
+          isPlaying: state === 1,
+          isBuffering: state === 3
         };
       });
     }
@@ -478,34 +475,42 @@ export default function YouTubeSyncPlayer({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPlaying, isMuted, volume, durationSec]);
 
-  // 7. Load or Queue YouTube URL
+  // 7. Load or queue a pasted link (YouTube, or any link source: features/media)
+  const resolveInput = async () => {
+    if (isResolving) return null;
+    setIsResolving(true);
+    try {
+      const res = await resolvePastedLink(urlInput);
+      if (res.error) {
+        setInputError(res.error);
+        return null;
+      }
+      setInputError('');
+      setUrlInput('');
+      return res;
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
   const handleLoadUrl = async (e) => {
     if (e) e.preventDefault();
-    const id = extractYouTubeId(urlInput);
-    if (!id) {
-      setInputError('Please enter a valid YouTube link (e.g., https://www.youtube.com/watch?v=...) or 11-char ID');
+    const res = await resolveInput();
+    if (!res) return;
+    if (res.kind === 'media') {
+      onPlayLink?.(res.media);
       return;
     }
-    setInputError('');
-    setUrlInput('');
-    const title = await fetchYouTubeTitle(id);
-    onVideoChange(id, title);
-    onBroadcastAction('load', { newVideoId: id, title });
+    onVideoChange(res.videoId, res.title);
+    onBroadcastAction('load', { newVideoId: res.videoId, title: res.title });
   };
 
   const handleQueueUrl = async (e) => {
     if (e) e.preventDefault();
-    const id = extractYouTubeId(urlInput);
-    if (!id) {
-      setInputError('Please enter a valid YouTube link (e.g., https://www.youtube.com/watch?v=...) or 11-char ID');
-      return;
-    }
-    setInputError('');
-    setUrlInput('');
-    if (typeof onAddToQueue === 'function') {
-      const title = await fetchYouTubeTitle(id);
-      onAddToQueue({ videoId: id, title });
-    }
+    const res = await resolveInput();
+    if (!res) return;
+    if (res.kind === 'media') onQueueLink?.(res.media);
+    else if (typeof onAddToQueue === 'function') onAddToQueue({ videoId: res.videoId, title: res.title });
   };
 
   // YouTube refused the video (100: removed or private; 101/150: owner blocks other sites, or it's
@@ -786,7 +791,7 @@ export default function YouTubeSyncPlayer({
               <input
                 type="text"
                 className="yt-url-input"
-                placeholder="Paste new YouTube link or ID..."
+                placeholder="Paste a new link (YouTube, Vimeo, Twitch, .mp4…)"
                 value={urlInput}
                 onChange={(e) => {
                   setUrlInput(e.target.value);
@@ -885,7 +890,7 @@ export default function YouTubeSyncPlayer({
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
               <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
             </svg>
-            <span>YouTube Video</span>
+            <span>Video Link</span>
           </button>
           <button
             type="button"
@@ -908,9 +913,9 @@ export default function YouTubeSyncPlayer({
                 <path d="M8 5v14l11-7z" />
               </svg>
             </div>
-            <h2 className="yt-hero-title">P2P Synchronized YouTube Watch Party</h2>
+            <h2 className="yt-hero-title">Watch Together, In Sync</h2>
             <p className="yt-hero-subtitle">
-              Paste any YouTube link or select a quick watch preset. The video will immediately load for all peers, and <strong>Play, Pause &amp; Seek</strong> will stay synchronized in real time.
+              Paste a YouTube, Vimeo or Twitch link, or a direct video link (.mp4, .m3u8), or pick a quick watch preset. It loads for everyone, and <strong>Play, Pause &amp; Seek</strong> stay in sync.
             </p>
 
             {/* Clean URL Input Bar */}
@@ -924,7 +929,7 @@ export default function YouTubeSyncPlayer({
                 <input
                   type="text"
                   className="yt-hero-input"
-                  placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...) or ID"
+                  placeholder={PASTE_PLACEHOLDER}
                   value={urlInput}
                   onChange={(e) => {
                     setUrlInput(e.target.value);
@@ -946,7 +951,7 @@ export default function YouTubeSyncPlayer({
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                   <path d="M8 5v14l11-7z" />
                 </svg>
-                <span>Load for All</span>
+                <span>{isResolving ? 'Checking…' : 'Load for All'}</span>
               </button>
             </form>
             {inputError && <div className="yt-url-error">{inputError}</div>}

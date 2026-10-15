@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness  # noqa: E402
 harness.dev()
 harness.signaling()
-import time
+import re, time
 from playwright.sync_api import sync_playwright
 BASE='http://localhost:5199'
 # Stand-in for the YouTube IFrame API: videos in __FAIL raise onError(150) like an embed-blocked
@@ -59,11 +59,11 @@ with sync_playwright() as p:
 
     # 3. A refused video with a queue behind it -> plays the next queued video
     host.get_by_role('button',name='Add video').last.click()
-    host.get_by_placeholder('Paste a YouTube link').fill('https://youtu.be/aqz-KE-bpKQ')
+    host.get_by_placeholder(re.compile('Paste a link')).fill('https://youtu.be/aqz-KE-bpKQ')
     host.get_by_role('button', name='Add to queue').click()
     host.wait_for_timeout(500)
     host.get_by_role('button',name='Add video').last.click()
-    host.get_by_placeholder('Paste a YouTube link').fill('https://youtu.be/dQw4w9WgXcQ')
+    host.get_by_placeholder(re.compile('Paste a link')).fill('https://youtu.be/dQw4w9WgXcQ')
     host.locator('.phone-sheet button[type=submit]').click()
     ok=wait(lambda: host.evaluate('window.__loaded')[-1]=='aqz-KE-bpKQ', 10)
     check('refused link with a queue -> next queued video plays', ok, host.evaluate('window.__loaded')[-3:])

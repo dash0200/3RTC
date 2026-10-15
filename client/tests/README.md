@@ -38,9 +38,12 @@ server you started), stop it: the connection test restarts the server on purpose
 | `queue` | Quick Watch queue buttons, Play queue, browse window, phone sheet |
 | `activities` | start, shared state, late joiner, host lock, close, leave (dev sample activity) |
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
+| `ludo_stack` | phone: tokens sharing a square stay visible, the movable ones on top, tapping one moves exactly that one (rigged dice) |
 | `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
+| `back_button` | phone Back: closes what's open, asks before leaving, never closes a video or game; room code in the address; Rejoin (guest and host); closing the tab mid-video asks |
 | `stream` | sharing a local video: on-demand streaming, seeking, a hard-refreshed viewer |
+| `media_links` | paste anything: video files, HLS, Vimeo, Twitch in sync (computer + phone), late joiner, queue, unplayable links explained, host lock, automatic re-sync (links and YouTube) |
 | `stream_uneven` | a film with an uneven bitrate (heavy first half) plays straight through |
 | `local_video_sync` | local video play / pause / seek sync |
 | `media_session` | lock-screen / headset controls |

@@ -183,6 +183,24 @@ def preview(build=True):
     return PREVIEW
 
 
+MEDIA_SERVER = 'http://localhost:9933'
+
+
+def media_server():
+    """Test media served like a CDN (byte ranges, CORS) on 9933, plus an HLS copy of test_small.mp4."""
+    media('test_small.mp4')
+    hls_dir = MEDIA / 'hls'
+    if not (hls_dir / 'index.m3u8').exists():
+        hls_dir.mkdir(exist_ok=True)
+        subprocess.run([shutil.which('ffmpeg'), '-y', '-loglevel', 'error', '-i', str(MEDIA / 'test_small.mp4'), '-c', 'copy',
+                        '-f', 'hls', '-hls_segment_type', 'fmp4', '-hls_time', '4', '-hls_playlist_type', 'vod',
+                        '-hls_fmp4_init_filename', 'init.mp4', str(hls_dir / 'index.m3u8')], check=True)
+    if not _answers(MEDIA_SERVER + '/__ping'):
+        _spawn(['node', str(HERE / 'fixtures' / 'fake_media.mjs'), str(MEDIA), '9933'], HERE, 'fake_media.log', name='fake_media')
+        _wait_for(MEDIA_SERVER + '/__ping')
+    return MEDIA_SERVER
+
+
 def signaling():
     """The signaling server on 8080."""
     if not _answers('http://localhost:8080/api/quick-picks'):

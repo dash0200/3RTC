@@ -1057,3 +1057,11 @@
 .phone-app .activity-bar-meta { display: none; }
 .phone-app .activity-bar .activity-bar-btn,
 .phone-app .activity-bar .activity-close-btn { padding: 6px 10px; }
+
+/* A link source playing (features/media/LinkPlayer.jsx): 16:9 plus its bar, like YouTube */
+.phone-app .stage-section.stage-phone:has(.link-player) {
+  aspect-ratio: auto;
+  height: calc(100vw * 9 / 16 + 40px);
+  max-height: 58dvh;
+}
+.phone-app .stage-phone .stage-canvas:has(.link-player) { padding: 0; }

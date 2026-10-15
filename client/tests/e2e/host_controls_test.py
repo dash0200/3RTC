@@ -34,7 +34,7 @@ with sync_playwright() as p:
     room = next(m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created')
     phone.goto(f'http://localhost:5199/?room={room}'); phone.wait_for_timeout(1200); phone.get_by_role('button', name='Join room').click()
     wait(lambda: 'P2P' in phone.locator('.phone-status-pill').inner_text(), 15); time.sleep(1.5)
-    host.get_by_placeholder(re.compile('Paste YouTube link')).first.fill('https://youtu.be/aqz-KE-bpKQ'); host.get_by_role('button', name=re.compile('Load for All')).click()
+    host.get_by_placeholder(re.compile('Paste a link')).first.fill('https://youtu.be/aqz-KE-bpKQ'); host.get_by_role('button', name=re.compile('Load for All')).click()
     wait(lambda: st(host) and st(phone), 8); time.sleep(1)
     host.evaluate('window.__user.play()'); wait(lambda: st(phone)['s'] == 1, 6); time.sleep(1.5)
     check('screen kept on while a video is loaded in a room', 'lock' in host.evaluate('window.__wake') and 'lock' in phone.evaluate('window.__wake'), [host.evaluate('window.__wake'), phone.evaluate('window.__wake')])
@@ -52,7 +52,7 @@ with sync_playwright() as p:
     check('guest seek does not move the host', st(host)['t'] < 100, st(host))
     check("guest's player goes back to the host's position", wait(lambda: abs(st(phone)['t'] - st(host)['t']) < 3, 6), f"phone {st(phone)} host {st(host)}")
     # guest tries to change the video from the Add video sheet
-    phone.get_by_role('button', name='Add video').last.click(); phone.get_by_placeholder('Paste a YouTube link').fill('https://youtu.be/dQw4w9WgXcQ')
+    phone.get_by_role('button', name='Add video').last.click(); phone.get_by_placeholder(re.compile('Paste a link')).fill('https://youtu.be/dQw4w9WgXcQ')
     phone.locator('.phone-sheet button[type=submit]').click(); time.sleep(0.5)
     check("guest can't change the video for the host", host.evaluate("window.__yt.o.videoId") == 'aqz-KE-bpKQ')
     check("guest's own video goes back to the host's", wait(lambda: phone.evaluate("window.__yt.o.videoId") == 'aqz-KE-bpKQ', 8), phone.evaluate("window.__yt && window.__yt.o.videoId"))

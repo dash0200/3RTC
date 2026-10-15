@@ -44,15 +44,28 @@ file/video frames on the bulk channel.
 | `yt-request-sync` | – "what are you watching?" (sent on every new channel) |
 | `yt-sync-state` | `videoId, currentTime, isPlaying, queue, skipVotes, activeVideoTitle` or `{ videoId: null, nothingPlaying: true }` |
 | `local-video-sync-state` | `mediaType: 'local', fileName, fileSize, currentTime, isPlaying, subtitleInfo?` |
+| `media-action` | a link source: `action: load \| play \| pause \| seek \| close`, `media?` (load), `currentTime?, fromHost, byVote?` |
+| `media-sync-state` | `media, queue, skipVotes`, and `currentTime, isPlaying` once its player knows them |
+| `media-heartbeat` | `key, currentTime, isPlaying`: from the room's reference app (host, else smallest peer id) every 4 s, for the automatic re-sync (`features/playback/useDriftSync.js`) |
 
-With the host controls lock on, apps drop `yt-action` / `local-video-action` play, pause, seek,
-load and close from guests (`fromHost` false), except `byVote` ones.
+A link source (`media`) is `{ provider: 'vimeo' \| 'twitch' \| 'file' \| 'hls', url, title?, … }`. Apps
+rebuild it from `url` (`normalizeMedia` in `features/media/sources.js`) and never trust the other
+fields. YouTube and local files keep their own types so apps from before link sources still sync
+them; older apps ignore `media-*` (they just don't see link videos).
+
+Someone already watching the same video ignores a `*-sync-state` answer (it comes from a person who
+just joined, whose player may still be at 0:00), except when it undoes a blocked change under the
+host controls lock.
+
+With the host controls lock on, apps drop `yt-action` / `local-video-action` / `media-action` play,
+pause, seek, load and close from guests (`fromHost` false), except `byVote` ones.
 
 ### Queue
 `queue-action` with `action`:
 `add {item}`, `remove {itemId}`, `reorder {queue}`, `clear`, `play-item {itemId}`,
 `next {nextVideoId, nextTitle, remainingQueue}`, `vote-skip {skipVotes}`, `vote-skip-passed`.
-An item is `{ id, videoId, title, addedBy, timestamp }`.
+An item is `{ id, videoId, title, addedBy, timestamp }` (YouTube) or `{ id, media, title, addedBy, timestamp }`
+(a link source; `nextVideoId` is then null).
 
 ### Sharing a local video (`features/playback/useStreamTransfer.js`)
 | type | direction | fields |
