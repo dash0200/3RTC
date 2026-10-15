@@ -42,6 +42,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `ludo` | lobby and rules, a real game (computer + phone), watchers, same board everywhere, a player leaving, taking a seat, late joiner |
 | `ludo_stack` | phone: tokens sharing a square stay visible, the movable ones on top, tapping one moves exactly that one (rigged dice) |
 | `ludo_rejoin` | the host reloads and rejoins (lobby and mid-game): gets the game, its colour back, stays in charge; the guest keeps its colour and gets no host buttons |
+| `ludo_video` | a video starts mid-game: the game becomes a small window on the computer (drag, resize, full size, minimise to a bubble) and a bubble on the phone that pulses "Your turn", opens over the video and goes away on Back; ending the video brings the game back full size |
 | `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
 | `back_button` | phone Back: closes what's open, asks before leaving, never closes a video or game; room code in the address; Rejoin (guest and host); closing the tab mid-video asks |
