@@ -26,7 +26,9 @@ http.createServer((req, res) => {
   if (u.pathname === '/search') {
     if (calls.search >= QUOTA_AFTER) { res.statusCode = 403; return res.end(JSON.stringify({ error: { errors: [{ reason: 'quotaExceeded' }], message: 'quota' } })); }
     calls.search++; calls.queries.push(u.searchParams.get('q'));
-    const ok = u.searchParams.get('videoEmbeddable') === 'true' && u.searchParams.get('type') === 'video' && u.searchParams.get('regionCode') === 'IN';
+    // Rows made for India search as seen from India; the others worldwide (no region)
+    calls.searchRegions = calls.searchRegions || {}; const sr = u.searchParams.get('regionCode') || 'none'; calls.searchRegions[sr] = (calls.searchRegions[sr] || 0) + 1;
+    const ok = u.searchParams.get('videoEmbeddable') === 'true' && u.searchParams.get('type') === 'video';
     if (!ok) { res.statusCode = 400; return res.end('{}'); }
     const base = calls.search * 100;
     const items = Array.from({ length: 14 }, (_, i) => ({ id: { videoId: i < 9 ? id(i + 1) : id(base + i) } }));
@@ -36,8 +38,11 @@ http.createServer((req, res) => {
     if (u.searchParams.get('chart') === 'mostPopular') {
       calls.chart++;
       calls.charts = calls.charts || {}; const cat = u.searchParams.get('videoCategoryId'); calls.charts[cat] = (calls.charts[cat] || 0) + 1;
+      const region = u.searchParams.get('regionCode');
+      calls.chartRegions = calls.chartRegions || {}; calls.chartRegions[region] = (calls.chartRegions[region] || 0) + 1;
       if (cat === '28') { res.statusCode = 404; return res.end(JSON.stringify({ error: { errors: [{ reason: 'videoChartNotFound' }], message: 'chart not found' } })); }
-      const base = 900 + Number(cat) * 10;
+      // Each country's chart has its own videos (vid9xx for India, vid19xx for the US, ...)
+      const base = 900 + Number(cat) * 10 + Math.max(0, ['IN', 'US', 'GB', 'CA', 'AU', 'DE', 'FR', 'BR', 'JP', 'KR'].indexOf(region)) * 1000;
       return res.end(JSON.stringify({ items: [id(3), id(7), id(base), id(base + 1), id(base + 2), id(4), id(9)].map((v) => video(v, 'Trending ' + cat)) }));
       return res.end(JSON.stringify({ items: [id(3), id(900), id(901), id(4)].map((v) => video(v, 'Top hit')) }));
     }

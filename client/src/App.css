@@ -11230,3 +11230,30 @@ video::cue {
   cursor: pointer;
 }
 .chat-link:hover { color: #7fd0f5; }
+
+/* "Trending in" country choice (quick picks) */
+.qp-region {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 0 4px 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+  color: #aab;
+  white-space: nowrap;
+}
+.qp-region select {
+  background: transparent;
+  border: none;
+  color: #e8eaed;
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+.qp-region select:focus-visible { outline: 2px solid #3ea6ff; border-radius: 6px; }
+.qp-region select option { background: #1b1d23; color: #e8eaed; }
+.qp-region.is-phone { margin: 0 0 8px; align-self: flex-start; }
