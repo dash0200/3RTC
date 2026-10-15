@@ -219,3 +219,36 @@ describe('ludo: computers, people who leave, play again', () => {
         assert.equal(s.tokens, null);
     });
 });
+
+// ---- drawing tokens that share a square ----
+import { placeTokens } from '../../src/features/activities/ludo/board.js';
+
+const base = { red: [-1, -1, -1, -1], green: [-1, -1, -1, -1], yellow: [-1, -1, -1, -1], blue: [-1, -1, -1, -1] };
+const at = (list, color, i) => list.find((t) => t.color === color && t.i === i);
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+it('tokens on the same square are spread out so each stays visible', () => {
+    // red 0 and 1 on red's start square, green 0 there too (13 squares behind green's start)
+    const shown = { ...base, red: [0, 0, -1, -1], green: [39, -1, -1, -1] };
+    const placed = placeTokens(shown);
+    const a = at(placed, 'red', 0); const b = at(placed, 'red', 1); const c = at(placed, 'green', 0);
+    for (const [x, y] of [[a, b], [a, c], [b, c]]) {
+        assert.ok(dist(x, y) >= Math.min(x.r, y.r) * 1.4, `centres ${dist(x, y).toFixed(2)} apart, radius ${x.r}`);
+    }
+    assert.ok(a.r < 0.36, 'smaller than a token alone');
+});
+
+it('the tokens you can move are drawn last (on top)', () => {
+    const shown = { ...base, red: [0, 0, -1, -1], green: [39, -1, -1, -1] };
+    const placed = placeTokens(shown, new Set(['red0', 'red1']));
+    const last = placed.slice(-2).map((t) => `${t.color}${t.i}`).sort();
+    assert.deepEqual(last, ['red0', 'red1']);
+    // nothing movable: every token still drawn once
+    assert.equal(placeTokens(shown).length, 16);
+});
+
+it('a token alone keeps its full size and place', () => {
+    const placed = placeTokens({ ...base, red: [5, -1, -1, -1] });
+    const t = at(placed, 'red', 0);
+    assert.equal(t.r, 0.36);
+});

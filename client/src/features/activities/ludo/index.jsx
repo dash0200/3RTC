@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRoom, useSharedState } from '../../../core/RoomContext';
 import { sound } from '../../../utils/sound';
 import { COLORS, COLOR_NAMES, INITIAL, HOME, reducer, seatedColors } from './rules';
-import { TRACK, BASE_ORIGIN, center, coloredSquares, tokenPoint, pathOf } from './board';
+import { TRACK, BASE_ORIGIN, center, coloredSquares, tokenPoint, pathOf, placeTokens } from './board';
 import './ludo.css';
 
 const BOT_DELAY_MS = 900;      // a computer's roll / move
@@ -70,26 +70,9 @@ function useShownTokens(state) {
 function Board({ state, shown, myColor, onMoveToken }) {
     const squares = useMemo(() => coloredSquares(), []);
     const canPick = state.phase === 'playing' && state.rolled && state.turn === myColor;
-    // Tokens on the same point are drawn smaller, side by side
-    const placed = [];
-    if (shown) {
-        const groups = new Map();
-        for (const color of COLORS) {
-            (shown[color] || []).forEach((p, i) => {
-                const pt = tokenPoint(color, i, p);
-                const key = p >= HOME || p === -1 ? `${color}${i}${p}` : pt.join(',');
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push({ color, i, p, pt });
-            });
-        }
-        for (const group of groups.values()) {
-            group.forEach((t, k) => {
-                const n = group.length;
-                const shift = n > 1 ? (k - (n - 1) / 2) * 0.22 : 0;
-                placed.push({ ...t, x: t.pt[0] + shift, y: t.pt[1] - (n > 1 ? 0.05 : 0), r: t.p >= HOME ? 0.17 : n > 1 ? 0.3 : 0.36 });
-            });
-        }
-    }
+    // Tokens sharing a square are spread out; the ones you can move come last (drawn on top)
+    const movableSet = new Set(canPick ? state.movable.map((i) => `${myColor}${i}`) : []);
+    const placed = shown ? placeTokens(shown, movableSet) : [];
     return (
         <svg className="ludo-board" viewBox="0 0 15 15" role="img" aria-label="Ludo board">
             <rect x="0" y="0" width="15" height="15" className="ludo-board-bg" />
@@ -129,7 +112,7 @@ function Board({ state, shown, myColor, onMoveToken }) {
             })}
             {/* tokens */}
             {placed.map(({ color, i, p, x, y, r }) => {
-                const movable = canPick && color === myColor && state.movable.includes(i);
+                const movable = movableSet.has(`${color}${i}`);
                 return (
                     <g
                         key={`${color}${i}`}
@@ -141,7 +124,8 @@ function Board({ state, shown, myColor, onMoveToken }) {
                         data-token={`${color}-${i}`}
                         data-progress={p}
                     >
-                        {movable && <circle r={r + 0.2} className="ludo-token-ring" />}
+                        {movable && <circle r={Math.max(r + 0.22, 0.5)} className="ludo-token-hit" />}
+                        {movable && <circle r={r + (r < 0.3 ? 0.08 : 0.2)} className="ludo-token-ring" />}
                         <circle r={r} className={`ludo-token-body ludo-c-${color}`} />
                         <circle r={r * 0.45} className="ludo-token-dot" />
                     </g>
