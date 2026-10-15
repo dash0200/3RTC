@@ -39,6 +39,43 @@
      "item": "https://3rtc.me/watch-videos-together"
     }
    ]
+  },
+  {
+   "@type": "FAQPage",
+   "mainEntity": [
+    {
+     "@type": "Question",
+     "name": "Is my video uploaded anywhere?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "No. It goes directly from your device to the devices in your room over an encrypted peer-to-peer connection. No server stores or even sees it."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Do my friends need to download the whole file first?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "No. They can start watching within seconds; the video keeps loading just ahead of where you are watching, and jumping to another point fetches that part first."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Which formats work?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "MP4 and WebM play everywhere; MKV plays in Chrome and Edge. What matters most is the video and audio format inside the file: H.264 or VP9 video with AAC or Opus audio is the safest choice. 3RTC checks the file and tells everyone in advance if it won’t play for them."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Can we use the subtitles inside an MKV?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. Text subtitle tracks (SRT, ASS, WebVTT) inside the file are listed on the player, and anyone can pick one for the whole room. Picture-based subtitles (PGS, VobSub) can’t be shown in a browser; use an .srt file instead."
+     }
+    }
+   ]
   }
  ]
 }</script>
@@ -46,7 +83,7 @@
 <body>
 <header class="site-header"><div class="wrap">
 <a class="logo" href="/"><img src="/favicon.svg" alt="" width="30" height="30">3RTC</a>
-<nav class="site-nav" aria-label="Site"><a href="/about">About</a><a href="/youtube-watch-party">YouTube</a><a href="/watch-movies-together">Movies</a><a href="/watch-videos-together" aria-current="page">Your videos</a><a class="btn btn-sm" href="/">Open app</a></nav>
+<nav class="site-nav" aria-label="Site"><a href="/about">About</a><a href="/youtube-watch-party">YouTube</a><a href="/watch-movies-together">Movies</a><a href="/play-ludo-online">Ludo</a><a class="btn btn-sm" href="/">Open app</a></nav>
 </div></header>
 <main class="wrap">
 <p class="eyebrow">Your own videos</p>
@@ -58,7 +95,7 @@
 <h2>How it works</h2>
 <ol class="steps">
 <li>Create a room at <a href="/">3rtc.me</a> and invite up to five friends with the room code.</li>
-<li>Choose a video file (MP4, WebM or MKV) or drag it onto the page.</li>
+<li>Choose a video file (MP4, WebM or MKV) or drag it onto the page. Add subtitles by dropping an .srt file, or pick a track inside the MKV.</li>
 <li>Your friends tap <strong>Stream</strong>. Playback starts within seconds and keeps loading just ahead of where you are watching.</li>
 <li>Play, pause and seek together. Everyone stays on the same frame.</li>
 </ol>
@@ -71,16 +108,26 @@
 <li><strong>Voice and chat</strong><span>Talk and react while you watch.</span></li>
 </ul>
 
+<h2>Subtitles, also from inside the file</h2>
+<p>Drop an .srt or .vtt subtitle file on the player and everyone in the room gets it. MKV files often carry their own subtitle tracks: 3RTC lists them, and anyone can pick one (English, Spanish, …); it is read straight out of the file and shared with the room. Each person can change the subtitle size, colour, background and timing for themselves.</p>
+
+<h2>Will the file play for everyone?</h2>
+<p>As soon as you pick a file, 3RTC reads what’s inside it (MP4, MKV, WebM, the video and audio formats, the audio and subtitle tracks) and checks it on every device in the room. If a friend’s browser can’t play the picture or the sound, they are told before they start, and you see who is affected, so you can switch to another file instead of finding out halfway through the film.</p>
+
 <h2>Tips for smooth playback</h2>
-<p>MP4 files (H.264 video with AAC audio) play in every browser. MKV and other formats play wherever the browser supports the codecs inside them; Chrome and Edge handle the most. Because the video streams from your device, a steady upload connection on your side helps, and keeping 3RTC open in the foreground prevents your device from pausing the stream.</p>
+<p>MP4 files (H.264 video with AAC audio) play in every browser. MKV files play in Chrome and Edge when the video and audio inside are formats they support; files with Dolby Digital (AC-3) or DTS audio play without sound in most browsers, and 3RTC warns about that. Because the video streams from your device, a steady upload connection on your side helps, and keeping 3RTC open in the foreground prevents your device from pausing the stream. In bigger rooms, viewers also pass the parts they already have on to each other, so your upload isn’t shared out six ways; each piece is checked against your original so nothing can be tampered with on the way.</p>
+
+<h2>Questions</h2>
+<details><summary>Is my video uploaded anywhere?</summary><p>No. It goes directly from your device to the devices in your room over an encrypted peer-to-peer connection. No server stores or even sees it.</p></details><details><summary>Do my friends need to download the whole file first?</summary><p>No. They can start watching within seconds; the video keeps loading just ahead of where you are watching, and jumping to another point fetches that part first.</p></details><details><summary>Which formats work?</summary><p>MP4 and WebM play everywhere; MKV plays in Chrome and Edge. What matters most is the video and audio format inside the file: H.264 or VP9 video with AAC or Opus audio is the safest choice. 3RTC checks the file and tells everyone in advance if it won’t play for them.</p></details><details><summary>Can we use the subtitles inside an MKV?</summary><p>Yes. Text subtitle tracks (SRT, ASS, WebVTT) inside the file are listed on the player, and anyone can pick one for the whole room. Picture-based subtitles (PGS, VobSub) can’t be shown in a browser; use an .srt file instead.</p></details>
 
 <div class="related"><h2>Related</h2><ul>
+<li><a href="/watch-movies-together">Plan a movie night online</a></li>
 <li><a href="/youtube-watch-party">Host a YouTube watch party</a></li>
 <li><a href="/about">About 3RTC and FAQ</a></li>
 </ul></div>
 </main>
 <footer class="site-footer"><div class="wrap">
-<nav aria-label="Footer"><a href="/">Open 3RTC</a><a href="/about">About & FAQ</a><a href="/youtube-watch-party">YouTube watch party</a><a href="/watch-movies-together">Watch movies together</a><a href="/watch-videos-together">Watch your own videos together</a><a href="/privacy">Privacy</a></nav>
+<nav aria-label="Footer"><a href="/">Open 3RTC</a><a href="/about">About & FAQ</a><a href="/youtube-watch-party">YouTube watch party</a><a href="/watch-movies-together">Watch movies together</a><a href="/watch-videos-together">Watch your own videos together</a><a href="/watch-links-together">Twitch, Vimeo & video links</a><a href="/play-ludo-online">Play Ludo online</a><a href="/netflix-watch-party">Netflix watch party?</a><a href="/watch2gether-alternative">Watch2Gether alternative</a><a href="/privacy">Privacy</a></nav>
 <p>3RTC · watch videos together, peer to peer</p>
 </div></footer>
 </body>

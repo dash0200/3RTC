@@ -166,15 +166,26 @@ export default function Ludo({ activityId }) {
     const nameOf = (c) => state.seats[c]?.name || COLOR_NAMES[c];
     const seatAway = (c) => state.seats[c] && !state.seats[c].bot && !present.has(state.seats[c].id);
 
-    // The dice animation: on every new roll
+    // The dice animation: on every new roll. The result shows in the roller's colour for a moment
+    // (even when the turn passed straight on, e.g. no move), then the dice takes the colour of
+    // whoever's turn it is, empty until they roll.
     const [rolling, setRolling] = useState(false);
-    const rollSeq = state.event && 'value' in state.event ? state.seq : null;
+    const [showingRoll, setShowingRoll] = useState(false);
+    const lastRoll = state.event && 'value' in state.event ? state.event : null;
+    const rollSeq = lastRoll ? state.seq : null;
     useEffect(() => {
         if (rollSeq === null) return undefined;
         setRolling(true);
+        setShowingRoll(true);
         const t = setTimeout(() => setRolling(false), 450);
-        return () => clearTimeout(t);
+        const t2 = setTimeout(() => setShowingRoll(false), 1600);
+        return () => {
+            clearTimeout(t);
+            clearTimeout(t2);
+        };
     }, [rollSeq]);
+    const diceColor = (showingRoll && lastRoll ? lastRoll.color : state.turn) || null;
+    const diceValue = showingRoll && lastRoll ? lastRoll.value : (state.rolled ? state.dice : null);
 
     // Your turn: a buzz on phones and a chime
     const myTurn = state.phase === 'playing' && state.turn === myColor && !state.rolled;
@@ -223,7 +234,7 @@ export default function Ludo({ activityId }) {
 
                 {state.phase === 'playing' && (
                     <div className="ludo-dice-row">
-                        <Dice value={state.dice} rolling={rolling} color={state.event?.color || state.turn} />
+                        <Dice value={diceValue} rolling={rolling} color={diceColor} />
                         {myTurn ? (
                             <button type="button" className="btn btn-primary ludo-roll-btn" onClick={() => dispatch({ kind: 'roll' })}>Roll</button>
                         ) : (
