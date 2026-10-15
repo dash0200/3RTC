@@ -16,6 +16,7 @@ import {
     getOptionalMicConstraints,
     MIC_PROCESSING
 } from '../utils/audioSettings';
+import { setOutputDevice, onDevicesChanged, resolveDevice } from '../utils/audioDevices';
 
 export function useVoiceChat(ctx) {
     const { addSystemMessage, logLocalDebug, peerMetadata, peersRef, showToast, username } = ctx;
@@ -36,6 +37,8 @@ export function useVoiceChat(ctx) {
     const [voiceIsolationStatus, setVoiceIsolationStatus] = useState(null);
     // Whether the current mic stream was opened with voice isolation requested
     const micIsolationRequestedRef = useRef(false);
+    // The microphone the current mic stream was opened with ('' = system default)
+    const micDeviceRequestedRef = useRef('');
     const [isPttActive, setIsPttActive] = useState(false);
     const audioSettingsRef = useRef(audioSettings);
     const isPttActiveRef = useRef(false);
@@ -149,7 +152,8 @@ export function useVoiceChat(ctx) {
                     Boolean(currentSettings.echoCancellation) === MIC_PROCESSING.echoCancellation &&
                     Boolean(currentSettings.noiseSuppression) === MIC_PROCESSING.noiseSuppression &&
                     Boolean(currentSettings.autoGainControl) === MIC_PROCESSING.autoGainControl &&
-                    micIsolationRequestedRef.current === Boolean(audioSettingsRef.current?.voiceIsolation);
+                    micIsolationRequestedRef.current === Boolean(audioSettingsRef.current?.voiceIsolation) &&
+                    micDeviceRequestedRef.current === (audioSettingsRef.current?.inputDeviceId || '');
 
                 if (!settingsMatch) {
                     micPipeline.teardown();
@@ -163,9 +167,12 @@ export function useVoiceChat(ctx) {
                     await new Promise((r) => setTimeout(r, 60));
 
                     const wantIsolation = Boolean(audioSettingsRef.current?.voiceIsolation);
-                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(currentSettings?.deviceId, { voiceIsolation: wantIsolation }));
+                    const wantDevice = audioSettingsRef.current?.inputDeviceId || '';
+                    const useDevice = await resolveDevice('audioinput', wantDevice, audioSettingsRef.current?.inputDeviceLabel);
+                    stream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(useDevice || undefined, { voiceIsolation: wantIsolation }));
                     localStreamRef.current = stream;
                     micIsolationRequestedRef.current = wantIsolation;
+                    micDeviceRequestedRef.current = wantDevice;
                     await verifyMicProcessing(stream.getAudioTracks()[0], wantIsolation);
                 }
 
@@ -286,8 +293,7 @@ export function useVoiceChat(ctx) {
         try {
             const wasMuted = isMicMutedRef.current;
             const currentStream = localStreamRef.current;
-            const currentTrack = currentStream?.getAudioTracks()[0];
-            const deviceId = currentTrack?.getSettings?.()?.deviceId;
+            const deviceId = enforcedSettings.inputDeviceId || '';
 
             // Disconnect old Web Audio node
             if (localSourceNodeRef.current) {
@@ -321,7 +327,8 @@ export function useVoiceChat(ctx) {
             await new Promise((resolve) => setTimeout(resolve, 80));
 
             const wantIsolation = Boolean(enforcedSettings.voiceIsolation);
-            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(deviceId, { voiceIsolation: wantIsolation }));
+            const useDevice = await resolveDevice('audioinput', deviceId, enforcedSettings.inputDeviceLabel);
+            const newStream = await navigator.mediaDevices.getUserMedia(buildMicConstraints(useDevice || undefined, { voiceIsolation: wantIsolation }));
             const newTrack = newStream.getAudioTracks()[0];
             if (!newTrack) {
                 throw new Error('No audio track returned from microphone');
@@ -329,6 +336,7 @@ export function useVoiceChat(ctx) {
             newTrack.enabled = true;
             localStreamRef.current = newStream;
             micIsolationRequestedRef.current = wantIsolation;
+            micDeviceRequestedRef.current = deviceId;
 
             await verifyMicProcessing(newTrack, wantIsolation);
 
@@ -344,6 +352,34 @@ export function useVoiceChat(ctx) {
             isAudioUpdatingRef.current = false;
         }
     }, [applyVoiceGate, connectLocalMeter, getSendTrack, logLocalDebug, setMicrophoneMuted, showToast, verifyMicProcessing]);
+
+    // Speaker / headphones: everything plays through the chosen one (no need to touch the mic)
+    const selectOutputDevice = useCallback(async (deviceId, label = '') => {
+        const next = { ...audioSettingsRef.current, outputDeviceId: deviceId || '', outputDeviceLabel: deviceId ? label : '' };
+        setAudioSettings(next);
+        audioSettingsRef.current = next;
+        saveAudioSettings(next);
+        const ok = await setOutputDevice(next.outputDeviceId);
+        if (!ok) showToast('⚠️ That speaker isn\'t available: playing through the default one.');
+        return ok;
+    }, [showToast]);
+
+    // The speaker saved last time
+    useEffect(() => {
+        const { outputDeviceId, outputDeviceLabel } = audioSettingsRef.current;
+        if (outputDeviceId) resolveDevice('audiooutput', outputDeviceId, outputDeviceLabel).then((id) => setOutputDevice(id));
+    }, []);
+
+    // A mic unplugged while live: its track ends; carry on with the default one (or the chosen one
+    // when it comes back)
+    const reopenMicRef = useRef(null);
+    reopenMicRef.current = () => {
+        const track = localStreamRef.current?.getAudioTracks()[0];
+        if (isMicMutedRef.current || !track || track.readyState !== 'ended') return;
+        showToast('🎙️ Microphone changed: using the system default.');
+        handleUpdateAudioSettings(audioSettingsRef.current);
+    };
+    useEffect(() => onDevicesChanged(() => setTimeout(() => reopenMicRef.current?.(), 300)), []);
 
     // Push-to-Talk (PTT) Mouse Handlers for button hold
     const handlePttPressStart = useCallback(() => {
@@ -571,6 +607,7 @@ export function useVoiceChat(ctx) {
     }, []);
 
     return {
+        selectOutputDevice,
         isMicMuted,
         setIsMicMuted,
         isAudioBlocked,

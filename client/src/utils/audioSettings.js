@@ -24,7 +24,11 @@ export const DEFAULT_AUDIO_SETTINGS = {
   pttKey: 'Space',   // KeyboardEvent code or key identifier
   pttKeyLabel: 'Space',
   pttReleaseDelay: 200, // Milliseconds to hold open after releasing PTT key
-  pttChime: true        // Sweet tactile audio chirps on push and release
+  pttChime: true,       // Sweet tactile audio chirps on push and release
+  inputDeviceId: '',    // microphone ('' = system default), see utils/audioDevices.js
+  inputDeviceLabel: '', // its name, to find it again if the browser changes its id
+  outputDeviceId: '',   // speaker / headphones ('' = system default)
+  outputDeviceLabel: ''
 };
 
 export const PTT_PRESET_KEYS = [

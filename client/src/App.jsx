@@ -134,7 +134,7 @@ export default function App() {
     const {
         isMicMuted, isAudioBlocked, peerVoiceStates, peerVolumes, localMutedPeers, audioSettings, voiceIsolationStatus,
         isPttActive, isAudioBlockedRef, toggleMicrophone, handleUpdateAudioSettings, handlePttPressStart,
-        handlePttPressEnd, toggleBlockAudio, handleSetPeerVolume, handleToggleMutePeer
+        handlePttPressEnd, toggleBlockAudio, handleSetPeerVolume, handleToggleMutePeer, selectOutputDevice
     } = voice;
 
     const mesh = usePeerMesh({
@@ -647,6 +647,8 @@ export default function App() {
                             onToggleChat={() => setIsChatOpen((prev) => !prev)}
                             audioSettings={audioSettings}
                             onOpenAudioSettings={openAudioSettings}
+                            onUpdateAudioSettings={handleUpdateAudioSettings}
+                            onSelectOutput={selectOutputDevice}
                             isPttActive={isPttActive}
                             peerCount={connectedPeers.length + 1}
                             onOpenSettings={openServerSettings}
@@ -708,6 +710,7 @@ export default function App() {
                 onClose={() => setShowAudioSettingsModal(false)}
                 audioSettings={audioSettings}
                 onUpdateAudioSettings={handleUpdateAudioSettings}
+                onSelectOutput={selectOutputDevice}
                 isMicMuted={isMicMuted}
                 isPttActive={isPttActive}
                 voiceIsolationSupported={micPipeline.isolationSupported}
