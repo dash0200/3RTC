@@ -104,6 +104,20 @@ with sync_playwright() as p:
     check('a watcher never gets the Roll button', rolls_by_others)
     time.sleep(1.5)
     check('everyone sees exactly the same board', same_board([host, phone, watcher]), board(host))
+
+    # Chat while playing: the phone's chat list is hidden behind the game, so new messages pop up on it
+    phone.evaluate("localStorage.removeItem('3rtc_activity_chat')")
+    if phone.locator('.stage-activity.is-chat-split').count():
+        phone.locator('.activity-chat-btn').click()
+    host.get_by_placeholder(re.compile('Type a message')).first.fill('good luck 🎲'); host.keyboard.press('Enter')
+    check('chat pops up over the game on the phone', wait(lambda: 'good luck' in ' '.join(phone.locator('.chat-peek-item').all_inner_texts()), 6))
+    check('the phone game bar counts it', wait(lambda: phone.locator('.activity-chat-badge').inner_text() == '1', 4))
+    phone.locator('.chat-peek-item').first.click()
+    check('tapping it shows the chat below the game (game still there)',
+          wait(lambda: phone.locator('.stage-activity.is-chat-split').count() == 1 and phone.get_by_text('good luck 🎲').count() > 0 and phone.locator('.ludo-board').is_visible(), 4))
+    check('no unread count while the chat is in view', phone.locator('.activity-chat-badge').count() == 0)
+    phone.locator('.activity-chat-btn').click()
+    check('the Chat button brings back the bigger board', wait(lambda: phone.locator('.stage-activity.is-chat-split').count() == 0, 3))
     # its turns come and go (the game would stop at green otherwise)
     check('the computer (green) plays its turns', saw_computer_turn and acted >= 24)
 
