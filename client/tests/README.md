@@ -31,6 +31,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | Suite | Covers |
 |---|---|
 | `connection` | two people: P2P link, bulk channel, voice, speaking ring, chat, signaling restart, ICE restart, rebuild, leaving |
+| `devices` | choosing the microphone and speaker: quick menu by the mic button and Audio settings, the chosen mic used and switched live, voices and new media on the chosen speaker, mic test, remembered after a reload |
 | `chat_attach` | sending an image (desktop and phone) |
 | `youtube_sync` | play / pause / seek sync, computer and phone |
 | `youtube_unavailable` | blocked videos skipped and remembered |

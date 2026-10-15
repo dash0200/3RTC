@@ -1,3 +1,5 @@
+import { routeMediaElement } from '../utils/audioDevices';
+
 /**
  * Remote voice playback for one peer: when the peer's audio track arrives it is played through a
  * hidden <audio> element (the only speaker output) and tapped by an AnalyserNode for the speaking
@@ -33,9 +35,7 @@ export function attachRemoteAudio(pc, ctx) {
         audioEl.srcObject = remoteStream;
         audioEl.muted = effectiveInit === 0;
         audioEl.volume = Math.min(1.0, effectiveInit);
-        if (typeof audioEl.setSinkId === 'function') {
-            audioEl.setSinkId('').catch(() => { });
-        }
+        routeMediaElement(audioEl); // the speaker chosen in Audio settings
 
         // 2. Direct Web Audio API Pipeline (Routes directly to system audio hardware, bypassing Chromium MediaElement sink bugs)
         const connectWebAudioPipeline = (stream) => {

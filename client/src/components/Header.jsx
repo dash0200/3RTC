@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import AudioDevicePicker from './AudioDevicePicker';
 import { MAX_ROOM_SIZE } from '../webrtc/config';
 import { copyToClipboard } from '../utils/clipboard';
 
@@ -20,6 +21,8 @@ export default function Header({
   onToggleChat,
   audioSettings = null,
   onOpenAudioSettings,
+  onUpdateAudioSettings,
+  onSelectOutput,
   isPttActive = false,
   peerCount = 1,
   onOpenSettings,
@@ -31,6 +34,20 @@ export default function Header({
   playbackLock = false
 }) {
   const [copied, setCopied] = useState(false);
+  // Quick device switch (the arrow next to the mic button)
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const devicesRef = useRef(null);
+  useEffect(() => {
+    if (!devicesOpen) return undefined;
+    const onDown = (e) => { if (devicesRef.current && !devicesRef.current.contains(e.target)) setDevicesOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setDevicesOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [devicesOpen]);
 
   const handleCopyClick = async (e) => {
     e.stopPropagation();
@@ -168,6 +185,37 @@ export default function Header({
                 </svg>
                 <span>{isAudioBlocked ? 'Mic Blocked' : isMicMuted ? 'Mic Off' : 'Mic Live'}</span>
               </button>
+            )}
+
+            {typeof onUpdateAudioSettings === 'function' && (
+              <div className="header-devices" ref={devicesRef}>
+                <button
+                  type="button"
+                  className={`header-devices-btn ${devicesOpen ? 'is-open' : ''}`}
+                  onClick={() => setDevicesOpen((o) => !o)}
+                  title="Switch microphone or speaker"
+                  aria-label="Switch microphone or speaker"
+                  aria-expanded={devicesOpen}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg>
+                </button>
+                {devicesOpen && (
+                  <div className="header-devices-menu" role="dialog" aria-label="Audio devices">
+                    <AudioDevicePicker
+                      compact
+                      audioSettings={audioSettings}
+                      onUpdateAudioSettings={onUpdateAudioSettings}
+                      onSelectOutput={onSelectOutput}
+                      isMicLive={!isMicMuted}
+                    />
+                    {typeof onOpenAudioSettings === 'function' && (
+                      <button type="button" className="header-devices-more" onClick={() => { setDevicesOpen(false); onOpenAudioSettings(); }}>
+                        Voice settings & mic test…
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Leave Room Pill */}

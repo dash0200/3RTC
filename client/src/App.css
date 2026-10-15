@@ -11138,3 +11138,78 @@ video::cue {
   .file-notice-row { font-size: 12px; padding: 7px 8px 7px 10px; }
   .file-notice-anchor { top: 6px; left: 6px; right: 6px; }
 }
+
+/* ---- Audio devices: input / output choice (AudioDevicePicker) ---- */
+.audio-device-picker { display: flex; flex-direction: column; gap: 10px; }
+.audio-device-row { display: flex; flex-direction: column; gap: 5px; }
+.audio-device-label { font-size: 0.78rem; font-weight: 600; color: #cbd5e1; }
+.audio-device-select {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8eaed;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.audio-device-select:focus { outline: 2px solid #3ea6ff; outline-offset: 1px; }
+.audio-device-select option { background: #1b1d23; color: #e8eaed; }
+.audio-device-test { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.audio-device-test-btn, .audio-device-names-btn {
+  background: rgba(62, 166, 255, 0.14);
+  border: 1px solid rgba(62, 166, 255, 0.4);
+  color: #cfe8ff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.audio-device-test-btn:hover, .audio-device-names-btn:hover { background: rgba(62, 166, 255, 0.26); }
+.audio-device-test-btn.is-on { background: rgba(255, 82, 82, 0.18); border-color: rgba(255, 82, 82, 0.5); color: #ffd0d0; }
+.audio-device-names-btn { align-self: flex-start; }
+.audio-device-meter { flex: 1; min-width: 120px; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.audio-device-meter-fill { height: 100%; background: linear-gradient(90deg, #00e676, #ffd600 75%, #ff5252); transition: width 60ms linear; }
+.audio-device-note { font-size: 0.74rem; color: #9aa0a6; line-height: 1.35; }
+.audio-device-note.is-warn { color: #ffb74d; }
+
+.header-devices { position: relative; display: flex; align-items: center; margin-left: -4px; }
+.header-devices-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+.header-devices-btn:hover, .header-devices-btn.is-open { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.header-devices-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1000;
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px;
+  border-radius: 12px;
+  background: #1b1d23;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.header-devices-more {
+  background: none;
+  border: none;
+  color: #3ea6ff;
+  font-size: 0.8rem;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+.header-devices-more:hover { text-decoration: underline; }
