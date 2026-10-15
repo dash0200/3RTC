@@ -118,6 +118,8 @@ export default function PhoneHome({ username, initialPin = '', onCreate, onJoin,
           <a href="/youtube-watch-party">YouTube watch party</a>
           <a href="/watch-movies-together">Movie night</a>
           <a href="/watch-videos-together">Your own videos</a>
+          <a href="/watch-links-together">Twitch & Vimeo</a>
+          <a href="/play-ludo-online">Play Ludo</a>
           <a href="/privacy">Privacy</a>
         </nav>
         <p className="build-label">{BUILD_LABEL}</p>
