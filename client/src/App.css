@@ -11380,3 +11380,34 @@ video::cue {
 @media (prefers-reduced-motion: reduce) {
   .activity-bubble.is-attention { animation: none; box-shadow: 0 0 0 4px var(--bubble-ring, #3ea6ff); }
 }
+
+/* A network blocks direct connections (components/NetworkBlockedBanner.jsx): stays until it connects */
+.network-blocked-banner {
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 24px));
+  z-index: 150; /* over the room, under menus' sheets, dialogs and toasts */
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #2a2112;
+  border: 1px solid #a8741a;
+  color: #f6e7c8;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  font-size: 13.5px;
+  line-height: 1.45;
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.network-blocked-icon { font-size: 18px; line-height: 1.2; }
+.network-blocked-text { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.network-blocked-text strong { color: #ffd27a; font-size: 14px; }
+.network-blocked-dismiss {
+  background: none; border: none; color: inherit; opacity: 0.75; cursor: pointer;
+  font-size: 15px; padding: 2px 4px; line-height: 1;
+}
+.network-blocked-dismiss:hover { opacity: 1; }
+.phone-app .network-blocked-banner { top: 58px; }

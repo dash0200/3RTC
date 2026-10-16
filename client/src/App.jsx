@@ -51,6 +51,7 @@ import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 import { useBackLayer, useRoomBackGuard } from './core/backStack';
 import LeaveRoomDialog from './components/LeaveRoomDialog';
 import { saveLastRoom, readLastRoom, forgetLastRoom } from './utils/lastRoom';
+import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
 
 const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
@@ -803,6 +804,7 @@ export default function App() {
                 onLeave={leaveRoomNow}
             />
 
+            {roomId && <NetworkBlockedBanner hint={mesh.networkHint} onDismiss={mesh.dismissNetworkHint} />}
             {notices.toastMessage && <div className="toast">{notices.toastMessage}</div>}
         </div>
         </RoomProvider>
