@@ -5,9 +5,13 @@
  */
 import { RECOVERY } from './config';
 import { tuneSdpForDiscordAudio } from './sdp';
+import { blockedNetworkHint } from './networkHint';
+
+// One blocked-network notice at a time, however many people we can't reach
+let lastBlockedNotice = 0;
 
 export function attachPeerRecovery(pc, ctx) {
-    const { addSystemMessage, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef } = ctx;
+    const { addSystemMessage, setNetworkHint, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef } = ctx;
     // ---- Connection recovery ----
     // Network changes (Wi-Fi <-> mobile data, a dropped Wi-Fi) break the P2P path. The initiator
     // runs an ICE restart over the signaling socket; if that keeps failing it rebuilds the
@@ -37,6 +41,25 @@ export function attachPeerRecovery(pc, ctx) {
         clearTimeout(peerEntry.recoveryTimer);
         peerEntry.recoveryTimer = setTimeout(runRecovery, delayMs);
     };
+
+    // A first connection that doesn't work: most often a network that blocks direct connections
+    // (there's no relay server). Say so plainly, once, and keep trying in the background.
+    const noteBlocked = () => {
+        if (peerEntry.everConnected || peerEntry.blockedNoted) return;
+        peerEntry.blockedNoted = true;
+        if (Date.now() - lastBlockedNotice < 60000) return;
+        lastBlockedNotice = Date.now();
+        const hint = blockedNetworkHint(peerEntry.localCandidateTypes || []);
+        logLocalDebug('NETWORK_BLOCKED', `Peer ${targetPeerId}: no connection (${hint.side}; ours: ${[...(peerEntry.localCandidateTypes || [])].join(',') || 'none'})`);
+        addSystemMessage(hint.message);
+        setNetworkHint?.(hint); // stays on screen (a toast is easy to miss)
+    };
+    const firstTimer = setTimeout(() => {
+        if (!isStillCurrent() || peerEntry.everConnected || pc.connectionState === 'closed' || isHealthy()) return;
+        noteBlocked();
+        if (!peerEntry.recoveryTimer) scheduleRecovery(0);
+    }, RECOVERY.firstConnectMs);
+    peerEntry.cancelFirstTimer = () => clearTimeout(firstTimer);
     peerEntry.scheduleRecovery = scheduleRecovery;
 
     function runRecovery() {
@@ -55,6 +78,7 @@ export function attachPeerRecovery(pc, ctx) {
         if (!peerEntry.isInitiator) {
             // The initiator restarts; give up only if nothing works for a long time
             if (Date.now() - peerEntry.brokenSince > RECOVERY.maxWaitMs) {
+                noteBlocked();
                 cleanupPeer(targetPeerId);
                 setPeerCount(peersRef.current.size + 1);
                 return;
@@ -85,7 +109,15 @@ export function attachPeerRecovery(pc, ctx) {
             logLocalDebug('PEER_REBUILD', `Peer ${targetPeerId}: rebuilding the connection`);
             cleanupPeer(targetPeerId);
             const fresh = getOrCreatePeerConnectionRef.current?.(targetPeerId, true);
-            if (fresh) fresh.rebuilt = true;
+            if (fresh) {
+                fresh.rebuilt = true;
+                fresh.everConnected = peerEntry.everConnected;
+                fresh.blockedNoted = peerEntry.blockedNoted;
+            }
+        } else if (!peerEntry.everConnected) {
+            noteBlocked();
+            cleanupPeer(targetPeerId);
+            setPeerCount(peersRef.current.size + 1);
         } else {
             addSystemMessage('❌ Could not reconnect to a peer. They can rejoin the room to connect again.');
             cleanupPeer(targetPeerId);
@@ -99,6 +131,12 @@ export function attachPeerRecovery(pc, ctx) {
         if (state === 'connected') {
             clearTimeout(peerEntry.recoveryTimer);
             peerEntry.recoveryTimer = null;
+            peerEntry.cancelFirstTimer?.();
+            if (peerEntry.blockedNoted && !peerEntry.everConnected) {
+                addSystemMessage('✅ Connected after all.');
+                setNetworkHint?.(null);
+            }
+            peerEntry.everConnected = true;
             const wasRecovering = peerEntry.wasInterrupted && peerEntry.restartAttempts > 0;
             peerEntry.restartAttempts = 0;
             peerEntry.brokenSince = 0;
@@ -110,6 +148,7 @@ export function attachPeerRecovery(pc, ctx) {
                 showToast('Reconnected');
             }
         } else if (state === 'disconnected' || state === 'failed') {
+            if (state === 'failed') noteBlocked();
             peerEntry.isConnected = false;
             peerEntry.wasInterrupted = true;
             updateP2PStatus();

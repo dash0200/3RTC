@@ -43,6 +43,7 @@ import { useFileFormat } from './features/files/useFileFormat';
 import { useQueue } from './features/queue/useQueue';
 import { useActivities } from './features/activities/useActivities';
 import ActivityStage from './features/activities/ActivityStage';
+import { nextActivityView } from './features/activities/activityHost';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
@@ -50,6 +51,7 @@ import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 import { useBackLayer, useRoomBackGuard } from './core/backStack';
 import LeaveRoomDialog from './components/LeaveRoomDialog';
 import { saveLastRoom, readLastRoom, forgetLastRoom } from './utils/lastRoom';
+import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
 
 const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
@@ -95,11 +97,33 @@ export default function App() {
     const peerIdRef = useRef(crypto.randomUUID());
     const peersRef = useRef(new Map()); // peerId -> peer entry (webrtc/usePeerMesh.js)
     const isHostRef = useRef(false);
+    // Who the host is, as the signaling server says (it knows who made the room). Peers' own claims
+    // are not trusted. undefined: an older server that doesn't say (then the peers' claims are used)
+    const hostPeerIdRef = useRef(undefined);
+    const [hostPeerId, setHostPeerIdState] = useState(undefined);
+    const setHostPeerId = useCallback((id) => {
+        hostPeerIdRef.current = id;
+        setHostPeerIdState(id);
+    }, []);
     const usernameRef = useRef(username);
     usernameRef.current = username;
     const [peerMetadata, setPeerMetadata] = useState({}); // { [peerId]: { username, isHost, isMuted } }
     const peerMetadataRef = useRef(peerMetadata);
     peerMetadataRef.current = peerMetadata;
+    // Keep each peer's stored host flag in line with the server (the host may come back with a new id)
+    useEffect(() => {
+        if (hostPeerId === undefined) return;
+        setPeerMetadata((prev) => {
+            let changed = false;
+            const next = {};
+            for (const [id, meta] of Object.entries(prev)) {
+                const isHostNow = id === hostPeerId;
+                changed = changed || Boolean(meta?.isHost) !== isHostNow;
+                next[id] = Boolean(meta?.isHost) === isHostNow ? meta : { ...meta, isHost: isHostNow };
+            }
+            return changed ? next : prev;
+        });
+    }, [hostPeerId]);
     const roomSettingsRef = useRef(() => ({}));
     const identityFieldsRef = useRef(() => ({}));
 
@@ -114,13 +138,21 @@ export default function App() {
 
     // Stable facade handed to every feature (see core/RoomContext.jsx)
     const room = useMemo(() => {
-        const connectedPeers = () => bus.connectedPeerIds().map((peerId) => ({ peerId, isHost: Boolean(peerMetadataRef.current[peerId]?.isHost) }));
+        const hostKnown = () => hostPeerIdRef.current !== undefined;
+        const isPeerHost = (id) => (id === peerIdRef.current ? isHostRef.current
+            : hostKnown() ? id === hostPeerIdRef.current : Boolean(peerMetadataRef.current[id]?.isHost));
+        const connectedPeers = () => bus.connectedPeerIds().map((peerId) => ({ peerId, isHost: isPeerHost(peerId) }));
         return {
             bus,
             getSelfId: () => peerIdRef.current,
             getSelf: () => ({ peerId: peerIdRef.current, username: usernameRef.current, isHost: isHostRef.current }),
-            isPeerHost: (id) => (id === peerIdRef.current ? isHostRef.current : Boolean(peerMetadataRef.current[id]?.isHost)),
-            getHostPeerId: () => Object.entries(peerMetadataRef.current).find(([, m]) => m?.isHost)?.[0] || null,
+            isPeerHost,
+            // The host among the other people here (null: we are the host, or the host isn't here)
+            getHostPeerId: () => {
+                if (!hostKnown()) return Object.entries(peerMetadataRef.current).find(([, m]) => m?.isHost)?.[0] || null;
+                const id = hostPeerIdRef.current;
+                return id && id !== peerIdRef.current && peerMetadataRef.current[id] ? id : null;
+            },
             peerName: (id) => peerMetadataRef.current[id]?.username || null,
             // The app's stable id (same after a reload or rejoin; the peer id isn't)
             clientIdOf: (id) => (id === peerIdRef.current ? getClientId() : peerMetadataRef.current[id]?.clientId || null),
@@ -141,7 +173,7 @@ export default function App() {
     } = voice;
 
     const mesh = usePeerMesh({
-        bus, peersRef, peerIdRef, isHostRef, setPeerMetadata, username, notices, voice,
+        bus, peersRef, peerIdRef, isHostRef, hostPeerIdRef, setHostPeerId, setPeerMetadata, username, notices, voice,
         identityFields: () => identityFieldsRef.current(),
         signalUrl, fallbackUrls, setSignalStatus, logLocalDebug
     });
@@ -168,12 +200,30 @@ export default function App() {
     const [sidebarTab, setSidebarTab] = useState('chat');
     const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
     const isPhone = useIsPhone();
+    // How the open game is shown here: over the stage, in a small window, or as a bubble
+    // (only on this device; the game itself is the same for everyone). See activityHost.js.
+    const [activityView, setActivityView] = useState('full');
+    const viewMemoRef = useRef({ media: false, key: null });
+    const activityKey = activities.current ? `${activities.current.id}:${activities.current.startedAt}` : null;
+    useEffect(() => {
+        const memo = viewMemoRef.current;
+        setActivityView((view) => nextActivityView({
+            view,
+            mediaActive: isMediaActive,
+            wasMediaActive: memo.media,
+            isPhone,
+            activityOpen: Boolean(activityKey),
+            activityJustOpened: Boolean(activityKey) && activityKey !== memo.key
+        }));
+        viewMemoRef.current = { media: isMediaActive, key: activityKey };
+    }, [isMediaActive, activityKey, isPhone]);
+    const activityAside = Boolean(activities.current) && activityView !== 'full';
     const [activityChatSplit, setActivityChatSplit] = useState(() => {
         try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
     });
     // Unread count: on phones the chat list is on screen when its tab is picked (and, with a game
     // open, when the game's "Chat" view is on); on computers when the chat panel is open
-    const phoneChatOnScreen = sidebarTab === 'chat' && (!activities.current || activityChatSplit);
+    const phoneChatOnScreen = sidebarTab === 'chat' && (!activities.current || activityAside || activityChatSplit);
     const chat = useChat({ room, isChatOpen: isPhone ? phoneChatOnScreen : isChatOpen });
     const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
     const soundboard = useSoundboard({ room, isAudioBlockedRef });
@@ -277,6 +327,8 @@ export default function App() {
     useBackLayer(showNetworkHudModal, () => setShowNetworkHudModal(false));
     useBackLayer(showQrModal, () => setShowQrModal(false));
     useBackLayer(isPhone && activityChatSplit && Boolean(activities.current), () => setActivityChatSplit(false));
+    // Phone, a game open: Back puts the game into its bubble (the game goes on)
+    useBackLayer(isPhone && Boolean(activities.current) && activityView === 'full', () => setActivityView('bubble'));
 
     // The room you were last in: "Rejoin" on the home screen for a while (utils/lastRoom.js)
     const [lastRoom, setLastRoom] = useState(() => readLastRoom());
@@ -285,7 +337,12 @@ export default function App() {
             setLastRoom(readLastRoom());
             return undefined;
         }
-        const save = () => saveLastRoom(roomId, isHost);
+        // (the last token seen: leaving clears it before the final save below)
+        let hostToken = null;
+        const save = () => {
+            hostToken = mesh.getHostToken() || hostToken;
+            saveLastRoom(roomId, isHost, hostToken);
+        };
         save();
         const timer = setInterval(save, 60 * 1000);
         window.addEventListener('pagehide', save);
@@ -298,7 +355,7 @@ export default function App() {
     const rejoin = !roomId && lastRoom ? {
         ...lastRoom,
         onRejoin: () => {
-            if (lastRoom.wasHost) mesh.createRoom(lastRoom.roomId);
+            if (lastRoom.wasHost) mesh.createRoom(lastRoom.roomId, lastRoom.hostToken);
             else mesh.joinRoom(lastRoom.roomId);
         },
         onDismiss: () => {
@@ -353,7 +410,7 @@ export default function App() {
                 id: peerId,
                 peerId,
                 username: meta.username || `Peer ${peerId.slice(0, 4)}`,
-                isHost: Boolean(meta.isHost),
+                isHost: hostPeerId !== undefined ? peerId === hostPeerId : Boolean(meta.isHost),
                 isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceState.isMuted !== undefined ? voiceState.isMuted : true),
                 volume: peerVolumes[peerId] !== undefined ? peerVolumes[peerId] : 1.0,
                 isLocalMuted: Boolean(localMutedPeers[peerId]),
@@ -363,7 +420,7 @@ export default function App() {
         return list;
         // peerCount / isP2PConnected: the peer map itself isn't state
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected]);
+    }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected, hostPeerId]);
 
     const localUser = useMemo(() => (roomId ? {
         id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
@@ -399,7 +456,10 @@ export default function App() {
         } : undefined
     };
     const activitySlot = roomId && activities.current ? (
-        <ActivityStage activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat} />
+        <ActivityStage
+            activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat}
+            view={activityView} onViewChange={setActivityView} isPhone={isPhone} mediaActive={isMediaActive}
+        />
     ) : null;
 
     // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)
@@ -744,6 +804,7 @@ export default function App() {
                 onLeave={leaveRoomNow}
             />
 
+            {roomId && <NetworkBlockedBanner hint={mesh.networkHint} onDismiss={mesh.dismissNetworkHint} />}
             {notices.toastMessage && <div className="toast">{notices.toastMessage}</div>}
         </div>
         </RoomProvider>

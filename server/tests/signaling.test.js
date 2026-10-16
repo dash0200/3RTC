@@ -125,6 +125,112 @@ describe('signaling server', () => {
         guest.close();
     });
 
+    it("refuses someone claiming a peer id that's in use (S1), and keeps routing to its owner", async () => {
+        const host = await connected('h5');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId } = await host.next('room-created');
+        const victim = await connected('victim-5');
+        victim.send({ type: 'join', roomId, peerId: victim.peerId });
+        await victim.next('joined');
+        await host.next('peer-joined');
+        const thief = await connected('victim-5');
+        thief.send({ type: 'join', roomId, peerId: 'victim-5' });
+        assert.equal((await thief.next('error')).code, 'seat-taken');
+        thief.send({ type: 'join', roomId, peerId: 'victim-5', rejoin: true, seatToken: 'v1.0123456789abcdef.9999999999.forged' });
+        assert.equal((await thief.next('error')).code, 'seat-taken');
+        host.send({ type: 'offer', targetId: 'victim-5', offer: { type: 'offer', sdp: 'y' } });
+        assert.equal((await victim.next('offer')).offer.sdp, 'y');
+        for (const c of [host, victim, thief]) c.close();
+    });
+
+    it('lets a peer reclaim its own seat with its seat token (signaling dropped)', async () => {
+        const host = await connected('h6');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId } = await host.next('room-created');
+        const guest = await connected('g6');
+        guest.send({ type: 'join', roomId, peerId: guest.peerId });
+        const { seatToken, hostToken } = await guest.next('joined');
+        assert.ok(seatToken);
+        assert.equal(hostToken, undefined, 'only the host gets the host token');
+        await host.next('peer-joined');
+        const again = await connected('g6'); // the old socket isn't closed yet
+        again.send({ type: 'join', roomId, peerId: 'g6', rejoin: true, seatToken });
+        assert.deepEqual((await again.next('joined')).peers, ['h6']);
+        host.send({ type: 'offer', targetId: 'g6', offer: { type: 'offer', sdp: 'z' } });
+        assert.equal((await again.next('offer')).offer.sdp, 'z');
+        for (const c of [host, guest, again]) c.close();
+    });
+
+    it('resumes a room only with its host token (S9), also with a new peer id', async () => {
+        const host = await connected('h7');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const created = await host.next('room-created');
+        assert.ok(created.hostToken && created.seatToken);
+        const stranger = await connected('s7');
+        stranger.send({ type: 'create-room', roomId: created.roomId, peerId: 's7' });
+        assert.equal((await stranger.next('error')).code, 'resume-denied');
+        // A host token for another room doesn't work either
+        const other = await connected('h7b');
+        other.send({ type: 'create-room', peerId: 'h7b' });
+        const otherRoom = await other.next('room-created');
+        stranger.send({ type: 'create-room', roomId: created.roomId, peerId: 's7', hostToken: otherRoom.hostToken });
+        assert.equal((await stranger.next('error')).code, 'resume-denied');
+        // The host after reloading the page: new peer id, same host token
+        const reloaded = await connected('h7-new');
+        reloaded.send({ type: 'create-room', roomId: created.roomId, peerId: 'h7-new', hostToken: created.hostToken });
+        const resumed = await reloaded.next('room-resumed');
+        assert.equal(resumed.roomId, created.roomId);
+        assert.ok(resumed.hostToken, 'the resumed host gets a fresh host token');
+        for (const c of [host, stranger, other, reloaded]) c.close();
+    });
+
+    it("brings back a closed room only with a seat token for it (a stranger can't make up rooms)", async () => {
+        const host = await connected('h8');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId } = await host.next('room-created');
+        const guest = await connected('g8');
+        guest.send({ type: 'join', roomId, peerId: 'g8' });
+        const { seatToken } = await guest.next('joined');
+        host.close();
+        guest.close();
+        await new Promise((r) => setTimeout(r, 300)); // the room is gone
+        const stranger = await connected('s8');
+        stranger.send({ type: 'join', roomId, peerId: 's8', rejoin: true });
+        assert.equal((await stranger.next('error')).code, 'not-found');
+        stranger.send({ type: 'join', roomId, peerId: 's8', rejoin: true, seatToken });
+        assert.equal((await stranger.next('error')).code, 'not-found', "someone else's seat token doesn't work");
+        const back = await connected('g8');
+        back.send({ type: 'join', roomId, peerId: 'g8', rejoin: true, seatToken });
+        assert.equal((await back.next('joined')).roomId, roomId);
+        for (const c of [stranger, back]) c.close();
+    });
+
+    it('says who the host is (S2): to joiners, and to everyone when the host comes back with a new id', async () => {
+        const host = await connected('h9');
+        host.send({ type: 'create-room', peerId: 'h9' });
+        const created = await host.next('room-created');
+        assert.equal(created.hostPeerId, 'h9');
+        const guest = await connected('g9');
+        guest.send({ type: 'join', roomId: created.roomId, peerId: 'g9' });
+        assert.equal((await guest.next('joined')).hostPeerId, 'h9');
+        const back = await connected('h9-new');
+        back.send({ type: 'create-room', roomId: created.roomId, peerId: 'h9-new', hostToken: created.hostToken });
+        assert.equal((await back.next('room-resumed')).hostPeerId, 'h9-new');
+        assert.equal((await guest.next('host')).hostPeerId, 'h9-new');
+        const late = await connected('l9');
+        late.send({ type: 'join', roomId: created.roomId, peerId: 'l9' });
+        assert.equal((await late.next('joined')).hostPeerId, 'h9-new');
+        for (const c of [host, guest, back, late]) c.close();
+    });
+
+    it('ignores a peer id with unexpected characters (uses its own instead)', async () => {
+        const c = await connected('x');
+        c.send({ type: 'create-room', peerId: '<script>'.repeat(40) });
+        const { peerId } = await c.next('room-created');
+        assert.match(peerId, /^[0-9a-f-]{36}$/);
+        c.close();
+    });
+
     it('serves quick picks with CORS (503 without a YouTube key)', async () => {
         const res = await fetch(`http://localhost:${PORT}/api/quick-picks`);
         assert.equal(res.status, 503);

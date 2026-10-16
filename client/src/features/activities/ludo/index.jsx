@@ -6,6 +6,7 @@
 import { getClientId } from '../../../utils/clientId';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRoom, useSharedState } from '../../../core/RoomContext';
+import { useActivityStatus } from '../activityHost';
 import { sound } from '../../../utils/sound';
 import { COLORS, COLOR_NAMES, INITIAL, HOME, reducer, seatedColors } from './rules';
 import { TRACK, BASE_ORIGIN, center, coloredSquares, tokenPoint, pathOf, placeTokens } from './board';
@@ -153,6 +154,8 @@ function statusText(state, myColor, nameOf) {
     return last + now;
 }
 
+const TURN_COLORS = { red: '#e53935', green: '#2e9e48', yellow: '#f2b705', blue: '#1e7fe0' };
+
 export default function Ludo({ activityId }) {
     const room = useRoom();
     const [state, dispatch] = useSharedState(`act:${activityId}`, { initial: INITIAL, reducer });
@@ -189,6 +192,13 @@ export default function Ludo({ activityId }) {
 
     // Your turn: a buzz on phones and a chime
     const myTurn = state.phase === 'playing' && state.turn === myColor && !state.rolled;
+    // Shrunk to a small window or a bubble: it glows / pulses in your colour when you have a move
+    const needsMe = state.phase === 'playing' && state.turn === myColor && (!state.rolled || state.movable.length > 0);
+    useActivityStatus({
+        attention: needsMe,
+        color: state.phase === 'playing' && state.turn ? TURN_COLORS[state.turn] : '',
+        label: needsMe ? (state.rolled ? 'Move a token' : 'Your turn') : ''
+    });
     useEffect(() => {
         if (!myTurn) return;
         try { navigator.vibrate?.(70); } catch { /* not supported */ }
