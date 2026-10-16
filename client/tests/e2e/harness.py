@@ -358,15 +358,19 @@ def summary():
     sys.exit(0 if _results and all(_results) else 1)
 
 
+# People really connected (peer connections up), whatever the UI looks like: see people(pg). Part of
+# signal_init(); suites with their own init script add it themselves.
+PEOPLE_INIT = ("if(!window.__people){window.__pcs=window.__pcs||[];const __P=window.RTCPeerConnection;if(__P){window.RTCPeerConnection=class extends __P{"
+               "constructor(...a){super(...a);window.__pcs.push(this)}}}"
+               "window.__people=()=>1+window.__pcs.filter(p=>p.connectionState==='connected').length;}")
+
+
 def signal_init(url):
     """Init script: use this signaling server and record what it sends (window.__sig)."""
     return ("localStorage.setItem('webrtc_signal_url', '%s');localStorage.removeItem('3rtc_quick_picks');"
             "window.__sig=[];const __O=window.WebSocket;window.WebSocket=class extends __O{constructor(...a){super(...a);"
             "this.addEventListener('message',e=>{try{window.__sig.push(JSON.parse(e.data))}catch{}})}};"
-            # People really connected (peer connections up), whatever the UI looks like: people(pg)
-            "window.__pcs=[];const __P=window.RTCPeerConnection;if(__P){window.RTCPeerConnection=class extends __P{"
-            "constructor(...a){super(...a);window.__pcs.push(this)}}}"
-            "window.__people=()=>1+window.__pcs.filter(p=>p.connectionState==='connected').length;" % url)
+            % url) + PEOPLE_INIT
 
 
 def people(pg):
@@ -428,3 +432,19 @@ def mic_button(pg):
     if pg.locator('.phone-actionbar').count():
         return pg.locator('.phone-actionbar .phone-action').first
     return pg.locator('.dock-mic-toggle')
+
+
+def stream_pill(pg):
+    """The streamed-video status as text: "Streaming · 42% | <name> · 3.1 MB/s · 60% from viewers"."""
+    return pg.evaluate("""(() => { const p = document.querySelector('.local-file-info-pill.is-streamed');
+        if (!p) { const old = document.querySelector('.local-filesize-text'); return old ? old.innerText : ''; }
+        const label = p.querySelector('.rd-stream-label'); return (label ? label.innerText : '') + ' | ' + (p.title || ''); })()""")
+
+
+def stream_percent(pg):
+    """How much of a streamed video this viewer has (100 once it's all here), or None."""
+    text = stream_pill(pg).split(' | ')[0]
+    if 'Streamed to you' in text:
+        return 100
+    m = re.search(r'(\d+)%', text)
+    return int(m.group(1)) if m else None

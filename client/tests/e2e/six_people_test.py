@@ -75,9 +75,9 @@ with sync_playwright() as p:
     check('voice capped at 64 kbps per connection with 6 people', rates and all(r == 64000 for r in rates), rates)
 
     # local video: owner shares, viewers stream one by one
-    owner.set_input_files('input[accept*="video/mp4"]', harness.media('test_small.mp4'))
+    owner.locator('input[accept*=".mp4"]').first.set_input_files(harness.media('test_small.mp4'))
     for g in guests:
-        btn = g.get_by_role('button', name=re.compile('Stream from Peer'))
+        btn = g.get_by_role('button', name=re.compile('Stream from'))
         wait(lambda: btn.count() > 0, 15); btn.first.click()
         wait(lambda: (vstate(g) or {}).get('rs', 0) >= 2, 25); time.sleep(0.5)
     ready = [(vstate(g) or {}).get('rs', 0) >= 2 for g in guests]
@@ -88,9 +88,7 @@ with sync_playwright() as p:
     check('all viewers play along', played, [vstate(g) for g in guests])
     # Once everyone has (nearly) the whole film: how much of it came from the owner
     def buffered(pg):
-        el = pg.query_selector('.local-filesize-text')
-        m = re.search(r'\((\d+)%', el.inner_text() if el else '')
-        return int(m.group(1)) if m else 0
+        return harness.stream_percent(pg) or 0
     check('every viewer buffers the film', wait(lambda: all(buffered(g) >= 90 for g in guests), 40, 0.5), [buffered(g) for g in guests])
     sent = [pg.evaluate('window.__rng') for pg in pages]
     for g, nm in zip(guests, names[1:]):
@@ -101,7 +99,7 @@ with sync_playwright() as p:
     check("owner's upload is a fraction of the total (no longer 5 copies)", sent[0] < 0.55 * total,
           f"owner {sent[0]/1e6:.1f} MB of {total/1e6:.1f} MB sent in total; per person (MB): {[round(x/1e6,1) for x in sent]}")
 
-    guests[1].locator('.chat-tab-btn', has_text='Peers').first.click(); guests[1].wait_for_timeout(300); guests[1].mouse.move(10, 10)
+    guests[1].locator('.chat-tab-btn', has_text='People').first.click(); guests[1].wait_for_timeout(300); guests[1].mouse.move(10, 10)
     guests[1].screenshot(path=str(harness.OUT / 'six-viewer.png'))
     # a viewer others fetch from leaves mid-video: the rest keep watching
     parents = [i for i, g in enumerate(guests) if sent[i + 1] > 1e6]
@@ -112,7 +110,7 @@ with sync_playwright() as p:
     rest = [g for i, g in enumerate(guests) if i != gone]
     ok = wait(lambda: all((vstate(g) or {}).get('t', 0) > 41.5 and (vstate(g) or {}).get('rs', 0) >= 3 for g in rest), 40, 0.5)
     check(f'{gone_name} (a relay) leaves; everyone else keeps playing after a seek', ok, [vstate(g) for g in rest])
-    owner.locator('.chat-tab-btn', has_text='Peers').first.click(); owner.wait_for_timeout(400)
+    owner.locator('.chat-tab-btn', has_text='People').first.click(); owner.wait_for_timeout(400)
     owner.screenshot(path=str(harness.OUT / 'six-owner.png'))
     b.close()
 print(f"\n{sum(res)}/{len(res)} passed")

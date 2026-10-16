@@ -38,11 +38,11 @@ with sync_playwright() as p:
     phone = dict(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True, device_scale_factor=2)
     host = b.new_context(**phone).new_page(); guest = b.new_context(**phone).new_page()
     for pg in (host, guest):
-        pg.add_init_script(INIT); pg.on('dialog', lambda d: d.accept())
+        pg.add_init_script(INIT); pg.add_init_script(harness.PEOPLE_INIT); pg.on('dialog', lambda d: d.accept())
         pg.on('pageerror', lambda e: print('PAGE ERROR', e))
     host.goto(BASE + '/'); host.wait_for_timeout(1500)
     check('phone home shown', host.locator('.phone-home').count() == 1 and host.locator('.chat-section').count() == 0)
-    host.locator('#phone-name').fill('Darshan')
+    host.locator('#phone-name:visible, #invite-name:visible, #dh-name:visible').first.fill('Darshan')
     shot(host, '01-home')
     host.get_by_role('button', name='Create a room').click()
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None))
@@ -53,13 +53,13 @@ with sync_playwright() as p:
     shot(host, '02-room-empty')
 
     guest.goto(f'{BASE}/?room={room}'); guest.wait_for_timeout(1500)
-    code = ''.join(guest.locator('.phone-code-box').evaluate_all('els => els.map(e => e.value)'))
-    check('code prefilled from shared link', code == room, code)
+    code = guest.locator('.invite-code').inner_text().strip() if guest.locator('.invite-code').count() else ''
+    check('the shared link opens its room (code shown, one Join button)', code == room and guest.get_by_role('button', name='Join room').count() == 1, code)
     check('no desktop join popup on phone', guest.locator('.modal-overlay, .join-modal').count() == 0 or not guest.locator('.modal-overlay').first.is_visible())
-    guest.locator('#phone-name').fill('Riya')
+    guest.locator('#phone-name:visible, #invite-name:visible, #dh-name:visible').first.fill('Riya')
     shot(guest, '03-guest-join')
     guest.get_by_role('button', name='Join room').click()
-    check('guest joined and connected', wait(lambda: host.locator('.phone-status-pill.ok').count() == 1 and 'P2P' in host.locator('.phone-status-pill').inner_text(), 15))
+    check('guest joined and connected', wait(lambda: harness.people(host) >= 2, 15))
 
     for t in ['hey! ready to watch?', '🍿']:
         guest.locator('.chat-pill-textarea').fill(t); guest.locator('.chat-pill-send-btn').click()
@@ -68,18 +68,18 @@ with sync_playwright() as p:
     shot(host, '04-room-chat')
 
     host.get_by_role('button', name='Add video').last.click()
-    check('Add video sheet opens', wait(lambda: host.get_by_role('dialog', name='Add video').is_visible(), 3))
+    check('Add video sheet opens', wait(lambda: host.get_by_role('dialog', name='Add a video').is_visible(), 3))
     shot(host, '05-add-video-sheet')
     with host.expect_file_chooser() as fc:
-        host.get_by_role('button', name='Choose a video file').click()
+        host.get_by_role('button', name=re.compile('Play a video from this device')).click()
     fc.value.set_files(harness.media('test.mp4'))
     check('sheet closes after picking a file', wait(lambda: host.get_by_role('dialog').count() == 0, 3))
     check('host plays local file in the video area', wait(lambda: host.locator('.stage-phone video').count() > 0, 5))
     shot(host, '06-host-local-video')
-    check('guest sees compact stream offer', wait(lambda: guest.locator('.phone-stream-offer').is_visible(), 8))
+    check('guest sees compact stream offer', wait(lambda: guest.get_by_role('button', name=re.compile('Stream from')).first.is_visible(), 8))
     shot(guest, '07-guest-offer')
 
-    for tab, name in (('Queue', '08-queue'), ('Peers', '09-people')):
+    for tab, name in (('Queue', '08-queue'), ('People', '09-people')):
         guest.locator('.chat-tab-btn', has_text=tab).first.click(); shot(guest, name)
     guest.locator('.chat-tab-btn', has_text='Chat').first.click()
 

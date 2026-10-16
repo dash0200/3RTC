@@ -27,13 +27,11 @@ def vstate(pg):
 
 
 def pill(pg):
-    el = pg.query_selector('.local-filesize-text')
-    return el.inner_text() if el else ''
+    return harness.stream_pill(pg)
 
 
 def pct(pg):
-    m = re.search(r'\((\d+)%', pill(pg))
-    return int(m.group(1)) if m else 0
+    return harness.stream_percent(pg) or 0
 
 
 def from_viewers(pg):
@@ -60,7 +58,7 @@ def join_and_stream(pg, room, buffered=95, owner=None):
     pg.goto(f'{BASE}/?room={room}')
     wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10)
     pg.get_by_role('button', name='Join Room').click()
-    btn = pg.get_by_role('button', name=re.compile('Stream from Peer'))
+    btn = pg.get_by_role('button', name=re.compile('Stream from'))
     wait(lambda: btn.count() > 0, 20)
     time.sleep(2)  # the others' "have" announcements arrive
     btn.first.click()
