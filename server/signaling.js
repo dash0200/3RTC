@@ -5,7 +5,10 @@
  */
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { log } from './log.js';
+import { createSeats, loadSecret, newEpoch, isValidPeerId } from './seats.js';
 
 // People per room. Everyone connects directly to everyone (mesh); 6 keeps voice light on each
 // person's upload, and local video files are passed along a relay tree instead of the owner
@@ -18,6 +21,36 @@ export function attachSignaling(server) {
 
   // Map<roomId, Map<peerId, WebSocket>>
   const rooms = new Map();
+  // Map<roomId, { epoch, hostPeerId }>: the room instance (see seats.js) and who is its host
+  const roomInfo = new Map();
+  const seats = createSeats(loadSecret({ dir: path.dirname(fileURLToPath(import.meta.url)) }));
+
+  function openRoom(roomId, epoch, hostPeerId) {
+    rooms.set(roomId, new Map());
+    roomInfo.set(roomId, { epoch, hostPeerId });
+    return rooms.get(roomId);
+  }
+
+  /**
+   * May `ws` sit as `peerId` in this room? A free seat, or one held by this same socket, yes. A seat
+   * held by another live socket only with a seat token for it (a peer reclaiming its own seat after
+   * its signaling dropped): ids are public, so naming one proves nothing.
+   */
+  function maySit(roomId, room, peerId, ws, token) {
+    const holder = room.get(peerId);
+    if (!holder || holder === ws || holder.readyState !== WebSocket.OPEN) return true;
+    return seats.checkSeat(token, roomId, peerId) === roomInfo.get(roomId)?.epoch;
+  }
+
+  /** Seat and host tokens for the client (tokens are only ever sent to their owner). */
+  function tokensFor(roomId, peerId) {
+    const info = roomInfo.get(roomId);
+    if (!info) return {};
+    return {
+      seatToken: seats.seatToken(roomId, info.epoch, peerId),
+      ...(info.hostPeerId === peerId ? { hostToken: seats.hostToken(roomId, info.epoch) } : {})
+    };
+  }
 
   function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN) {
@@ -62,6 +95,7 @@ export function attachSignaling(server) {
 
       if (room.size === 0) {
         rooms.delete(roomId);
+        roomInfo.delete(roomId);
         log('INFO', `Room "${roomId}" closed (empty)`);
       }
     }
@@ -93,27 +127,35 @@ export function attachSignaling(server) {
 
       switch (type) {
         case 'create-room': {
-          // Host reconnecting after a signaling drop asks for its room back by code
+          // The host asks for its room back by code (after a signaling drop, a server restart, or
+          // reloading the page). Only with the room's host token: anyone can name a code.
           const resumeRoomId = typeof data.roomId === 'string' || typeof data.roomId === 'number'
             ? String(data.roomId).trim() : '';
-          if (/^\d{5}$/.test(resumeRoomId) && data.peerId && typeof data.peerId === 'string') {
-            const peerId = data.peerId.trim();
-            if (ws.roomId && ws.roomId !== resumeRoomId) {
-              leaveRoom(ws);
-            }
-            ws.peerId = peerId;
-            let room = rooms.get(resumeRoomId);
-            if (!room) {
-              room = new Map();
-              rooms.set(resumeRoomId, room);
-            } else if (room.size >= MAX_ROOM_USERS && !room.has(peerId)) {
-              safeSend(ws, { type: 'error', message: `Room ${resumeRoomId} is full (maximum ${MAX_ROOM_USERS} people)` });
+          if (/^\d{5}$/.test(resumeRoomId)) {
+            const epoch = seats.checkHost(data.hostToken, resumeRoomId);
+            const existing = roomInfo.get(resumeRoomId);
+            if (!epoch || (existing && existing.epoch !== epoch)) {
+              log('WARN', `Refused to resume room "${resumeRoomId}" (no valid host token)`);
+              safeSend(ws, { type: 'error', code: 'resume-denied', roomId: resumeRoomId, message: `Couldn't get room ${resumeRoomId} back` });
               return;
             }
+            const peerId = isValidPeerId(data.peerId) ? data.peerId : ws.peerId;
+            let room = rooms.get(resumeRoomId) || openRoom(resumeRoomId, epoch, peerId);
+            if (!maySit(resumeRoomId, room, peerId, ws, data.seatToken)) {
+              safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
+              return;
+            }
+            if (room.size >= MAX_ROOM_USERS && !room.has(peerId)) {
+              safeSend(ws, { type: 'error', code: 'room-full', message: `Room ${resumeRoomId} is full (maximum ${MAX_ROOM_USERS} people)` });
+              return;
+            }
+            if (ws.roomId && ws.roomId !== resumeRoomId) leaveRoom(ws);
+            ws.peerId = peerId;
             const previous = room.get(peerId);
             if (previous && previous !== ws) previous.roomId = null; // its close won't remove us
             room.set(peerId, ws);
             ws.roomId = resumeRoomId;
+            roomInfo.get(resumeRoomId).hostPeerId = peerId;
 
             const otherPeers = getOtherPeers(resumeRoomId, peerId);
             log('RESUME', `Peer ${peerId} resumed room "${resumeRoomId}" (Total: ${room.size})`);
@@ -121,7 +163,8 @@ export function attachSignaling(server) {
               type: 'room-resumed',
               roomId: resumeRoomId,
               peerId,
-              peers: otherPeers.map((p) => p.peerId)
+              peers: otherPeers.map((p) => p.peerId),
+              ...tokensFor(resumeRoomId, peerId)
             });
             for (const peer of otherPeers) {
               safeSend(peer.ws, { type: 'peer-joined', peerId });
@@ -129,23 +172,25 @@ export function attachSignaling(server) {
             break;
           }
 
-          // Generate an unused random 5-digit room ID (10000-99999)
+          // A new room: an unused random 5-digit code (10000-99999)
           let generatedRoomId;
           let attempts = 0;
           do {
-            generatedRoomId = String(Math.floor(10000 + Math.random() * 90000));
+            generatedRoomId = String(crypto.randomInt(10000, 100000));
             attempts++;
           } while (rooms.has(generatedRoomId) && attempts < 100);
+          if (rooms.has(generatedRoomId)) {
+            // (only with tens of thousands of rooms open) never take over a room in use
+            safeSend(ws, { type: 'error', code: 'server-busy', message: 'No free room codes right now. Try again in a minute.' });
+            return;
+          }
 
           if (ws.roomId) {
             leaveRoom(ws);
           }
+          if (isValidPeerId(data.peerId)) ws.peerId = data.peerId;
 
-          if (data.peerId && typeof data.peerId === 'string') {
-            ws.peerId = data.peerId.trim();
-          }
-
-          rooms.set(generatedRoomId, new Map([[ws.peerId, ws]]));
+          openRoom(generatedRoomId, newEpoch(), ws.peerId).set(ws.peerId, ws);
           ws.roomId = generatedRoomId;
 
           log('CREATE', `Peer ${ws.peerId} created room "${generatedRoomId}"`);
@@ -154,7 +199,8 @@ export function attachSignaling(server) {
             type: 'room-created',
             roomId: generatedRoomId,
             peerId: ws.peerId,
-            peers: []
+            peers: [],
+            ...tokensFor(generatedRoomId, ws.peerId)
           });
           break;
         }
@@ -172,41 +218,49 @@ export function attachSignaling(server) {
             return;
           }
 
-          // Leave any existing room first
-          if (ws.roomId) {
-            leaveRoom(ws);
-          }
+          const peerId = isValidPeerId(data.peerId) ? data.peerId : ws.peerId;
 
-          // Optional custom peerId provided by client
-          if (data.peerId && typeof data.peerId === 'string') {
-            ws.peerId = data.peerId.trim();
-          }
-
-          // A peer reconnecting after a signaling drop (or server restart) may arrive before the
-          // host does: restore the room instead of turning it away
+          // A peer reconnecting after a server restart may arrive before the host does: it may
+          // bring the room back, with its seat token for it (a stranger can't make up rooms)
           if (!rooms.has(roomId) && data.rejoin === true) {
-            rooms.set(roomId, new Map());
-            log('INFO', `Room "${roomId}" restored by rejoining peer ${ws.peerId}`);
+            const epoch = seats.checkSeat(data.seatToken, roomId, peerId);
+            if (epoch) {
+              openRoom(roomId, epoch, null);
+              log('INFO', `Room "${roomId}" restored by rejoining peer ${peerId}`);
+            }
           }
 
           if (!rooms.has(roomId)) {
             safeSend(ws, {
               type: 'error',
+              code: 'not-found',
               message: `Room "${roomId}" not found. Please verify the 5-digit code or create a room.`
             });
-            log('WARN', `Peer ${ws.peerId} tried to join non-existent room "${roomId}"`);
+            log('WARN', `Peer ${peerId} tried to join non-existent room "${roomId}"`);
             return;
           }
 
           const room = rooms.get(roomId);
+          if (!maySit(roomId, room, peerId, ws, data.seatToken)) {
+            log('WARN', `Refused peer id ${peerId} in room "${roomId}": in use, no seat token`);
+            safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
+            return;
+          }
           // A peer rejoining after a signaling drop already has its seat
-          if (room.size >= MAX_ROOM_USERS && !room.has(ws.peerId)) {
+          if (room.size >= MAX_ROOM_USERS && !room.has(peerId)) {
             safeSend(ws, {
               type: 'error',
+              code: 'room-full',
               message: `Room ${roomId} is full (maximum ${MAX_ROOM_USERS} people)`
             });
             return;
           }
+
+          // Leave any existing room first
+          if (ws.roomId && ws.roomId !== roomId) {
+            leaveRoom(ws);
+          }
+          ws.peerId = peerId;
 
           const previous = room.get(ws.peerId);
           if (previous && previous !== ws) previous.roomId = null; // stale socket: its close won't remove us
@@ -223,7 +277,8 @@ export function attachSignaling(server) {
             type: 'joined',
             roomId,
             peerId: ws.peerId,
-            peers: peerIdsInRoom
+            peers: peerIdsInRoom,
+            ...tokensFor(roomId, ws.peerId)
           });
 
           // Notify other peers about the newcomer

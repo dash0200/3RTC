@@ -71,3 +71,6 @@ quick-picks-cache.json
 # Browser test output (logs, screenshots, generated media)
 client/tests/e2e/.out/
 __pycache__/
+
+# Signaling server secret (production, made on first start)
+.signal-secret

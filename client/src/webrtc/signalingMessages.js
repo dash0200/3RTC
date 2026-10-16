@@ -6,7 +6,15 @@ import { micPipeline } from '../utils/micPipeline';
 import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp';
 
 export async function processSignalingMessage(msg, ctx) {
-    const { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username } = ctx;
+    const { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username } = ctx;
+    // Keep the server's proof of our seat (and of the room, as host) for reconnecting
+    if (roomTokensRef && (msg.type === 'room-created' || msg.type === 'room-resumed' || msg.type === 'joined')) {
+        roomTokensRef.current = {
+            roomId: String(msg.roomId),
+            seat: msg.seatToken || null,
+            host: msg.hostToken || null
+        };
+    }
     switch (msg.type) {
         case 'room-created': {
             setRoomId(msg.roomId);
@@ -240,6 +248,13 @@ export async function processSignalingMessage(msg, ctx) {
         }
 
         case 'error': {
+            if (msg.code === 'resume-denied' && /^\d{5}$/.test(String(msg.roomId || ''))) {
+                // The server wouldn't give us the room back as host (no valid host token: e.g. an
+                // older saved "Rejoin"): join it as a guest instead, if it's still there
+                const tokens = roomTokensRef?.current?.roomId === String(msg.roomId) ? roomTokensRef.current : {};
+                sendSignal({ type: 'join', roomId: String(msg.roomId), peerId: peerIdRef?.current, rejoin: true, ...(tokens.seat ? { seatToken: tokens.seat } : {}) });
+                break;
+            }
             showToast(msg.message || 'Signaling error');
             break;
         }

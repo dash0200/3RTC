@@ -40,6 +40,9 @@ export function usePeerMesh(ctx) {
     const wsRef = useRef(null);
     const pendingSignalsRef = useRef([]);
     const currentRoomRef = useRef(null);
+    // The server's proof of our seat (and, for the host, of the room): sent back when we reconnect,
+    // so nobody else can take our place by naming our peer id (server/seats.js)
+    const roomTokensRef = useRef({ roomId: null, seat: null, host: null });
     currentRoomRef.current = roomId;
     isHostRef.current = isHost;
     const getOrCreatePeerConnectionRef = useRef(null);
@@ -220,13 +223,19 @@ export function usePeerMesh(ctx) {
 
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, {
         addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef,
-        logLocalDebug, peersRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
-    }), [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
+        logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
+    }), [peerIdRef, addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
 
-    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
+    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, roomTokensRef, setSignalStatus, showToast, signalUrl, wsRef });
 
     // With a code: a host coming back gets that room again (the server's resume path)
-    const createRoom = useCallback((resumeRoomId) => sendSignal({ type: 'create-room', peerId: peerIdRef.current, ...(resumeRoomId ? { roomId: String(resumeRoomId) } : {}) }), [peerIdRef, sendSignal]);
+    // (it needs the room's host token: `hostToken`, saved with "Rejoin room" on the home screen)
+    const createRoom = useCallback((resumeRoomId, hostToken) => sendSignal({
+        type: 'create-room', peerId: peerIdRef.current,
+        ...(resumeRoomId ? { roomId: String(resumeRoomId), ...(hostToken ? { hostToken } : {}) } : {})
+    }), [peerIdRef, sendSignal]);
+    /** The host token of the room we're in as host (to save for "Rejoin room"), else null. */
+    const getHostToken = useCallback(() => roomTokensRef.current.host, []);
     const joinRoom = useCallback((pin) => sendSignal({ type: 'join', roomId: pin, peerId: peerIdRef.current }), [peerIdRef, sendSignal]);
 
     /** Leave on purpose: tell the server and every peer, drop all connections, reset features. */
@@ -242,11 +251,12 @@ export function usePeerMesh(ctx) {
         setIsHost(false);
         isHostRef.current = false;
         setPeerCount(0);
+        roomTokensRef.current = { roomId: null, seat: null, host: null };
         bus.emitEvent('room-left');
     }, [bus, isHostRef, peersRef, sendSignal, setPeerMetadata]);
 
     return {
         roomId, isHost, peerCount, isP2PConnected, p2pStatusText,
-        createRoom, joinRoom, leaveRoom, sendSignal
+        createRoom, joinRoom, leaveRoom, sendSignal, getHostToken
     };
 }

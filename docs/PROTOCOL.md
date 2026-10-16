@@ -118,14 +118,30 @@ Keys in use: `activity` (which activity is open: `{ current: { id, startedBy, st
 dice; actions `sit`, `stand`, `add-bot`, `clear-seat`, `rules`, `start`, `roll`, `move`, `auto`,
 `again`, see `features/activities/ludo/rules.js`).
 
-## Signaling messages (`server/server.js`)
+## Signaling messages (`server/signaling.js`)
 
-Browser → server: `create-room {peerId}`, `join {roomId, peerId}`, `leave`,
+Browser → server: `create-room {peerId}`, `create-room {roomId, peerId, hostToken, seatToken?}`
+(the host getting its room back), `join {roomId, peerId, rejoin?, seatToken?}`, `leave`,
 `offer {targetId, offer, fresh?, iceRestart?}`, `answer {targetId, answer}`,
 `ice-candidate {targetId, candidate}` (`candidate` is accepted too), `ping`.
 
-Server → browser: `room-created {roomId}`, `room-resumed {roomId, peers}`, `joined {roomId, peers}`,
+Server → browser: `room-created {roomId, peerId, seatToken, hostToken}`,
+`room-resumed {roomId, peerId, peers, seatToken, hostToken}`, `joined {roomId, peerId, peers, seatToken}`,
 `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
-`pong`, `error {message}`.
+`pong`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`, `room-full`, `not-found`,
+`server-busy`).
+
+**Seats** (`server/seats.js`): peer ids are public (everyone in the room sees them), so naming one
+proves nothing. The server signs a **seat token** (this peer id in this room) and, for the host, a
+**host token** (this room, any peer id), and checks them when someone comes back:
+- a peer id held by another live connection is only given to someone with its seat token (a peer
+  whose signaling dropped reclaims its own seat);
+- `create-room` with a code (resume) needs the room's host token: after a signaling drop, a server
+  restart, or a page reload (new peer id; the app saves the token with "Rejoin room");
+- `join` with `rejoin` brings back a room that's gone (server restart) only with a seat token for it.
+Tokens name the room instance (a random id given at creation), so a token from an earlier room with
+the same code doesn't work on a new one, and they expire after 24 hours. They are signed with the
+server's secret (`SIGNAL_SECRET`, or `.signal-secret` made on first start in production), so they
+survive restarts. The app sends tokens only back to the server, never to peers.
 
 HTTP: `GET /api/quick-picks?region=IN` (cached YouTube picks, CORS open): `{ updatedAt, region, regions, categories }`. Trending rows are that country's charts (`region` is one of `regions`), or a worldwide mix (`region: 'GLOBAL'`) for any other or no country; the app asks for the worldwide mix unless the viewer picked a country in "Trending in".
