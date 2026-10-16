@@ -42,7 +42,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 
 # Everything the server needs on the VM (server.js imports the others)
-SERVER_FILES = ["server.js", "signaling.js", "quickPicks.js", "log.js", "package.json"]
+SERVER_FILES = ["server.js", "signaling.js", "seats.js", "quickPicks.js", "log.js", "package.json"]
 # The systemd unit (installed to /etc/systemd/system/, not /opt/webrtc-server)
 SERVICE_FILE = "webrtc-signaling.service"
 # Only Caddy's ports are public; Node (8080) listens on localhost behind it

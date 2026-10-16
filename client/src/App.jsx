@@ -306,7 +306,12 @@ export default function App() {
             setLastRoom(readLastRoom());
             return undefined;
         }
-        const save = () => saveLastRoom(roomId, isHost);
+        // (the last token seen: leaving clears it before the final save below)
+        let hostToken = null;
+        const save = () => {
+            hostToken = mesh.getHostToken() || hostToken;
+            saveLastRoom(roomId, isHost, hostToken);
+        };
         save();
         const timer = setInterval(save, 60 * 1000);
         window.addEventListener('pagehide', save);
@@ -319,7 +324,7 @@ export default function App() {
     const rejoin = !roomId && lastRoom ? {
         ...lastRoom,
         onRejoin: () => {
-            if (lastRoom.wasHost) mesh.createRoom(lastRoom.roomId);
+            if (lastRoom.wasHost) mesh.createRoom(lastRoom.roomId, lastRoom.hostToken);
             else mesh.joinRoom(lastRoom.roomId);
         },
         onDismiss: () => {

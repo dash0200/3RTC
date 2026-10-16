@@ -204,7 +204,8 @@ def media_server():
 def signaling():
     """The signaling server on 8080."""
     if not _answers('http://localhost:8080/api/quick-picks'):
-        _spawn(['node', 'server.js'], SERVER, 'signaling.log', {'PORT': '8080'}, name='signaling')
+        # A fixed secret, like production's saved one: seat tokens survive restart_signaling()
+        _spawn(['node', 'server.js'], SERVER, 'signaling.log', {'PORT': '8080', 'SIGNAL_SECRET': 'e2e-tests-secret'}, name='signaling')
         _wait_for('http://localhost:8080/api/quick-picks')
     return SIGNAL
 
