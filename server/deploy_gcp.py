@@ -43,14 +43,27 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 # Everything the server needs on the VM (server.js imports the others)
 SERVER_FILES = ["server.js", "signaling.js", "quickPicks.js", "log.js", "package.json"]
+# The systemd unit (installed to /etc/systemd/system/, not /opt/webrtc-server)
+SERVICE_FILE = "webrtc-signaling.service"
+# Only Caddy's ports are public; Node (8080) listens on localhost behind it
+PUBLIC_PORTS = "tcp:80,tcp:443,tcp:8443"
+# The service's own user (not root); it owns /opt/webrtc-server
+SERVICE_USER = "webrtc"
 
 
 def update_command(server_files):
     """Shell command run on the VM: move the uploaded files into place, install new dependencies
-    if package.json changed, restart the service."""
+    if package.json changed, (re)install the service as its own user, restart it. Safe to repeat;
+    it also moves an older VM (service as root, Node open on all interfaces) to the current setup."""
     moves = " && ".join(f"sudo mv /tmp/{f.name} /opt/webrtc-server/{f.name}" for f in server_files)
     return (f"{moves} && cd /opt/webrtc-server"
             " && (sudo npm install --omit=dev --no-audit --no-fund --silent || echo 'npm install failed: keeping the installed modules')"
+            f" && (id -u {SERVICE_USER} >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin {SERVICE_USER})"
+            f" && sudo chown -R {SERVICE_USER}:{SERVICE_USER} /opt/webrtc-server"
+            " && (sudo chmod 600 /opt/webrtc-server/.youtube-api-key 2>/dev/null || true)"
+            f" && sudo mv /tmp/{SERVICE_FILE} /etc/systemd/system/{SERVICE_FILE}"
+            f" && sudo chown root:root /etc/systemd/system/{SERVICE_FILE}"
+            " && sudo systemctl daemon-reload"
             " && sudo systemctl restart webrtc-signaling")
 
 def print_step(title):
@@ -108,7 +121,7 @@ def check_prerequisites():
     # 2. Local signaling server files
     script_dir = Path(__file__).resolve().parent
     server_files = [script_dir / name for name in SERVER_FILES]
-    missing = [f.name for f in server_files if not f.exists()]
+    missing = [f.name for f in [*server_files, script_dir / SERVICE_FILE] if not f.exists()]
     if missing:
         print(f"[ERROR] Missing server files in {script_dir}: {', '.join(missing)}")
         sys.exit(1)
@@ -254,16 +267,18 @@ def ensure_firewall(gcloud):
 
     res = run_cmd([gcloud, "compute", "firewall-rules", "describe", FIREWALL_RULE_NAME], check=False)
     if res.returncode == 0:
-        print(f"[OK] Firewall rule '{FIREWALL_RULE_NAME}' already exists.")
+        # Older deploys also opened 8080 (Node directly, without TLS): close it
+        run_cmd([gcloud, "compute", "firewall-rules", "update", FIREWALL_RULE_NAME, f"--allow={PUBLIC_PORTS}"], capture_output=False)
+        print(f"[OK] Firewall rule '{FIREWALL_RULE_NAME}' allows only {PUBLIC_PORTS} (Caddy).")
         return
 
-    print("Creating firewall rule allowing ports 80, 443, 8443, and 8080...")
+    print("Creating firewall rule allowing ports 80, 443 and 8443 (Caddy)...")
     for attempt in range(1, 4):
         try:
             run_cmd([
                 gcloud, "compute", "firewall-rules", "create", FIREWALL_RULE_NAME,
                 "--network=default",
-                "--allow=tcp:80,tcp:443,tcp:8443,tcp:8080",
+                f"--allow={PUBLIC_PORTS}",
                 f"--target-tags={FIREWALL_TAG}",
                 "--source-ranges=0.0.0.0/0",
                 "--description=Allow incoming traffic for WebRTC signaling server"
@@ -292,6 +307,8 @@ def build_startup_script(server_files):
             b64 = base64.b64encode(f.read().encode("utf-8")).decode("utf-8")
         unpack_lines.append(f'echo "{b64}" | base64 -d > {path.name}')
     unpack = "\n".join(unpack_lines)
+    service_path = Path(server_files[0]).parent / SERVICE_FILE
+    service_b64 = base64.b64encode(service_path.read_bytes()).decode("utf-8")
 
     script = f"""#!/bin/bash
 set -e
@@ -339,26 +356,12 @@ cd /opt/webrtc-server
 echo "[App] Installing npm dependencies..."
 npm install --omit=dev
 
-# 4. Create systemd service for signaling server
-echo "[Systemd] Creating webrtc-signaling service..."
-cat <<'EOF' > /etc/systemd/system/webrtc-signaling.service
-[Unit]
-Description=WebRTC Signaling Server
-After=network.target
+# 4. The service runs as its own unprivileged user, which owns the app folder
+id -u {SERVICE_USER} >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin {SERVICE_USER}
+chown -R {SERVICE_USER}:{SERVICE_USER} /opt/webrtc-server
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/webrtc-server
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=3
-Environment=PORT=8080
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-EOF
+echo "[Systemd] Installing webrtc-signaling service..."
+echo "{service_b64}" | base64 -d > /etc/systemd/system/webrtc-signaling.service
 
 systemctl daemon-reload
 systemctl enable webrtc-signaling
@@ -421,7 +424,7 @@ def deploy_vm(gcloud, zone, server_files):
         if c == "1":
             print(f"\nUploading latest server files to '{instance_name}'...")
             run_cmd([
-                gcloud, "compute", "scp", *[str(f) for f in server_files], f"{instance_name}:/tmp/",
+                gcloud, "compute", "scp", *[str(f) for f in server_files], str(Path(server_files[0]).parent / SERVICE_FILE), f"{instance_name}:/tmp/",
                 f"--zone={zone}", "--quiet"
             ], capture_output=False)
             print("Restarting webrtc-signaling service...")
@@ -521,7 +524,6 @@ def wait_for_ready(external_ip):
     print(f"  App URL (DNS)   : wss://{SIGNAL_DOMAIN}  (A record {SIGNAL_DOMAIN} -> {external_ip})")
     print(f"  Primary WSS URL : {wss_url}")
     print(f"  Alternative WSS : {wss_alt}")
-    print(f"  Plain WS (Port) : ws://{external_ip}:8080")
     print("\n" + "-" * 60)
     print("Details:")
     print(f"  External IP  : {external_ip}")
@@ -535,7 +537,7 @@ def configure_quick_picks(gcloud, zone, instance_name):
 
     The server searches YouTube a few times a day and caches the result for every client, so the
     key is only ever used on the server. It is stored in /opt/webrtc-server/.youtube-api-key,
-    readable only by root, and never embedded in instance metadata or sent to browsers.
+    readable only by the service's own user, and never embedded in instance metadata or sent to browsers.
     """
     print_step("Step 8: YouTube Quick Picks (optional)")
     print("Quick picks can be filled from live YouTube searches instead of the built-in list.")
@@ -563,7 +565,7 @@ def configure_quick_picks(gcloud, zone, instance_name):
         os.remove(local_path)
     run_cmd([
         gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
-        "--command=sudo install -m 600 -o root -g root /tmp/.youtube-api-key /opt/webrtc-server/.youtube-api-key"
+        f"--command=sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} /tmp/.youtube-api-key /opt/webrtc-server/.youtube-api-key"
         " && rm -f /tmp/.youtube-api-key && sudo rm -f /opt/webrtc-server/quick-picks-cache.json"
         " && sudo systemctl restart webrtc-signaling",
         "--quiet"
