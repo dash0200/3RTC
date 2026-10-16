@@ -6,7 +6,7 @@ import { micPipeline } from '../utils/micPipeline';
 import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp';
 
 export async function processSignalingMessage(msg, ctx) {
-    const { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username } = ctx;
+    const { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username } = ctx;
     // Keep the server's proof of our seat (and of the room, as host) for reconnecting
     if (roomTokensRef && (msg.type === 'room-created' || msg.type === 'room-resumed' || msg.type === 'joined')) {
         roomTokensRef.current = {
@@ -14,6 +14,8 @@ export async function processSignalingMessage(msg, ctx) {
             seat: msg.seatToken || null,
             host: msg.hostToken || null
         };
+        // Who the host is, from the server (undefined: an older server that doesn't say)
+        setHostPeerId?.('hostPeerId' in msg ? msg.hostPeerId ?? null : undefined);
     }
     switch (msg.type) {
         case 'room-created': {
@@ -244,6 +246,12 @@ export async function processSignalingMessage(msg, ctx) {
             cleanupPeer(msg.peerId);
             setPeerCount(peersRef.current.size + 1);
             addSystemMessage('A peer disconnected from the room.');
+            break;
+        }
+
+        case 'host': {
+            // The host got the room back (maybe with a new peer id, after reloading)
+            setHostPeerId?.(msg.hostPeerId ?? null);
             break;
         }
 

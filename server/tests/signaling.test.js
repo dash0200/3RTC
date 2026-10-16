@@ -205,6 +205,24 @@ describe('signaling server', () => {
         for (const c of [stranger, back]) c.close();
     });
 
+    it('says who the host is (S2): to joiners, and to everyone when the host comes back with a new id', async () => {
+        const host = await connected('h9');
+        host.send({ type: 'create-room', peerId: 'h9' });
+        const created = await host.next('room-created');
+        assert.equal(created.hostPeerId, 'h9');
+        const guest = await connected('g9');
+        guest.send({ type: 'join', roomId: created.roomId, peerId: 'g9' });
+        assert.equal((await guest.next('joined')).hostPeerId, 'h9');
+        const back = await connected('h9-new');
+        back.send({ type: 'create-room', roomId: created.roomId, peerId: 'h9-new', hostToken: created.hostToken });
+        assert.equal((await back.next('room-resumed')).hostPeerId, 'h9-new');
+        assert.equal((await guest.next('host')).hostPeerId, 'h9-new');
+        const late = await connected('l9');
+        late.send({ type: 'join', roomId: created.roomId, peerId: 'l9' });
+        assert.equal((await late.next('joined')).hostPeerId, 'h9-new');
+        for (const c of [host, guest, back, late]) c.close();
+    });
+
     it('ignores a peer id with unexpected characters (uses its own instead)', async () => {
         const c = await connected('x');
         c.send({ type: 'create-room', peerId: '<script>'.repeat(40) });

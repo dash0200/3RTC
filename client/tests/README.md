@@ -43,6 +43,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `ludo_stack` | phone: tokens sharing a square stay visible, the movable ones on top, tapping one moves exactly that one (rigged dice) |
 | `ludo_rejoin` | the host reloads and rejoins (lobby and mid-game): gets the game, its colour back, stays in charge; the guest keeps its colour and gets no host buttons |
 | `ludo_video` | the game can be minimised any time (phone: button, swipe down, Back; computer: small window, bubble); a video starting mid-game shrinks it by itself: a small window on the computer (drag, resize, full size, minimise) and a bubble on the phone that pulses "Your turn", can be dragged anywhere (snaps to a side) and opens over the video; YouTube's bar doesn't cover the game; ending the video brings it back full size |
+| `host_spoof` | a guest whose app claims to be the host in every message, puts an outside image and a fake transfer card in chat, and tries to lock playback: others show no HOST badge for it, its real name, no outside image (nothing loaded), no lock; the real host can still lock |
 | `room_basics` | reactions (incl. spam and flood limits, combos), soundboard, ping, vote to skip, leaving resets the room |
 | `phone_layout` | phone screens (screenshots in `.out/phone`) |
 | `back_button` | phone Back: closes what's open, asks before leaving, never closes a video or game; room code in the address; Rejoin (guest and host); closing the tab mid-video asks |
