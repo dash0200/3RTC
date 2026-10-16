@@ -11333,10 +11333,12 @@ video::cue {
 .stage-activity.is-bubble { visibility: hidden; pointer-events: none; }
 
 .activity-bubble {
-  position: absolute;
-  right: 16px;
-  bottom: 72px;
-  z-index: 25;
+  /* ActivityBubble.jsx places it on the screen (left/top); it can be dragged anywhere */
+  position: fixed;
+  z-index: 90; /* over the page, under menus, sheets and dialogs */
+  touch-action: none;
+  cursor: grab;
+  transition: left 0.22s ease, top 0.22s ease, transform 0.15s ease;
   width: 58px;
   height: 58px;
   border-radius: 50%;
@@ -11346,11 +11348,12 @@ video::cue {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   padding: 0;
-  transition: transform 0.15s;
 }
 .activity-bubble:hover { transform: scale(1.06); }
+.activity-bubble.is-dragging { transition: none; transform: scale(1.12); cursor: grabbing; }
+/* On the left edge the tag goes on its right */
+.activity-bubble.is-left .activity-bubble-tag { right: auto; left: calc(100% + 10px); }
 .activity-bubble-icon { font-size: 27px; line-height: 1; }
 .activity-bubble.is-attention { animation: activity-bubble-pulse 1.3s ease-out infinite; }
 @keyframes activity-bubble-pulse {

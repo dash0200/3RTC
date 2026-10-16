@@ -11,6 +11,7 @@
  */
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPeek from './ChatPeek';
+import ActivityBubble from './ActivityBubble';
 import { ActivityHostProvider } from './activityHost';
 
 const WINDOW_KEY = '3rtc_activity_window';
@@ -299,17 +300,16 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
             {showPeek && <ChatPeek messages={chat.messages} onOpenChat={isFull ? toggleFull : chat.onOpenChat} />}
         </div>
         {shown === 'bubble' && (
-            <button
-                type="button"
-                className={`activity-bubble ${status.attention ? 'is-attention' : ''}`}
-                style={status.color ? { '--bubble-ring': status.color } : undefined}
-                onClick={reopen}
-                aria-label={bubbleLabel}
-                title={bubbleLabel}
-            >
-                <span className="activity-bubble-icon" aria-hidden="true">{definition.icon}</span>
-                {status.attention && status.label && <span className="activity-bubble-tag" aria-hidden="true">{status.label}</span>}
-            </button>
+            <ActivityBubble
+                icon={definition.icon}
+                label={bubbleLabel}
+                tag={status.attention ? status.label : ''}
+                attention={status.attention}
+                color={status.color}
+                isPhone={isPhone}
+                anchorRef={rootRef}
+                onOpen={reopen}
+            />
         )}
         </>
     );
