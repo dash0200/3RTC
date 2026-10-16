@@ -7,7 +7,8 @@ layer (`webrtc/`), and older app versions in the same room keep working.
 
 The room opens one activity at a time over the stage; videos keep playing underneath. When a
 video is playing, each person can shrink the activity: to a small window over the video on a
-computer (draggable, resizable) or to a bubble (phones, or Minimise). It starts that way when a
+computer (draggable, resizable) or to a bubble (phones, or Minimise) that can be dragged anywhere
+on the screen and docks to the nearest side. It starts that way when a
 video starts, and goes back to full size when the video ends. The component stays mounted in every
 view, so its effects (computer players, timers) keep running; keep its layout fluid down to 300 px
 wide (`.stage-activity.is-window` in your CSS for anything to hide in the small window).

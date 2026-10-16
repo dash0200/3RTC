@@ -42,3 +42,23 @@ export function nextActivityView({ view, mediaActive, wasMediaActive, isPhone, a
     if (isPhone && view === 'window') return 'bubble'; // (no small window on phones)
     return view;
 }
+
+// ---- The bubble's place on the screen (ActivityBubble.jsx) ----
+
+export const BUBBLE_EDGE = 10; // gap to the screen edge
+const EDGE = BUBBLE_EDGE;
+
+/** (pure) where a bubble of `size` goes for a saved spot in a `w` x `h` screen */
+export function bubbleXY(spot, size, w, h) {
+    const maxY = Math.max(EDGE, h - size - EDGE);
+    return {
+        x: spot.side === 'left' ? EDGE : Math.max(EDGE, w - size - EDGE),
+        y: Math.min(maxY, Math.max(EDGE, spot.y * h))
+    };
+}
+
+/** (pure) the spot to keep when a drag ends with the bubble's top-left at x, y */
+export function snapSpot(x, y, size, w, h) {
+    const maxY = Math.max(EDGE, h - size - EDGE);
+    return { side: x + size / 2 < w / 2 ? 'left' : 'right', y: Math.min(maxY, Math.max(EDGE, y)) / Math.max(1, h) };
+}

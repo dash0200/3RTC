@@ -1067,9 +1067,7 @@
 .phone-app .stage-phone .stage-canvas:has(.link-player) { padding: 0; }
 
 /* The game as a bubble over the video (phones) */
-/* Middle of the right edge on a phone: the video's title bar (Exit Video) is at the top and its
-   own controls at the bottom */
-.phone-app .activity-bubble { right: 10px; top: 50%; bottom: auto; transform: translateY(-50%); width: 50px; height: 50px; }
+.phone-app .activity-bubble { width: 50px; height: 50px; }
 .phone-app .activity-bubble-icon { font-size: 23px; }
 
 /* Game open over a video: it can be swiped down (the handle on its bar hints at it) */
