@@ -25,7 +25,7 @@ const WAITING_TEXT = 'Waiting for peer to enter 5-digit code...';
 
 export function usePeerMesh(ctx) {
     const {
-        bus, peersRef, peerIdRef, isHostRef, setPeerMetadata, username, notices, identityFields,
+        bus, peersRef, peerIdRef, isHostRef, hostPeerIdRef, setHostPeerId, setPeerMetadata, username, notices, identityFields,
         voice, signalUrl, fallbackUrls, setSignalStatus, logLocalDebug
     } = ctx;
     const { addSystemMessage, showToast } = notices;
@@ -178,7 +178,7 @@ export function usePeerMesh(ctx) {
                 bus.emitEvent('peer-open', targetPeerId);
             };
 
-            dc.onmessage = createPeerMessageHandler({ bus, cleanupPeer, dc, getIdentity, isAudioBlockedRef, isStillCurrent, peerEntry, peersRef, setPeerCount, setPeerMetadata, setPeerVoiceStates, targetPeerId });
+            dc.onmessage = createPeerMessageHandler({ bus, cleanupPeer, dc, getIdentity, hostPeerIdRef, isAudioBlockedRef, isStillCurrent, peerEntry, peersRef, setPeerCount, setPeerMetadata, setPeerVoiceStates, targetPeerId });
 
             dc.onclose = () => {
                 bus.emitEvent('channel-close', targetPeerId);
@@ -223,8 +223,8 @@ export function usePeerMesh(ctx) {
 
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, {
         addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef,
-        logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
-    }), [peerIdRef, addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
+        logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
+    }), [peerIdRef, setHostPeerId, addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
 
     useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, roomTokensRef, setSignalStatus, showToast, signalUrl, wsRef });
 
@@ -252,8 +252,9 @@ export function usePeerMesh(ctx) {
         isHostRef.current = false;
         setPeerCount(0);
         roomTokensRef.current = { roomId: null, seat: null, host: null };
+        setHostPeerId?.(undefined);
         bus.emitEvent('room-left');
-    }, [bus, isHostRef, peersRef, sendSignal, setPeerMetadata]);
+    }, [bus, isHostRef, peersRef, sendSignal, setHostPeerId, setPeerMetadata]);
 
     return {
         roomId, isHost, peerCount, isP2PConnected, p2pStatusText,

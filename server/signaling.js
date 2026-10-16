@@ -42,6 +42,11 @@ export function attachSignaling(server) {
     return seats.checkSeat(token, roomId, peerId) === roomInfo.get(roomId)?.epoch;
   }
 
+  /** Who is the host (the peer that created the room, or got it back with its host token). The
+   *  apps trust this, not what a peer says about itself. null: not known (room brought back by a
+   *  guest after a restart, until the host returns). */
+  const hostOf = (roomId) => roomInfo.get(roomId)?.hostPeerId ?? null;
+
   /** Seat and host tokens for the client (tokens are only ever sent to their owner). */
   function tokensFor(roomId, peerId) {
     const info = roomInfo.get(roomId);
@@ -164,9 +169,11 @@ export function attachSignaling(server) {
               roomId: resumeRoomId,
               peerId,
               peers: otherPeers.map((p) => p.peerId),
+              hostPeerId: peerId,
               ...tokensFor(resumeRoomId, peerId)
             });
             for (const peer of otherPeers) {
+              safeSend(peer.ws, { type: 'host', hostPeerId: peerId });
               safeSend(peer.ws, { type: 'peer-joined', peerId });
             }
             break;
@@ -200,6 +207,7 @@ export function attachSignaling(server) {
             roomId: generatedRoomId,
             peerId: ws.peerId,
             peers: [],
+            hostPeerId: ws.peerId,
             ...tokensFor(generatedRoomId, ws.peerId)
           });
           break;
@@ -278,6 +286,7 @@ export function attachSignaling(server) {
             roomId,
             peerId: ws.peerId,
             peers: peerIdsInRoom,
+            hostPeerId: hostOf(roomId),
             ...tokensFor(roomId, ws.peerId)
           });
 

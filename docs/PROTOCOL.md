@@ -125,9 +125,10 @@ Browser → server: `create-room {peerId}`, `create-room {roomId, peerId, hostTo
 `offer {targetId, offer, fresh?, iceRestart?}`, `answer {targetId, answer}`,
 `ice-candidate {targetId, candidate}` (`candidate` is accepted too), `ping`.
 
-Server → browser: `room-created {roomId, peerId, seatToken, hostToken}`,
-`room-resumed {roomId, peerId, peers, seatToken, hostToken}`, `joined {roomId, peerId, peers, seatToken}`,
-`peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
+Server → browser: `room-created {roomId, peerId, hostPeerId, seatToken, hostToken}`,
+`room-resumed {roomId, peerId, peers, hostPeerId, seatToken, hostToken}`,
+`joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId}` (the host got the room back,
+maybe with a new peer id), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
 `pong`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`, `room-full`, `not-found`,
 `server-busy`).
 
@@ -143,5 +144,13 @@ Tokens name the room instance (a random id given at creation), so a token from a
 the same code doesn't work on a new one, and they expire after 24 hours. They are signed with the
 server's secret (`SIGNAL_SECRET`, or `.signal-secret` made on first start in production), so they
 survive restarts. The app sends tokens only back to the server, never to peers.
+
+**Who is the host** comes from the server (`hostPeerId`: whoever made the room or got it back with
+its host token; `null` when not known, e.g. a room brought back by a guest until the host returns).
+Apps don't trust what a peer says about itself: `isHost` in any peer message is replaced on arrival
+with "is this connection the server's host" (`webrtc/peerMessages.js`), so the HOST badge, host
+controls and the shared-state tiebreak can't be claimed. Chat and image messages take the sender's
+name and host flag from the connection and keep only their own fields; names from peers are cleaned
+(`utils/names.js`). With an older server that doesn't send `hostPeerId`, peers' claims are used.
 
 HTTP: `GET /api/quick-picks?region=IN` (cached YouTube picks, CORS open): `{ updatedAt, region, regions, categories }`. Trending rows are that country's charts (`region` is one of `regions`), or a worldwide mix (`region: 'GLOBAL'`) for any other or no country; the app asks for the worldwide mix unless the viewer picked a country in "Trending in".

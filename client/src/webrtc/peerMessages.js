@@ -7,8 +7,25 @@
  * (core/roomBus.js). Binary frames go to the bus's binary handlers (chat images, video stream).
  */
 
+import { cleanName } from '../utils/names';
+
+/**
+ * What a peer's message says about who sent it is checked here, once for every feature: `isHost`
+ * comes from the signaling server (who made the room), not the sender; names are cleaned.
+ */
+export function normalizeSender(data, fromPeerId, hostPeerIdRef) {
+    if ('isHost' in data) {
+        const hostId = hostPeerIdRef?.current;
+        data.isHost = hostId !== undefined ? fromPeerId === hostId : Boolean(data.isHost);
+    }
+    if ('sender' in data) data.sender = cleanName(data.sender) || undefined;
+    if (data.type === 'peer-identity' || data.type === 'peer-voice-status') {
+        if ('username' in data) data.username = cleanName(data.username) || undefined;
+    }
+}
+
 export function createPeerMessageHandler(ctx) {
-    const { bus, cleanupPeer, dc, getIdentity, isAudioBlockedRef, isStillCurrent, peerEntry, peersRef, setPeerCount, setPeerMetadata, setPeerVoiceStates, targetPeerId } = ctx;
+    const { bus, cleanupPeer, dc, getIdentity, hostPeerIdRef, isAudioBlockedRef, isStillCurrent, peerEntry, peersRef, setPeerCount, setPeerMetadata, setPeerVoiceStates, targetPeerId } = ctx;
 
     const handleCore = (data) => {
         if (data.type === 'peer-bye') {
@@ -77,7 +94,8 @@ export function createPeerMessageHandler(ctx) {
         } catch {
             return; // not ours
         }
-        if (!data || typeof data.type !== 'string') return;
+        if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+        normalizeSender(data, targetPeerId, hostPeerIdRef);
         if (handleCore(data)) bus.dispatch(data, targetPeerId);
     };
 }
