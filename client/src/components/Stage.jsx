@@ -31,7 +31,6 @@ export default function Stage({
   onLeaveRoom,
   onToggleChat,
   isChatOpen = false,
-  chatCount = 0,
   unreadChatCount = 0,
   activeVideoId,
   activeMedia = null,  // a link source (Vimeo, Twitch, a video file...): features/media
@@ -255,7 +254,7 @@ export default function Stage({
           <div className="stage-overlay">
             <div className="stage-card">
               <div className="stage-logo-ring">
-                <svg viewBox="0 0 24 24" width="48" height="48" fill="#FF0033">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="#e5143d">
                   <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" />
                 </svg>
               </div>
@@ -480,7 +479,9 @@ export default function Stage({
           {/* 1. Mic Button */}
           <button
             type="button"
-            className={`circle-action-btn ${isMicMuted ? 'muted' : 'active'}`}
+            className={`circle-action-btn dock-mic ${isMicMuted ? 'muted' : 'active'}`}
+            aria-pressed={roomId ? !isMicMuted : undefined}
+            aria-label={isPttMode ? 'Push to talk' : isMicMuted ? 'Turn microphone on' : 'Turn microphone off'}
             onClick={roomId ? (isPttMode ? onOpenAudioSettings : onToggleMic) : undefined}
             onMouseDown={roomId && isPttMode ? onPttPressStart : undefined}
             onMouseUp={roomId && isPttMode ? onPttPressEnd : undefined}
@@ -510,12 +511,17 @@ export default function Stage({
                 <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
               </svg>
             )}
+            <span className="dock-mic-label" aria-hidden="true">
+              {isPttMode ? (isPttActive ? 'Talking' : `Hold ${audioSettings?.pttKeyLabel || 'Space'}`) : isAudioBlocked ? 'Mic blocked' : isMicMuted ? 'Mic off' : 'Mic on'}
+            </span>
           </button>
 
           {/* 2. Audio Block / Deafen Button */}
           <button
             type="button"
             className={`circle-action-btn ${isAudioBlocked ? 'blocked' : ''}`}
+            aria-pressed={isAudioBlocked}
+            aria-label={isAudioBlocked ? 'Hear everyone again' : 'Deafen: stop hearing everyone'}
             onClick={roomId ? onToggleBlockAudio : undefined}
             title={
               !roomId
@@ -536,20 +542,6 @@ export default function Stage({
               </svg>
             )}
           </button>
-
-          {/* 3. Leave Room Button (Red Circle) */}
-          {roomId && (
-            <button
-              type="button"
-              className="circle-action-btn danger-leave"
-              onClick={onLeaveRoom}
-              title="Leave Room"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z" />
-              </svg>
-            </button>
-          )}
 
           {/* 4. Soundboard Button (SFX Tray) */}
           {roomId && (
@@ -572,6 +564,8 @@ export default function Stage({
               <button
                 type="button"
                 className={`circle-action-btn ${isSoundboardOpen ? 'active' : ''}`}
+                aria-label="Soundboard"
+                aria-expanded={isSoundboardOpen}
                 onClick={() => setIsSoundboardOpen((prev) => !prev)}
                 title="Soundboard SFX (Airhorn, Ba-Dum-Tss, Tada...)"
               >
@@ -587,14 +581,16 @@ export default function Stage({
             type="button"
             className={`circle-action-btn ${isChatOpen ? 'active' : ''}`}
             onClick={onToggleChat}
-            title={isChatOpen ? "Close Live Chat" : `Open Live Chat${(unreadChatCount || chatCount) > 0 ? ` (${unreadChatCount || chatCount} new)` : ''}`}
+            aria-pressed={isChatOpen}
+            aria-label={isChatOpen ? 'Hide chat' : `Show chat${unreadChatCount > 0 ? ` (${unreadChatCount} unread)` : ''}`}
+            title={isChatOpen ? 'Hide chat' : `Show chat${unreadChatCount > 0 ? ` (${unreadChatCount} unread)` : ''}`}
           >
             <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
             </svg>
-            {!isChatOpen && (unreadChatCount || chatCount) > 0 && (
-              <span className="circle-badge">
-                {(unreadChatCount || chatCount) > 99 ? '99+' : (unreadChatCount || chatCount)}
+            {!isChatOpen && unreadChatCount > 0 && (
+              <span className="circle-badge" aria-hidden="true">
+                {unreadChatCount > 99 ? '99+' : unreadChatCount}
               </span>
             )}
           </button>
@@ -604,6 +600,9 @@ export default function Stage({
             <button
               type="button"
               className={`circle-action-btn ${isMoreMenuOpen ? 'active' : ''}`}
+              aria-label="More options"
+              aria-haspopup="menu"
+              aria-expanded={isMoreMenuOpen}
               onClick={() => setIsMoreMenuOpen((prev) => !prev)}
               title="More options & reactions"
             >
@@ -623,7 +622,7 @@ export default function Stage({
                   }}
                 >
                   <span className="dropdown-item-icon">🎙️</span>
-                  <span>Audio & Mic Settings</span>
+                  <span>Voice settings</span>
                 </button>
                 <button
                   type="button"
@@ -634,7 +633,7 @@ export default function Stage({
                   }}
                 >
                   <span className="dropdown-item-icon">📊</span>
-                  <span>Network HUD Diagnostics</span>
+                  <span>Connection details</span>
                 </button>
                 <button
                   type="button"
@@ -645,7 +644,7 @@ export default function Stage({
                   }}
                 >
                   <span className="dropdown-item-icon">📱</span>
-                  <span>Mobile Join QR Code</span>
+                  <span>Invite with QR code</span>
                 </button>
                 {roomId && (isHost ? (
                   <button
@@ -715,6 +714,11 @@ export default function Stage({
               </div>
             )}
           </div>
+          {roomId && (
+            <button type="button" className="dock-leave-btn" onClick={onLeaveRoom}>
+              Leave
+            </button>
+          )}
         </div>
       </div>
       )}

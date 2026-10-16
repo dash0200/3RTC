@@ -615,7 +615,7 @@
 }
 
 .room-log-item.log-cat-video {
-  border-left: 2px solid #ff0033;
+  border-left: 2px solid #e5143d;
 }
 
 .room-log-item.log-cat-playback {
@@ -1384,7 +1384,7 @@
 
 .yt-ctrl-btn.exit-video-btn:hover {
   background: rgba(255, 0, 51, 0.28);
-  border-color: #ff0033;
+  border-color: #e5143d;
   color: #ffffff;
   box-shadow: 0 0 10px rgba(255, 0, 51, 0.35);
 }
@@ -2587,7 +2587,7 @@
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.8px;
-  color: var(--accent-red, #FF0033);
+  color: var(--accent-red, #e5143d);
   text-transform: uppercase;
 }
 
@@ -2595,7 +2595,7 @@
 .equalizer-bar {
   display: inline-block;
   width: 3px;
-  background: var(--accent-red, #FF0033);
+  background: var(--accent-red, #e5143d);
   border-radius: 2px;
   animation: eqBounce 1.2s infinite ease-in-out alternate;
 }
@@ -2776,7 +2776,7 @@
 }
 
 .queue-add-input:focus {
-  border-color: var(--accent-red, #FF0033);
+  border-color: var(--accent-red, #e5143d);
   background: rgba(255, 255, 255, 0.08);
   box-shadow: 0 0 0 2px rgba(255, 0, 51, 0.2);
 }
@@ -8328,7 +8328,7 @@ video::cue {
 .yt-hero-icon-box {
   width: 54px;
   height: 40px;
-  background: #ff0033;
+  background: #e5143d;
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -8373,7 +8373,7 @@ video::cue {
 }
 
 .yt-hero-form:focus-within {
-  border-color: #ff0033;
+  border-color: #e5143d;
   box-shadow: 0 0 0 2px rgba(255, 0, 51, 0.25);
 }
 
@@ -8645,7 +8645,7 @@ video::cue {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
-  accent-color: #ff0033;
+  accent-color: #e5143d;
   transition: background 0.15s ease;
 }
 
@@ -8693,7 +8693,7 @@ video::cue {
 
 .yt-screen-scrubber-fill {
   height: 100%;
-  background: #ff0033;
+  background: #e5143d;
   border-radius: 3px;
   pointer-events: none;
 }
@@ -9068,7 +9068,7 @@ video::cue {
   position: absolute;
   top: -3px;
   right: -3px;
-  background: #ff0033;
+  background: #e5143d;
   color: #ffffff;
   font-size: 0.65rem;
   font-weight: 800;
@@ -9214,7 +9214,7 @@ video::cue {
 }
 
 .tab-badge.chat-badge {
-  background: #ff0033;
+  background: #e5143d;
   color: #ffffff;
   border-radius: 10px;
   padding: 1px 6px;
@@ -9698,7 +9698,7 @@ video::cue {
 
 .yt-screen-ctrl-icon.yt-play-btn:hover {
   background: rgba(255, 0, 51, 0.2);
-  color: #ff0033;
+  color: #e5143d;
 }
 
 /* Volume Control Group */
@@ -9735,12 +9735,12 @@ video::cue {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
-  accent-color: #ff0033;
+  accent-color: #e5143d;
   transition: background 0.05s ease;
 }
 
 .yt-volume-slider::-moz-range-progress {
-  background-color: #ff0033;
+  background-color: #e5143d;
   height: 4px;
   border-radius: 2px;
 }
@@ -9807,7 +9807,7 @@ video::cue {
   left: 0;
   height: 100%;
   border-radius: 3px;
-  background: #ff0033;
+  background: #e5143d;
   pointer-events: none;
   transition: width 0.05s linear;
 }
@@ -10501,7 +10501,7 @@ video::cue {
 .qp-card:hover .qp-queue,
 .qp-queue:focus-visible { opacity: 1; }
 
-.qp-queue:hover { background: #ff0033; }
+.qp-queue:hover { background: #e5143d; }
 
 @media (hover: none) {
   .qp-queue { opacity: 1; }
@@ -10567,7 +10567,7 @@ video::cue {
   border: none;
   border-radius: 999px;
   padding: 6px 14px;
-  background: #ff0033;
+  background: #e5143d;
   color: #fff;
   font: inherit;
   font-size: 0.78rem;

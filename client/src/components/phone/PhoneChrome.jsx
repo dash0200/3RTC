@@ -5,9 +5,11 @@ export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, 
   const ping = networkStats?.avgPingMs;
   let status;
   if (roomId) {
+    // Plain words; the numbers live in the connection details
+    const weak = typeof ping === 'number' && ping > 250;
     status = isP2PConnected
-      ? { tone: 'ok', text: ping !== null && ping !== undefined ? `P2P · ${ping} ms` : 'P2P' }
-      : { tone: 'wait', text: 'Waiting for peers' };
+      ? (weak ? { tone: 'wait', text: 'Weak connection' } : { tone: 'ok', text: 'Connected' })
+      : { tone: 'wait', text: 'Waiting for friends' };
   } else {
     status = signalStatus?.connected
       ? { tone: 'ok', text: 'Online' }
@@ -17,7 +19,7 @@ export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, 
   return (
     <header className="phone-topbar">
       <div className="phone-logo">
-        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4l14 8-14 8z" fill="#ff0033" /></svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4l14 8-14 8z" fill="#e5143d" /></svg>
         3RTC
       </div>
       {roomId && (
