@@ -84,7 +84,7 @@ with sync_playwright() as p:
     # speaking rings: the guest's chip on the host lights up while the fake mic tone plays
     host.locator('.chat-tab-btn', has_text='People').first.click()  # (the people list shows who's talking)
     host.evaluate("""() => { window.__ring = 0; window.__ringObs = setInterval(() => {
-        if (document.querySelector('.peer-voice-badge.is-speaking, .vpo-av.is-speaking')) window.__ring++; else window.__dark = (window.__dark || 0) + 1; }, 50); }""")
+        if (document.querySelector('.peer-voice-badge.is-speaking, .vpo-av.is-speaking, .popover-status-text.speaking, .voice-user-card.peer-card.speaking-active')) window.__ring++; else window.__dark = (window.__dark || 0) + 1; }, 50); }""")
     time.sleep(6)
     rings = host.evaluate("clearInterval(window.__ringObs), window.__ring")
     dark = host.evaluate("window.__dark || 0")
@@ -127,7 +127,7 @@ with sync_playwright() as p:
           str(host.evaluate('window.__chans()')))
 
     # --- 4. guest leaves on purpose: host cleans up immediately (no reconnect attempts) ---
-    guest.evaluate("""() => { const b = [...document.querySelectorAll('button')].find(x => /leave/i.test(x.textContent + (x.title||'') + (x.getAttribute('aria-label')||''))); b && b.click(); return !!b; }""")
+    harness.leave_room(guest)
     gone = wait(lambda: len(live(host)) == 0, 8)
     check('host dropped the connection right after guest left', gone, str(host.evaluate('window.__state()')))
     time.sleep(10)

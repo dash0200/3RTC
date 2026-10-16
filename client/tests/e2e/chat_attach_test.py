@@ -14,7 +14,7 @@ with sync_playwright() as p:
     for vp, tag in (({'width': 1400, 'height': 900}, 'desk'), ({'width': 390, 'height': 844}, 'mob')):
         host = b.new_context(viewport=vp).new_page(); guest = b.new_context(viewport=vp).new_page()
         for pg in (host, guest):
-            pg.add_init_script(INIT); pg.on('dialog', lambda d: d.accept())
+            pg.add_init_script(INIT); pg.add_init_script(harness.PEOPLE_INIT); pg.on('dialog', lambda d: d.accept())
         host.goto('http://localhost:5199/'); host.wait_for_timeout(1500)
         if tag == 'mob':
             host.get_by_role('button', name='Create a room').click()
@@ -26,7 +26,7 @@ with sync_playwright() as p:
             guest.get_by_role('button', name='Join room').click()
         else:
             guest.get_by_role('button', name='Join Room').evaluate('(el) => el.click()')
-        wait(lambda: 'Direct P2P' in host.content() or host.locator('.phone-status-pill.ok').count() == 1, 15); time.sleep(1.5)
+        wait(lambda: harness.people(host) >= 2, 15); time.sleep(1.5)
         btn = guest.locator('.chat-pill-attach-btn')
         check(f'{tag}: attach button visible', btn.is_visible())
         with guest.expect_file_chooser() as fc:

@@ -86,8 +86,7 @@ with sync_playwright() as p:
         check(f"{name}: a guest can't turn on host controls", pg.locator('.rh-lock').count() == 0)
 
     # The real host still can
-    host.locator('.stage-more-wrap .circle-action-btn').click()
-    host.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
+    harness.toggle_playback_lock(host)
     check('the real host can (the guest sees "Host controls")', wait(lambda: guest.locator('.rh-lock').count() > 0, 5))
     check('no page errors', not errors, errors[:3])
     b.close()

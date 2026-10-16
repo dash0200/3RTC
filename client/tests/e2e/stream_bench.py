@@ -110,8 +110,8 @@ with sync_playwright() as p:
     guest.goto(f'{BASE}/?room={room}'); time.sleep(1.5); guest.get_by_role('button', name='Join Room').click()
     wait(lambda: harness.people(host) >= 2, 25); time.sleep(2)
 
-    host.set_input_files('input[accept*="video/mp4"]', movie())
-    btn = guest.get_by_role('button', name=re.compile('Stream from Peer'))
+    host.locator('input[accept*=".mp4"]').first.set_input_files(movie())
+    btn = guest.get_by_role('button', name=re.compile('Stream from'))
     wait(lambda: btn.count() > 0, 20)
     t0 = time.time(); btn.first.click()
     ready = wait(lambda: guest.evaluate("(document.querySelector('video')||{}).readyState >= 3"), 60, 0.1)

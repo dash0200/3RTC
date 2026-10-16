@@ -85,8 +85,9 @@ with sync_playwright() as p:
     check('pressing Back again and again never leaves the site', '/about' not in url(phone) and in_room(phone), url(phone))
 
     # A game open: Back closes the phone's chat view first, then minimises the game, then asks
-    host.locator('.stage-more-wrap .circle-action-btn').click()
-    host.locator('.stage-more-dropdown .dropdown-item', has_text='Ludo').click()
+    harness.open_activity(host, 'Ludo')
+    check('the phone is invited to the game', wait(lambda: phone.locator('.activity-bubble.is-invite').count() == 1, 15))
+    harness.join_activity(phone)
     check('a game opens on the phone', wait(lambda: phone.locator('.ludo-board').count() == 1, 15))
     if not phone.locator('.stage-activity.is-chat-split').count():
         phone.locator('.activity-chat-btn').click()
@@ -100,11 +101,11 @@ with sync_playwright() as p:
     back(phone)
     check('Back again asks about the room, the game stays', wait(lambda: leave_dialog(phone), 3) and phone.locator('.ludo-board').count() == 1)
     phone.get_by_role('button', name='Stay').click()
-    host.locator('.activity-close-btn').click()
+    host.get_by_role('button', name='End for everyone').click()
     wait(lambda: phone.locator('.ludo-board').count() == 0, 6)
 
     # A video open: Back doesn't close it (it has its own Exit button)
-    host.set_input_files('input[accept*="video/mp4"]', harness.media('test_small.mp4'))
+    host.locator('input[accept*=".mp4"]').first.set_input_files(harness.media('test_small.mp4'))
     check('host shares a video; the phone sees it', wait(lambda: phone.get_by_role('button', name=re.compile('Stream', re.I)).count() > 0, 15))
     back(phone)
     check('Back during a video asks about the room, the video stays',
@@ -138,8 +139,8 @@ with sync_playwright() as p:
     check('Rejoin can be dismissed', phone.get_by_role('region', name='Rejoin your last room').count() == 0)
 
     # The host leaves and gets the same room back
-    host.get_by_role('button', name=re.compile('Leave', re.I)).first.click()
-    wait(lambda: host.locator('.stage-overlay .initial-actions').count() == 1, 8)
+    harness.leave_room(host)
+    wait(lambda: host.get_by_role('button', name=re.compile('Create a room')).count() >= 1, 8)
     card = host.get_by_role('region', name='Rejoin your last room')
     check('the host is offered their room back', wait(lambda: card.count() == 1, 3) and 'Your room' in card.inner_text())
     card.get_by_role('button', name='Rejoin').click()

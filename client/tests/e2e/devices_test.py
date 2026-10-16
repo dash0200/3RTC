@@ -28,6 +28,13 @@ def last_mic_device(pg):
     return (calls[-1]['audio'].get('deviceId') or {}).get('ideal', '')
 
 
+def open_voice_settings(pg):
+    """Voice settings from the dock's microphone menu ("Voice settings & mic test...")."""
+    if pg.locator('.dock-pop-devices').count() == 0:
+        pg.locator('.dock-mic-caret').click()
+    pg.locator('.dock-pop-devices .dock-pop-link').click()
+
+
 with sync_playwright() as p:
     b = p.chromium.launch(args=harness.CHROMIUM_ARGS)
     pages = []
@@ -59,13 +66,13 @@ with sync_playwright() as p:
     host.select_option('.dock-pop-devices select[aria-label^="Input"]', in2)
     host.keyboard.press('Escape')
     check('Escape closes the menu', wait(lambda: host.locator('.dock-pop-devices').count() == 0, 3))
-    host.locator('.header-ctrl-pill', has_text='Mic Off').click()
+    harness.mic_button(host).click()
     check('the mic opens on the chosen microphone', wait(lambda: last_mic_device(host) == in2, 8), last_mic_device(host))
 
     host.locator('.dock-mic-caret').click()
     host.select_option('.dock-pop-devices select[aria-label^="Input"]', in1)
     check('switching while live reopens the mic on the new one', wait(lambda: last_mic_device(host) == in1, 8), last_mic_device(host))
-    check('the mic stays on', wait(lambda: host.locator('.header-ctrl-pill', has_text='Mic Live').count() == 1, 5))
+    check('the mic stays on', wait(lambda: host.locator('.dock-mic-toggle[aria-label="Turn microphone off"]').count() == 1, 5))
 
     host.select_option('.dock-pop-devices select[aria-label^="Output"]', out2)
     sink = "[...document.querySelectorAll('audio[id^=\"remote-audio-\"]')].map(a => a.sinkId)"
@@ -77,15 +84,14 @@ with sync_playwright() as p:
     host.screenshot(path=str(harness.OUT / 'devices_menu.png'))
 
     # Audio settings: Devices section, mic level while live
-    host.locator('.header-devices-more').click()
+    open_voice_settings(host)
     check('Audio settings has the devices', wait(lambda: host.locator('.audio-settings-modal-card .audio-device-picker').count() == 1, 3))
     check('...with the live mic level', host.locator('.audio-settings-modal-card .audio-device-meter').count() == 1)
     host.screenshot(path=str(harness.OUT / 'devices_settings.png'))
     host.locator('.modal-close-btn').first.click()
 
     # The guest tests a mic before turning it on
-    guest.evaluate("document.querySelector('.dock-mic-caret') && document.querySelector('.dock-mic-caret').click()")
-    guest.locator('.header-devices-more').click()
+    open_voice_settings(guest)
     guest.locator('.audio-device-test-btn', has_text='Test mic').click()
     fill = "parseFloat(document.querySelector('.audio-settings-modal-card .audio-device-meter-fill').style.width)"
     check('Test mic shows the level before joining the call', wait(lambda: guest.evaluate(fill) > 0, 6), guest.evaluate(fill))

@@ -41,7 +41,7 @@ with sync_playwright() as p:
     b = p.chromium.launch(args=['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
     pc = b.new_context(viewport={'width': 1440, 'height': 900}).new_page()
     phone = b.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True).new_page()
-    for pg in (pc, phone): pg.add_init_script(INIT); pg.on('pageerror', lambda e: print('ERR', e))
+    for pg in (pc, phone): pg.add_init_script(INIT); pg.add_init_script(harness.PEOPLE_INIT); pg.on('pageerror', lambda e: print('ERR', e))
     pc.goto('http://localhost:5199/'); pc.wait_for_timeout(1500)
     harness.create_room(pc); pc.wait_for_timeout(800)
     room = next(m['roomId'] for m in pc.evaluate('window.__sig') if m.get('type') == 'room-created')

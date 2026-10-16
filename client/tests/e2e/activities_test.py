@@ -21,16 +21,13 @@ def wait(f, t=10):
     return False
 def count(pg): return pg.locator('[data-testid=sample-count]').inner_text().strip()
 def toasts(pg): return pg.evaluate("[...document.querySelectorAll('.toast')].map(t => t.innerText).join(' | ')")
-def menu(pg, name):
-    pg.locator('.stage-more-wrap .circle-action-btn').click()
-    pg.locator('.stage-more-dropdown .dropdown-item', has_text=name).click()
 
 errors = []
 with sync_playwright() as p:
     b = p.chromium.launch(args=['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
     def page(mobile=False):
         ctx = b.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True) if mobile else b.new_context(viewport={'width': 1440, 'height': 900})
-        pg = ctx.new_page(); pg.add_init_script(INIT); pg.on('pageerror', lambda e: errors.append(str(e))); return pg
+        pg = ctx.new_page(); pg.add_init_script(INIT); pg.add_init_script(harness.PEOPLE_INIT); pg.on('pageerror', lambda e: errors.append(str(e))); return pg
     host, guest = page(), page()
     host.goto(BASE); host.wait_for_timeout(1500)
     harness.create_room(host)

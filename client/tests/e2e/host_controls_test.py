@@ -27,19 +27,19 @@ with sync_playwright() as p:
     host = b.new_context(viewport={'width': 1440, 'height': 900}).new_page()
     phone = b.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True).new_page()
     guest = b.new_context(viewport={'width': 1440, 'height': 900}).new_page()
-    for pg in (host, phone, guest): pg.add_init_script(INIT); pg.on('pageerror', lambda e: print('ERR', e))
+    for pg in (host, phone, guest): pg.add_init_script(INIT); pg.add_init_script(harness.PEOPLE_INIT); pg.on('pageerror', lambda e: print('ERR', e))
     host.goto('http://localhost:5199/'); host.wait_for_timeout(1500)
     harness.create_room(host); host.wait_for_timeout(800)
     room = next(m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created')
     phone.goto(f'http://localhost:5199/?room={room}'); phone.wait_for_timeout(1200); phone.get_by_role('button', name='Join room').click()
-    wait(lambda: 'P2P' in phone.locator('.phone-status-pill').inner_text(), 15); time.sleep(1.5)
-    host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).first.fill('https://youtu.be/aqz-KE-bpKQ'); host.get_by_role('button', name=re.compile('Load for All')).click()
+    wait(lambda: harness.people(phone) >= 2, 15); time.sleep(1.5)
+    host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).first.fill('https://youtu.be/aqz-KE-bpKQ'); host.get_by_role('button', name=re.compile('Play for everyone|Load for All')).click()
     wait(lambda: st(host) and st(phone), 8); time.sleep(1)
     host.evaluate('window.__user.play()'); wait(lambda: st(phone)['s'] == 1, 6); time.sleep(1.5)
     check('screen kept on while a video is loaded in a room', 'lock' in host.evaluate('window.__wake') and 'lock' in phone.evaluate('window.__wake'), [host.evaluate('window.__wake'), phone.evaluate('window.__wake')])
 
     # host turns the lock on from the ⋮ menu
-    host.locator('.stage-more-wrap .circle-action-btn').click(); host.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
+    harness.toggle_playback_lock(host)
     check('phone guest sees the lock (top bar)', wait(lambda: phone.locator('.phone-lock-pill').count() == 1, 5))
     check('host sees "Host controls" in the header', host.locator('.rh-lock').count() == 1)
     # guest pauses on YouTube's own controls: reverted, host keeps playing
@@ -68,12 +68,12 @@ with sync_playwright() as p:
     host.locator('.chat-timestamp', has_text='2:30').first.click()
     check('host clicks 2:30: everyone jumps there', wait(lambda: abs(st(phone)['t'] - 150) < 2 and abs(st(guest)['t'] - 150) < 2, 8), f"phone {st(phone)} guest {st(guest)} host {st(host)}")
     # host turns the lock off: guests can control again
-    host.locator('.stage-more-wrap .circle-action-btn').click(); host.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
+    harness.toggle_playback_lock(host)
     check('lock off: pill disappears for guests', wait(lambda: phone.locator('.phone-lock-pill').count() == 0 and guest.locator('.rh-lock').count() == 0, 5))
     phone.evaluate('window.__user.play()')
     check('lock off: guest play reaches the host', wait(lambda: st(host)['s'] == 1, 6), st(host))
     # lock on again, then the host leaves: the lock goes away
-    host.locator('.stage-more-wrap .circle-action-btn').click(); host.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
+    harness.toggle_playback_lock(host)
     wait(lambda: phone.locator('.phone-lock-pill').count() == 1, 5)
     host.context.close()
     check('host leaves: the lock is released after a few seconds', wait(lambda: phone.locator('.phone-lock-pill').count() == 0 and guest.locator('.rh-lock').count() == 0, 40))
