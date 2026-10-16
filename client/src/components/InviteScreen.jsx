@@ -1,4 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { nameFieldValue, cleanName } from '../utils/names';
+import { getAvatarColor } from '../utils/sound';
+import { getInitials } from './PeerVoiceRoster';
 import { Logo } from './Logo';
 
 /**
@@ -6,8 +9,12 @@ import { Logo } from './Logo';
  * The mic choice is made here, before anyone can hear you.
  */
 export default function InviteScreen({ pin, username, onJoin, onDismiss }) {
-  const [name, setName] = useState(username || '');
+  const [name, setName] = useState(() => nameFieldValue(username));
   const [micOn, setMicOn] = useState(false);
+  // Who sent the link (?from=Priya, added by 3RTC's invite links)
+  const [inviter] = useState(() => {
+    try { return cleanName(new URLSearchParams(window.location.search).get('from') || ''); } catch { return ''; }
+  });
   const nameRef = useRef(null);
   // Focus the name on desktop only (on phones it would open the keyboard over the Join button)
   useEffect(() => {
@@ -23,10 +30,14 @@ export default function InviteScreen({ pin, username, onJoin, onDismiss }) {
       <header className="invite-top"><Logo size={28} /></header>
       <form className="invite-body" onSubmit={join}>
         <div className="invite-hero">
-          <span className="invite-mark" aria-hidden="true">
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="4" /><path d="M2 21c0-4 3-7 7-7s7 3 7 7M19 8v6M16 11h6" /></svg>
-          </span>
-          <h1>You’re invited to watch together</h1>
+          {inviter ? (
+            <span className="rd-av invite-av" style={{ '--av': getAvatarColor(inviter) }} aria-hidden="true">{getInitials(inviter)}</span>
+          ) : (
+            <span className="invite-mark" aria-hidden="true">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="8" r="4" /><path d="M2 21c0-4 3-7 7-7s7 3 7 7M19 8v6M16 11h6" /></svg>
+            </span>
+          )}
+          <h1>{inviter ? `${inviter} invited you to watch together` : 'You’re invited to watch together'}</h1>
           <p>Room <span className="invite-code">{pin}</span> · up to 6 people, video, voice and chat</p>
         </div>
 

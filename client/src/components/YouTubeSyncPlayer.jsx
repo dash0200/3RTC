@@ -893,7 +893,8 @@ export default function YouTubeSyncPlayer({
       }}
     >
       <div className="yt-hero-center">
-        <h2 className="yt-hero-title rd-pick-title">What are we watching?</h2>
+        <div className="rd-pick">
+        <h2 className="rd-pick-title">What are we watching?</h2>
 
         <div className={`rd-dropzone ${isDropOver ? 'is-over' : ''}`}>
           <form className="yt-hero-form" onSubmit={handleLoadUrl}>
@@ -942,6 +943,7 @@ export default function YouTubeSyncPlayer({
               e.target.value = '';
             }}
           />
+        </div>
         </div>
 
         {/* Quick picks: groups, categories and a thumbnail grid */}

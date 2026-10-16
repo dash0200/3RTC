@@ -10,6 +10,7 @@ import Stage from './components/Stage';
 import LiveChat from './components/LiveChat';
 import DesktopHome from './components/DesktopHome';
 import InviteScreen from './components/InviteScreen';
+import InvitePanel from './components/room/InvitePanel';
 import ServerSettingsModal from './components/ServerSettingsModal';
 import AudioSettingsModal from './components/AudioSettingsModal';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
@@ -197,7 +198,8 @@ export default function App() {
     } = playback;
     const { queue, skipVotes } = queueFeature;
 
-    const [isChatOpen, setIsChatOpen] = useState(() => !(typeof window !== 'undefined' && window.innerWidth <= 768));
+    // Desktop: the side panel is always there (Figma); phones embed the chat under the video
+    const [isChatOpen, setIsChatOpen] = useState(true);
     const [sidebarTab, setSidebarTab] = useState('chat');
     const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
     const isPhone = useIsPhone();
@@ -549,6 +551,30 @@ export default function App() {
             {...extra}
         />
     );
+    const nowPlaying = playback.activeMedia
+        ? (playback.activeMedia.title || '')
+        : activeVideoId ? (activeVideoTitle || 'YouTube video')
+            : (localVideoFile?.name || remoteLocalVideoMeta?.fileName || remoteLocalVideoMeta?.name || '');
+    const renderAddVideoSheet = () => (
+        <AddVideoSheet
+            isOpen={phoneSheet === 'add'}
+            onClose={closePhoneSheet}
+            isMediaActive={isMediaActive}
+            onLoadYouTube={(id, title) => {
+                playback.changeVideo(id, title);
+                playback.broadcastAction('load', { newVideoId: id, title });
+            }}
+            onQueueYouTube={(id, title) => queueFeature.addToQueue({ videoId: id, title })}
+            onLoadLink={playback.playLink}
+            onQueueLink={(media) => queueFeature.addToQueue({ media, title: media.title })}
+            onQueuePick={(id, title) => queueFeature.addToQueue({ videoId: id, title }, { autoplay: false })}
+            queuedIds={queue.map((item) => item.videoId)}
+            onPlayQueue={queue.length > 0 && !isMediaActive ? queueFeature.playNextInQueue : undefined}
+            onPickFile={playback.selectLocalFile}
+            onStopVideo={playback.exitVideo}
+        />
+    );
+
     const renderChat = (extra = {}) => (
         <LiveChat
             onSeekTo={isMediaActive ? playback.seekEveryone : undefined}
@@ -613,7 +639,13 @@ export default function App() {
                 <>
                     <PhoneTopBar
                         roomId={roomId}
-                        onCopyRoom={handleCopyRoom}
+                        onCopyRoom={async (link) => showToast((await copyToClipboard(link)) ? 'Invite link copied' : link)}
+                        people={[
+                            ...connectedPeers.map((p) => ({ key: p.peerId || p.id, name: p.username || 'Friend' })),
+                            ...(localUser ? [{ key: 'me', name: username || 'You' }] : [])
+                        ]}
+                        onOpenPeople={() => setSidebarTab('peers')}
+                        username={username}
                         networkStats={networkStats}
                         isP2PConnected={isP2PConnected}
                         signalStatus={signalStatus}
@@ -649,23 +681,7 @@ export default function App() {
                             rejoin={rejoin}
                         />
                     )}
-                    <AddVideoSheet
-                        isOpen={phoneSheet === 'add'}
-                        onClose={closePhoneSheet}
-                        isMediaActive={isMediaActive}
-                        onLoadYouTube={(id, title) => {
-                            playback.changeVideo(id, title);
-                            playback.broadcastAction('load', { newVideoId: id, title });
-                        }}
-                        onQueueYouTube={(id, title) => queueFeature.addToQueue({ videoId: id, title })}
-                        onLoadLink={playback.playLink}
-                        onQueueLink={(media) => queueFeature.addToQueue({ media, title: media.title })}
-                        onQueuePick={(id, title) => queueFeature.addToQueue({ videoId: id, title }, { autoplay: false })}
-                        queuedIds={queue.map((item) => item.videoId)}
-                        onPlayQueue={queue.length > 0 && !isMediaActive ? queueFeature.playNextInQueue : undefined}
-                        onPickFile={playback.selectLocalFile}
-                        onStopVideo={playback.exitVideo}
-                    />
+                    {renderAddVideoSheet()}
                     <MoreSheet
                         isOpen={phoneSheet === 'more'}
                         onClose={closePhoneSheet}
@@ -710,42 +726,34 @@ export default function App() {
                     />
                 )
             ) : (
-                <>
-                    <div className="app-main-pane">
-                        <Header
-                            isLive={Boolean(roomId)}
-                            roomId={roomId}
-                            playbackLock={playbackLock}
-                            onCopyRoom={handleCopyRoom}
-                            isMicMuted={isMicMuted}
-                            isAudioBlocked={isAudioBlocked}
-                            onToggleMic={toggleMicrophone}
-                            onToggleBlockAudio={toggleBlockAudio}
-                            isP2PConnected={isP2PConnected}
-                            p2pStatusText={p2pStatusText}
-                            isMediaActive={isMediaActive}
-                            onExitVideo={playback.exitVideo}
-                            onLeaveRoom={handleLeaveRoom}
-                            isChatOpen={isChatOpen}
-                            unreadChatCount={chat.unreadChatCount}
-                            onToggleChat={() => setIsChatOpen((prev) => !prev)}
-                            audioSettings={audioSettings}
-                            onOpenAudioSettings={openAudioSettings}
-                            onUpdateAudioSettings={handleUpdateAudioSettings}
-                            onSelectOutput={selectOutputDevice}
-                            isPttActive={isPttActive}
-                            peerCount={connectedPeers.length + 1}
-                            onOpenSettings={openServerSettings}
-                            networkStats={networkStats}
-                            onOpenNetworkHud={openNetworkHud}
-                            onOpenQrCode={openQrCode}
-                        />
-                        <main className="main-container">
-                            {renderStage()}
-                        </main>
+                <div className="room-desktop">
+                    <Header
+                        roomId={roomId}
+                        onCopyRoom={handleCopyRoom}
+                        isP2PConnected={isP2PConnected}
+                        networkStats={networkStats}
+                        peerCount={connectedPeers.length + 1}
+                        onOpenNetworkHud={openNetworkHud}
+                        onOpenQrCode={openQrCode}
+                        playbackLock={playbackLock}
+                        nowPlaying={nowPlaying}
+                    />
+                    <div className="room-desktop-body">
+                        <div className="app-main-pane">
+                            <main className="main-container">
+                                {renderStage({
+                                    onOpenAddVideo: () => setPhoneSheet('add'),
+                                    onUpdateAudioSettings: handleUpdateAudioSettings,
+                                    onSelectOutput: selectOutputDevice
+                                })}
+                            </main>
+                        </div>
+                        {connectedPeers.length === 0
+                            ? <InvitePanel roomId={roomId} onShowQr={openQrCode} onCopied={() => showToast('Invite link copied')} />
+                            : renderChat()}
                     </div>
-                    {renderChat()}
-                </>
+                    {renderAddVideoSheet()}
+                </div>
             )}
 
             {/* Floating Push-to-Talk HUD Indicator */}

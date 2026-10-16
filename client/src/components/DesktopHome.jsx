@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { nameFieldValue } from '../utils/names';
 import { BUILD, BUILD_LABEL } from '../version';
 import RejoinCard from './RejoinCard';
 import { useRoomCodeInput } from '../hooks/useRoomCodeInput';
@@ -9,7 +10,7 @@ import { Logo } from './Logo';
  * (No chat sidebar, mic or video controls yet: there is no room for them to act on.)
  */
 export default function DesktopHome({ username, initialPin = '', onCreate, onJoin, onOpenServerSettings, rejoin = null, isOnline = true }) {
-  const [name, setName] = useState(username || '');
+  const [name, setName] = useState(() => nameFieldValue(username));
   const displayName = name.trim() || username || 'Guest';
   const { digits, code, isComplete, boxProps } = useRoomCodeInput(initialPin, (c) => onJoin?.(c, displayName));
 
@@ -18,7 +19,8 @@ export default function DesktopHome({ username, initialPin = '', onCreate, onJoi
       <header className="dh-header">
         <Logo />
         <nav className="dh-nav" aria-label="3RTC">
-          <a href="/about">How it works</a>
+          <a href="/watch-videos-together">How it works</a>
+          <a href="/about">About</a>
           <span className={`dh-status ${isOnline ? 'is-online' : ''}`}>
             <span className="dh-dot" aria-hidden="true" />
             {isOnline ? 'Ready' : 'Connecting…'}
@@ -52,10 +54,7 @@ export default function DesktopHome({ username, initialPin = '', onCreate, onJoi
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
-            <button type="submit" className="rd-btn rd-btn-primary rd-btn-lg">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-              Create a room
-            </button>
+            <button type="submit" className="rd-btn rd-btn-primary rd-btn-lg">Create a room</button>
             <div className="dh-divider"><span>or join a friend’s room</span></div>
             <div className="dh-join">
               <fieldset className="dh-code">

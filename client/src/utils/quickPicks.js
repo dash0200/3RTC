@@ -103,7 +103,13 @@ function sanitize(data) {
     videos: (Array.isArray(c?.videos) ? c.videos : [])
       .filter((v) => VIDEO_ID.test(String(v?.id || '')))
       .slice(0, 25)
-      .map((v) => ({ id: v.id, title: String(v.title || 'YouTube video').slice(0, 200), channel: String(v.channel || '').slice(0, 100) }))
+      .map((v) => ({
+        id: v.id,
+        title: String(v.title || 'YouTube video').slice(0, 200),
+        channel: String(v.channel || '').slice(0, 100),
+        ...(v.live === true ? { live: true } : {}),
+        ...(Number.isFinite(v.seconds) && v.seconds > 0 ? { seconds: Math.round(v.seconds) } : {})
+      }))
   })).filter((c) => c.id && c.name && c.videos.length > 0);
   return categories.length > 0 ? categories : null;
 }

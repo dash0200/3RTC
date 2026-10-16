@@ -115,14 +115,8 @@ class SoundFx {
 export const sound = new SoundFx();
 
 export function getAvatarColor(name) {
-  const colors = [
-    'linear-gradient(135deg, #f43f5e, #e11d48)',
-    'linear-gradient(135deg, #a855f7, #7c3aed)',
-    'linear-gradient(135deg, #3b82f6, #2563eb)',
-    'linear-gradient(135deg, #10b981, #059669)',
-    'linear-gradient(135deg, #f59e0b, #d97706)',
-    'linear-gradient(135deg, #06b6d4, #0891b2)'
-  ];
+  // Flat pastels with dark initials (3RTC redesign): the same person always gets the same color
+  const colors = ['#6aa8ff', '#f5b544', '#c79bff', '#7be7bf', '#ff8a9c', '#8fd3ff'];
   let hash = 0;
   for (let i = 0; i < (name || '').length; i++) {
     hash = name.charCodeAt(i) + ((hash << 5) - hash);

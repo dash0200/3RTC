@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
+import { nameFieldValue } from '../../utils/names';
 import { BUILD_LABEL } from '../../version';
 import RejoinCard from '../RejoinCard';
 import { useRoomCodeInput } from '../../hooks/useRoomCodeInput';
 
 /** Phone home: your name, create a room, or join with a 5-digit code. */
 export default function PhoneHome({ username, initialPin = '', onCreate, onJoin, onOpenServerSettings, rejoin = null }) {
-  const [name, setName] = useState(username || '');
+  const [name, setName] = useState(() => nameFieldValue(username));
   const displayName = name.trim() || username || 'Guest';
   const { digits, code, isComplete, boxProps } = useRoomCodeInput(initialPin, (c) => onJoin?.(c, displayName));
 

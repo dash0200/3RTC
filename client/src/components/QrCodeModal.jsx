@@ -34,7 +34,7 @@ export default function QrCodeModal({
 
   // Compute final join URL
   const joinUrl = useMemo(() => {
-    return getMobileJoinUrl(roomId, customHost.trim() || null);
+    return getMobileJoinUrl(roomId, customHost.trim() || null, username);
   }, [roomId, customHost]);
 
   // Render QR Code onto canvas
