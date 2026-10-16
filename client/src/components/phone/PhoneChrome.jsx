@@ -1,53 +1,60 @@
 import React from 'react';
 
-/** Phone top bar: logo, room code (tap to copy), connection status (tap for network details). */
-export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, signalStatus, onOpenNetworkHud, playbackLock = false }) {
+import { Logo } from '../Logo';
+import { Icon as LineIcon } from '../icons';
+import { getAvatarColor } from '../../utils/sound';
+import { getInitials } from '../PeerVoiceRoster';
+import { getMobileJoinUrl } from '../../utils/qrCode';
+
+/**
+ * Phone top bar (Figma). Before a room: logo + status. In a room: the room code (tap to share the
+ * invite link), the connection as a signal icon (tap for details) and who's here (tap for People).
+ */
+export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, signalStatus, onOpenNetworkHud, playbackLock = false, people = [], onOpenPeople, username = '' }) {
   const ping = networkStats?.avgPingMs;
-  let status;
-  if (roomId) {
-    // Plain words; the numbers live in the connection details
-    const weak = typeof ping === 'number' && ping > 250;
-    status = isP2PConnected
-      ? (weak ? { tone: 'wait', text: 'Weak connection' } : { tone: 'ok', text: 'Connected' })
-      : { tone: 'wait', text: 'Waiting for friends' };
-  } else {
-    status = signalStatus?.connected
-      ? { tone: 'ok', text: 'Online' }
-      : { tone: 'wait', text: signalStatus?.label || 'Connecting…' };
+  if (!roomId) {
+    const online = Boolean(signalStatus?.connected);
+    return (
+      <header className="phone-topbar is-home">
+        <Logo size={28} />
+        <span className={`phone-status-pill ${online ? 'ok' : 'wait'}`}>
+          <span className="phone-status-dot" />
+          {online ? 'Online' : (signalStatus?.label || 'Connecting…')}
+        </span>
+      </header>
+    );
   }
+  const weak = typeof ping === 'number' && ping > 250;
+  const tone = isP2PConnected ? (weak ? 'weak' : 'ok') : 'wait';
+  const toneText = isP2PConnected ? (weak ? 'Weak connection' : 'Connected') : 'Waiting for friends';
+  const share = async () => {
+    const url = getMobileJoinUrl(roomId, null, username);
+    if (navigator.share) {
+      try { await navigator.share({ title: '3RTC', text: 'Watch with me on 3RTC', url }); return; } catch { /* cancelled: fall back to copy */ }
+    }
+    onCopyRoom?.(url);
+  };
+  const shown = people.slice(0, 2);
+  const extra = people.length - shown.length;
 
   return (
     <header className="phone-topbar">
-      <div className="phone-logo">
-        <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4l14 8-14 8z" fill="#e5143d" /></svg>
-        3RTC
-      </div>
-      {roomId && (
-        <button
-          type="button"
-          className="phone-room-pill"
-          onClick={() => onCopyRoom?.(String(roomId))}
-          aria-label={`Copy room code ${roomId}`}
-        >
-          {roomId}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="9" y="9" width="11" height="11" rx="2" />
-            <path d="M5 15V6a2 2 0 0 1 2-2h9" />
-          </svg>
-        </button>
+      <button type="button" className="phone-room-pill" onClick={share} aria-label={`Share room ${roomId}`}>
+        <span className="phone-room-code">{roomId}</span>
+        <LineIcon name="share" size={16} />
+      </button>
+      {playbackLock && (
+        <span className="phone-lock-pill" title="Only the host can control playback" aria-label="Host controls on"><LineIcon name="lock" size={16} /></span>
       )}
-      {roomId && playbackLock && (
-        <span className="phone-lock-pill" title="Only the host can control playback" aria-label="Host controls on">🔒</span>
-      )}
-      <button
-        type="button"
-        className={`phone-status-pill ${status.tone}`}
-        onClick={roomId ? onOpenNetworkHud : undefined}
-        disabled={!roomId}
-        aria-label={`Connection: ${status.text}`}
-      >
-        <span className="phone-status-dot" />
-        {status.text}
+      <span className="phone-topbar-space" />
+      <button type="button" className={`phone-signal is-${tone}`} onClick={onOpenNetworkHud} aria-label={`${toneText}. Connection details`} title={toneText}>
+        <LineIcon name="signal" size={18} strokeWidth={2.6} />
+      </button>
+      <button type="button" className="phone-people" onClick={onOpenPeople} aria-label={`${people.length} ${people.length === 1 ? 'person' : 'people'} in the room`}>
+        {shown.map((p, i) => (
+          <span key={p.key} className="rd-av" style={{ '--av': getAvatarColor(p.name), zIndex: 3 - i }} aria-hidden="true">{getInitials(p.name)}</span>
+        ))}
+        {extra > 0 && <span className="rd-av phone-people-more" style={{ zIndex: 0 }} aria-hidden="true">+{extra}</span>}
       </button>
     </header>
   );

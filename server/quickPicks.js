@@ -151,7 +151,14 @@ export function isShort(video) {
 const isGoodPick = (video, regions = QUICK_PICKS_REGIONS) => isPlayableIn(video, regions) && !isShort(video);
 
 function toPick(video) {
-  return { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
+  const pick = { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
+  // Length badge on the card (Figma): seconds, or live
+  if (video.snippet?.liveBroadcastContent === 'live') pick.live = true;
+  else {
+    const seconds = parseDuration(video.contentDetails?.duration);
+    if (seconds) pick.seconds = seconds;
+  }
+  return pick;
 }
 
 /** New videos for a category merged with its saved ones (re-checked), newest first. */

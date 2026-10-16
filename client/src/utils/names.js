@@ -13,3 +13,13 @@ export function cleanName(value) {
         .trim();
     return [...text].slice(0, NAME_MAX).join('').trim();
 }
+
+/** Names the app made up (User_819): shown as an empty box with a placeholder, not as a name. */
+export function isAutoName(name) {
+    return /^User_\d+$/.test(String(name || ''));
+}
+
+/** What to show in a "Your name" box: your own name, or nothing for a made-up one. */
+export function nameFieldValue(name) {
+    return isAutoName(name) ? '' : (name || '');
+}

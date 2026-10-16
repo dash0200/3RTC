@@ -206,7 +206,9 @@ export function checkPlayable(format, { canPlay = defaultCanPlay, chromium = isC
         message = `${cName} files don't play in browsers. Convert it to MP4 (H.264 + AAC), e.g. with HandBrake.`;
     } else if (video === 'no') {
         verdict = 'no-video';
-        message = `The video is ${format.video.label}, which this browser can't play.${format.video.codec === 'hevc' ? ' HEVC plays only on some devices (Safari, or Chrome/Edge with hardware support).' : ''} Convert it to H.264, e.g. with HandBrake.`;
+        message = format.video.codec === 'h264'
+            ? 'This browser can\'t play H.264 video. Open 3RTC in Chrome, Edge, Safari or Firefox.'
+            : `The video is ${format.video.label}, which this browser can't play.${format.video.codec === 'hevc' ? ' HEVC plays only on some devices (Safari, or Chrome/Edge with hardware support).' : ''} Convert it to H.264, e.g. with HandBrake.`;
     } else if (audio === 'no') {
         verdict = 'no-audio';
         message = `The picture plays, but there will be no sound: the audio is ${first.label}, which this browser can't play. Convert the audio to AAC, e.g. with HandBrake.`;
