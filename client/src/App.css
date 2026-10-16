@@ -11216,6 +11216,7 @@ video::cue {
 
 /* Chat text can be selected and copied (the page itself is not selectable); links open in a new tab */
 .wa-text,
+.cm-text, /* (the redesign's chat messages) */
 .room-log-content {
   user-select: text;
   -webkit-user-select: text;
