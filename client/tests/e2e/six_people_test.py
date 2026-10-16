@@ -49,8 +49,7 @@ with sync_playwright() as p:
         if not wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10):
             pg.reload(); wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10)
     owner, guests = pages[0], pages[1:]
-    owner.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    owner.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(owner)
     room = wait(lambda: next((m['roomId'] for m in owner.evaluate('window.__sig') if m.get('type') == 'room-created'), None))
     for g in guests:
         g.goto(f'{BASE}/?room={room}'); wait(lambda: g.evaluate('!!navigator.serviceWorker.controller'), 10)

@@ -20,11 +20,10 @@ with sync_playwright() as p:
         pg.goto(BASE + '/')
         if not wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10):
             pg.reload(); wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     guest.goto(f'{BASE}/?room={room}'); time.sleep(1.5); guest.get_by_role('button', name='Join Room').click()
-    check('peers connected', wait(lambda: host.locator('.stage-voice-chip').count() >= 2, 25))
+    check('peers connected', wait(lambda: harness.people(host) >= 2, 25))
     time.sleep(1.5)
 
     host.set_input_files('input[accept*="video/mp4"]', harness.media('uneven.mp4'))

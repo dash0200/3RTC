@@ -49,17 +49,16 @@ with sync_playwright() as p:
     host, liar, guest = pages['host'], pages['liar'], pages['guest']
 
     host.goto(BASE); host.wait_for_timeout(1200)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     for pg in (liar, guest):
         pg.goto(f'{BASE}?room={room}'); pg.wait_for_timeout(1200)
         pg.get_by_role('button', name='Join room').click()
-    check('all three in the room', wait(lambda: all(pg.locator('.stage-voice-chip').count() >= 3 for pg in (host, liar, guest)), 30))
+    check('all three in the room', wait(lambda: all(harness.people(pg) >= 3 for pg in (host, liar, guest)), 30))
     time.sleep(2)
 
     def roster_hosts(pg):
-        pg.locator('.chat-tab-btn', has_text='Peers').first.click(); time.sleep(0.5)
+        pg.locator('.chat-tab-btn', has_text='People').first.click(); time.sleep(0.5)
         tags = pg.evaluate("[...document.querySelectorAll('.host-tag')].map((t) => t.parentElement?.innerText || '')")
         pg.locator('.chat-tab-btn', has_text='Chat').first.click()
         return tags
@@ -70,12 +69,12 @@ with sync_playwright() as p:
               len(tags) == 1 and not any('Liary' in t for t in tags) and (name == 'host' or 'Hosty' in tags[0]), tags)
 
     # The lying guest chats (its app adds the host flag, an image link and a fake transfer card)
-    box = liar.get_by_placeholder(re.compile('Type a message'))
+    box = liar.get_by_placeholder(re.compile('Message the room|Type a message'))
     box.fill('hello from the guest'); box.press('Enter')
     for name, pg in (('host', host), ('guest', guest)):
         check(f'{name}: the message arrives', wait(lambda: pg.get_by_text('hello from the guest').count() > 0, 8))
-        bubble = pg.locator('.wa-message, [class*=message]', has_text='hello from the guest').last
-        check(f'{name}: with no HOST badge', pg.locator('.wa-host-badge').count() == 0, pg.locator('.wa-host-badge').count())
+        bubble = pg.locator('.cm-row, [class*=message]', has_text='hello from the guest').last
+        check(f'{name}: with no HOST badge', pg.locator('.cm-host').count() == 0, pg.locator('.cm-host').count())
         check(f'{name}: under its real name, not the one in the message', 'Liary' in pg.content() and pg.get_by_text('Mallory').count() == 0)
         check(f'{name}: no outside image and no fake "Receiving" card', pg.locator(f'img[src="{EVIL}"]').count() == 0 and pg.get_by_text('stuck.png').count() == 0)
     check('nobody loaded the outside image', not any('evil.png' in u for u in requests))
@@ -84,12 +83,12 @@ with sync_playwright() as p:
     liar.evaluate("for (const c of window.__chans) if (c.readyState === 'open') c.send(JSON.stringify({ type: 'room-settings', playbackLock: true }))")
     time.sleep(1.5)
     for name, pg in (('host', host), ('guest', guest)):
-        check(f"{name}: a guest can't turn on host controls", pg.locator('.header-lock-pill').count() == 0)
+        check(f"{name}: a guest can't turn on host controls", pg.locator('.rh-lock').count() == 0)
 
     # The real host still can
     host.locator('.stage-more-wrap .circle-action-btn').click()
     host.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
-    check('the real host can (the guest sees "Host controls")', wait(lambda: guest.locator('.header-lock-pill').count() > 0, 5))
+    check('the real host can (the guest sees "Host controls")', wait(lambda: guest.locator('.rh-lock').count() > 0, 5))
     check('no page errors', not errors, errors[:3])
     b.close()
 harness.summary()

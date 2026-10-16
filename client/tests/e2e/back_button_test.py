@@ -47,13 +47,12 @@ with sync_playwright() as p:
     # Arrive from another page first, so a Back that escaped would really leave the site
     phone.goto(BASE + '/about')
     host.goto(BASE); host.wait_for_timeout(1500)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     check('the host address carries the room code', wait(lambda: f'room={room}' in url(host), 5), url(host))
     phone.goto(f'{BASE}/?room={room}'); phone.wait_for_timeout(1500)
     phone.get_by_role('button', name='Join room').click()
-    ok = check('phone joined', wait(lambda: host.locator('.stage-voice-chip').count() >= 2 and in_room(phone), 25))
+    ok = check('phone joined', wait(lambda: harness.people(host) >= 2 and in_room(phone), 25))
     if not ok:
         print('ERRORS', errors[:3]); phone.screenshot(path=str(harness.OUT / 'back_phone_join.png')); host.screenshot(path=str(harness.OUT / 'back_host_join.png'))
 
@@ -78,7 +77,7 @@ with sync_playwright() as p:
     back(phone)
     wait(lambda: leave_dialog(phone), 3)
     phone.get_by_role('button', name='Stay').click()
-    check('Stay keeps you in the room', not leave_dialog(phone) and in_room(phone) and host.locator('.stage-voice-chip').count() >= 2)
+    check('Stay keeps you in the room', not leave_dialog(phone) and in_room(phone) and harness.people(host) >= 2)
     for _ in range(4):  # many Backs never leave the site
         back(phone)
         if leave_dialog(phone):
@@ -126,7 +125,7 @@ with sync_playwright() as p:
     card = phone.get_by_role('region', name='Rejoin your last room')
     check('home screen offers "Rejoin room"', wait(lambda: card.count() == 1, 5) and str(room) in card.inner_text())
     card.get_by_role('button', name='Rejoin').click()
-    check('Rejoin puts you back in the room', wait(lambda: in_room(phone) and host.locator('.stage-voice-chip').count() >= 2, 25))
+    check('Rejoin puts you back in the room', wait(lambda: in_room(phone) and harness.people(host) >= 2, 25))
 
     # Leaving through Back: the code leaves the address, Rejoin is offered
     back(phone)
@@ -145,7 +144,7 @@ with sync_playwright() as p:
     check('the host is offered their room back', wait(lambda: card.count() == 1, 3) and 'Your room' in card.inner_text())
     card.get_by_role('button', name='Rejoin').click()
     check('the host is back in the same room, as host',
-          wait(lambda: f'room={room}' in url(host) and host.locator('.stage-voice-chip').count() >= 1, 10),
+          wait(lambda: f'room={room}' in url(host) and harness.people(host) >= 1, 10),
           f"{url(host)} {[m.get('type') for m in host.evaluate('window.__sig')][-6:]}")
 
     check('no page errors', not errors, errors[:3])

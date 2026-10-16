@@ -87,8 +87,7 @@ def play_from(pg, t):
 with sync_playwright() as p:
     b = p.chromium.launch(args=harness.CHROMIUM_ARGS)
     owner = page(b, 'Owner')
-    owner.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    owner.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(owner)
     room = wait(lambda: (re.search(r'room=(\d+)', owner.evaluate('location.href')) or [None, None])[1], 15)
     owner.set_input_files('input[type=file][accept*="video/"]', harness.media('test.mp4'))
     size = os.path.getsize(harness.media('test.mp4'))

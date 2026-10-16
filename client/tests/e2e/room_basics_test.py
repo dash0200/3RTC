@@ -32,11 +32,10 @@ with sync_playwright() as p:
         pages.append(pg)
     host, guest = pages
     host.goto(BASE); host.wait_for_timeout(1500)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     guest.goto(f'{BASE}?room={room}'); guest.wait_for_timeout(1200); guest.get_by_role('button', name='Join Room').click()
-    check('two people connected', wait(lambda: guest.locator('.stage-voice-chip').count() >= 2 and host.locator('.stage-voice-chip').count() >= 2, 20))
+    check('two people connected', wait(lambda: harness.people(guest) >= 2 and harness.people(host) >= 2, 20))
     time.sleep(1)
 
     # reactions
@@ -69,7 +68,7 @@ with sync_playwright() as p:
     time.sleep(0.5)
     flood_items = guest.evaluate("document.querySelectorAll('.floating-reaction-item').length")
     check('a flood of 200 at once shows only a handful', flood_items <= 30, flood_items)
-    check('the app is still responsive after the flood', guest.evaluate('1 + 1') == 2 and guest.locator('.stage-voice-chip').count() >= 2)
+    check('the app is still responsive after the flood', guest.evaluate('1 + 1') == 2 and harness.people(guest) >= 2)
 
     # an older app posts each reaction tap to the chat too (reaction, then the same emoji as text)
     time.sleep(2.5)
@@ -130,7 +129,7 @@ with sync_playwright() as p:
     phone.reload(); phone.wait_for_timeout(1500)
     check('phone: the set is kept after reloading', phone.evaluate("JSON.parse(localStorage.getItem('3rtc_quick_reactions') || '[]').length") == 10)
     phone.context.close()
-    wait(lambda: host.locator('.stage-voice-chip').count() == 2 and guest.locator('.stage-voice-chip').count() == 2, 20)
+    wait(lambda: harness.people(host) == 2 and harness.people(guest) == 2, 20)
     time.sleep(1)
 
     # soundboard
@@ -150,7 +149,7 @@ with sync_playwright() as p:
         host.mouse.click(5, 5)
 
     # vote to skip: with two people one vote is enough
-    host.get_by_placeholder(re.compile('Paste a link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
+    host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
     host.get_by_role('button', name=re.compile('Load for All')).click()
     check('a video loads for both', wait(lambda: video_id(host) == 'aqz-KE-bpKQ' and video_id(guest) == 'aqz-KE-bpKQ', 10))
     host.evaluate("document.querySelector('.yt-sync-wrapper')")
@@ -158,15 +157,14 @@ with sync_playwright() as p:
     check('vote to skip with nothing queued closes the video for both', wait(lambda: host.locator('.yt-fullstage-player').count() == 0 and guest.locator('.yt-fullstage-player').count() == 0, 8))
 
     # leaving resets what the room had
-    host.get_by_placeholder(re.compile('Paste a link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
+    host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).first.fill('https://youtu.be/aqz-KE-bpKQ')
     host.get_by_role('button', name=re.compile('Load for All')).click()
     wait(lambda: video_id(guest) == 'aqz-KE-bpKQ', 10)
     guest.get_by_role('button', name=re.compile('Leave', re.I)).first.click()
     check('after leaving: back on the start screen, no video', wait(lambda: guest.locator('.stage-overlay .initial-actions').count() == 1 and guest.locator('.yt-fullstage-player').count() == 0, 8))
-    check('the host sees them go', wait(lambda: host.locator('.stage-voice-chip').count() == 1, 10), host.locator('.stage-voice-chip').count())
-    guest.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    guest.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
-    check('a new room starts clean (no video, no queue)', wait(lambda: guest.locator('.stage-voice-chip').count() == 1, 10) and guest.locator('.yt-fullstage-player').count() == 0)
+    check('the host sees them go', wait(lambda: harness.people(host) == 1, 10), harness.people(host))
+    harness.create_room(guest)
+    check('a new room starts clean (no video, no queue)', wait(lambda: harness.people(guest) == 1, 10) and guest.locator('.yt-fullstage-player').count() == 0)
     check('no page errors', not errors, errors[:3])
     b.close()
 harness.summary()

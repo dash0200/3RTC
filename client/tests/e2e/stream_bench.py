@@ -105,11 +105,10 @@ with sync_playwright() as p:
     host, guest = pages
     for pg in pages:
         pg.goto(BASE + '/'); wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10) or (pg.reload(), time.sleep(2))
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     guest.goto(f'{BASE}/?room={room}'); time.sleep(1.5); guest.get_by_role('button', name='Join Room').click()
-    wait(lambda: host.locator('.stage-voice-chip').count() >= 2, 25); time.sleep(2)
+    wait(lambda: harness.people(host) >= 2, 25); time.sleep(2)
 
     host.set_input_files('input[accept*="video/mp4"]', movie())
     btn = guest.get_by_role('button', name=re.compile('Stream from Peer'))

@@ -27,8 +27,7 @@ with sync_playwright() as p:
     for pg in (pc,phone):
         pg.add_init_script(INIT); pg.goto(BASE+'/')
         if not wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10): pg.reload(); wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10)
-    pc.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    pc.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click(); pc.wait_for_timeout(800)
+    harness.create_room(pc); pc.wait_for_timeout(800)
     room=next(m['roomId'] for m in pc.evaluate('window.__sig') if m.get('type')=='room-created')
     phone.goto(f'{BASE}/?room={room}'); wait(lambda: phone.evaluate('!!navigator.serviceWorker.controller'), 10); phone.get_by_role('button', name='Join room').click()
     wait(lambda: 'P2P' in phone.locator('.phone-status-pill').inner_text(), 15); time.sleep(1.5)

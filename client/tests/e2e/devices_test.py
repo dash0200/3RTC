@@ -39,36 +39,35 @@ with sync_playwright() as p:
         pages.append(pg)
     host, guest = pages
     host.goto(BASE)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 15)
     guest.goto(f'{BASE}/?room={room}')
     guest.get_by_role('button', name=re.compile('Join Room', re.I)).click()
     check('both in the room', wait(lambda: host.locator('audio[id^="remote-audio-"]').count() >= 1, 25))
 
     # Quick menu next to the mic button
-    host.locator('.header-devices-btn').click()
-    check('the device menu opens', wait(lambda: host.locator('.header-devices-menu').count() == 1, 3))
-    ins = options(host, '.header-devices-menu select[aria-label^="Input"]')
-    outs = options(host, '.header-devices-menu select[aria-label^="Output"]')
+    host.locator('.dock-mic-caret').click()
+    check('the device menu opens', wait(lambda: host.locator('.dock-pop-devices').count() == 1, 3))
+    ins = options(host, '.dock-pop-devices select[aria-label^="Input"]')
+    outs = options(host, '.dock-pop-devices select[aria-label^="Output"]')
     check('it lists the microphones (default first)', len(ins) == 3 and ins[0][0] == '' and 'Fake Audio Input 2' in [t for _, t in ins], ins)
     check('it lists the speakers', len(outs) == 3 and 'Fake Audio Output 2' in [t for _, t in outs], outs)
     in2 = next(v for v, t in ins if t == 'Fake Audio Input 2')
     in1 = next(v for v, t in ins if t == 'Fake Audio Input 1')
     out2 = next(v for v, t in outs if t == 'Fake Audio Output 2')
 
-    host.select_option('.header-devices-menu select[aria-label^="Input"]', in2)
+    host.select_option('.dock-pop-devices select[aria-label^="Input"]', in2)
     host.keyboard.press('Escape')
-    check('Escape closes the menu', wait(lambda: host.locator('.header-devices-menu').count() == 0, 3))
+    check('Escape closes the menu', wait(lambda: host.locator('.dock-pop-devices').count() == 0, 3))
     host.locator('.header-ctrl-pill', has_text='Mic Off').click()
     check('the mic opens on the chosen microphone', wait(lambda: last_mic_device(host) == in2, 8), last_mic_device(host))
 
-    host.locator('.header-devices-btn').click()
-    host.select_option('.header-devices-menu select[aria-label^="Input"]', in1)
+    host.locator('.dock-mic-caret').click()
+    host.select_option('.dock-pop-devices select[aria-label^="Input"]', in1)
     check('switching while live reopens the mic on the new one', wait(lambda: last_mic_device(host) == in1, 8), last_mic_device(host))
     check('the mic stays on', wait(lambda: host.locator('.header-ctrl-pill', has_text='Mic Live').count() == 1, 5))
 
-    host.select_option('.header-devices-menu select[aria-label^="Output"]', out2)
+    host.select_option('.dock-pop-devices select[aria-label^="Output"]', out2)
     sink = "[...document.querySelectorAll('audio[id^=\"remote-audio-\"]')].map(a => a.sinkId)"
     check('voices play through the chosen speaker', wait(lambda: host.evaluate(sink) == [out2], 5), host.evaluate(sink))
     later = host.evaluate("(async () => { const v = document.createElement('video'); document.body.appendChild(v); await new Promise(r => setTimeout(r, 300)); const id = v.sinkId; v.remove(); return id; })()")
@@ -85,7 +84,7 @@ with sync_playwright() as p:
     host.locator('.modal-close-btn').first.click()
 
     # The guest tests a mic before turning it on
-    guest.evaluate("document.querySelector('.header-devices-btn') && document.querySelector('.header-devices-btn').click()")
+    guest.evaluate("document.querySelector('.dock-mic-caret') && document.querySelector('.dock-mic-caret').click()")
     guest.locator('.header-devices-more').click()
     guest.locator('.audio-device-test-btn', has_text='Test mic').click()
     fill = "parseFloat(document.querySelector('.audio-settings-modal-card .audio-device-meter-fill').style.width)"
