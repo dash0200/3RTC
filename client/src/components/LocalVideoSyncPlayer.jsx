@@ -1633,7 +1633,7 @@ export default function LocalVideoSyncPlayer({
                 onChange={handleVolumeChange}
                 className="yt-volume-slider"
                 style={{
-                  background: `linear-gradient(to right, #ff0033 0%, #ff0033 ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) 100%)`
+                  background: `linear-gradient(to right, #e5143d 0%, #e5143d ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) 100%)`
                 }}
                 title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
               />

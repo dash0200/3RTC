@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { findQuickPickTitle, getQuickPicks, isVideoUnavailable, markVideoUnavailable } from '../utils/quickPicks';
 import QuickPicksBrowser from './QuickPicksBrowser';
-import { resolvePastedLink, PASTE_PLACEHOLDER } from '../features/media/resolveLink';
+import { resolvePastedLink } from '../features/media/resolveLink';
 
 // (Moved to utils/youtubeId.js so plain modules and tests can use it)
 import { extractYouTubeId } from '../utils/youtubeId';
@@ -87,7 +87,6 @@ export default function YouTubeSyncPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoverPreview, setHoverPreview] = useState(null);
   const [isDropOver, setIsDropOver] = useState(false);
-  const [activeSourceTab, setActiveSourceTab] = useState('youtube'); // 'youtube' | 'local'
   const [isResolving, setIsResolving] = useState(false);
 
   const playerRef = useRef(null);
@@ -785,7 +784,7 @@ export default function YouTubeSyncPlayer({
         <div className="yt-stage-topbar">
           <form className="yt-stage-url-form" onSubmit={handleLoadUrl}>
             <div className="yt-input-wrapper compact">
-              <svg className="yt-input-icon" viewBox="0 0 24 24" width="16" height="16" fill="#FF0033">
+              <svg className="yt-input-icon" viewBox="0 0 24 24" width="16" height="16" fill="#e5143d">
                 <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
               </svg>
               <input
@@ -873,179 +872,92 @@ export default function YouTubeSyncPlayer({
     );
   }
 
-  // CASE 2: Idle Screen (Lobby / Presets)
+  // CASE 2: Idle Screen: one box for a link or a file (drop it anywhere here), then quick picks
+  const onDragOver = (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    setIsDropOver(true);
+  };
   return (
-    <div className="yt-screen-card" ref={fullstageRef}>
-      {/* Center Hero Card */}
+    <div
+      className={`yt-screen-card ${isDropOver ? 'is-drop-over' : ''}`}
+      ref={fullstageRef}
+      onDragOver={onDragOver}
+      onDragEnter={onDragOver}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDropOver(false); }}
+      onDrop={(e) => {
+        if (!e.dataTransfer?.files?.length) return;
+        e.preventDefault();
+        setIsDropOver(false);
+        onLocalFileSelect?.(e.dataTransfer.files[0]);
+      }}
+    >
       <div className="yt-hero-center">
-        {/* Source Selector Tabs: YouTube & Local Video */}
-        <div className="stage-source-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeSourceTab === 'youtube'}
-            className={`stage-source-tab ${activeSourceTab === 'youtube' ? 'active tab-yt' : ''}`}
-            onClick={() => setActiveSourceTab('youtube')}
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-            </svg>
-            <span>Video Link</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeSourceTab === 'local'}
-            className={`stage-source-tab ${activeSourceTab === 'local' ? 'active tab-local' : ''}`}
-            onClick={() => setActiveSourceTab('local')}
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z" />
-            </svg>
-            <span>Local Video File</span>
-          </button>
+        <h2 className="yt-hero-title rd-pick-title">What are we watching?</h2>
+
+        <div className={`rd-dropzone ${isDropOver ? 'is-over' : ''}`}>
+          <form className="yt-hero-form" onSubmit={handleLoadUrl}>
+            <div className="yt-hero-input-wrap">
+              <label htmlFor="stage-link" className="rd-visually-hidden">Video link</label>
+              <input
+                id="stage-link"
+                type="text"
+                className="yt-hero-input"
+                placeholder="Paste a YouTube, Vimeo, Twitch or video link"
+                value={urlInput}
+                onChange={(e) => {
+                  setUrlInput(e.target.value);
+                  if (inputError) setInputError('');
+                }}
+              />
+              {urlInput && (
+                <button type="button" className="yt-clear-btn" onClick={() => setUrlInput('')} aria-label="Clear link">
+                  &times;
+                </button>
+              )}
+            </div>
+            <button type="submit" className="yt-hero-load-btn" title="Starts for everyone in the room">
+              <span>{isResolving ? 'Checking…' : 'Play for everyone'}</span>
+            </button>
+          </form>
+          {inputError && <div className="yt-url-error">{inputError}</div>}
+          <p className="rd-drop-hint">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></svg>
+            {isDropOver ? 'Drop to play it for everyone' : 'or drop a video file anywhere here ·'}
+            {!isDropOver && (
+              <>
+                <button type="button" className="rd-inline-link" onClick={() => localFileInputRef.current?.click()}>browse files</button>
+                <span className="rd-drop-types">MP4, MKV, WebM</span>
+              </>
+            )}
+          </p>
+          <input
+            ref={localFileInputRef}
+            type="file"
+            accept="video/*,.mkv,.mp4,.webm,.mov,.avi,.m4v"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onLocalFileSelect?.(f);
+              e.target.value = '';
+            }}
+          />
         </div>
 
-        {activeSourceTab === 'youtube' ? (
-          <>
-            <div className="yt-hero-icon-box">
-              <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </div>
-            <h2 className="yt-hero-title">Watch Together, In Sync</h2>
-            <p className="yt-hero-subtitle">
-              Paste a YouTube, Vimeo or Twitch link, or a direct video link (.mp4, .m3u8), or pick a quick watch preset. It loads for everyone, and <strong>Play, Pause &amp; Seek</strong> stay in sync.
-            </p>
-
-            {/* Clean URL Input Bar */}
-            <form className="yt-hero-form" onSubmit={handleLoadUrl}>
-              <div className="yt-hero-input-wrap">
-                <div className="yt-hero-input-icon">
-                  <svg viewBox="0 0 24 24" width="22" height="22" fill="#FF0033">
-                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-                  </svg>
-                </div>
-                <input
-                  type="text"
-                  className="yt-hero-input"
-                  placeholder={PASTE_PLACEHOLDER}
-                  value={urlInput}
-                  onChange={(e) => {
-                    setUrlInput(e.target.value);
-                    if (inputError) setInputError('');
-                  }}
-                />
-                {urlInput && (
-                  <button
-                    type="button"
-                    className="yt-clear-btn"
-                    onClick={() => setUrlInput('')}
-                    title="Clear input"
-                  >
-                    &times;
-                  </button>
-                )}
-              </div>
-              <button type="submit" className="yt-hero-load-btn" title="Play immediately for all">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-                <span>{isResolving ? 'Checking…' : 'Load for All'}</span>
-              </button>
-            </form>
-            {inputError && <div className="yt-url-error">{inputError}</div>}
-
-            {/* Quick picks: groups, categories and a thumbnail grid */}
-            <QuickPicksBrowser
-              onPlay={(v) => {
-                setInputError('');
-                onVideoChange(v.id, v.title);
-                onBroadcastAction('load', { newVideoId: v.id, title: v.title });
-              }}
-              onShuffle={handleSelectPreset}
-              onQueue={typeof onAddToQueue === 'function' ? (v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false }) : undefined}
-              queuedIds={queue.map((item) => item.videoId)}
-              queueCount={queue.length}
-              onPlayQueue={typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined}
-            />
-          </>
-        ) : (
-          <>
-            <div className="yt-hero-icon-box local">
-              <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
-                <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z" />
-              </svg>
-            </div>
-            <h2 className="yt-hero-title">P2P Synchronized Local Video Watch Party</h2>
-            <p className="yt-hero-subtitle">
-              Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files with zero server upload. Peers directly sync playback in real time or stream P2P.
-            </p>
-
-            {/* Local Video Dropzone & Browse Button */}
-            <div
-              className={`yt-hero-local-dropzone ${isDropOver ? 'drag-over' : ''}`}
-              onClick={() => localFileInputRef.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); setIsDropOver(true); }}
-              onDragLeave={() => setIsDropOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDropOver(false);
-                const files = e.dataTransfer?.files;
-                if (files && files.length > 0) {
-                  onLocalFileSelect?.(files[0]);
-                }
-              }}
-            >
-              <div className="local-drop-cloud-icon">
-                <svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor">
-                  <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" />
-                </svg>
-              </div>
-              <div className="local-drop-text-group">
-                <div className="local-drop-main-text">
-                  <span>Click to Select Video</span> or Drag &amp; Drop Here
-                </div>
-                <div className="local-drop-sub-text">
-                  Supports MP4, MKV, WebM, MOV • 100% Private Peer-to-Peer
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btn-browse-file"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  localFileInputRef.current?.click();
-                }}
-              >
-                Browse File
-              </button>
-            </div>
-
-            <input
-              ref={localFileInputRef}
-              type="file"
-              accept="video/*,.mkv,.mp4,.webm,.mov,.avi,.m4v"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) {
-                  onLocalFileSelect?.(f);
-                }
-                e.target.value = '';
-              }}
-            />
-
-            <div className="yt-hero-presets-row">
-              <span className="yt-hero-presets-tag">⚡ Local Direct</span>
-              <span className="yt-hero-info-pill">0 Network Upload</span>
-              <span className="yt-hero-info-pill">100% Private Playback</span>
-              <span className="yt-hero-info-pill">Subtitles Supported</span>
-            </div>
-          </>
-        )}
+        {/* Quick picks: groups, categories and a thumbnail grid */}
+        <QuickPicksBrowser
+          onPlay={(v) => {
+            setInputError('');
+            onVideoChange(v.id, v.title);
+            onBroadcastAction('load', { newVideoId: v.id, title: v.title });
+          }}
+          onShuffle={handleSelectPreset}
+          onQueue={typeof onAddToQueue === 'function' ? (v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false }) : undefined}
+          queuedIds={queue.map((item) => item.videoId)}
+          queueCount={queue.length}
+          onPlayQueue={typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined}
+        />
       </div>
-
     </div>
   );
 }

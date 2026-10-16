@@ -1,0 +1,333 @@
+/* ==========================================================================
+   3RTC redesign (Oct 2026): tokens + the new home, invite screen and dock.
+   Matches the "3RTC Redesign" Figma file. Loaded after App.css / phone.css.
+   ========================================================================== */
+
+:root {
+  --rd-bg: #0a0a0d;
+  --rd-surface: #141419;
+  --rd-raised: #1c1c23;
+  --rd-panel: #0e0e12;
+  --rd-line: #2a2a33;
+  --rd-line-strong: #3a3a45;
+  --rd-text: #f4f4f6;
+  --rd-text-2: #a9a9b5;   /* 8.5:1 on bg */
+  --rd-text-3: #85858f;   /* 5.4:1 on bg */
+  --rd-accent: #e5143d;   /* white text 4.7:1 */
+  --rd-accent-press: #c40f33;
+  --rd-live: #36d399;
+  --rd-live-text: #7be7bf;
+  --rd-warn: #f5b544;
+  --rd-danger-text: #ff8a9c;
+  --rd-danger-bg: #3a1520;
+  --rd-danger-line: #5a1e2a;
+  --rd-focus: #6aa8ff;
+}
+
+.rd-visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---- Logo ---- */
+.rd-logo { display: inline-flex; align-items: center; gap: 10px; color: var(--rd-text); }
+.rd-logo-mark {
+  width: var(--logo, 30px); height: var(--logo, 30px);
+  border-radius: calc(var(--logo, 30px) * 0.27);
+  background: var(--rd-accent);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.rd-logo-word {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: calc(var(--logo, 30px) * 0.68);
+  letter-spacing: -0.02em;
+}
+
+/* ---- Buttons ---- */
+.rd-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 44px; padding: 0 20px;
+  border-radius: 12px; border: 1px solid transparent;
+  font: inherit; font-size: 15px; font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+.rd-btn-lg { min-height: 52px; font-size: 16px; }
+.rd-btn-xl { min-height: 56px; font-size: 18px; border-radius: 16px; }
+.rd-btn-primary { background: var(--rd-accent); color: #fff; }
+.rd-btn-primary:hover { background: var(--rd-accent-press); }
+.rd-btn-secondary { background: var(--rd-surface); border-color: var(--rd-line-strong); color: var(--rd-text); font-weight: 600; }
+.rd-btn-secondary:hover:not(:disabled) { border-color: var(--rd-text-3); }
+.rd-btn-ghost { background: transparent; color: var(--rd-text-2); font-weight: 600; }
+.rd-btn-ghost:hover { color: var(--rd-text); }
+.rd-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- Switch ---- */
+.rd-switch {
+  appearance: none; -webkit-appearance: none;
+  flex: none; width: 48px; height: 28px; border-radius: 14px;
+  background: var(--rd-line-strong); position: relative; cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.rd-switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 22px; height: 22px; border-radius: 50%; background: #fff;
+  transition: transform 0.15s ease;
+}
+.rd-switch:checked { background: var(--rd-live); }
+.rd-switch:checked::after { transform: translateX(20px); }
+
+/* ==========================================================================
+   Desktop home
+   ========================================================================== */
+.dh {
+  flex: 1; min-height: 100%; width: 100%;
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+  background: var(--rd-bg); color: var(--rd-text);
+}
+.dh a { color: var(--rd-text-2); text-decoration: none; }
+.dh a:hover { color: var(--rd-text); }
+.dh-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 20px 40px;
+}
+.dh-nav { display: flex; align-items: center; gap: 28px; font-size: 15px; font-weight: 500; }
+.dh-status { display: inline-flex; align-items: center; gap: 8px; color: var(--rd-text-2); font-size: 14px; }
+.dh-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rd-warn); }
+.dh-status.is-online .dh-dot, .dh-dot.is-live { background: var(--rd-live); }
+
+.dh-main {
+  flex: 1;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+  gap: 72px;
+  padding: 24px 40px 40px;
+}
+.dh-hero { flex: 1 1 420px; max-width: 500px; min-width: 0; display: flex; flex-direction: column; gap: 28px; }
+.dh-copy { display: flex; flex-direction: column; gap: 16px; }
+.dh-eyebrow { color: var(--rd-warn); font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+.dh-copy h1 {
+  font-family: var(--font-display);
+  font-size: clamp(40px, 4.4vw, 60px);
+  line-height: 1.02; letter-spacing: -0.035em; font-weight: 700;
+}
+.dh-sub { font-size: 18px; line-height: 1.55; color: var(--rd-text-2); }
+
+.dh-card {
+  background: var(--rd-surface); border: 1px solid var(--rd-line);
+  border-radius: 20px; padding: 24px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.dh-field { display: flex; flex-direction: column; gap: 8px; }
+.dh-field label { font-size: 14px; font-weight: 600; color: var(--rd-text); }
+.dh-field input {
+  height: 48px; padding: 0 14px;
+  border-radius: 12px; border: 1px solid var(--rd-line-strong);
+  background: var(--rd-bg); color: var(--rd-text);
+  font-size: 16px;
+}
+.dh-field input::placeholder { color: var(--rd-text-3); }
+.dh-field input:focus { border-color: var(--rd-focus); outline: none; }
+.dh-divider { display: flex; align-items: center; gap: 12px; color: var(--rd-text-3); font-size: 14px; }
+.dh-divider::before, .dh-divider::after { content: ''; flex: 1; height: 1px; background: var(--rd-line); }
+.dh-join { display: flex; gap: 10px; }
+.dh-code { flex: 1; min-width: 0; display: flex; gap: 8px; border: 0; }
+.dh-code input {
+  flex: 1; width: 0; height: 52px;
+  border-radius: 12px; border: 1px solid var(--rd-line-strong);
+  background: var(--rd-bg); color: var(--rd-text);
+  text-align: center;
+  font-family: var(--font-mono); font-size: 22px; font-weight: 700;
+}
+.dh-code input:focus { border-color: var(--rd-focus); outline: none; }
+
+.dh-points { list-style: none; display: flex; flex-direction: column; gap: 10px; color: var(--rd-text-2); font-size: 14px; }
+.dh-points li { display: flex; align-items: center; gap: 8px; }
+.dh-points svg { color: var(--rd-live); flex: none; }
+
+.dh-preview {
+  flex: 1 1 480px; max-width: 640px; min-width: 0;
+  background: var(--rd-surface); border: 1px solid var(--rd-line);
+  border-radius: 24px; padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.dh-preview-video {
+  position: relative; aspect-ratio: 16 / 9;
+  border-radius: 14px; background: #1b1524; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.dh-preview-play { color: rgba(244, 244, 246, 0.25); }
+.dh-pill {
+  position: absolute; top: 12px; left: 12px;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(10, 10, 13, 0.8);
+  font-size: 13px; font-weight: 600;
+}
+.dh-people { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 10px; }
+.dh-av {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--av); color: var(--rd-bg);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 16px; flex: none;
+}
+.dh-av.is-speaking { box-shadow: 0 0 0 3px #1b1524, 0 0 0 6px var(--rd-live); }
+.dh-av-sm { width: 28px; height: 28px; font-size: 12px; }
+.dh-preview-chat { display: flex; align-items: flex-start; gap: 10px; padding: 4px 6px; }
+.dh-preview-chat p { background: var(--rd-raised); border-radius: 4px 14px 14px 14px; padding: 8px 12px; font-size: 14px; line-height: 1.4; }
+.dh-preview-chat strong { color: var(--rd-warn); font-weight: 600; margin-right: 4px; }
+
+.dh-footer {
+  border-top: 1px solid var(--rd-raised);
+  padding: 18px 40px;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px;
+  font-size: 13px; color: var(--rd-text-3);
+}
+.dh-footer nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.dh-footer a { color: var(--rd-text-3); }
+.dh-linkbtn { background: none; border: 0; padding: 0; color: var(--rd-text-3); font-size: 13px; cursor: pointer; }
+.dh-linkbtn:hover { color: var(--rd-text); }
+.dh-build { font-family: var(--font-mono); font-size: 12px; }
+
+@media (max-width: 900px) {
+  .dh-header, .dh-main, .dh-footer { padding-left: 20px; padding-right: 20px; }
+  .dh-preview { display: none; }
+}
+
+/* ==========================================================================
+   Invite screen (?room=12345), phone and desktop
+   ========================================================================== */
+.invite {
+  flex: 1; width: 100%; min-height: 100%;
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+  background: var(--rd-bg); color: var(--rd-text);
+  padding: calc(20px + var(--sat)) 20px calc(28px + var(--sab));
+}
+.invite-top { display: flex; }
+.invite-body {
+  flex: 1; width: 100%; max-width: 440px; margin: 0 auto;
+  display: flex; flex-direction: column; justify-content: center; gap: 28px;
+  padding-top: 24px;
+}
+.invite-hero { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+.invite-mark {
+  width: 64px; height: 64px; border-radius: 20px;
+  background: var(--rd-danger-bg); color: var(--rd-danger-text);
+  display: flex; align-items: center; justify-content: center;
+}
+.invite-hero h1 {
+  font-family: var(--font-display);
+  font-size: 30px; line-height: 1.1; letter-spacing: -0.02em; font-weight: 700;
+}
+.invite-hero p { color: var(--rd-text-2); font-size: 16px; }
+.invite-code { font-family: var(--font-mono); font-weight: 700; color: var(--rd-text); letter-spacing: 0.06em; }
+.invite-fields { display: flex; flex-direction: column; gap: 14px; }
+.invite-fields .dh-field input { height: 52px; border-radius: 14px; background: var(--rd-surface); font-size: 17px; }
+.invite-toggle {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 60px; padding: 10px 14px;
+  border-radius: 14px; background: var(--rd-surface);
+  cursor: pointer;
+}
+.invite-toggle > svg { flex: none; color: var(--rd-text); }
+.invite-toggle-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.invite-toggle-text span { font-size: 16px; font-weight: 600; }
+.invite-toggle-text small { font-size: 13px; color: var(--rd-text-2); }
+.invite-actions { display: flex; flex-direction: column; gap: 8px; }
+.invite-actions .rd-btn-primary { width: 100%; }
+
+@media (min-width: 900px) {
+  .invite { padding: 20px 40px 40px; }
+  .invite-body { flex: 0 0 auto; margin: auto; padding: 40px 0; }
+}
+
+/* ==========================================================================
+   Desktop room: header
+   ========================================================================== */
+.header-room-chip { font: inherit; color: inherit; cursor: pointer; }
+.header-net-chip.weak { border-color: rgba(245, 181, 68, 0.4); color: var(--rd-warn); }
+.header-net-chip.weak .net-status-dot { background: var(--rd-warn); box-shadow: none; }
+.header-net-chip:not(.connected):not(.weak) .net-status-dot { background: var(--rd-text-3); box-shadow: none; }
+.header-devices-btn { min-width: 36px; min-height: 36px; }
+
+.header-invite-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--rd-line-strong);
+  background: var(--rd-surface); color: var(--rd-text);
+  font: inherit; font-size: 14px; font-weight: 600;
+  cursor: pointer;
+}
+.header-invite-btn:hover { border-color: var(--rd-text-3); }
+.header-invite-btn.is-alone { background: var(--rd-accent); border-color: var(--rd-accent); color: #fff; font-weight: 700; }
+.header-invite-btn.is-alone:hover { background: var(--rd-accent-press); }
+.header-invite-count { color: var(--rd-text-3); font-weight: 500; }
+
+/* ==========================================================================
+   Desktop room: dock (mic with a label, Leave as words on the far right)
+   ========================================================================== */
+.circle-action-btn { width: 44px; height: 44px; }
+.circle-action-btn.dock-mic {
+  width: auto; padding: 0 16px 0 14px; gap: 8px;
+  border-radius: 14px;
+  font: inherit; font-size: 14px; font-weight: 600;
+}
+.circle-action-btn.dock-mic.muted { background: var(--rd-danger-bg); border-color: var(--rd-danger-line); color: var(--rd-danger-text); }
+.circle-action-btn.dock-mic.active { background: rgba(54, 211, 153, 0.12); border-color: rgba(54, 211, 153, 0.35); color: var(--rd-live-text); }
+.dock-leave-btn {
+  margin-left: 12px;
+  height: 44px; padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid var(--rd-danger-line);
+  background: transparent; color: var(--rd-danger-text);
+  font: inherit; font-size: 15px; font-weight: 600;
+  cursor: pointer;
+}
+.dock-leave-btn:hover { background: var(--rd-danger-bg); }
+
+/* ==========================================================================
+   Room, nothing playing: one box for a link or a file
+   ========================================================================== */
+.yt-screen-card.is-drop-over { outline: 2px dashed var(--rd-live); outline-offset: -12px; }
+.rd-pick-title { font-family: var(--font-display); letter-spacing: -0.02em; }
+.rd-dropzone {
+  width: 100%; max-width: 760px;
+  border: 1.5px dashed var(--rd-line-strong);
+  border-radius: 20px;
+  background: var(--rd-surface);
+  padding: 18px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.rd-dropzone.is-over { border-color: var(--rd-live); background: rgba(54, 211, 153, 0.06); }
+.rd-dropzone .yt-hero-form { margin: 0; max-width: none; width: 100%; }
+.rd-drop-hint {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px;
+  color: var(--rd-text-2); font-size: 15px;
+}
+.rd-inline-link {
+  background: none; border: 0; padding: 0;
+  color: var(--rd-text); font: inherit; font-weight: 600;
+  text-decoration: underline; text-underline-offset: 3px;
+  cursor: pointer;
+}
+.rd-drop-types { color: var(--rd-text-3); }
+
+/* ==========================================================================
+   Chat: 44px touch targets
+   ========================================================================== */
+.quick-reaction-dock-btn { min-width: 44px; min-height: 44px; }
+.chat-pill-smiley-btn { min-width: 40px; min-height: 40px; }
+.chat-pill-textarea { font-family: inherit; }
+
+/* Phone: the app shell already shows the logo above the invite */
+.phone-app .invite-top { display: none; }
+.phone-app .invite { padding-top: 12px; }
+
+/* Voice chips never wrap a name onto two lines */
+.voice-chip-name { white-space: nowrap; }

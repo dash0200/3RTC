@@ -8,8 +8,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Header from './components/Header';
 import Stage from './components/Stage';
 import LiveChat from './components/LiveChat';
-import CreateRoomModal from './components/CreateRoomModal';
-import JoinRoomModal from './components/JoinRoomModal';
+import DesktopHome from './components/DesktopHome';
+import InviteScreen from './components/InviteScreen';
 import ServerSettingsModal from './components/ServerSettingsModal';
 import AudioSettingsModal from './components/AudioSettingsModal';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
@@ -47,6 +47,7 @@ import { nextActivityView } from './features/activities/activityHost';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
+import './redesign.css';
 import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 import { useBackLayer, useRoomBackGuard } from './core/backStack';
 import LeaveRoomDialog from './components/LeaveRoomDialog';
@@ -230,8 +231,6 @@ export default function App() {
     const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast });
 
     // ---- screens and dialogs -----------------------------------------------------------------
-    const [showCreateModal, setShowCreateModal] = useState(false);
-    const [showJoinModal, setShowJoinModal] = useState(false);
     const [showSettingsModal, setShowSettingsModal] = useState(false);
     const [showQrModal, setShowQrModal] = useState(false);
     const [showAudioSettingsModal, setShowAudioSettingsModal] = useState(false);
@@ -267,8 +266,7 @@ export default function App() {
         hasInitializedRef.current = true;
         const roomParam = new URLSearchParams(window.location.search).get('room');
         if (roomParam && /^\d{5}$/.test(roomParam)) {
-            setInitialJoinPin(roomParam);
-            setShowJoinModal(true);
+            setInitialJoinPin(roomParam); // opens the invite screen
         }
         addSystemMessage('Welcome to 3RTC! Create or join a room to chat and watch YouTube together.');
     }, [addSystemMessage]);
@@ -292,14 +290,31 @@ export default function App() {
     };
     const handleConfirmCreate = (displayName) => {
         rememberName(displayName);
-        setShowCreateModal(false);
         mesh.createRoom();
     };
     const handleConfirmJoin = (pin, displayName) => {
         rememberName(displayName);
-        setShowJoinModal(false);
         mesh.joinRoom(pin);
     };
+    // Invite link (?room=12345): its own screen with one Join button; the mic choice is made there
+    const [inviteDismissed, setInviteDismissed] = useState(false);
+    const showInvite = !roomId && Boolean(initialJoinPin) && !inviteDismissed;
+    const micOnAfterJoinRef = useRef(false);
+    const handleInviteJoin = (pin, displayName, { micOn } = {}) => {
+        micOnAfterJoinRef.current = Boolean(micOn);
+        setInviteDismissed(true);
+        handleConfirmJoin(pin, displayName);
+    };
+    const dismissInvite = () => {
+        setInviteDismissed(true);
+        setInitialJoinPin('');
+        try { window.history.replaceState(null, '', window.location.pathname); } catch { /* ignore */ }
+    };
+    useEffect(() => {
+        if (!roomId || !micOnAfterJoinRef.current) return;
+        micOnAfterJoinRef.current = false;
+        if (isMicMuted) toggleMicrophone();
+    }, [roomId]); // eslint-disable-line react-hooks/exhaustive-deps
     const leaveRoomNow = () => {
         setShowLeaveDialog(false);
         voice.resetVoice();
@@ -307,10 +322,8 @@ export default function App() {
         addSystemMessage('You left the room.');
         showToast('Left room');
     };
-    const handleLeaveRoom = () => {
-        if (!window.confirm('Leave this room and end P2P connection?')) return;
-        leaveRoomNow();
-    };
+    // Same "Leave room 12345?" dialog on desktop and phone (was a browser confirm() on desktop)
+    const handleLeaveRoom = () => setShowLeaveDialog(true);
 
     // ---- Back button, rejoining, closing the tab -----------------------------------------------
     // Back in a room closes what's open on top, else asks before leaving (core/backStack.js).
@@ -320,8 +333,6 @@ export default function App() {
     useRoomBackGuard(roomId, () => setShowLeaveDialog(true));
     useEffect(() => { if (!roomId) setShowLeaveDialog(false); }, [roomId]);
     useBackLayer(Boolean(phoneSheet), closePhoneSheet);
-    useBackLayer(showCreateModal, () => setShowCreateModal(false));
-    useBackLayer(showJoinModal, () => setShowJoinModal(false));
     useBackLayer(showSettingsModal, () => setShowSettingsModal(false));
     useBackLayer(showAudioSettingsModal, () => setShowAudioSettingsModal(false));
     useBackLayer(showNetworkHudModal, () => setShowNetworkHudModal(false));
@@ -473,11 +484,6 @@ export default function App() {
             isP2PConnected={isP2PConnected}
             p2pStatusText={p2pStatusText}
             rejoin={rejoin}
-            onOpenCreate={() => setShowCreateModal(true)}
-            onOpenJoin={() => {
-                setInitialJoinPin('');
-                setShowJoinModal(true);
-            }}
             onCopyRoom={handleCopyRoom}
             onLeaveRoom={handleLeaveRoom}
             onToggleChat={() => setIsChatOpen((prev) => !prev)}
@@ -631,6 +637,8 @@ export default function App() {
                                 onOpenMore={() => setPhoneSheet('more')}
                             />
                         </>
+                    ) : showInvite ? (
+                        <InviteScreen pin={initialJoinPin} username={username} onJoin={handleInviteJoin} onDismiss={dismissInvite} />
                     ) : (
                         <PhoneHome
                             username={username}
@@ -688,6 +696,19 @@ export default function App() {
                         onToggleSoundboardMute={soundboard.toggleMute}
                     />
                 </>
+            ) : !roomId ? (
+                showInvite ? (
+                    <InviteScreen pin={initialJoinPin} username={username} onJoin={handleInviteJoin} onDismiss={dismissInvite} />
+                ) : (
+                    <DesktopHome
+                        username={username}
+                        onCreate={handleConfirmCreate}
+                        onJoin={handleConfirmJoin}
+                        onOpenServerSettings={openServerSettings}
+                        rejoin={rejoin}
+                        isOnline={signalStatus.connected}
+                    />
+                )
             ) : (
                 <>
                     <div className="app-main-pane">
@@ -749,19 +770,6 @@ export default function App() {
                 </div>
             )}
 
-            <CreateRoomModal
-                isOpen={showCreateModal && !isPhone}
-                onClose={() => setShowCreateModal(false)}
-                onConfirm={handleConfirmCreate}
-                currentUsername={username}
-            />
-            <JoinRoomModal
-                isOpen={showJoinModal && !isPhone}
-                onClose={() => setShowJoinModal(false)}
-                onConfirm={handleConfirmJoin}
-                currentUsername={username}
-                initialPin={initialJoinPin}
-            />
             <ServerSettingsModal
                 isOpen={SHOW_SERVER_SETTINGS && showSettingsModal}
                 onClose={() => setShowSettingsModal(false)}

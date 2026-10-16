@@ -624,7 +624,7 @@ export default function LiveChat({
               >
                 <span className={`signal-dot ${signalStatus.connected ? 'connected' : ''}`} />
                 <span className="sidebar-cloud-label">
-                  {signalStatus.connected ? 'Cloud Connected' : (signalStatus.label || 'Connecting...')}
+                  {signalStatus.connected ? 'Online' : (signalStatus.label || 'Connecting…')}
                 </span>
                 {typeof onOpenSettings === 'function' && (
                   <svg className="sidebar-cloud-gear" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
@@ -644,9 +644,11 @@ export default function LiveChat({
         )}
 
         {/* Tabs: Chat vs Queue vs Peers */}
-        <div className="chat-nav-tabs">
+        <div className="chat-nav-tabs" role="tablist" aria-label="Room panel">
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'chat'}
             className={`chat-tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('chat');
@@ -657,13 +659,16 @@ export default function LiveChat({
               <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
             </svg>
             <span>Chat</span>
-            {(messages.length > 0 || unreadChatCount > 0) && (
-              <span className="tab-badge chat-badge">{unreadChatCount || messages.length}</span>
+            {/* Unread only: the total message count used to show here forever, even on this tab */}
+            {activeTab !== 'chat' && unreadChatCount > 0 && (
+              <span className="tab-badge chat-badge" aria-label={`${unreadChatCount} unread`}>{unreadChatCount}</span>
             )}
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'queue'}
             className={`chat-tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
             onClick={() => setActiveTab('queue')}
           >
@@ -676,14 +681,16 @@ export default function LiveChat({
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'peers'}
             className={`chat-tab-btn ${activeTab === 'peers' ? 'active' : ''}`}
             onClick={() => setActiveTab('peers')}
-            title="Peers & Voice Status"
+            title="People and voice"
           >
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
               <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
             </svg>
-            <span>Peers</span>
+            <span>People</span>
             <span className="tab-badge peers-badge">{connectedPeers.length + 1}</span>
           </button>
         </div>
@@ -1125,7 +1132,7 @@ export default function LiveChat({
             {/* Add Video to Queue Form */}
             <form className="queue-add-form" onSubmit={handleQueueSubmit}>
               <div className="queue-input-wrapper">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#FF0033" className="queue-input-icon">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="#e5143d" className="queue-input-icon">
                   <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
                 </svg>
                 <input
