@@ -45,6 +45,7 @@ import { useQueue } from './features/queue/useQueue';
 import { useActivities } from './features/activities/useActivities';
 import ActivityStage from './features/activities/ActivityStage';
 import { nextActivityView } from './features/activities/activityHost';
+import { useActivityLoad } from './features/activities/useActivityLoad';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
 import './App.css';
 import './phone.css';
@@ -202,31 +203,54 @@ export default function App() {
     const [isChatOpen, setIsChatOpen] = useState(true);
     const [sidebarTab, setSidebarTab] = useState('chat');
     const activities = useActivities({ room, hostControls, peopleCount: roomId ? peerCount : 0 });
+    // Is the game loaded on this device? Only for whoever started it or joined it (features/activities/useActivityLoad.js)
+    const activityLoad = useActivityLoad({ bus, activity: activities.current, definition: activities.definition, selfId: peerIdRef.current, notify: showToast });
+    const activityOn = Boolean(activities.current) && activityLoad.loaded;
+    const joinedByTapRef = useRef(false);
+    const joinActivity = useCallback(() => {
+        joinedByTapRef.current = true;
+        activityLoad.load();
+    }, [activityLoad]);
+    // The games menu: the open game, not loaded here, is "Join" (instead of greyed out as open)
+    const activityMenu = useMemo(() => activities.menu.map((a) => (a.isOpen && !activityLoad.loaded
+        ? { ...a, isOpen: false, description: `On now: tap to join` } : a)), [activities.menu, activityLoad.loaded]);
+    const startOrJoinActivity = useCallback((id) => {
+        if (activities.current?.id === id && !activityLoad.loaded) joinActivity();
+        else activities.start(id);
+    }, [activities, activityLoad.loaded, joinActivity]);
     const isPhone = useIsPhone();
     // How the open game is shown here: over the stage, in a small window, or as a bubble
     // (only on this device; the game itself is the same for everyone). See activityHost.js.
     const [activityView, setActivityView] = useState('full');
     const viewMemoRef = useRef({ media: false, key: null });
-    const activityKey = activities.current ? `${activities.current.id}:${activities.current.startedAt}` : null;
+    // (the game counts as opened here when it's loaded here)
+    const activityKey = activityOn ? `${activities.current.id}:${activities.current.startedAt}` : null;
     useEffect(() => {
         const memo = viewMemoRef.current;
-        setActivityView((view) => nextActivityView({
-            view,
-            mediaActive: isMediaActive,
-            wasMediaActive: memo.media,
-            isPhone,
-            activityOpen: Boolean(activityKey),
-            activityJustOpened: Boolean(activityKey) && activityKey !== memo.key
-        }));
+        const justOpened = Boolean(activityKey) && activityKey !== memo.key;
+        if (justOpened && joinedByTapRef.current) {
+            // Joined from its bubble: show it (a small window over a video on a computer)
+            joinedByTapRef.current = false;
+            setActivityView(!isPhone && isMediaActive ? 'window' : 'full');
+        } else {
+            setActivityView((view) => nextActivityView({
+                view,
+                mediaActive: isMediaActive,
+                wasMediaActive: memo.media,
+                isPhone,
+                activityOpen: Boolean(activityKey),
+                activityJustOpened: justOpened
+            }));
+        }
         viewMemoRef.current = { media: isMediaActive, key: activityKey };
     }, [isMediaActive, activityKey, isPhone]);
-    const activityAside = Boolean(activities.current) && activityView !== 'full';
+    const activityAside = activityOn && activityView !== 'full';
     const [activityChatSplit, setActivityChatSplit] = useState(() => {
         try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
     });
     // Unread count: on phones the chat list is on screen when its tab is picked (and, with a game
     // open, when the game's "Chat" view is on); on computers when the chat panel is open
-    const phoneChatOnScreen = sidebarTab === 'chat' && (!activities.current || activityAside || activityChatSplit);
+    const phoneChatOnScreen = sidebarTab === 'chat' && (!activityOn || activityAside || activityChatSplit);
     const chat = useChat({ room, isChatOpen: isPhone ? phoneChatOnScreen : isChatOpen });
     const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
     const soundboard = useSoundboard({ room, isAudioBlockedRef });
@@ -339,9 +363,9 @@ export default function App() {
     useBackLayer(showAudioSettingsModal, () => setShowAudioSettingsModal(false));
     useBackLayer(showNetworkHudModal, () => setShowNetworkHudModal(false));
     useBackLayer(showQrModal, () => setShowQrModal(false));
-    useBackLayer(isPhone && activityChatSplit && Boolean(activities.current), () => setActivityChatSplit(false));
+    useBackLayer(isPhone && activityChatSplit && activityOn, () => setActivityChatSplit(false));
     // Phone, a game open: Back puts the game into its bubble (the game goes on)
-    useBackLayer(isPhone && Boolean(activities.current) && activityView === 'full', () => setActivityView('bubble'));
+    useBackLayer(isPhone && activityOn && activityView === 'full', () => setActivityView('bubble'));
 
     // The room you were last in: "Rejoin" on the home screen for a while (utils/lastRoom.js)
     const [lastRoom, setLastRoom] = useState(() => readLastRoom());
@@ -378,7 +402,7 @@ export default function App() {
     } : null;
 
     // Closing or reloading the tab mid-video or mid-game: the browser asks first
-    const busyInRoom = Boolean(roomId) && (isMediaActive || Boolean(activities.current));
+    const busyInRoom = Boolean(roomId) && (isMediaActive || activityOn);
     useEffect(() => {
         if (!busyInRoom) return undefined;
         const ask = (e) => {
@@ -472,6 +496,7 @@ export default function App() {
         <ActivityStage
             activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat}
             view={activityView} onViewChange={setActivityView} isPhone={isPhone} mediaActive={isMediaActive}
+            loaded={activityLoad.loaded} onJoin={joinActivity} onLeave={activityLoad.leave}
         />
     ) : null;
 
@@ -546,8 +571,8 @@ export default function App() {
             onOpenNetworkHud={openNetworkHud}
             onOpenQrCode={openQrCode}
             activitySlot={activitySlot}
-            activityMenu={activities.menu}
-            onStartActivity={activities.start}
+            activityMenu={activityMenu}
+            onStartActivity={startOrJoinActivity}
             {...extra}
         />
     );
@@ -698,8 +723,8 @@ export default function App() {
                         isHost={isHost}
                         playbackLock={playbackLock}
                         onTogglePlaybackLock={hostControls.toggle}
-                        activityMenu={activities.menu}
-                        onStartActivity={activities.start}
+                        activityMenu={activityMenu}
+                        onStartActivity={startOrJoinActivity}
                     />
                     <SoundboardSheet
                         isOpen={phoneSheet === 'soundboard'}
@@ -815,7 +840,7 @@ export default function App() {
             <LeaveRoomDialog
                 isOpen={showLeaveDialog && Boolean(roomId)}
                 roomId={roomId}
-                isPlaying={isMediaActive || Boolean(activities.current)}
+                isPlaying={isMediaActive || activityOn}
                 onStay={closeLeaveDialog}
                 onLeave={leaveRoomNow}
             />
