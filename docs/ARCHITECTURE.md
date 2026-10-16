@@ -101,10 +101,19 @@ Features talk to each other through explicit arguments (the queue gets `playback
 | `server.js` | Entry point: HTTP (quick picks endpoint; in production redirects page visits to 3rtc.me), starts the two below |
 | `signaling.js` | WebSocket rooms (5-digit codes, up to `MAX_ROOM_USERS`), relays offer / answer / ICE, heartbeat |
 | `quickPicks.js` | Fetches YouTube quick picks on a daily-quota budget (trending charts for 10 countries + a worldwide mix, search rows for everyone), caches them, serves `GET /api/quick-picks?region=` |
+| `seats.js` | Signed seat and host tokens: who may reclaim a seat or get a room back (see PROTOCOL.md, Seats) |
 | `log.js` | Timestamped log lines |
-| `deploy_gcp.py` | Creates or updates the VM; uploads every file in `SERVER_FILES` (add new server files there) |
+| `deploy_gcp.py` | Creates or updates the VM; uploads every file in `SERVER_FILES` (add new server files there) and installs `webrtc-signaling.service` |
+| `webrtc-signaling.service` | systemd unit: runs as the unprivileged `webrtc` user, Node on 127.0.0.1:8080 behind Caddy (only 80/443/8443 are public) |
 
 The server never sees chat, video or game traffic: that all goes browser to browser.
+
+**Who to trust.** Anything a peer's app sends could be made up, so identity comes from the server:
+it assigns seats (a peer id is only reclaimed with its seat token) and says who the host is
+(`hostPeerId`). The apps replace `isHost` on every incoming peer message with the server's answer
+and take chat names from the connection (`webrtc/peerMessages.js`). Text from peers is shown as text
+(React escapes it; links are `http(s)` only). When adding a feature, check host-only actions with
+`room.isPeerHost(fromPeerId)`, never with a field in the message.
 
 ## Lifecycles
 
