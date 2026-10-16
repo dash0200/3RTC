@@ -85,7 +85,7 @@ with sync_playwright() as p:
             phone.get_by_role('button', name='Stay').click()
     check('pressing Back again and again never leaves the site', '/about' not in url(phone) and in_room(phone), url(phone))
 
-    # A game open: Back closes the phone's chat view first, then asks; the game stays
+    # A game open: Back closes the phone's chat view first, then minimises the game, then asks
     host.locator('.stage-more-wrap .circle-action-btn').click()
     host.locator('.stage-more-dropdown .dropdown-item', has_text='Ludo').click()
     check('a game opens on the phone', wait(lambda: phone.locator('.ludo-board').count() == 1, 15))
@@ -96,7 +96,10 @@ with sync_playwright() as p:
     check("Back closes the game's chat view, the game stays",
           wait(lambda: phone.locator('.stage-activity.is-chat-split').count() == 0, 3) and phone.locator('.ludo-board').count() == 1)
     back(phone)
-    check('Back in a game asks about the room, the game stays', wait(lambda: leave_dialog(phone), 3) and phone.locator('.ludo-board').count() == 1)
+    check('Back in a game minimises it to its bubble (the game goes on)',
+          wait(lambda: phone.locator('.activity-bubble').count() == 1 and 'is-bubble' in (phone.locator('.stage-activity').get_attribute('class') or ''), 3) and not leave_dialog(phone))
+    back(phone)
+    check('Back again asks about the room, the game stays', wait(lambda: leave_dialog(phone), 3) and phone.locator('.ludo-board').count() == 1)
     phone.get_by_role('button', name='Stay').click()
     host.locator('.activity-close-btn').click()
     wait(lambda: phone.locator('.ludo-board').count() == 0, 6)

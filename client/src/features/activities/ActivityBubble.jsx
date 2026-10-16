@@ -48,6 +48,7 @@ export default function ActivityBubble({ icon, label, tag, attention, color, isP
     const btnRef = useRef(null);
     const [spot, setSpot] = useState(loadSpot);       // null: not moved yet (at the stage's edge)
     const [drag, setDrag] = useState(null);           // { x, y } while dragging
+    const [snapping, setSnapping] = useState(false);  // gliding to the edge after a drag
     const [, setTick] = useState(0);                  // re-place on resize
     const moved = useRef(false);
 
@@ -111,8 +112,10 @@ export default function ActivityBubble({ icon, label, tag, attention, color, isP
             const s = el.offsetWidth;
             const next = snapSpot(Math.min(window.innerWidth - s, Math.max(0, ev.clientX - dx)), ev.clientY - dy, s, window.innerWidth, window.innerHeight);
             saveSpot(next);
+            setSnapping(true); // only this move is animated: it appears in place, without a slide
             setSpot(next);
             setDrag(null);
+            setTimeout(() => setSnapping(false), 260);
         };
         el.addEventListener('pointermove', move);
         el.addEventListener('pointerup', up);
@@ -133,7 +136,7 @@ export default function ActivityBubble({ icon, label, tag, attention, color, isP
         <button
             ref={btnRef}
             type="button"
-            className={`activity-bubble is-${p.side} ${attention ? 'is-attention' : ''} ${drag ? 'is-dragging' : ''}`}
+            className={`activity-bubble is-${p.side} ${attention ? 'is-attention' : ''} ${drag ? 'is-dragging' : ''} ${snapping ? 'is-snapping' : ''}`}
             style={{ left: p.x, top: p.y, ...(color ? { '--bubble-ring': color } : {}) }}
             onPointerDown={onPointerDown}
             onClick={onClick}

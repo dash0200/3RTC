@@ -213,12 +213,16 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
     const shown = view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
     const { box, startDrag } = useFloatingBox(rootRef, shown === 'window');
     const setView = (v) => onViewChange?.(v);
-    const backToVideo = () => {
-        if (isFull) toggleFull(); // the bubble sits over the stage, not in the game's full screen
+    // Where the bubble opens back to: the view it was minimised from (full or the small window)
+    const openedAs = useRef('full');
+    if (shown !== 'bubble') openedAs.current = shown;
+    const minimise = () => {
+        if (isFull) toggleFull(); // the bubble sits over the page, not in the game's full screen
         setView('bubble');
     };
-    const canSwipeAway = isPhone && shown === 'full' && mediaActive;
-    useSwipeDown(rootRef, canSwipeAway, backToVideo);
+    // The game can be minimised at any time (a video playing or not): swipe it down on a phone
+    const canSwipeAway = isPhone && shown === 'full';
+    useSwipeDown(rootRef, canSwipeAway, minimise);
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
     const showPeek = chat && shown === 'full' && (isFull || !chat.isListVisible);
     if (!activity) return null;
@@ -235,7 +239,7 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
         );
     }
     const startedBy = activity.startedBy === selfId ? 'you' : (activity.startedByName || 'someone');
-    const reopen = () => setView(!isPhone && mediaActive ? 'window' : 'full');
+    const reopen = () => setView(!isPhone && (openedAs.current === 'window' || mediaActive) ? 'window' : 'full');
     const bubbleLabel = `${definition.name}${status.attention && status.label ? `: ${status.label}` : ''}. Open`;
     return (
         <>
@@ -256,8 +260,8 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 <span className="activity-bar-name">{definition.name}</span>
                 {shown === 'full' && <span className="activity-bar-meta">started by {startedBy}</span>}
                 {shown === 'window' && <span className="activity-bar-meta">{status.attention && status.label ? status.label : 'drag to move'}</span>}
-                {shown === 'full' && mediaActive && !isPhone && (
-                    <button type="button" className="activity-bar-btn activity-window-btn" onClick={() => setView('window')} title="Play in a small window over the video">
+                {shown === 'full' && !isPhone && (
+                    <button type="button" className="activity-bar-btn activity-window-btn" onClick={() => setView('window')} title={mediaActive ? 'Play in a small window over the video' : 'Play in a small window'}>
                         ⧉ Small window
                     </button>
                 )}
@@ -267,10 +271,12 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 {shown === 'window' && (
                     <button type="button" className="activity-bar-btn activity-icon-btn activity-min-btn" onClick={() => setView('bubble')} title="Minimise: you get a nudge when it's your turn" aria-label="Minimise">–</button>
                 )}
-                {shown === 'full' && mediaActive && (
-                    // Over a video: a plain way back to it (the game shrinks to a bubble)
-                    <button type="button" className="activity-bar-btn activity-video-btn" onClick={backToVideo} title="Watch the video: the game becomes a bubble that nudges you on your turn">
-                        ▶ Video
+                {shown === 'full' && (
+                    // Minimise to the bubble (it nudges you on your turn). Over a video it says where
+                    // you go: back to the video
+                    <button type="button" className="activity-bar-btn activity-video-btn" onClick={minimise}
+                        title={mediaActive ? 'Watch the video: the game becomes a bubble that nudges you on your turn' : 'Minimise: the game becomes a bubble that nudges you on your turn'}>
+                        {mediaActive ? '▶ Video' : '▾ Minimise'}
                     </button>
                 )}
                 {chat?.onToggleSplitView && !isFull && shown === 'full' && (
@@ -279,7 +285,7 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                         💬 Chat{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
                     </button>
                 )}
-                {canFullscreen() && shown === 'full' && !(isPhone && mediaActive) && (
+                {canFullscreen() && shown === 'full' && !isPhone && (
                     <button type="button" className="activity-bar-btn activity-fullscreen-btn" onClick={toggleFull} title={isFull ? 'Exit full screen (Esc)' : 'Full screen'} aria-pressed={isFull}>
                         {isFull ? 'Exit full screen' : 'Full screen'}
                     </button>

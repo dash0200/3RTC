@@ -296,8 +296,8 @@ export default function App() {
     useBackLayer(showNetworkHudModal, () => setShowNetworkHudModal(false));
     useBackLayer(showQrModal, () => setShowQrModal(false));
     useBackLayer(isPhone && activityChatSplit && Boolean(activities.current), () => setActivityChatSplit(false));
-    // Phone, a game open over a video: Back puts the game into its bubble (the game goes on)
-    useBackLayer(isPhone && Boolean(activities.current) && isMediaActive && activityView === 'full', () => setActivityView('bubble'));
+    // Phone, a game open: Back puts the game into its bubble (the game goes on)
+    useBackLayer(isPhone && Boolean(activities.current) && activityView === 'full', () => setActivityView('bubble'));
 
     // The room you were last in: "Rejoin" on the home screen for a while (utils/lastRoom.js)
     const [lastRoom, setLastRoom] = useState(() => readLastRoom());
