@@ -6,7 +6,7 @@
 import { useEffect, useRef } from 'react';
 
 export function useSignalingConnection(ctx) {
-    const { addSystemMessage, currentRoomRef, fallbackUrls = [], handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef } = ctx;
+    const { addSystemMessage, currentRoomRef, fallbackUrls = [], handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, roomTokensRef, setSignalStatus, showToast, signalUrl, wsRef } = ctx;
     // Same server under other addresses (signal.3rtc.me, then the raw sslip.io name): if one can't
     // be reached, the next attempt tries the next address, and the app stays on whichever worked
     const fallbackKey = fallbackUrls.join(' ');
@@ -78,18 +78,23 @@ export function useSignalingConnection(ctx) {
                 if (currentRoomRef.current) {
                     const activeRoom = currentRoomRef.current;
                     addSystemMessage(`🔄 Reconnected to signaling. Resuming room ${activeRoom}...`);
+                    // Our seat back, proven with the server's tokens (server/seats.js)
+                    const tokens = roomTokensRef?.current?.roomId === String(activeRoom) ? roomTokensRef.current : {};
                     if (isHostRef.current) {
                         ws.send(JSON.stringify({
                             type: 'create-room',
                             roomId: activeRoom,
-                            peerId: peerIdRef.current
+                            peerId: peerIdRef.current,
+                            ...(tokens.host ? { hostToken: tokens.host } : {}),
+                            ...(tokens.seat ? { seatToken: tokens.seat } : {})
                         }));
                     } else {
                         ws.send(JSON.stringify({
                             type: 'join',
                             roomId: activeRoom,
                             peerId: peerIdRef.current,
-                            rejoin: true
+                            rejoin: true,
+                            ...(tokens.seat ? { seatToken: tokens.seat } : {})
                         }));
                     }
                 }

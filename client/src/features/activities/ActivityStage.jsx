@@ -1,10 +1,152 @@
 /**
- * Shows the open activity over the stage: a title bar (name, who started it, Close) and the
- * activity itself, downloaded on first use. Videos keep playing underneath (you can listen to
- * music while playing). A crash inside an activity only replaces the activity with a message.
+ * Shows the open activity: a title bar (name, who started it, Close) and the activity itself,
+ * downloaded on first use. A crash inside an activity only replaces it with a message.
+ *
+ * Three ways to show it, chosen on each device (App keeps `view`, see activityHost.js):
+ *   full   over the stage (videos keep playing underneath)
+ *   window a small window over the video, dragged and resized (computers, while a video plays)
+ *   bubble a round button; it pulses when the game needs you ("Your turn"), tap to open
+ * The activity stays mounted in every view, so its timers and sounds keep working.
+ * Phone, game open over a video: swipe it down to put it away (like the YouTube app).
  */
-import { Component, Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPeek from './ChatPeek';
+import ActivityBubble from './ActivityBubble';
+import { ActivityHostProvider } from './activityHost';
+
+const WINDOW_KEY = '3rtc_activity_window';
+const WINDOW_MIN = 300; // narrower and the board's tokens get too small to hit
+const WINDOW_MAX = 520;
+const EDGE = 8;
+
+function readWindowBox() {
+    try {
+        const box = JSON.parse(localStorage.getItem(WINDOW_KEY) || 'null');
+        if (box && Number.isFinite(box.width) && Number.isFinite(box.right) && Number.isFinite(box.bottom)) return box;
+    } catch { /* nothing saved */ }
+    return { width: 360, right: 16, bottom: 72 }; // bottom-right, above the video's control bar
+}
+
+/** The small window's size and place: dragged by its bar, resized from its top-left corner. */
+/**
+ * Swipe the game down to put it away (phones, over a video), like the YouTube app. Works anywhere
+ * on the game: a drag that starts going down while the game is scrolled to the top is the swipe;
+ * taps, sideways drags and scrolling the game still work. The game follows the finger; let go far
+ * or fast enough and `onDone` runs, else it springs back.
+ */
+function useSwipeDown(ref, active, onDone) {
+    const doneRef = useRef(onDone);
+    doneRef.current = onDone;
+    useEffect(() => {
+        const el = ref.current;
+        if (!active || !el) return undefined;
+        let g = null; // the gesture: { x0, y0, t0, dy, state: 'maybe' | 'swipe' | 'no' }
+        const reset = (animate) => {
+            el.style.transition = animate ? 'transform 0.18s ease, opacity 0.18s ease' : '';
+            el.style.transform = '';
+            el.style.opacity = '';
+        };
+        const start = (e) => {
+            if (e.touches.length !== 1) { g = null; return; }
+            const t = e.touches[0];
+            // Only from the top of the game: further down, a pull scrolls the game back up
+            let atTop = true;
+            for (let n = e.target; n && n !== el; n = n.parentElement) if (n.scrollTop > 0) atTop = false;
+            g = { x0: t.clientX, y0: t.clientY, t0: performance.now(), dy: 0, state: atTop ? 'maybe' : 'no' };
+        };
+        const move = (e) => {
+            if (!g || g.state === 'no') return;
+            const t = e.touches[0];
+            const dx = t.clientX - g.x0;
+            const dy = t.clientY - g.y0;
+            if (g.state === 'maybe') {
+                // Claim a downward start at once: Chrome commits to scrolling (or pull-to-refresh)
+                // on the first move, after which the swipe couldn't stop it
+                if (dy > 0 && dy >= Math.abs(dx) && e.cancelable) e.preventDefault();
+                if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+                g.state = dy > 0 && dy > Math.abs(dx) * 1.2 ? 'swipe' : 'no';
+                if (g.state === 'no') return;
+                g.y0 = t.clientY; // follow from here, so the game doesn't jump
+                g.t0 = performance.now();
+                el.style.transition = 'none';
+            }
+            if (e.cancelable) e.preventDefault(); // no page scroll or pull-to-refresh while swiping
+            g.dy = Math.max(0, t.clientY - g.y0);
+            el.style.transform = g.dy ? `translateY(${g.dy}px)` : '';
+            el.style.opacity = String(Math.max(0.35, 1 - g.dy / 500));
+        };
+        const end = (e) => {
+            if (!g) return;
+            const swiped = g.state === 'swipe';
+            const speed = g.dy / Math.max(1, performance.now() - g.t0);
+            const away = swiped && e.type === 'touchend' && (g.dy > 90 || (g.dy > 30 && speed > 0.5));
+            g = null;
+            if (!swiped) return;
+            reset(!away);
+            if (away) doneRef.current?.();
+        };
+        el.addEventListener('touchstart', start, { passive: true });
+        el.addEventListener('touchmove', move, { passive: false });
+        el.addEventListener('touchend', end);
+        el.addEventListener('touchcancel', end);
+        return () => {
+            el.removeEventListener('touchstart', start);
+            el.removeEventListener('touchmove', move);
+            el.removeEventListener('touchend', end);
+            el.removeEventListener('touchcancel', end);
+            reset(false);
+        };
+    }, [ref, active]);
+}
+
+function useFloatingBox(ref, active) {
+    const [box, setBox] = useState(readWindowBox);
+    const boxRef = useRef(box);
+    boxRef.current = box;
+    const clamp = useCallback((next) => {
+        const parent = ref.current?.parentElement;
+        const el = ref.current;
+        if (!parent || !el) return next;
+        const pw = parent.clientWidth;
+        const ph = parent.clientHeight;
+        const width = Math.max(Math.min(WINDOW_MIN, pw - 2 * EDGE), Math.min(next.width, WINDOW_MAX, pw - 2 * EDGE));
+        const height = el.offsetHeight;
+        return {
+            width,
+            right: Math.max(EDGE, Math.min(next.right, pw - width - EDGE)),
+            bottom: Math.max(EDGE, Math.min(next.bottom, ph - Math.min(height, ph - 2 * EDGE) - EDGE))
+        };
+    }, [ref]);
+    // Keep it inside the stage when the stage changes size
+    useEffect(() => {
+        if (!active) return undefined;
+        const fit = () => setBox((b) => clamp(b));
+        fit();
+        window.addEventListener('resize', fit);
+        return () => window.removeEventListener('resize', fit);
+    }, [active, clamp]);
+    const startDrag = (e, mode) => {
+        if (e.button !== undefined && e.button !== 0) return;
+        if (mode === 'move' && e.target.closest('button')) return;
+        e.preventDefault();
+        const start = { x: e.clientX, y: e.clientY, ...boxRef.current };
+        const move = (ev) => {
+            const dx = ev.clientX - start.x;
+            const dy = ev.clientY - start.y;
+            setBox(clamp(mode === 'move'
+                ? { ...start, right: start.right - dx, bottom: start.bottom - dy }
+                : { ...start, width: start.width - dx }));
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            try { localStorage.setItem(WINDOW_KEY, JSON.stringify(boxRef.current)); } catch { /* storage blocked */ }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    };
+    return { box, startDrag };
+}
 
 // Full screen takes the whole stage (so floating reactions still show over the game)
 const fullscreenTarget = (el) => el?.closest('.stage-section') || el;
@@ -61,12 +203,28 @@ class ActivityErrorBoundary extends Component {
     }
 }
 
-export default function ActivityStage({ activity, definition, onClose, selfId, chat = null }) {
+export default function ActivityStage({ activity, definition, onClose, selfId, chat = null, view = 'full', onViewChange, isPhone = false, mediaActive = false }) {
     const ActivityComponent = useMemo(() => (definition ? lazyFor(definition) : null), [definition]);
     const rootRef = useRef(null);
     const [isFull, toggleFull] = useStageFullscreen(rootRef);
+    const [status, setStatus] = useState({ attention: false, color: '', label: '' });
+    const onStatus = useCallback((next) => setStatus((prev) => (
+        prev.attention === next.attention && prev.color === next.color && prev.label === next.label ? prev : next)), []);
+    const shown = view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
+    const { box, startDrag } = useFloatingBox(rootRef, shown === 'window');
+    const setView = (v) => onViewChange?.(v);
+    // Where the bubble opens back to: the view it was minimised from (full or the small window)
+    const openedAs = useRef('full');
+    if (shown !== 'bubble') openedAs.current = shown;
+    const minimise = () => {
+        if (isFull) toggleFull(); // the bubble sits over the page, not in the game's full screen
+        setView('bubble');
+    };
+    // The game can be minimised at any time (a video playing or not): swipe it down on a phone
+    const canSwipeAway = isPhone && shown === 'full';
+    useSwipeDown(rootRef, canSwipeAway, minimise);
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
-    const showPeek = chat && (isFull || !chat.isListVisible);
+    const showPeek = chat && shown === 'full' && (isFull || !chat.isListVisible);
     if (!activity) return null;
     if (!definition) {
         // Started from a newer version of the app
@@ -81,33 +239,84 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
         );
     }
     const startedBy = activity.startedBy === selfId ? 'you' : (activity.startedByName || 'someone');
+    const reopen = () => setView(!isPhone && (openedAs.current === 'window' || mediaActive) ? 'window' : 'full');
+    const bubbleLabel = `${definition.name}${status.attention && status.label ? `: ${status.label}` : ''}. Open`;
     return (
-        <div className={`stage-activity ${isFull ? 'is-fullscreen' : ''} ${chat?.splitView ? 'is-chat-split' : ''}`} role="region" aria-label={definition.name} ref={rootRef}>
-            <div className="activity-bar">
+        <>
+        <div
+            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
+            role="region"
+            aria-label={definition.name}
+            aria-hidden={shown === 'bubble' ? true : undefined}
+            ref={rootRef}
+            style={shown === 'window' ? { width: box.width, right: box.right, bottom: box.bottom, ...(status.color ? { '--bubble-ring': status.color } : {}) } : undefined}
+        >
+            {shown === 'window' && (
+                <span className="activity-resize" onPointerDown={(e) => startDrag(e, 'resize')} title="Drag to resize" aria-hidden="true" />
+            )}
+            <div className={`activity-bar ${canSwipeAway ? 'can-swipe' : ''}`} onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : undefined}>
+                {canSwipeAway && <span className="activity-grab" aria-hidden="true" />}
                 <span className="activity-bar-icon" aria-hidden="true">{definition.icon}</span>
                 <span className="activity-bar-name">{definition.name}</span>
-                <span className="activity-bar-meta">started by {startedBy}</span>
-                {chat?.onToggleSplitView && !isFull && (
+                {shown === 'full' && <span className="activity-bar-meta">started by {startedBy}</span>}
+                {shown === 'window' && <span className="activity-bar-meta">{status.attention && status.label ? status.label : 'drag to move'}</span>}
+                {shown === 'full' && !isPhone && (
+                    <button type="button" className="activity-bar-btn activity-window-btn" onClick={() => setView('window')} title={mediaActive ? 'Play in a small window over the video' : 'Play in a small window'}>
+                        ⧉ Small window
+                    </button>
+                )}
+                {shown === 'window' && (
+                    <button type="button" className="activity-bar-btn activity-icon-btn activity-full-btn" onClick={() => setView('full')} title="Show the game full size" aria-label="Full size">⤢</button>
+                )}
+                {shown === 'window' && (
+                    <button type="button" className="activity-bar-btn activity-icon-btn activity-min-btn" onClick={() => setView('bubble')} title="Minimise: you get a nudge when it's your turn" aria-label="Minimise">–</button>
+                )}
+                {shown === 'full' && (
+                    // Minimise to the bubble (it nudges you on your turn). Over a video it says where
+                    // you go: back to the video
+                    <button type="button" className="activity-bar-btn activity-video-btn" onClick={minimise}
+                        title={mediaActive ? 'Watch the video: the game becomes a bubble that nudges you on your turn' : 'Minimise: the game becomes a bubble that nudges you on your turn'}>
+                        {mediaActive ? '▶ Video' : '▾ Minimise'}
+                    </button>
+                )}
+                {chat?.onToggleSplitView && !isFull && shown === 'full' && (
                     <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
                         aria-pressed={chat.splitView} title={chat.splitView ? 'Bigger board (hide chat messages)' : 'Show chat messages below the game'}>
                         💬 Chat{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
                     </button>
                 )}
-                {canFullscreen() && (
+                {canFullscreen() && shown === 'full' && !isPhone && (
                     <button type="button" className="activity-bar-btn activity-fullscreen-btn" onClick={toggleFull} title={isFull ? 'Exit full screen (Esc)' : 'Full screen'} aria-pressed={isFull}>
                         {isFull ? 'Exit full screen' : 'Full screen'}
                     </button>
                 )}
-                <button type="button" className="activity-close-btn" onClick={onClose} title="Close for everyone">Close</button>
+                <button type="button" className={`activity-close-btn ${shown === 'window' ? 'activity-icon-btn' : ''}`} onClick={onClose} title="Close for everyone" aria-label="Close for everyone">
+                    {shown === 'window' ? '✕' : 'Close'}
+                </button>
             </div>
             <div className="activity-body">
                 <ActivityErrorBoundary key={definition.id}>
                     <Suspense fallback={<div className="activity-message">Loading {definition.name}…</div>}>
-                        <ActivityComponent activityId={definition.id} />
+                        <ActivityHostProvider onStatus={onStatus}>
+                            <ActivityComponent activityId={definition.id} />
+                        </ActivityHostProvider>
                     </Suspense>
                 </ActivityErrorBoundary>
             </div>
             {showPeek && <ChatPeek messages={chat.messages} onOpenChat={isFull ? toggleFull : chat.onOpenChat} />}
         </div>
+        {shown === 'bubble' && (
+            <ActivityBubble
+                icon={definition.icon}
+                label={bubbleLabel}
+                tag={status.attention ? status.label : ''}
+                attention={status.attention}
+                color={status.color}
+                isPhone={isPhone}
+                anchorRef={rootRef}
+                onOpen={reopen}
+            />
+        )}
+        </>
     );
 }

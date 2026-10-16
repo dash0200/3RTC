@@ -5,9 +5,13 @@
 const KEY = '3rtc_last_room';
 export const LAST_ROOM_FRESH_MS = 30 * 60 * 1000;
 
-export function saveLastRoom(roomId, wasHost) {
+/** `hostToken`: the server's proof that we were the host (needed to get the room back as host). */
+export function saveLastRoom(roomId, wasHost, hostToken = null) {
     try {
-        localStorage.setItem(KEY, JSON.stringify({ roomId: String(roomId), wasHost: Boolean(wasHost), at: Date.now() }));
+        localStorage.setItem(KEY, JSON.stringify({
+            roomId: String(roomId), wasHost: Boolean(wasHost), at: Date.now(),
+            ...(wasHost && typeof hostToken === 'string' ? { hostToken } : {})
+        }));
     } catch { /* private mode */ }
 }
 

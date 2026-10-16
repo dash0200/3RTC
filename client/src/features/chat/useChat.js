@@ -11,6 +11,7 @@ import { usePeerMessageOn } from '../../core/RoomContext';
 
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 const MAX_MESSAGES = 300; // older ones are dropped (and their image memory freed)
+const MAX_CHAT_TEXT = 2000; // (the box allows 200; more from a peer is cut)
 
 // Append and keep the list bounded
 const appendCapped = (prev, item) => {
@@ -55,22 +56,35 @@ export function useChat({ room, isChatOpen }) {
     usePeerMessageOn(bus, 'chat', (data, from) => {
         const reaction = lastReactionRef.current.get(from);
         if (reaction && typeof data.text === 'string' && data.text.trim() === reaction.emoji && Date.now() - reaction.at < 2500) return;
-        setMessages((prev) => appendCapped(prev, { ...data, isSelf: false }));
+        // Only what a chat message has; who sent it comes from the connection, not the message
+        if (typeof data.text !== 'string' || !data.text.trim()) return;
+        setMessages((prev) => appendCapped(prev, {
+            type: 'chat',
+            id: typeof data.id === 'string' ? data.id.slice(0, 64) : crypto.randomUUID(),
+            sender: room.peerName(from) || data.sender || 'Peer',
+            isHost: room.isPeerHost(from),
+            text: data.text.slice(0, MAX_CHAT_TEXT),
+            timestamp: Number.isFinite(data.timestamp) ? Math.min(data.timestamp, Date.now() + 60000) : Date.now(),
+            isSelf: false
+        }));
         sound.playPop();
     });
 
-    usePeerMessageOn(bus, 'p2p-image-start', (data) => {
+    usePeerMessageOn(bus, 'p2p-image-start', (data, from) => {
+        if (typeof data.transferId !== 'string' || data.transferId.length > 64) return;
         p2pImageReceiver.handleStart(data);
+        const fileName = typeof data.fileName === 'string' ? data.fileName.slice(0, 120) : 'image';
+        const fileSize = Number.isFinite(data.fileSize) ? data.fileSize : 0;
         setMessages((prev) => appendCapped(prev, {
             type: 'chat',
-            id: data.id,
+            id: typeof data.id === 'string' ? data.id.slice(0, 64) : crypto.randomUUID(),
             transferId: data.transferId,
-            sender: data.sender,
-            isHost: data.isHost,
-            text: data.caption || '',
-            imageTransfer: { transferId: data.transferId, isTransferring: true, percent: 0, fileName: data.fileName, fileSize: data.fileSize },
+            sender: room.peerName(from) || data.sender || 'Peer',
+            isHost: room.isPeerHost(from),
+            text: typeof data.caption === 'string' ? data.caption.slice(0, MAX_CHAT_TEXT) : '',
+            imageTransfer: { transferId: data.transferId, isTransferring: true, percent: 0, fileName, fileSize },
             isSelf: false,
-            timestamp: data.timestamp || Date.now()
+            timestamp: Number.isFinite(data.timestamp) ? Math.min(data.timestamp, Date.now() + 60000) : Date.now()
         }));
         sound.playChime();
     });

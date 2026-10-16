@@ -1043,13 +1043,13 @@
 }
 
 /* An activity (game) open: the stage grows so the board fits; the activity scrolls inside */
-.phone-app .stage-section.stage-phone:has(.stage-activity) {
+.phone-app .stage-section.stage-phone:has(.stage-activity.is-full) {
   aspect-ratio: auto;
   height: 72dvh;
   max-height: none;
 }
 /* "Chat" on in the game bar: a smaller game, so the chat messages fit below it */
-.phone-app .stage-section.stage-phone:has(.stage-activity.is-chat-split) {
+.phone-app .stage-section.stage-phone:has(.stage-activity.is-full.is-chat-split) {
   height: 56dvh;
 }
 /* Phone bar: the three buttons stay on one line */
@@ -1065,3 +1065,14 @@
   max-height: 58dvh;
 }
 .phone-app .stage-phone .stage-canvas:has(.link-player) { padding: 0; }
+
+/* The game as a bubble over the video (phones) */
+.phone-app .activity-bubble { width: 50px; height: 50px; }
+.phone-app .activity-bubble-icon { font-size: 23px; }
+
+/* Game open over a video: it can be swiped down (the handle on its bar hints at it) */
+.phone-app .activity-bar.can-swipe { position: relative; padding-top: 16px; }
+.phone-app .activity-grab {
+  position: absolute; top: 5px; left: 50%; transform: translateX(-50%);
+  width: 40px; height: 4px; border-radius: 2px; background: var(--text-muted); opacity: 0.7;
+}

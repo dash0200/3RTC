@@ -20,12 +20,13 @@ import { createPeerMessageHandler } from './peerMessages';
 import { processSignalingMessage } from './signalingMessages';
 import { BUILD } from '../version';
 import { useSignalingConnection } from '../hooks/useSignalingConnection';
+import { candidateType } from './networkHint';
 
 const WAITING_TEXT = 'Waiting for peer to enter 5-digit code...';
 
 export function usePeerMesh(ctx) {
     const {
-        bus, peersRef, peerIdRef, isHostRef, setPeerMetadata, username, notices, identityFields,
+        bus, peersRef, peerIdRef, isHostRef, hostPeerIdRef, setHostPeerId, setPeerMetadata, username, notices, identityFields,
         voice, signalUrl, fallbackUrls, setSignalStatus, logLocalDebug
     } = ctx;
     const { addSystemMessage, showToast } = notices;
@@ -36,10 +37,16 @@ export function usePeerMesh(ctx) {
     const [peerCount, setPeerCount] = useState(0);
     const [isP2PConnected, setIsP2PConnected] = useState(false);
     const [p2pStatusText, setP2pStatusText] = useState(WAITING_TEXT);
+    // A first connection blocked by a network: what to tell the person (webrtc/networkHint.js)
+    const [networkHint, setNetworkHint] = useState(null);
+    const dismissNetworkHint = useCallback(() => setNetworkHint(null), []);
 
     const wsRef = useRef(null);
     const pendingSignalsRef = useRef([]);
     const currentRoomRef = useRef(null);
+    // The server's proof of our seat (and, for the host, of the room): sent back when we reconnect,
+    // so nobody else can take our place by naming our peer id (server/seats.js)
+    const roomTokensRef = useRef({ roomId: null, seat: null, host: null });
     currentRoomRef.current = roomId;
     isHostRef.current = isHost;
     const getOrCreatePeerConnectionRef = useRef(null);
@@ -152,10 +159,14 @@ export function usePeerMesh(ctx) {
         attachRemoteAudio(pc, { isAudioBlockedRef, localMutedPeersRef, logLocalDebug, peerEntry, peerVolumesRef, targetPeerId });
 
         pc.onicecandidate = (event) => {
-            if (event.candidate) sendSignal({ type: 'ice-candidate', targetId: targetPeerId, candidate: event.candidate });
+            if (!event.candidate) return;
+            // What kinds of address we found (to tell a blocked network apart, see networkHint.js)
+            const kind = candidateType(event.candidate);
+            if (kind) (peerEntry.localCandidateTypes ||= new Set()).add(kind);
+            sendSignal({ type: 'ice-candidate', targetId: targetPeerId, candidate: event.candidate });
         };
 
-        const { isStillCurrent, scheduleRecovery } = attachPeerRecovery(pc, { addSystemMessage, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef });
+        const { isStillCurrent, scheduleRecovery } = attachPeerRecovery(pc, { addSystemMessage, setNetworkHint, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef });
 
         const bindDataChannel = (dc) => {
             peerEntry.dataChannel = dc;
@@ -175,7 +186,7 @@ export function usePeerMesh(ctx) {
                 bus.emitEvent('peer-open', targetPeerId);
             };
 
-            dc.onmessage = createPeerMessageHandler({ bus, cleanupPeer, dc, getIdentity, isAudioBlockedRef, isStillCurrent, peerEntry, peersRef, setPeerCount, setPeerMetadata, setPeerVoiceStates, targetPeerId });
+            dc.onmessage = createPeerMessageHandler({ bus, cleanupPeer, dc, getIdentity, hostPeerIdRef, isAudioBlockedRef, isStillCurrent, peerEntry, peersRef, setPeerCount, setPeerMetadata, setPeerVoiceStates, targetPeerId });
 
             dc.onclose = () => {
                 bus.emitEvent('channel-close', targetPeerId);
@@ -220,13 +231,19 @@ export function usePeerMesh(ctx) {
 
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, {
         addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef,
-        logLocalDebug, peersRef, sendSignal, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
-    }), [addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
+        logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
+    }), [peerIdRef, setHostPeerId, addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
 
-    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, setSignalStatus, showToast, signalUrl, wsRef });
+    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, roomTokensRef, setSignalStatus, showToast, signalUrl, wsRef });
 
     // With a code: a host coming back gets that room again (the server's resume path)
-    const createRoom = useCallback((resumeRoomId) => sendSignal({ type: 'create-room', peerId: peerIdRef.current, ...(resumeRoomId ? { roomId: String(resumeRoomId) } : {}) }), [peerIdRef, sendSignal]);
+    // (it needs the room's host token: `hostToken`, saved with "Rejoin room" on the home screen)
+    const createRoom = useCallback((resumeRoomId, hostToken) => sendSignal({
+        type: 'create-room', peerId: peerIdRef.current,
+        ...(resumeRoomId ? { roomId: String(resumeRoomId), ...(hostToken ? { hostToken } : {}) } : {})
+    }), [peerIdRef, sendSignal]);
+    /** The host token of the room we're in as host (to save for "Rejoin room"), else null. */
+    const getHostToken = useCallback(() => roomTokensRef.current.host, []);
     const joinRoom = useCallback((pin) => sendSignal({ type: 'join', roomId: pin, peerId: peerIdRef.current }), [peerIdRef, sendSignal]);
 
     /** Leave on purpose: tell the server and every peer, drop all connections, reset features. */
@@ -242,11 +259,14 @@ export function usePeerMesh(ctx) {
         setIsHost(false);
         isHostRef.current = false;
         setPeerCount(0);
+        roomTokensRef.current = { roomId: null, seat: null, host: null };
+        setHostPeerId?.(undefined);
+        setNetworkHint(null);
         bus.emitEvent('room-left');
-    }, [bus, isHostRef, peersRef, sendSignal, setPeerMetadata]);
+    }, [bus, isHostRef, peersRef, sendSignal, setHostPeerId, setPeerMetadata]);
 
     return {
         roomId, isHost, peerCount, isP2PConnected, p2pStatusText,
-        createRoom, joinRoom, leaveRoom, sendSignal
+        createRoom, joinRoom, leaveRoom, sendSignal, getHostToken, networkHint, dismissNetworkHint
     };
 }

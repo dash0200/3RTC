@@ -22,5 +22,7 @@ export const RECOVERY = {
     disconnectGraceMs: 3000,  // 'disconnected' often recovers by itself; restart if it lasts longer
     retryMs: 8000,            // time given to each ICE restart before trying again
     maxIceRestarts: 4,        // then rebuild the connection from scratch once, then give up
-    maxWaitMs: 60000          // non-initiator side: drop a connection that stays broken this long
+    maxWaitMs: 60000,         // non-initiator side: drop a connection that stays broken this long
+    firstConnectMs: 25000     // a first connection not up by then counts as failed (a blocking
+                              // network can leave it "connecting" for ever): tell the person, retry
 };

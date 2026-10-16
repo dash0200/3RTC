@@ -19,6 +19,9 @@ const candidateDirs = [
 const clientDir = candidateDirs.find(d => fs.existsSync(d) && fs.existsSync(path.join(d, 'index.html'))) || candidateDirs[0];
 
 const PORT = process.env.PORT || 8080;
+// Production: 127.0.0.1, so only Caddy (TLS, on the same VM) can reach it. Default: every interface
+// (local development, phones on the same Wi-Fi)
+const HOST = process.env.HOST || undefined;
 
 const server = http.createServer((req, res) => {
   let reqPath = req.url.split('?')[0];
@@ -67,7 +70,7 @@ const server = http.createServer((req, res) => {
 attachSignaling(server);
 startQuickPicks();
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(`===============================================`);
   console.log(` WebRTC Signaling & Web Server on port ${PORT}`);
   console.log(` Web Client UI: http://localhost:${PORT}`);
