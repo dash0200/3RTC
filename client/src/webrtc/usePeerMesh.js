@@ -20,6 +20,7 @@ import { createPeerMessageHandler } from './peerMessages';
 import { processSignalingMessage } from './signalingMessages';
 import { BUILD } from '../version';
 import { useSignalingConnection } from '../hooks/useSignalingConnection';
+import { candidateType } from './networkHint';
 
 const WAITING_TEXT = 'Waiting for peer to enter 5-digit code...';
 
@@ -36,6 +37,9 @@ export function usePeerMesh(ctx) {
     const [peerCount, setPeerCount] = useState(0);
     const [isP2PConnected, setIsP2PConnected] = useState(false);
     const [p2pStatusText, setP2pStatusText] = useState(WAITING_TEXT);
+    // A first connection blocked by a network: what to tell the person (webrtc/networkHint.js)
+    const [networkHint, setNetworkHint] = useState(null);
+    const dismissNetworkHint = useCallback(() => setNetworkHint(null), []);
 
     const wsRef = useRef(null);
     const pendingSignalsRef = useRef([]);
@@ -155,10 +159,14 @@ export function usePeerMesh(ctx) {
         attachRemoteAudio(pc, { isAudioBlockedRef, localMutedPeersRef, logLocalDebug, peerEntry, peerVolumesRef, targetPeerId });
 
         pc.onicecandidate = (event) => {
-            if (event.candidate) sendSignal({ type: 'ice-candidate', targetId: targetPeerId, candidate: event.candidate });
+            if (!event.candidate) return;
+            // What kinds of address we found (to tell a blocked network apart, see networkHint.js)
+            const kind = candidateType(event.candidate);
+            if (kind) (peerEntry.localCandidateTypes ||= new Set()).add(kind);
+            sendSignal({ type: 'ice-candidate', targetId: targetPeerId, candidate: event.candidate });
         };
 
-        const { isStillCurrent, scheduleRecovery } = attachPeerRecovery(pc, { addSystemMessage, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef });
+        const { isStillCurrent, scheduleRecovery } = attachPeerRecovery(pc, { addSystemMessage, setNetworkHint, cleanupPeer, getOrCreatePeerConnectionRef, logLocalDebug, peerEntry, peersRef, sendSignal, setPeerCount, showToast, targetPeerId, updateP2PStatus, wsRef });
 
         const bindDataChannel = (dc) => {
             peerEntry.dataChannel = dc;
@@ -253,11 +261,12 @@ export function usePeerMesh(ctx) {
         setPeerCount(0);
         roomTokensRef.current = { roomId: null, seat: null, host: null };
         setHostPeerId?.(undefined);
+        setNetworkHint(null);
         bus.emitEvent('room-left');
     }, [bus, isHostRef, peersRef, sendSignal, setHostPeerId, setPeerMetadata]);
 
     return {
         roomId, isHost, peerCount, isP2PConnected, p2pStatusText,
-        createRoom, joinRoom, leaveRoom, sendSignal, getHostToken
+        createRoom, joinRoom, leaveRoom, sendSignal, getHostToken, networkHint, dismissNetworkHint
     };
 }
