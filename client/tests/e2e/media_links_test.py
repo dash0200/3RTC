@@ -88,17 +88,16 @@ with sync_playwright() as p:
         pg.on('pageerror', lambda e: errors.append(str(e)))
         pg.on('dialog', lambda d: d.accept())
     host.goto(BASE); host.wait_for_timeout(1500)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     phone.goto(f'{BASE}?room={room}'); phone.wait_for_timeout(1500); phone.get_by_role('button', name='Join room').click()
-    check('connected', wait(lambda: host.locator('.stage-voice-chip').count() >= 2, 25))
+    check('connected', wait(lambda: harness.people(host) >= 2, 25))
     time.sleep(1)
 
     # ---- links that can't be played say why, and nothing opens ----
     paste_desktop(host, 'https://www.netflix.com/watch/80100172')
     check('a Netflix link is explained (protected)', wait(lambda: 'protected' in host.locator('.yt-url-error').inner_text(), 4))
-    host.locator('.stage-canvas').get_by_placeholder(re.compile('Paste a link')).fill('')
+    host.locator('.stage-canvas').get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).fill('')
     paste_desktop(host, f'{MEDIA}/page')
     check('a page that isn\'t a video is explained (checked before anyone loads it)',
           wait(lambda: "isn't a video" in host.locator('.yt-url-error').inner_text(), 12) and phone.locator('.link-player').count() == 0)
@@ -134,7 +133,7 @@ with sync_playwright() as p:
 
     # ---- the queue takes links too ----
     host.locator('.chat-tab-btn', has_text='Queue').first.click()
-    qbox = host.get_by_placeholder(re.compile('Paste a link'))
+    qbox = host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link'))
     qbox.fill(HLS); qbox.press('Enter')
     ok = check('a stream link goes into the queue (with its icon)', wait(lambda: host.locator('.queue-item-card .queue-item-thumb-link').count() == 1, 6))
     if not ok:
@@ -147,7 +146,7 @@ with sync_playwright() as p:
 
     # ---- Vimeo, pasted on the phone ----
     phone.get_by_role('button', name='Add video').last.click()
-    phone.get_by_placeholder(re.compile('Paste a link')).fill('https://vimeo.com/76979871')
+    phone.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).fill('https://vimeo.com/76979871')
     phone.get_by_role('button', name=re.compile('Play for everyone')).click()
     check('a Vimeo link from the phone opens the Vimeo player for both',
           wait(lambda: (player(host) or {}).get('kind') == 'vimeo' and (player(phone) or {}).get('kind') == 'vimeo', 10)
@@ -171,7 +170,7 @@ with sync_playwright() as p:
     host.locator('.stage-more-wrap .circle-action-btn').click(); host.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
     wait(lambda: phone.locator('.phone-lock-pill').count() == 1, 5)
     phone.get_by_role('button', name='Add video').last.click()
-    phone.get_by_placeholder(re.compile('Paste a link')).fill(FILE)
+    phone.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).fill(FILE)
     phone.get_by_role('button', name=re.compile('Play for everyone')).click()
     time.sleep(2)
     check('with the lock on, a guest\'s link doesn\'t replace the host\'s video', (player(host) or {}).get('kind') == 'twitch' and host.locator('.link-player-video').count() == 0)

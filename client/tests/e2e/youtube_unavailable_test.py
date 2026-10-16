@@ -35,12 +35,12 @@ with sync_playwright() as p:
     ph=dict(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
     host=b.new_context(**ph).new_page(); guest=b.new_context(**ph).new_page()
     for pg in (host,guest): pg.add_init_script(INIT); pg.on('pageerror',lambda e: print('ERR',e))
-    host.goto(BASE); host.wait_for_timeout(1200); host.locator('#phone-name').fill('Host')
+    host.goto(BASE); host.wait_for_timeout(1200); host.locator('#phone-name:visible, #invite-name:visible, #dh-name:visible').first.fill('Host')
     host.get_by_role('button',name='Create a room').click()
     room=wait(lambda: host.locator('.phone-room-pill').inner_text().strip())
-    guest.goto(f'{BASE}/?room={room}'); guest.wait_for_timeout(1200); guest.locator('#phone-name').fill('Guest')
+    guest.goto(f'{BASE}/?room={room}'); guest.wait_for_timeout(1200); guest.locator('#phone-name:visible, #invite-name:visible, #dh-name:visible').first.fill('Guest')
     guest.get_by_role('button',name='Join room').click()
-    check('peers connected', wait(lambda: 'P2P' in host.locator('.phone-status-pill').inner_text(), 15))
+    check('peers connected', wait(lambda: harness.people(host) >= 2, 15))
 
     # 1. Quick pick that YouTube refuses -> next working pick in the same category, for both
     host.get_by_role('button',name='Add video').last.click()
@@ -59,11 +59,11 @@ with sync_playwright() as p:
 
     # 3. A refused video with a queue behind it -> plays the next queued video
     host.get_by_role('button',name='Add video').last.click()
-    host.get_by_placeholder(re.compile('Paste a link')).fill('https://youtu.be/aqz-KE-bpKQ')
+    host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).fill('https://youtu.be/aqz-KE-bpKQ')
     host.get_by_role('button', name='Add to queue').click()
     host.wait_for_timeout(500)
     host.get_by_role('button',name='Add video').last.click()
-    host.get_by_placeholder(re.compile('Paste a link')).fill('https://youtu.be/dQw4w9WgXcQ')
+    host.get_by_placeholder(re.compile(r'Paste a (YouTube|link)|or \.mp4 link')).fill('https://youtu.be/dQw4w9WgXcQ')
     host.locator('.phone-sheet button[type=submit]').click()
     ok=wait(lambda: host.evaluate('window.__loaded')[-1]=='aqz-KE-bpKQ', 10)
     check('refused link with a queue -> next queued video plays', ok, host.evaluate('window.__loaded')[-3:])

@@ -17,8 +17,7 @@ with sync_playwright() as p:
     host=b.new_context(viewport={'width':1440,'height':900}).new_page(); guest=b.new_context(viewport={'width':1440,'height':900}).new_page()
     for pg in (host,guest): pg.add_init_script(INIT); pg.on('pageerror', lambda e: print('ERR', e))
     host.goto('http://localhost:5199/'); host.wait_for_timeout(1500)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room=None
     for _ in range(20):
         room=next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type')=='room-created'), None)

@@ -19,8 +19,7 @@ with sync_playwright() as p:
         if tag == 'mob':
             host.get_by_role('button', name='Create a room').click()
         else:
-            host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-            host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).evaluate('(el) => el.click()')
+            harness.create_room(host)
         room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None))
         guest.goto(f'http://localhost:5199/?room={room}'); guest.wait_for_timeout(1500)
         if tag == 'mob':
@@ -42,13 +41,13 @@ with sync_playwright() as p:
         check(f'{tag}: host received the image', got)
         host.wait_for_timeout(500); host.screenshot(path=str(harness.OUT) + f'/attach_{tag}_received.png')
         # Links and selectable text
-        guest.get_by_placeholder(re.compile('Type a message')).first.fill('watch this https://example.com/clip?t=1, at 1:05 ok')
+        guest.get_by_placeholder(re.compile('Message the room|Type a message')).first.fill('watch this https://example.com/clip?t=1, at 1:05 ok')
         guest.keyboard.press('Enter')
         link = host.locator('a.chat-link')
         check(f'{tag}: a web link in a message is a link', wait(lambda: link.count() == 1, 10) and link.get_attribute('href') == 'https://example.com/clip?t=1',
               link.get_attribute('href') if link.count() else None)
         check(f'{tag}: it opens in a new tab, safely', link.get_attribute('target') == '_blank' and 'noopener' in (link.get_attribute('rel') or ''))
-        text = host.locator('.wa-text', has_text='watch this')
+        text = host.locator('.cm-text', has_text='watch this')
         check(f'{tag}: message text can be selected', text.evaluate('(el) => getComputedStyle(el).userSelect') == 'text')
         text.click(click_count=3)
         sel = host.evaluate('getSelection().toString()')
