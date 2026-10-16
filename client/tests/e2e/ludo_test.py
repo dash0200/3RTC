@@ -55,18 +55,20 @@ with sync_playwright() as p:
 
     host, phone, watcher = page(), page(mobile=True), page()
     host.goto(BASE); host.wait_for_timeout(1500)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     phone.goto(f'{BASE}?room={room}'); phone.wait_for_timeout(1200); phone.get_by_role('button', name='Join room').click()
     watcher.goto(f'{BASE}?room={room}'); watcher.wait_for_timeout(1200); watcher.get_by_role('button', name='Join Room').click()
-    check('three people connected', wait(lambda: host.locator('.stage-voice-chip').count() >= 3, 25))
+    check('three people connected', wait(lambda: harness.people(host) >= 3, 25))
     time.sleep(1)
 
     # open Ludo from the menu
-    host.locator('.stage-more-wrap .circle-action-btn').click()
-    host.locator('.stage-more-dropdown .dropdown-item', has_text='Ludo').click()
-    check('Ludo opens for everyone (phone too)', wait(lambda: all(pg.locator('.ludo-board').count() == 1 for pg in (host, phone, watcher)), 15))
+    harness.open_activity(host, 'Ludo')
+    check('Ludo opens for the host; the others are invited (nothing loaded)', wait(lambda: host.locator('.ludo-board').count() == 1 and all(
+        pg.locator('.activity-bubble.is-invite').count() == 1 and pg.locator('.ludo-board').count() == 0 for pg in (phone, watcher)), 15))
+    for pg in (phone, watcher):
+        harness.join_activity(pg)
+    check('...they join (phone too)', wait(lambda: all(pg.locator('.ludo-board').count() == 1 for pg in (host, phone, watcher)), 15))
 
     # lobby: seats, computer, rules
     seat_row(host, 'red').get_by_role('button', name='Sit').click()
@@ -109,7 +111,7 @@ with sync_playwright() as p:
     phone.evaluate("localStorage.removeItem('3rtc_activity_chat')")
     if phone.locator('.stage-activity.is-chat-split').count():
         phone.locator('.activity-chat-btn').click()
-    host.get_by_placeholder(re.compile('Type a message')).first.fill('good luck 🎲'); host.keyboard.press('Enter')
+    host.get_by_placeholder(re.compile('Message the room|Type a message')).first.fill('good luck 🎲'); host.keyboard.press('Enter')
     check('chat pops up over the game on the phone', wait(lambda: 'good luck' in ' '.join(phone.locator('.chat-peek-item').all_inner_texts()), 6))
     check('the phone game bar counts it', wait(lambda: phone.locator('.activity-chat-badge').inner_text() == '1', 4))
     phone.locator('.chat-peek-item').first.click()
@@ -124,6 +126,7 @@ with sync_playwright() as p:
     # someone joining now gets the game as it is
     late = page()
     late.goto(f'{BASE}?room={room}'); late.wait_for_timeout(1200); late.get_by_role('button', name='Join Room').click()
+    harness.join_activity(late, 20)
     check('a late joiner sees the same game', wait(lambda: late.locator('.ludo-board').count() == 1, 20) and same_board([host, late], 15), board(late))
 
     # the phone player leaves: the computer plays yellow; the watcher can take the seat

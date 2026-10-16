@@ -8,6 +8,10 @@
  *   bubble a round button; it pulses when the game needs you ("Your turn"), tap to open
  * The activity stays mounted in every view, so its timers and sounds keep working.
  * Phone, game open over a video: swipe it down to put it away (like the YouTube app).
+ *
+ * Not loaded on this device (`loaded` false: someone else started it, or we left it): only its
+ * bubble, tagged "Join <game>"; tapping it loads the game (useActivityLoad.js). "Leave" on the bar
+ * unloads it again; "End" closes it for everyone.
  */
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ChatPeek from './ChatPeek';
@@ -203,7 +207,7 @@ class ActivityErrorBoundary extends Component {
     }
 }
 
-export default function ActivityStage({ activity, definition, onClose, selfId, chat = null, view = 'full', onViewChange, isPhone = false, mediaActive = false }) {
+export default function ActivityStage({ activity, definition, onClose, selfId, chat = null, view = 'full', onViewChange, isPhone = false, mediaActive = false, loaded = true, onJoin, onLeave }) {
     const ActivityComponent = useMemo(() => (definition ? lazyFor(definition) : null), [definition]);
     const rootRef = useRef(null);
     const [isFull, toggleFull] = useStageFullscreen(rootRef);
@@ -238,6 +242,27 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
             </div>
         );
     }
+    if (!loaded) {
+        // Not loaded here: nothing of the game runs; its bubble invites us in
+        return (
+            <>
+                <div className="stage-activity-anchor" ref={rootRef} aria-hidden="true" />
+                <ActivityBubble
+                    icon={definition.icon}
+                    label={`${definition.name} is on (${activity.startedByName || 'someone'} started it). Join`}
+                    tag={`Join ${definition.name}`}
+                    invite
+                    isPhone={isPhone}
+                    anchorRef={rootRef}
+                    onOpen={onJoin}
+                />
+            </>
+        );
+    }
+    const leave = () => {
+        if (isFull) toggleFull();
+        onLeave?.();
+    };
     const startedBy = activity.startedBy === selfId ? 'you' : (activity.startedByName || 'someone');
     const reopen = () => setView(!isPhone && (openedAs.current === 'window' || mediaActive) ? 'window' : 'full');
     const bubbleLabel = `${definition.name}${status.attention && status.label ? `: ${status.label}` : ''}. Open`;
@@ -282,7 +307,7 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 {chat?.onToggleSplitView && !isFull && shown === 'full' && (
                     <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
                         aria-pressed={chat.splitView} title={chat.splitView ? 'Bigger board (hide chat messages)' : 'Show chat messages below the game'}>
-                        💬 Chat{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
+                        💬<span className="activity-btn-text"> Chat</span>{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
                     </button>
                 )}
                 {canFullscreen() && shown === 'full' && !isPhone && (
@@ -290,9 +315,16 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                         {isFull ? 'Exit full screen' : 'Full screen'}
                     </button>
                 )}
-                <button type="button" className={`activity-close-btn ${shown === 'window' ? 'activity-icon-btn' : ''}`} onClick={onClose} title="Close for everyone" aria-label="Close for everyone">
-                    {shown === 'window' ? '✕' : 'Close'}
+                {/* Leave: just me (the game unloads here and goes on for the others). End: everyone. */}
+                <button type="button" className={`activity-bar-btn activity-leave-btn ${shown === 'window' ? 'activity-icon-btn' : ''}`} onClick={leave}
+                    title={`Leave ${definition.name}: it closes on this device only and keeps going for the others`} aria-label={`Leave ${definition.name} (just you)`}>
+                    {shown === 'window' ? '✕' : 'Leave'}
                 </button>
+                {shown === 'full' && (
+                    <button type="button" className="activity-close-btn" onClick={onClose} title="End it for everyone" aria-label="End for everyone">
+                        End
+                    </button>
+                )}
             </div>
             <div className="activity-body">
                 <ActivityErrorBoundary key={definition.id}>

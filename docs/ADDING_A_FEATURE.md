@@ -13,6 +13,16 @@ video starts, and goes back to full size when the video ends. The component stay
 view, so its effects (computer players, timers) keep running; keep its layout fluid down to 300 px
 wide (`.stage-activity.is-window` in your CSS for anything to hide in the small window).
 
+**Not everyone loads it.** An activity opens for the person who starts it; everyone else gets a
+"Join <name>" bubble (and the Games menu says "On now: tap to join"), and nothing of it is
+downloaded or run until they tap. Anyone can **Leave** it (just them: it unloads and its shared
+state is dropped on that device) while **End** closes it for everyone. So:
+- keep its shared state under keys `act:<activityId>` (or `act:<activityId>:...`): those are the
+  ones dropped on Leave, and answered "gone" while it isn't loaded (useActivityLoad.js);
+- for "is it my app that runs the computer players" and "who is here to play", use
+  `useSharedPresence(key)` (`{ authorityId, members }`): only people who have the game count, so
+  someone who left it is "away" (the reducer's `meta.present` is the same list).
+
 1. **Copy the example:** `client/src/features/activities/sample/` → `features/activities/<id>/`.
    `index.jsx` default-exports the component. It receives `activityId`. For a full game, read
    `features/activities/ludo/`: rules and dice in `rules.js` (tested in `tests/unit/ludo.test.js`),
@@ -59,8 +69,8 @@ wide (`.stage-activity.is-window` in your CSS for anything to hide in the small 
      minPeople: 2, load: () => import('./chess/index.jsx') },
    ```
 
-   The menus (desktop ⋮ and phone More) list it; starting it opens it for everyone; people who
-   join later get the activity and its state; leaving resets it; its code downloads only when
+   The menus (desktop Games and phone More) list it; starting it opens it for you and invites the
+   others; people who join (also later) get its state as it is; leaving the room resets it; its code downloads only when
    someone opens it; a crash shows "This activity stopped working" instead of breaking the app.
    **"Your turn" while shrunk:** call `useActivityStatus({ attention, color, label })` from
    `features/activities/activityHost.js` (Ludo does). With `attention` true the bubble pulses and

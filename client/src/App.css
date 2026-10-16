@@ -11411,3 +11411,11 @@ video::cue {
 }
 .network-blocked-dismiss:hover { opacity: 1; }
 .phone-app .network-blocked-banner { top: 58px; }
+
+/* The game isn't loaded here (features/activities/useActivityLoad.js): an anchor for its bubble,
+   and the bubble as an invitation ("Join Ludo"), quieter than a turn nudge */
+.stage-activity-anchor { position: absolute; inset: 0; pointer-events: none; visibility: hidden; }
+.activity-bubble.is-invite { border-style: dashed; border-color: rgba(255, 255, 255, 0.55); background: #23262e; }
+.activity-bubble.is-invite .activity-bubble-icon { filter: saturate(0.6); }
+.activity-bubble.is-invite .activity-bubble-tag { background: #2f333d; border: 1px solid rgba(255, 255, 255, 0.25); }
+.activity-leave-btn { font-weight: 600; }

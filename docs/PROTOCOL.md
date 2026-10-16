@@ -111,7 +111,8 @@ format with `cleanFormat` (known fields, short strings, bounded lists) before us
 |---|---|---|
 | `room-state` | `key, v, state` | full state, version `v` (only higher versions are accepted). Sent by everyone who has a state to each peer whose channel opens, so a host who comes back gets the game it left. |
 | `room-state-action` | `key, action` | to the authority (host, else smallest peer id) |
-| `room-state-request` | `key` | "send me `key` if you have it" (a store created late) |
+| `room-state-request` | `key` | "send me `key` if you have it" (a store created late); also says "I have it now" |
+| `room-state-gone` | `key` | "I don't have `key`": someone who skipped or left a game. Sent when leaving it, to peers who connect, and in answer to that store's messages; the authority and `meta.present` for `key` leave them out until they send something for it again |
 
 Keys in use: `activity` (which activity is open: `{ current: { id, startedBy, startedByName, startedAt } | null }`),
 `act:<activity-id>` for each activity's own state, e.g. `act:ludo` (seats, rules, tokens, turn,
