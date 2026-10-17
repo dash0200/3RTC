@@ -41,6 +41,39 @@ export default function FileFormatNotice({ info, hasSubtitles = false, compact =
                     <div className="file-notice-text">
                         <strong>{check.verdict === 'no-audio' ? 'No sound on this device' : 'This video won\'t play on this device'}</strong>
                         <span>{check.message}</span>
+                        {check.verdict === 'no-audio' && typeof info.transcodeAudio === 'function' && (
+                            <div className="file-notice-audio-action">
+                                {info.transcodedAudioUrl ? (
+                                    <span className="file-notice-audio-done">✅ Audio converted to AAC · Playing in sync</span>
+                                ) : info.audioJob?.error ? (
+                                    <div className="file-notice-audio-err">
+                                        <span>⚠️ {info.audioJob.error}</span>
+                                        <button type="button" className="file-notice-audio-btn" onClick={() => info.transcodeAudio()}>Retry</button>
+                                    </div>
+                                ) : info.audioJob && !info.audioJob.done ? (
+                                    <div className="file-notice-audio-progress">
+                                        <div className="file-notice-audio-progress-row">
+                                            <span>⚡ {info.audioJob.stage || `Converting audio… ${pct(info.audioJob.progress)}`}</span>
+                                            <span className="file-notice-audio-pct">{pct(info.audioJob.progress)}</span>
+                                        </div>
+                                        <div className="file-notice-audio-bar">
+                                            <div className="file-notice-audio-bar-fill" style={{ width: pct(info.audioJob.progress) }} />
+                                        </div>
+                                        {info.cancelTranscode && (
+                                            <button type="button" className="file-notice-audio-cancel" onClick={info.cancelTranscode}>Cancel</button>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        className="file-notice-audio-btn"
+                                        onClick={() => info.transcodeAudio()}
+                                    >
+                                        ⚡ Convert Audio in Browser (E-AC-3 ➔ AAC)
+                                    </button>
+                                )}
+                            </div>
+                        )}
                         <span className="file-notice-meta">{describeFormat(format)}{!isOwner && sharedBy ? ` · shared by ${sharedBy}` : ''}</span>
                     </div>
                     <button type="button" className="file-notice-close" aria-label="Close" onClick={() => close('own')}>✕</button>
