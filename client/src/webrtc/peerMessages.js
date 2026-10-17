@@ -16,7 +16,7 @@ import { cleanName } from '../utils/names';
 export function normalizeSender(data, fromPeerId, hostPeerIdRef) {
     if ('isHost' in data) {
         const hostId = hostPeerIdRef?.current;
-        data.isHost = hostId !== undefined ? fromPeerId === hostId : Boolean(data.isHost);
+        data.isHost = Boolean(hostId && fromPeerId === hostId);
     }
     if ('sender' in data) data.sender = cleanName(data.sender) || undefined;
     if (data.type === 'peer-identity' || data.type === 'peer-voice-status') {
