@@ -1,10 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const CLOUD_URL = 'wss://signal.3rtc.me';
 const LOCAL_URL = 'ws://localhost:8080';
 
 export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApply }) {
   const [url, setUrl] = useState(currentUrl);
+
+  useEffect(() => {
+    setUrl(currentUrl);
+  }, [currentUrl, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e) => {
+      if (e.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -21,7 +34,7 @@ export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApp
   };
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
       <div className="modal-card">
         <div className="modal-header">
           <div className="modal-title">Signaling Server Connection</div>

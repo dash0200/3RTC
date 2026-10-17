@@ -7,7 +7,7 @@ import { EMOJI_CATEGORIES } from '../utils/emoji';
 import { useReactionSet, openReactionsEditor } from '../features/reactions/reactionSet';
 
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
-const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]|\s)+$/u;
+const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f]|[0-9#*]\ufe0f?\u20e3|\s)+$/u;
 const GRAPHEMES = typeof Intl !== 'undefined' && Intl.Segmenter
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : null;
@@ -405,7 +405,7 @@ export default function LiveChat({
   const handleCopyLogs = async () => {
     if (!displayLogs || displayLogs.length === 0) return;
     const formatted = displayLogs.map((log) => {
-      const d = new Date(log.timestamp || Date.now());
+      const d = new Date(log.timestamp || 0);
       const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
       return `[${timeStr}] ${log.text}`;
     }).join('\n');
@@ -679,7 +679,7 @@ export default function LiveChat({
               ) : (
                 <div className="chat-messages-inner cm-feed">
                   {messages.map((msg, index) => {
-                    const date = new Date(msg.timestamp || Date.now());
+                    const date = new Date(msg.timestamp || 0);
                     const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                     const msgInitial = getInitials(msg.sender || '?');
                     const msgAvatarBg = getAvatarColor(msg.sender || 'Peer');
@@ -1278,7 +1278,7 @@ export default function LiveChat({
               ) : (
                 <div className="room-logs-list">
                   {[...displayLogs].reverse().map((log) => {
-                    const date = new Date(log.timestamp || Date.now());
+                    const date = new Date(log.timestamp || 0);
                     const timeStr = date.toLocaleTimeString([], {
                       hour: 'numeric',
                       minute: '2-digit',

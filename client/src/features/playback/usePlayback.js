@@ -92,10 +92,10 @@ export function usePlayback({ room, hostControls }) {
     }, [bus, room, hostControls]);
 
     // ---- remote changes ---------------------------------------------------------------------
-    usePeerMessageOn(bus, 'yt-action', async (data) => {
+    usePeerMessageOn(bus, 'yt-action', async (data, from) => {
         if (!hostControls.acceptRemotePlayback(data)) return;
         lastChangeAtRef.current = Date.now();
-        const who = data.sender || 'Peer';
+        const who = room.peerName(from) || data.sender || 'Peer';
         if (data.action === 'close' || data.action === 'unload') {
             setActiveVideoId(null);
             setActiveVideoTitle('');
@@ -126,14 +126,14 @@ export function usePlayback({ room, hostControls }) {
         setRemoteAction(data);
     });
 
-    usePeerMessageOn(bus, 'local-video-action', (data) => {
+    usePeerMessageOn(bus, 'local-video-action', (data, from) => {
         if (!hostControls.acceptRemotePlayback(data)) return;
         lastChangeAtRef.current = Date.now();
-        const who = data.sender || 'Peer';
+        const who = room.peerName(from) || data.sender || 'Peer';
         if (data.action === 'load') {
             setActiveVideoId(null);
             setActiveMedia(null);
-            setRemoteLocalVideoMeta({ fileName: data.fileName, fileSize: data.fileSize, sender: data.sender });
+            setRemoteLocalVideoMeta({ fileName: data.fileName, fileSize: data.fileSize, sender: who });
             mediaChanged();
             setRemoteAction(data);
             room.log(`📁 ${who} loaded local video: "${data.fileName}"`);
@@ -157,10 +157,10 @@ export function usePlayback({ room, hostControls }) {
         }
     });
 
-    usePeerMessageOn(bus, 'media-action', (data) => {
+    usePeerMessageOn(bus, 'media-action', (data, from) => {
         if (!hostControls.acceptRemotePlayback(data)) return;
         lastChangeAtRef.current = Date.now();
-        const who = data.sender || 'Peer';
+        const who = room.peerName(from) || data.sender || 'Peer';
         if (data.action === 'load') {
             const media = normalizeMedia(data.media);
             if (!media) return;
@@ -215,6 +215,10 @@ export function usePlayback({ room, hostControls }) {
 
     /** Show a YouTube video here and tell the room (queue, quick picks). */
     const playYouTube = useCallback((videoId, title, extra = {}) => {
+        if (hostControls.isLockedForMe()) {
+            hostControls.onBlocked();
+            return;
+        }
         setLocalVideoFile(null);
         setRemoteLocalVideoMeta(null);
         setActiveMedia(null);
@@ -222,13 +226,13 @@ export function usePlayback({ room, hostControls }) {
         setActiveVideoTitle(title);
         mediaChanged();
         broadcastAction('load', { type: 'yt-action', action: 'load', newVideoId: videoId, title, ...extra });
-    }, [broadcastAction, mediaChanged, setActiveMedia]);
+    }, [broadcastAction, hostControls, mediaChanged, setActiveMedia]);
 
     /** Open a link source here and tell the room (paste box, queue). */
     const playLink = useCallback((media, extra = {}) => {
         const clean = normalizeMedia(media);
         if (!clean) return;
-        if (hostControls.isLockedForMe() && !extra.byVote) {
+        if (hostControls.isLockedForMe()) {
             hostControls.onBlocked();
             return;
         }
