@@ -6,7 +6,7 @@ import { micPipeline } from '../utils/micPipeline';
 import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp';
 
 export async function processSignalingMessage(msg, ctx) {
-    const { addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username } = ctx;
+    const { addSystemMessage, cleanupPeer, currentRoomRef, currentScreenTrackRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username } = ctx;
     // Keep the server's proof of our seat (and of the room, as host) for reconnecting
     if (roomTokensRef && (msg.type === 'room-created' || msg.type === 'room-resumed' || msg.type === 'joined')) {
         roomTokensRef.current = {
@@ -129,12 +129,19 @@ export async function processSignalingMessage(msg, ctx) {
                     peerEntry.applyingRemote = false;
                 }
 
-                // Ensure the negotiated audio transceiver on the answerer is active and set to sendrecv
+                // Ensure the negotiated audio and video transceivers on the answerer are active and set to sendrecv
                 if (pc.getTransceivers) {
                     const allTransceivers = pc.getTransceivers();
                     for (const t of allTransceivers) {
-                        const isValid = t.mid !== null || allTransceivers.length === 1;
-                        if (isValid && (!t.receiver?.track || t.receiver.track.kind === 'audio' || t.sender?.track?.kind === 'audio')) {
+                        const isVideo = t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video';
+                        if (isVideo) {
+                            peerEntry.videoTransceiver = t;
+                            t.direction = 'sendrecv';
+                            if (currentScreenTrackRef?.current && t.sender) {
+                                t.sender.replaceTrack(currentScreenTrackRef.current).catch(() => { });
+                            }
+                        } else {
+                            peerEntry.audioTransceiver = t;
                             t.direction = 'sendrecv';
                             if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
                                 const audioTrack = micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
@@ -196,6 +203,15 @@ export async function processSignalingMessage(msg, ctx) {
                         peerEntry.applyingRemote = false;
                     }
                     tuneAudioSender(pc);
+                    if (pc.getTransceivers) {
+                        for (const t of pc.getTransceivers()) {
+                            if (t.sender?.track?.kind === 'video' || t.receiver?.track?.kind === 'video') {
+                                peerEntry.videoTransceiver = t;
+                            } else if (t.sender?.track?.kind === 'audio' || t.receiver?.track?.kind === 'audio') {
+                                peerEntry.audioTransceiver = t;
+                            }
+                        }
+                    }
 
                     const answerAudioSdp = extractAudioSdp(msg.answer?.sdp);
                     const tInfo = pc.getTransceivers ? pc.getTransceivers().map(t => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`).join(', ') : 'none';
