@@ -109,6 +109,20 @@ describe('shared state', () => {
         assert.equal(stores.a.getState().total, 3);
     });
 
+    it('rejects unverified room-state broadcasts from non-authority peers', async () => {
+        const { net, apps, stores } = room3();
+        stores.h.dispatch({ kind: 'add', n: 3 });
+        await net.flush();
+        // Guest 'b' attempts to broadcast forged high-version room-state to Guest 'a' and Host 'h'
+        apps[1].bus.dispatch({ type: 'room-state', key: 'game', v: 99999999, state: { total: 0 } }, 'b');
+        apps[0].bus.dispatch({ type: 'room-state', key: 'game', v: 99999999, state: { total: 0 } }, 'b');
+        await net.flush();
+        assert.equal(stores.a.getState().total, 3, 'guest a rejected state from guest b');
+        assert.equal(stores.a.getVersion(), 1);
+        assert.equal(stores.h.getState().total, 3, 'host h rejected state from guest b');
+        assert.equal(stores.h.getVersion(), 1);
+    });
+
     it('actions sent to a peer that is not the authority are ignored', async () => {
         const { net, apps, stores } = room3();
         apps[2].bus.dispatch({ type: 'room-state-action', key: 'game', action: { kind: 'add', n: 50 } }, 'a');

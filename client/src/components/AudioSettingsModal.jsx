@@ -71,6 +71,22 @@ export default function AudioSettingsModal({
     };
   }, [isRecordingKey, audioSettings, onUpdateAudioSettings]);
 
+  // Handle Escape key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (isRecordingKey) {
+          setIsRecordingKey(false);
+        } else {
+          onClose?.();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isRecordingKey, onClose]);
+
   if (!isOpen) return null;
 
   const handleToggle = (key) => {
