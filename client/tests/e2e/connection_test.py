@@ -52,8 +52,7 @@ with sync_playwright() as p:
     for pg in (host, guest):
         pg.add_init_script(INIT); pg.on('dialog', lambda d: d.accept())
     host.goto('http://localhost:5199/'); host.wait_for_timeout(1500)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None))
     check('host created room', room, room)
 
@@ -73,7 +72,7 @@ with sync_playwright() as p:
     check('bulk channel carries data (1 MB)', got, str(guest.evaluate('window.__bulkGot')))
 
     # voice: guest unmutes, host must receive audio packets from the guest
-    guest.locator('.header-ctrl-pill').first.click()
+    harness.mic_button(guest).click()
     def host_audio_bytes():
         return host.evaluate("""async () => { let n = 0; for (const pc of window.__pcs) { if (pc.signalingState === 'closed') continue;
             const st = await pc.getStats(); st.forEach((r) => { if (r.type === 'inbound-rtp' && r.kind === 'audio') n += r.packetsReceived || 0; }); } return n; }""")
@@ -83,13 +82,15 @@ with sync_playwright() as p:
     check('voice: guest sends the processed pipeline track with high priority', gate and gate['prio'] == 'high', str(gate))
 
     # speaking rings: the guest's chip on the host lights up while the fake mic tone plays
+    host.locator('.chat-tab-btn', has_text='People').first.click()  # (the people list shows who's talking)
     host.evaluate("""() => { window.__ring = 0; window.__ringObs = setInterval(() => {
-        if (document.querySelector('.stage-voice-chip.speaking')) window.__ring++; else window.__dark = (window.__dark || 0) + 1; }, 50); }""")
+        if (document.querySelector('.peer-voice-badge.is-speaking, .vpo-av.is-speaking, .popover-status-text.speaking, .voice-user-card.peer-card.speaking-active')) window.__ring++; else window.__dark = (window.__dark || 0) + 1; }, 50); }""")
     time.sleep(6)
     rings = host.evaluate("clearInterval(window.__ringObs), window.__ring")
     dark = host.evaluate("window.__dark || 0")
     check('speaking ring follows the talking peer (on while talking, off in pauses)', rings > 3 and dark > 3, f'{rings} samples lit, {dark} dark')
 
+    host.locator('.chat-tab-btn', has_text='Chat').first.click()
     # chat: guest types a message, host shows it
     guest.locator('.chat-pill-textarea').fill('hello from guest')
     guest.locator('.chat-pill-send-btn').click()
@@ -126,7 +127,7 @@ with sync_playwright() as p:
           str(host.evaluate('window.__chans()')))
 
     # --- 4. guest leaves on purpose: host cleans up immediately (no reconnect attempts) ---
-    guest.evaluate("""() => { const b = [...document.querySelectorAll('button')].find(x => /leave/i.test(x.textContent + (x.title||'') + (x.getAttribute('aria-label')||''))); b && b.click(); return !!b; }""")
+    harness.leave_room(guest)
     gone = wait(lambda: len(live(host)) == 0, 8)
     check('host dropped the connection right after guest left', gone, str(host.evaluate('window.__state()')))
     time.sleep(10)

@@ -1,251 +1,140 @@
-import React, { useEffect, useRef, useState } from 'react';
-import AudioDevicePicker from './AudioDevicePicker';
+import React, { useState } from 'react';
 import { MAX_ROOM_SIZE } from '../webrtc/config';
 import { copyToClipboard } from '../utils/clipboard';
+import { Logo } from './Logo';
+import { Icon } from './icons';
 
+/**
+ * Desktop room header (Figma): logo, room code (click to copy), what's playing,
+ * the connection in plain words, and Invite (the main button while you're alone).
+ */
 export default function Header({
-  isLive,
   roomId,
   onCopyRoom,
-  isMicMuted = true,
-  isAudioBlocked = false,
-  onToggleMic,
-  onToggleBlockAudio,
   isP2PConnected = false,
-  p2pStatusText = '',
-  isMediaActive = false,
-  onExitVideo,
-  onLeaveRoom,
-  isChatOpen = false,
-  unreadChatCount = 0,
-  onToggleChat,
-  audioSettings = null,
-  onOpenAudioSettings,
-  onUpdateAudioSettings,
-  onSelectOutput,
-  isPttActive = false,
-  peerCount = 1,
-  onOpenSettings,
-  // Feature 4.1: Real-Time P2P Network HUD
   networkStats = null,
+  peerCount = 1,
   onOpenNetworkHud,
-  // Feature 4.3: QR Code for Instant Mobile Join
   onOpenQrCode,
-  playbackLock = false
+  playbackLock = false,
+  nowPlaying = '',
+  isChatOpen = true,
+  onToggleChat,
+  unreadCount = 0,
+  isMediaActive = false,
+  onExitVideo = null,
+  onVoteSkip = null,
+  skipVotes = [],
+  connectedPeers = [],
+  isHost = false,
+  username = '',
+  activityStatus = null
 }) {
   const [copied, setCopied] = useState(false);
-  // Quick device switch (the arrow next to the mic button)
-  const [devicesOpen, setDevicesOpen] = useState(false);
-  const devicesRef = useRef(null);
-  useEffect(() => {
-    if (!devicesOpen) return undefined;
-    const onDown = (e) => { if (devicesRef.current && !devicesRef.current.contains(e.target)) setDevicesOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setDevicesOpen(false); };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [devicesOpen]);
+  const ping = networkStats?.avgPingMs;
+  const isWeak = isP2PConnected && typeof ping === 'number' && ping > 250;
+  const alone = peerCount <= 1;
+  const connection = isP2PConnected
+    ? (isWeak ? { tone: 'weak', text: 'Weak connection' } : { tone: 'ok', text: 'Connected' })
+    : alone ? { tone: 'idle', text: 'Waiting for friends' } : { tone: 'weak', text: 'Connecting…' };
 
-  const handleCopyClick = async (e) => {
-    e.stopPropagation();
+  const hostPeer = isHost ? null : connectedPeers.find((p) => p.isHost);
+  const totalParticipants = connectedPeers.length + 1;
+  const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
+  const hasVotedSkip = skipVotes.includes(username);
+
+  const copy = async () => {
     if (!roomId) return;
-    const cleanId = String(roomId).trim();
-    const success = await copyToClipboard(cleanId);
-    if (success) {
+    const code = String(roomId).trim();
+    if (await copyToClipboard(code)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      if (typeof onCopyRoom === 'function') {
-        onCopyRoom(cleanId);
-      }
+      onCopyRoom?.(code);
     }
   };
 
   return (
-    <header className="app-header">
-      {/* Left: Brand Logo & Room Chip */}
-      <div className="header-left">
-        <div className="brand-logo" title="3RTC Watch Party Studio">
-          <div className="yt-icon-box">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="#ffffff">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </div>
-          <span className="brand-title">3RTC</span>
-          <span className="brand-badge">LIVE</span>
-        </div>
+    <header className="rh">
+      <Logo size={30} />
+      {roomId && (
+        <button type="button" className={`rh-room ${copied ? 'is-copied' : ''}`} onClick={copy} aria-label={`Copy room code ${roomId}`} title="Copy room code">
+          <span className="rh-room-label">{copied ? 'Copied' : 'Room'}</span>
+          <span className="rh-room-code">{roomId}</span>
+          <Icon name={copied ? 'check' : 'copy'} size={15} />
+        </button>
+      )}
 
-        {roomId && (
-          <div className="header-room-pill-wrap">
-            <div
-              className={`header-room-chip ${copied ? 'copied' : ''}`}
-              onClick={handleCopyClick}
-              title="Click to copy 5-digit Room ID"
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  handleCopyClick(e);
-                }
-              }}
-            >
-              <span className="room-green-dot" />
-              <span className="room-label-text">Room:</span>
-              <span className="room-code-digits">{roomId}</span>
-              <span className="room-copy-icon">
-                {copied ? (
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="#00e676">
-                    <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                    <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z" />
-                  </svg>
-                )}
-              </span>
-              {copied && <span className="room-copied-tag">Copied!</span>}
-            </div>
-          </div>
-        )}
-      </div>
+      {/* When media is active, show clean sync pill in header */}
+      {isMediaActive && (
+        <span className="rh-sync-pill" role="status" title="Sync status with peers">
+          <span className="rh-sync-dot" aria-hidden="true" />
+          <span>{isHost ? 'In sync · You are host' : hostPeer ? `In sync · ${hostPeer.username}` : 'In sync'}</span>
+        </span>
+      )}
 
-      {/* Center Spacer */}
-      <div className="header-center" />
+      <p className="rh-now" title={nowPlaying || undefined}>{nowPlaying ? `Now playing · ${nowPlaying}` : ''}</p>
 
-      {/* Right: Network, Mic, Leave, Peer Counter, Settings */}
-      <div className="header-right">
-        {roomId && (
-          <>
-            {playbackLock && (
-              <span className="header-lock-pill" title="The host turned on host controls: only the host can play, pause, seek or change the video">
-                🔒 Host controls
-              </span>
-            )}
-            {/* Network Latency & Topology Pill */}
+      {playbackLock && (
+        <span className="rh-lock" title="Only the host can play, pause, seek or change the video">
+          <Icon name="lock" size={15} />Host controls
+        </span>
+      )}
+
+      {/* Dedicated video action buttons in Header - keeps video canvas 100% clean */}
+      {isMediaActive && (
+        <div className="rh-video-actions">
+          {typeof onVoteSkip === 'function' && totalParticipants > 1 && (
             <button
               type="button"
-              className={`header-net-chip ${isP2PConnected ? 'connected' : ''}`}
-              onClick={typeof onOpenNetworkHud === 'function' ? onOpenNetworkHud : undefined}
-              title={
-                isP2PConnected
-                  ? `WebRTC Direct Mesh (${networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined ? `${networkStats.avgPingMs}ms • ` : ''}${networkStats?.overallConnectionType || 'Direct P2P'}) - Click for Diagnostics HUD`
-                  : (p2pStatusText || 'Waiting for peers... Click for Diagnostics')
-              }
-              aria-label="Open Network Diagnostics HUD"
+              className={`rh-action-btn rh-skip-btn ${hasVotedSkip ? 'is-voted' : ''}`}
+              onClick={onVoteSkip}
+              title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} needed)`}
             >
-              <span className="net-status-dot" />
-              <span className="net-status-text">
-                {isP2PConnected
-                  ? (networkStats?.avgPingMs !== null && networkStats?.avgPingMs !== undefined
-                    ? `${networkStats.avgPingMs}ms • ${networkStats.overallConnectionType || 'Direct P2P'}`
-                    : '1ms • Direct P2P')
-                  : (p2pStatusText || 'Direct P2P')}
-              </span>
+              <Icon name="skipForward" size={14} />
+              <span>Skip ({skipVotes.length}/{requiredVotes})</span>
             </button>
+          )}
 
-            {/* Microphone Toggle Pill */}
-            {audioSettings?.inputMode === 'ptt' ? (
-              <button
-                type="button"
-                className={`header-ctrl-pill ${isPttActive ? 'live ptt-live' : 'muted ptt-idle'}`}
-                onClick={typeof onOpenAudioSettings === 'function' ? onOpenAudioSettings : onToggleMic}
-                title={
-                  isAudioBlocked
-                    ? "Microphone is blocked"
-                    : isPttActive
-                      ? "PTT Transmitting Live! Release key to mute"
-                      : `Push-to-Talk: Hold [${audioSettings?.pttKeyLabel || 'Space'}] to transmit`
-                }
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                  {isPttActive ? (
-                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
-                  ) : (
-                    <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
-                  )}
-                </svg>
-                <span>{isAudioBlocked ? 'Mic Blocked' : isPttActive ? 'PTT Live' : `PTT [${audioSettings?.pttKeyLabel || 'Space'}]`}</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className={`header-ctrl-pill ${isMicMuted ? 'muted' : 'live'}`}
-                onClick={onToggleMic}
-                title={isMicMuted ? "Microphone is muted. Click to speak" : "Microphone is live. Click to mute"}
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                  {isMicMuted ? (
-                    <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
-                  ) : (
-                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
-                  )}
-                </svg>
-                <span>{isAudioBlocked ? 'Mic Blocked' : isMicMuted ? 'Mic Off' : 'Mic Live'}</span>
-              </button>
-            )}
-
-            {typeof onUpdateAudioSettings === 'function' && (
-              <div className="header-devices" ref={devicesRef}>
-                <button
-                  type="button"
-                  className={`header-devices-btn ${devicesOpen ? 'is-open' : ''}`}
-                  onClick={() => setDevicesOpen((o) => !o)}
-                  title="Switch microphone or speaker"
-                  aria-label="Switch microphone or speaker"
-                  aria-expanded={devicesOpen}
-                >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M7 10l5 5 5-5z" /></svg>
-                </button>
-                {devicesOpen && (
-                  <div className="header-devices-menu" role="dialog" aria-label="Audio devices">
-                    <AudioDevicePicker
-                      compact
-                      audioSettings={audioSettings}
-                      onUpdateAudioSettings={onUpdateAudioSettings}
-                      onSelectOutput={onSelectOutput}
-                      isMicLive={!isMicMuted}
-                    />
-                    {typeof onOpenAudioSettings === 'function' && (
-                      <button type="button" className="header-devices-more" onClick={() => { setDevicesOpen(false); onOpenAudioSettings(); }}>
-                        Voice settings & mic test…
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Leave Room Pill */}
-            {typeof onLeaveRoom === 'function' && (
-              <button
-                type="button"
-                className="header-leave-btn"
-                onClick={onLeaveRoom}
-                title="Leave room"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                  <path d="M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5c-1.11 0-2 .9-2 2v4h2V5h14v14H5v-4H3v4c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
-                </svg>
-                <span>Leave</span>
-              </button>
-            )}
-
-            {/* Subtle Divider */}
-            <div className="header-v-divider" />
-
-            {/* Peers in Room Counter */}
-            <div className="header-peers-chip" title={`${peerCount} connected in room`}>
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
-              </svg>
-              <span>{peerCount} / {MAX_ROOM_SIZE}</span>
-            </div>
-          </>
-        )}
-      </div>
+          {typeof onExitVideo === 'function' && (
+            <button
+              type="button"
+              className="rh-action-btn rh-exit-btn"
+              onClick={onExitVideo}
+              title="Exit video and return to watch party stage"
+              aria-label="Exit video"
+            >
+              <Icon name="close" size={14} strokeWidth={2.4} />
+              <span>Exit</span>
+            </button>
+          )}
+        </div>
+      )}
+      <button type="button" className={`rh-conn is-${connection.tone}`} onClick={onOpenNetworkHud} aria-label={`${connection.text}. Open connection details`}>
+        <Icon name="signal" size={16} strokeWidth={2.4} />
+        {connection.text}
+      </button>
+      <button type="button" className={`rh-invite ${alone ? 'is-primary' : ''}`} onClick={onOpenQrCode}>
+        {alone && <Icon name="userPlus" size={17} strokeWidth={2.2} />}
+        {alone ? 'Invite friends' : 'Invite'}
+        {!alone && <span className="rh-count">{peerCount} / {MAX_ROOM_SIZE}</span>}
+      </button>
+      {onToggleChat && (
+        <button
+          type="button"
+          className={`rh-chat-toggle ${isChatOpen ? 'is-open' : ''} ${!isChatOpen && activityStatus?.attention ? 'needs-you' : ''}`}
+          onClick={onToggleChat}
+          aria-label={isChatOpen ? 'Hide side panel' : 'Open chat and queue panel'}
+          title={isChatOpen ? 'Hide side panel' : 'Open chat and queue panel'}
+        >
+          <Icon name="chat" size={16} strokeWidth={2.2} />
+          <span className="rh-chat-toggle-text">{isChatOpen ? 'Hide Panel' : 'Panel'}</span>
+          {!isChatOpen && (activityStatus?.attention || unreadCount > 0) && (
+            <span className={`rh-chat-badge ${activityStatus?.attention ? 'is-activity' : ''}`} style={activityStatus?.color ? { backgroundColor: activityStatus.color } : undefined}>
+              {activityStatus?.attention ? (activityStatus.label || '🎲') : unreadCount}
+            </span>
+          )}
+        </button>
+      )}
     </header>
   );
 }

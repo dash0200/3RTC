@@ -27,13 +27,11 @@ def vstate(pg):
 
 
 def pill(pg):
-    el = pg.query_selector('.local-filesize-text')
-    return el.inner_text() if el else ''
+    return harness.stream_pill(pg)
 
 
 def pct(pg):
-    m = re.search(r'\((\d+)%', pill(pg))
-    return int(m.group(1)) if m else 0
+    return harness.stream_percent(pg) or 0
 
 
 def from_viewers(pg):
@@ -60,7 +58,7 @@ def join_and_stream(pg, room, buffered=95, owner=None):
     pg.goto(f'{BASE}/?room={room}')
     wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10)
     pg.get_by_role('button', name='Join Room').click()
-    btn = pg.get_by_role('button', name=re.compile('Stream from Peer'))
+    btn = pg.get_by_role('button', name=re.compile('Stream from'))
     wait(lambda: btn.count() > 0, 20)
     time.sleep(2)  # the others' "have" announcements arrive
     btn.first.click()
@@ -87,8 +85,7 @@ def play_from(pg, t):
 with sync_playwright() as p:
     b = p.chromium.launch(args=harness.CHROMIUM_ARGS)
     owner = page(b, 'Owner')
-    owner.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    owner.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(owner)
     room = wait(lambda: (re.search(r'room=(\d+)', owner.evaluate('location.href')) or [None, None])[1], 15)
     owner.set_input_files('input[type=file][accept*="video/"]', harness.media('test.mp4'))
     size = os.path.getsize(harness.media('test.mp4'))

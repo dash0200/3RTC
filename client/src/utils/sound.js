@@ -114,18 +114,31 @@ class SoundFx {
 
 export const sound = new SoundFx();
 
-export function getAvatarColor(name) {
-  const colors = [
-    'linear-gradient(135deg, #f43f5e, #e11d48)',
-    'linear-gradient(135deg, #a855f7, #7c3aed)',
-    'linear-gradient(135deg, #3b82f6, #2563eb)',
-    'linear-gradient(135deg, #10b981, #059669)',
-    'linear-gradient(135deg, #f59e0b, #d97706)',
-    'linear-gradient(135deg, #06b6d4, #0891b2)'
-  ];
-  let hash = 0;
-  for (let i = 0; i < (name || '').length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+export const PEER_AVATAR_COLORS = [
+  '#6aa8ff', // 1. Sky Blue (--rd-focus, 'P' in UI/UX design)
+  '#f5b544', // 2. Warm Amber (--rd-warn, 'A' in UI/UX design)
+  '#c79bff', // 3. Lavender Violet ('M' in UI/UX design)
+  '#36d399', // 4. Mint Green (--rd-live)
+  '#ff8a9c', // 5. Coral Rose (--rd-danger-text)
+  '#f4f4f6', // 6. Cloud Off-White (--rd-text, 'D' in UI/UX design)
+];
+
+export function getAvatarColor(name, index) {
+  if (typeof name === 'string' && name.trim().length > 0) {
+    // Strip trailing suffixes like " (you)" or " (host)" if present in display names
+    const clean = name.replace(/\s*\((you|host).*?\)\s*/gi, '').trim().toLowerCase();
+    let hash = 0;
+    for (let i = 0; i < clean.length; i++) {
+      hash = (hash * 31 + clean.charCodeAt(i)) | 0;
+    }
+    return PEER_AVATAR_COLORS[Math.abs(hash) % PEER_AVATAR_COLORS.length];
   }
-  return colors[Math.abs(hash) % colors.length];
+  if (typeof index === 'number' && Number.isFinite(index)) {
+    return PEER_AVATAR_COLORS[Math.abs(Math.floor(index)) % PEER_AVATAR_COLORS.length];
+  }
+  if (typeof name === 'number' && Number.isFinite(name)) {
+    return PEER_AVATAR_COLORS[Math.abs(Math.floor(name)) % PEER_AVATAR_COLORS.length];
+  }
+  return PEER_AVATAR_COLORS[0];
 }
+

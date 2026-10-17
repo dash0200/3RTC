@@ -56,3 +56,13 @@ export function useSharedStateOn(room, key, options) {
 export function useSharedState(key, options) {
     return useSharedStateOn(useRoom(), key, options);
 }
+
+/**
+ * Who has this shared store and who decides for it: { authorityId, members } (members: peer ids,
+ * ours included). A game uses it for "is it my app that plays for the computers" and "who is here
+ * to play" (people who left the game count as away). Call after useSharedState with the same key.
+ */
+export function useSharedPresence(key, options) {
+    const store = getSharedStore(useRoom().bus, useRoom(), key, options);
+    return useSyncExternalStore(store.subscribePresence, store.getPresence, store.getPresence);
+}

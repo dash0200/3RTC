@@ -11,8 +11,8 @@ import { usePeerMessageOn } from '../../core/RoomContext';
 
 // Changes to what everyone watches; with the lock on, only the host sends these
 const LOCKED_PLAYBACK_ACTIONS = new Set(['play', 'pause', 'seek', 'load', 'close', 'unload']);
-export const isLockedPlaybackAction = (type, action, payload = {}) =>
-    (type === 'yt-action' || type === 'local-video-action' || type === 'media-action') && LOCKED_PLAYBACK_ACTIONS.has(action) && !payload.byVote;
+export const isLockedPlaybackAction = (type, action, _payload = {}) =>
+    (type === 'yt-action' || type === 'local-video-action' || type === 'media-action') && LOCKED_PLAYBACK_ACTIONS.has(action);
 
 const HOST_RETURN_GRACE_MS = 4000; // a host that is only reconnecting comes back within this
 const BLOCKED_TOAST_GAP_MS = 3000;

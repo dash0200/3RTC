@@ -5,7 +5,7 @@
  */
 import { getClientId } from '../../../utils/clientId';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useRoom, useSharedState } from '../../../core/RoomContext';
+import { useRoom, useSharedState, useSharedPresence } from '../../../core/RoomContext';
 import { useActivityStatus } from '../activityHost';
 import { sound } from '../../../utils/sound';
 import { COLORS, COLOR_NAMES, INITIAL, HOME, reducer, seatedColors } from './rules';
@@ -159,12 +159,17 @@ const TURN_COLORS = { red: '#e53935', green: '#2e9e48', yellow: '#f2b705', blue:
 export default function Ludo({ activityId }) {
     const room = useRoom();
     const [state, dispatch] = useSharedState(`act:${activityId}`, { initial: INITIAL, reducer });
+    // Who has the game open (someone can skip or leave it: then they count as away) and whose app
+    // decides, among them (core/sharedState.js)
+    const presence = useSharedPresence(`act:${activityId}`, { initial: INITIAL, reducer });
     const selfId = room.getSelfId();
-    const presentKey = [selfId, ...room.peers.map((p) => p.peerId)].sort().join(',');
+    const presentKey = presence.members.join(',');
     const present = useMemo(() => new Set(presentKey.split(',')), [presentKey]);
     const myColor = COLORS.find((c) => state.seats[c] && !state.seats[c].bot && state.seats[c].id === selfId) || null;
-    const isAuthority = room.getAuthorityId() === selfId;
-    const canManage = room.isHost || !room.getHostPeerId();
+    const isAuthority = presence.authorityId === selfId;
+    // The host manages the game; if the host isn't in it, anyone in it can
+    const hostId = room.getHostPeerId();
+    const canManage = room.isHost || !hostId || !present.has(hostId);
     const shown = useShownTokens(state);
     const nameOf = (c) => state.seats[c]?.name || COLOR_NAMES[c];
     const seatAway = (c) => state.seats[c] && !state.seats[c].bot && !present.has(state.seats[c].id);

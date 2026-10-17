@@ -31,8 +31,7 @@ with sync_playwright() as p:
     for pg in (host, blocked):
         pg.on('pageerror', lambda e: errors.append(str(e)))
     host.goto(BASE); host.wait_for_timeout(1200)
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None), 10)
     blocked.goto(f'{BASE}?room={room}'); blocked.wait_for_timeout(1200)
     blocked.get_by_role('button', name='Join room').click()

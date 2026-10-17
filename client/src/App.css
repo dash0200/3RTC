@@ -615,7 +615,7 @@
 }
 
 .room-log-item.log-cat-video {
-  border-left: 2px solid #ff0033;
+  border-left: 2px solid #e5143d;
 }
 
 .room-log-item.log-cat-playback {
@@ -1100,7 +1100,7 @@
 
 .toast {
   position: fixed;
-  bottom: 24px;
+  bottom: 104px;
   left: 50%;
   transform: translateX(-50%) translateY(0);
   background-color: var(--bg-surface);
@@ -1112,6 +1112,7 @@
   font-weight: 500;
   box-shadow: var(--shadow-elevated);
   z-index: 200;
+  pointer-events: none;
   animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -1384,7 +1385,7 @@
 
 .yt-ctrl-btn.exit-video-btn:hover {
   background: rgba(255, 0, 51, 0.28);
-  border-color: #ff0033;
+  border-color: #e5143d;
   color: #ffffff;
   box-shadow: 0 0 10px rgba(255, 0, 51, 0.35);
 }
@@ -1473,9 +1474,11 @@
   opacity: 0 !important;
   pointer-events: none !important;
   transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease !important;
-  background: linear-gradient(to bottom, rgba(12, 12, 14, 0.98) 0%, rgba(12, 12, 14, 0.88) 75%, transparent 100%) !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7) !important;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.2) 65%, transparent 100%) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
 }
 
 .local-fullstage-player.is-fullscreen .local-stage-topbar.visible,
@@ -2587,7 +2590,7 @@
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.8px;
-  color: var(--accent-red, #FF0033);
+  color: var(--accent-red, #e5143d);
   text-transform: uppercase;
 }
 
@@ -2595,7 +2598,7 @@
 .equalizer-bar {
   display: inline-block;
   width: 3px;
-  background: var(--accent-red, #FF0033);
+  background: var(--accent-red, #e5143d);
   border-radius: 2px;
   animation: eqBounce 1.2s infinite ease-in-out alternate;
 }
@@ -2776,7 +2779,7 @@
 }
 
 .queue-add-input:focus {
-  border-color: var(--accent-red, #FF0033);
+  border-color: var(--accent-red, #e5143d);
   background: rgba(255, 255, 255, 0.08);
   box-shadow: 0 0 0 2px rgba(255, 0, 51, 0.2);
 }
@@ -3140,14 +3143,23 @@
 /* In Fullscreen: Synchronize reaction dock with player controls */
 .local-fullstage-player.is-fullscreen .floating-reaction-dock {
   z-index: 105 !important;
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease !important;
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.28s ease !important;
   opacity: 1 !important;
   transform: translateY(0) !important;
   pointer-events: auto !important;
 }
 
-/* Auto-hide reaction dock when controls auto-hide or in Cinema View (matches player controls) */
-.local-fullstage-player.is-fullscreen.controls-hidden .floating-reaction-dock,
+/* Ensure reaction dock stays 100% visible and interactive whenever hovered or focused */
+.local-fullstage-player.is-fullscreen .floating-reaction-dock:hover,
+.local-fullstage-player.is-fullscreen .floating-reaction-dock:focus-within,
+.local-fullstage-player.is-fullscreen .fullscreen-reaction-wrapper:hover {
+  opacity: 1 !important;
+  transform: translateY(0) scale(1) !important;
+  pointer-events: auto !important;
+}
+
+/* Auto-hide reaction dock only when not hovered or focused (matches player controls) */
+.local-fullstage-player.is-fullscreen.controls-hidden .floating-reaction-dock:not(:hover):not(:focus-within),
 .local-fullstage-player.is-fullscreen.panels-hidden .floating-reaction-dock {
   opacity: 0 !important;
   transform: translateY(24px) scale(0.95) !important;
@@ -3204,8 +3216,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 50%;
   cursor: pointer;
   padding: 0;
@@ -3213,8 +3225,8 @@
 }
 
 .reaction-dock-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.22);
   transform: translateY(-3px) scale(1.15);
 }
 
@@ -8328,7 +8340,7 @@ video::cue {
 .yt-hero-icon-box {
   width: 54px;
   height: 40px;
-  background: #ff0033;
+  background: #e5143d;
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -8373,7 +8385,7 @@ video::cue {
 }
 
 .yt-hero-form:focus-within {
-  border-color: #ff0033;
+  border-color: #e5143d;
   box-shadow: 0 0 0 2px rgba(255, 0, 51, 0.25);
 }
 
@@ -8645,7 +8657,7 @@ video::cue {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
-  accent-color: #ff0033;
+  accent-color: #e5143d;
   transition: background 0.15s ease;
 }
 
@@ -8693,7 +8705,7 @@ video::cue {
 
 .yt-screen-scrubber-fill {
   height: 100%;
-  background: #ff0033;
+  background: #e5143d;
   border-radius: 3px;
   pointer-events: none;
 }
@@ -9068,7 +9080,7 @@ video::cue {
   position: absolute;
   top: -3px;
   right: -3px;
-  background: #ff0033;
+  background: #e5143d;
   color: #ffffff;
   font-size: 0.65rem;
   font-weight: 800;
@@ -9214,7 +9226,7 @@ video::cue {
 }
 
 .tab-badge.chat-badge {
-  background: #ff0033;
+  background: #e5143d;
   color: #ffffff;
   border-radius: 10px;
   padding: 1px 6px;
@@ -9621,8 +9633,11 @@ video::cue {
   z-index: 100 !important;
   height: 60px !important;
   padding: 0 24px !important;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.98) 0%, rgba(0, 0, 0, 0.82) 75%, transparent 100%) !important;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.25) 65%, transparent 100%) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
   border-top: none !important;
+  box-shadow: none !important;
   transform: translateY(100%) !important;
   opacity: 0 !important;
   pointer-events: none !important;
@@ -9698,7 +9713,7 @@ video::cue {
 
 .yt-screen-ctrl-icon.yt-play-btn:hover {
   background: rgba(255, 0, 51, 0.2);
-  color: #ff0033;
+  color: #e5143d;
 }
 
 /* Volume Control Group */
@@ -9735,12 +9750,12 @@ video::cue {
   border-radius: 2px;
   outline: none;
   cursor: pointer;
-  accent-color: #ff0033;
+  accent-color: #e5143d;
   transition: background 0.05s ease;
 }
 
 .yt-volume-slider::-moz-range-progress {
-  background-color: #ff0033;
+  background-color: #e5143d;
   height: 4px;
   border-radius: 2px;
 }
@@ -9807,7 +9822,7 @@ video::cue {
   left: 0;
   height: 100%;
   border-radius: 3px;
-  background: #ff0033;
+  background: #e5143d;
   pointer-events: none;
   transition: width 0.05s linear;
 }
@@ -10501,7 +10516,7 @@ video::cue {
 .qp-card:hover .qp-queue,
 .qp-queue:focus-visible { opacity: 1; }
 
-.qp-queue:hover { background: #ff0033; }
+.qp-queue:hover { background: #e5143d; }
 
 @media (hover: none) {
   .qp-queue { opacity: 1; }
@@ -10567,7 +10582,7 @@ video::cue {
   border: none;
   border-radius: 999px;
   padding: 6px 14px;
-  background: #ff0033;
+  background: #e5143d;
   color: #fff;
   font: inherit;
   font-size: 0.78rem;
@@ -10801,7 +10816,7 @@ video::cue {
 /* Build number (home footer, Peers tab): which deploy this is */
 .build-label {
   margin: 10px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
@@ -10813,7 +10828,7 @@ video::cue {
   align-items: center;
   gap: 6px;
   margin-top: 3px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -10823,7 +10838,7 @@ video::cue {
   border-radius: 5px;
   background: rgba(242, 183, 5, 0.18);
   color: #f2c94c;
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -10880,7 +10895,7 @@ video::cue {
   border-radius: 9px;
   background: var(--accent-red, #ff1744);
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 18px;
   text-align: center;
@@ -10959,7 +10974,7 @@ video::cue {
 }
 .link-player-badge {
   flex: none;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -11216,6 +11231,7 @@ video::cue {
 
 /* Chat text can be selected and copied (the page itself is not selectable); links open in a new tab */
 .wa-text,
+.cm-text, /* (the redesign's chat messages) */
 .room-log-content {
   user-select: text;
   -webkit-user-select: text;
@@ -11411,3 +11427,11 @@ video::cue {
 }
 .network-blocked-dismiss:hover { opacity: 1; }
 .phone-app .network-blocked-banner { top: 58px; }
+
+/* The game isn't loaded here (features/activities/useActivityLoad.js): an anchor for its bubble,
+   and the bubble as an invitation ("Join Ludo"), quieter than a turn nudge */
+.stage-activity-anchor { position: absolute; inset: 0; pointer-events: none; visibility: hidden; }
+.activity-bubble.is-invite { border-style: dashed; border-color: rgba(255, 255, 255, 0.55); background: #23262e; }
+.activity-bubble.is-invite .activity-bubble-icon { filter: saturate(0.6); }
+.activity-bubble.is-invite .activity-bubble-tag { background: #2f333d; border: 1px solid rgba(255, 255, 255, 0.25); }
+.activity-leave-btn { font-weight: 600; }

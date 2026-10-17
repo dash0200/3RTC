@@ -32,17 +32,18 @@ export function useSoundboard({ room, isAudioBlockedRef }) {
         bannerTimerRef.current = setTimeout(() => setActiveSoundboardSfx(null), BANNER_MS);
     }, []);
 
-    usePeerMessageOn(bus, 'soundboard-sfx', (data) => {
+    usePeerMessageOn(bus, 'soundboard-sfx', (data, from) => {
         if (!data?.soundId) return;
         const now = Date.now();
         if (now - lastRemoteRef.current < REMOTE_MIN_GAP_MS) return;
         lastRemoteRef.current = now;
+        const sender = room.peerName(from) || data.sender || 'Peer';
         playLocally(data.soundId);
-        showBanner({ soundId: data.soundId, soundName: data.soundName || data.soundId, emoji: data.emoji || '🎵', sender: data.sender || 'Peer', timestamp: now });
+        showBanner({ soundId: data.soundId, soundName: data.soundName || data.soundId, emoji: data.emoji || '🎵', sender, timestamp: now });
         if (now - lastRemoteNoticeRef.current > REMOTE_NOTICE_GAP_MS) {
             lastRemoteNoticeRef.current = now;
-            room.notify(`🔊 ${data.sender || 'Peer'} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
-            room.log(`🔊 ${data.sender || 'Peer'} played soundboard clip: "${data.soundName || data.soundId}"`);
+            room.notify(`🔊 ${sender} played ${data.soundName || 'Sound'} ${data.emoji || ''}`);
+            room.log(`🔊 ${sender} played soundboard clip: "${data.soundName || data.soundId}"`);
         }
     });
 

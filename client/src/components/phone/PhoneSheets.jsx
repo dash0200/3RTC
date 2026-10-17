@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import SoundboardTray from '../SoundboardTray';
-import { resolvePastedLink, PASTE_PLACEHOLDER } from '../../features/media/resolveLink';
+import { resolvePastedLink } from '../../features/media/resolveLink';
 import { groupQuickPicks, isVideoUnavailable, useQuickPicks, youtubeThumb } from '../../utils/quickPicks';
 import TrendingRegionSelect from '../TrendingRegionSelect';
 
@@ -40,11 +40,19 @@ const Chevron = (
   <svg className="phone-row-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
 );
 
-/** Add video: any link (YouTube, Vimeo, Twitch, a video file), quick picks, or a file from the phone. */
+const YT_ID = /(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|live\/|embed\/))([\w-]{11})/;
+const looksLikeLink = (text) => /^https?:\/\/\S+$/i.test((text || '').trim());
+
+/**
+ * Add a video (Figma "Add a video" sheet): the link you just copied first, then any link,
+ * a video from this device, and quick picks. On desktop the same sheet opens as a dialog.
+ */
 export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, onQueueYouTube, onLoadLink, onQueueLink, onQueuePick, queuedIds = [], onPlayQueue, onPickFile, onStopVideo }) {
   const queuedSet = new Set(queuedIds);
   const queuePick = onQueuePick || onQueueYouTube;
   const [link, setLink] = useState('');
+  const [clip, setClip] = useState(null); // a link found on the clipboard
+  const [clipAllowed, setClipAllowed] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const quickPicks = useQuickPicks();
@@ -55,13 +63,39 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
 
   const group = groups.find((g) => g.group === groupName) || groups[0];
   const category = group?.categories.find((c) => c.id === categoryId) || group?.categories[0];
+  const picks = (category?.videos || []).filter((v) => !isVideoUnavailable(v.id));
+
+  // The link you just copied: read silently when the browser already allows it, else one tap
+  const readClipboard = async () => {
+    try {
+      const text = (await navigator.clipboard.readText())?.trim();
+      if (looksLikeLink(text)) { setClip(text); return true; }
+    } catch { /* not allowed */ }
+    return false;
+  };
+  useEffect(() => {
+    if (!isOpen) return;
+    setClip(null);
+    let cancelled = false;
+    (async () => {
+      try {
+        const perm = await navigator.permissions?.query({ name: 'clipboard-read' });
+        if (cancelled) return;
+        setClipAllowed(perm?.state !== 'denied' && Boolean(navigator.clipboard?.readText));
+        if (perm?.state === 'granted') await readClipboard();
+      } catch {
+        setClipAllowed(Boolean(navigator.clipboard?.readText));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   // Any link: YouTube, Vimeo, Twitch, a video file (features/media)
-  const submitLink = async (mode) => {
+  const submitLink = async (value, mode) => {
     setError('');
     setBusy(true);
     try {
-      const res = await resolvePastedLink(link);
+      const res = await resolvePastedLink(value);
       if (res.error) {
         setError(res.error);
         return;
@@ -77,120 +111,77 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
       setBusy(false);
     }
   };
+  const clipYt = clip && clip.match(YT_ID)?.[1];
 
   return (
-    <BottomSheet isOpen={isOpen} onClose={onClose} title="Add video">
+    <BottomSheet isOpen={isOpen} onClose={onClose} title="Add a video">
+      {clip ? (
+        <div className="av-clip">
+          <div className="av-clip-row">
+            <span className="av-clip-thumb" aria-hidden="true">
+              {clipYt && <img src={youtubeThumb(clipYt)} alt="" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />}
+            </span>
+            <span className="av-clip-text">
+              <span className="av-clip-label">From your clipboard</span>
+              <span className="av-clip-url">{clip.replace(/^https?:\/\/(www\.)?/, '')}</span>
+            </span>
+          </div>
+          <div className="av-clip-actions">
+            <button type="button" className="rd-btn rd-btn-primary" disabled={busy} onClick={() => submitLink(clip, 'play')}>{busy ? 'Checking…' : 'Play now'}</button>
+            <button type="button" className="rd-btn rd-btn-secondary" disabled={busy} onClick={() => submitLink(clip, 'queue')}>Add to queue</button>
+          </div>
+        </div>
+      ) : clipAllowed ? (
+        <button type="button" className="av-row" onClick={async () => { if (!(await readClipboard())) setError('No link on your clipboard. Paste one below.'); }}>
+          <span className="av-row-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" /></svg>
+          </span>
+          <span className="av-row-text">
+            <span>Paste the link you copied</span>
+            <span className="av-row-sub">YouTube, Vimeo, Twitch or a video link</span>
+          </span>
+        </button>
+      ) : null}
+
       <form
-        className="phone-link-form"
+        className="av-link"
         onSubmit={(e) => {
           e.preventDefault();
-          submitLink('play');
+          if (link.trim()) submitLink(link, 'play');
         }}
       >
-        <label htmlFor="phone-yt-link" className="phone-label">Video link</label>
+        <label htmlFor="av-link-input" className="av-label">Or paste a link</label>
         <input
-          id="phone-yt-link"
-          className="phone-input"
+          id="av-link-input"
+          className="av-input"
           type="url"
           inputMode="url"
-          placeholder={PASTE_PLACEHOLDER}
+          placeholder="YouTube, Vimeo, Twitch or .mp4 link"
           value={link}
           onChange={(e) => {
             setLink(e.target.value);
             if (error) setError('');
           }}
         />
-        {error && <div className="phone-form-error" role="alert">{error}</div>}
-        <div className="phone-link-actions">
-          <button type="submit" className="phone-btn phone-btn-primary" disabled={!link.trim() || busy}>
-            {busy ? 'Checking…' : 'Play for everyone'}
-          </button>
-          {isMediaActive && (
-            <button type="button" className="phone-btn phone-btn-ghost" disabled={!link.trim() || busy} onClick={() => submitLink('queue')}>
-              Add to queue
-            </button>
-          )}
-        </div>
-      </form>
-
-      <div className="phone-section-label">QUICK PICKS</div>
-      {onPlayQueue && queuedIds.length > 0 && (
-        <button type="button" className="phone-btn phone-btn-primary phone-play-queue" onClick={() => { onPlayQueue(); onClose?.(); }}>
-          ▶ Play queue ({queuedIds.length})
-        </button>
-      )}
-      {groups.length > 1 && (
-        <div className="phone-segmented" role="tablist" aria-label="Quick pick groups">
-          {groups.map((g) => (
-            <button
-              key={g.group}
-              type="button"
-              role="tab"
-              aria-selected={g === group}
-              className={g === group ? 'active' : ''}
-              onClick={() => { setGroupName(g.group); setCategoryId(null); }}
-            >
-              {g.group}
-            </button>
-          ))}
-        </div>
-      )}
-      {group?.group === 'Trending' && <TrendingRegionSelect className="is-phone" />}
-      <div className="phone-chip-row" role="tablist" aria-label="Quick pick categories">
-        {group?.categories.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            role="tab"
-            aria-selected={c === category}
-            className={`phone-chip ${c === category ? 'active' : ''}`}
-            onClick={() => setCategoryId(c.id)}
-          >
-            {c.name}
-          </button>
-        ))}
-      </div>
-      <div className="phone-list">
-        {category?.videos.filter((v) => !isVideoUnavailable(v.id)).map((v) => (
-          <div key={v.id} className="phone-pick">
-            <button
-              type="button"
-              className="phone-row"
-              onClick={() => {
-                onLoadYouTube?.(v.id, v.title);
-                onClose?.();
-              }}
-            >
-              <span className="phone-row-thumb" aria-hidden="true">
-                <img src={youtubeThumb(v.id)} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
-              </span>
-              <span className="phone-row-text">
-                <span className="phone-pick-title">{v.title}</span>
-                {v.channel && <span className="phone-pick-channel">{v.channel}</span>}
-              </span>
-            </button>
-            {queuePick && (
-              <button
-                type="button"
-                className={`phone-pick-queue ${queuedSet.has(v.id) ? 'is-queued' : ''}`}
-                onClick={() => !queuedSet.has(v.id) && queuePick(v.id, v.title)}
-                disabled={queuedSet.has(v.id)}
-                aria-label={queuedSet.has(v.id) ? `"${v.title}" is in the queue` : `Add "${v.title}" to queue`}
-              >
-                {queuedSet.has(v.id) ? (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" /></svg>
-                ) : (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 10H3v2h11v-2zm0-4H3v2h11V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM3 16h7v-2H3v2z" /></svg>
-                )}
-              </button>
+        {error && <div className="av-error" role="alert">{error}</div>}
+        {link.trim() && (
+          <div className="av-clip-actions">
+            <button type="submit" className="rd-btn rd-btn-primary" disabled={busy}>{busy ? 'Checking…' : 'Play for everyone'}</button>
+            {isMediaActive && (
+              <button type="button" className="rd-btn rd-btn-secondary" disabled={busy} onClick={() => submitLink(link, 'queue')}>Add to queue</button>
             )}
           </div>
-        ))}
-      </div>
+        )}
+      </form>
 
-      <div className="phone-section-label">FROM YOUR PHONE</div>
-      <button type="button" className="phone-btn phone-btn-ghost phone-btn-block" onClick={() => fileRef.current?.click()}>
-        Choose a video file
+      <button type="button" className="av-row" onClick={() => fileRef.current?.click()}>
+        <span className="av-row-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg>
+        </span>
+        <span className="av-row-text">
+          <span>Play a video from this device</span>
+          <span className="av-row-sub">MP4, MKV, WebM · streams to everyone</span>
+        </span>
       </button>
       <input
         ref={fileRef}
@@ -207,8 +198,61 @@ export function AddVideoSheet({ isOpen, onClose, isMediaActive, onLoadYouTube, o
         }}
       />
 
+      {group && (
+        <div className="av-picks">
+          <div className="av-picks-head">
+            <span className="av-label">Quick picks</span>
+            {onPlayQueue && queuedIds.length > 0 && (
+              <button type="button" className="av-play-queue" onClick={() => { onPlayQueue(); onClose?.(); }}>Play queue ({queuedIds.length})</button>
+            )}
+          </div>
+          {groups.length > 1 && (
+            <div className="av-seg" role="tablist" aria-label="Quick pick mood">
+              {groups.map((g) => (
+                <button key={g.group} type="button" role="tab" aria-selected={g === group} className={g === group ? 'active' : ''} onClick={() => { setGroupName(g.group); setCategoryId(null); }}>
+                  {g.group}
+                </button>
+              ))}
+            </div>
+          )}
+          {group.group === 'Trending' && <TrendingRegionSelect className="is-phone" />}
+          {group.categories.length > 1 && (
+            <div className="av-cats" role="tablist" aria-label="Quick pick categories">
+              {group.categories.map((c) => (
+                <button key={c.id} type="button" role="tab" aria-selected={c === category} className={c === category ? 'active' : ''} onClick={() => setCategoryId(c.id)}>
+                  {c.name.replace(/^[^\p{L}\p{N}]+/u, '')}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="av-pick-row">
+            {picks.map((v) => (
+              <div key={v.id} className="av-pick">
+                <button type="button" className="av-pick-play" onClick={() => { onLoadYouTube?.(v.id, v.title); onClose?.(); }}>
+                  <span className="av-pick-thumb" aria-hidden="true">
+                    <img src={youtubeThumb(v.id)} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
+                  </span>
+                  <span className="av-pick-title">{v.title}</span>
+                </button>
+                {queuePick && (
+                  <button
+                    type="button"
+                    className={`av-pick-queue ${queuedSet.has(v.id) ? 'is-queued' : ''}`}
+                    onClick={() => !queuedSet.has(v.id) && queuePick(v.id, v.title)}
+                    disabled={queuedSet.has(v.id)}
+                    aria-label={queuedSet.has(v.id) ? `"${v.title}" is in the queue` : `Add "${v.title}" to queue`}
+                  >
+                    {queuedSet.has(v.id) ? 'Queued' : '+ Queue'}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {isMediaActive && (
-        <button type="button" className="phone-btn phone-btn-danger phone-btn-block" onClick={() => { onStopVideo?.(); onClose?.(); }}>
+        <button type="button" className="rd-btn av-stop" onClick={() => { onStopVideo?.(); onClose?.(); }}>
           Stop the video for everyone
         </button>
       )}

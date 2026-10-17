@@ -151,7 +151,14 @@ export function isShort(video) {
 const isGoodPick = (video, regions = QUICK_PICKS_REGIONS) => isPlayableIn(video, regions) && !isShort(video);
 
 function toPick(video) {
-  return { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
+  const pick = { id: video.id, title: video.snippet?.title || 'YouTube video', channel: video.snippet?.channelTitle || '' };
+  // Length badge on the card (Figma): seconds, or live
+  if (video.snippet?.liveBroadcastContent === 'live') pick.live = true;
+  else {
+    const seconds = parseDuration(video.contentDetails?.duration);
+    if (seconds) pick.seconds = seconds;
+  }
+  return pick;
 }
 
 /** New videos for a category merged with its saved ones (re-checked), newest first. */
@@ -277,6 +284,7 @@ async function refreshQuickPicks() {
   // Nothing new (bad key, quota used up, YouTube down): keep serving the last list, retry soon
   if (refreshed === 0 || (categories.length === 0 && trending[GLOBAL_REGION].length === 0)) return false;
   quickPicks = { updatedAt: new Date().toISOString(), config: QUICK_PICKS_CONFIG_ID, rotation, categories, trending };
+  invalidateQuickPicksCache();
   try {
     fs.writeFileSync(QUICK_PICKS_CACHE_FILE, JSON.stringify(quickPicks));
   } catch (err) {
@@ -310,6 +318,7 @@ export function startQuickPicks() {
     const saved = JSON.parse(fs.readFileSync(QUICK_PICKS_CACHE_FILE, 'utf8'));
     if (saved?.categories?.length) {
       quickPicks = saved; // served until the refresh below, and its videos seed the new lists
+      invalidateQuickPicksCache();
       if (saved.config === QUICK_PICKS_CONFIG_ID) {
         const age = Date.now() - Date.parse(saved.updatedAt);
         delay = Math.max(0, QUICK_PICKS_REFRESH_MS - (Number.isFinite(age) ? age : QUICK_PICKS_REFRESH_MS));
@@ -349,11 +358,20 @@ export function picksFor(data, requested) {
   };
 }
 
+// Pre-serialized JSON cache per region to prevent CPU exhaustion on request floods (M-05)
+const preSerializedCache = new Map();
+
+export function invalidateQuickPicksCache() {
+  preSerializedCache.clear();
+}
+
 export function serveQuickPicks(req, res) {
   const headers = {
     'Content-Type': 'application/json; charset=UTF-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS'
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN'
   };
   if (req.method === 'OPTIONS') {
     res.writeHead(204, headers);
@@ -369,6 +387,13 @@ export function serveQuickPicks(req, res) {
   } catch {
     // unreadable address: the worldwide list
   }
+
+  let body = preSerializedCache.get(requested);
+  if (!body) {
+    body = JSON.stringify(picksFor(quickPicks, requested));
+    preSerializedCache.set(requested, body);
+  }
+
   res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=900' });
-  res.end(JSON.stringify(picksFor(quickPicks, requested)));
+  res.end(body);
 }

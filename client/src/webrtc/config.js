@@ -1,9 +1,29 @@
 /** WebRTC settings shared by the peer connection code. */
 
-export const ICE_SERVERS = [
+export const DEFAULT_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' }
 ];
+
+/**
+ * Resolves ICE servers with optional TURN relay fallback (L-02).
+ * Allows users requiring network privacy or symmetric NAT bypass to provide custom TURN credentials
+ * via VITE_ICE_SERVERS or window.__RTC_ICE_SERVERS__.
+ */
+export function getIceServers() {
+    try {
+        if (typeof window !== 'undefined' && window.__RTC_ICE_SERVERS__ && Array.isArray(window.__RTC_ICE_SERVERS__)) {
+            return window.__RTC_ICE_SERVERS__;
+        }
+        if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ICE_SERVERS) {
+            const parsed = JSON.parse(import.meta.env.VITE_ICE_SERVERS);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+    } catch { /* fallback */ }
+    return DEFAULT_ICE_SERVERS;
+}
+
+export const ICE_SERVERS = getIceServers();
 
 // Second data channel for bulk transfers (P2P video stream, images). Pre-negotiated with a fixed
 // id on both sides, so it needs no extra signaling. Chat, reactions and play/pause sync stay on the

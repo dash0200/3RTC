@@ -17,13 +17,16 @@ function PeerBuild({ build }) {
 }
 
 export function getInitials(name) {
-  if (!name) return '??';
+  if (!name) return '?';
   const clean = name.trim();
-  const parts = clean.split(/[\s_-]+/);
-  if (parts.length >= 2) {
+  // Auto names (User_819) all start with "U": show the number so people can be told apart
+  const auto = clean.match(/^User[\s_-]?(\d+)$/i);
+  if (auto) return auto[1].slice(-2);
+  const parts = clean.split(/[\s_-]+/).filter(Boolean);
+  if (parts.length >= 2 && /^\p{L}/u.test(parts[1])) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
-  return clean.slice(0, 2).toUpperCase();
+  return [...clean][0].toUpperCase();
 }
 
 /**
@@ -157,7 +160,7 @@ export function PeerAudioPopover({
           <div className="popover-titles">
             <span className="popover-username">{peer.username}</span>
             <span className={`popover-status-text ${isSpeaking ? 'speaking' : isLocalMuted ? 'muted' : ''}`}>
-              {isSpeaking ? '🎙️ Speaking now' : isLocalMuted ? '🔇 Muted by you' : peer.isMuted ? '🔇 Muted by them' : '🟢 Active'}
+              {isSpeaking ? 'Speaking' : isLocalMuted ? 'You muted them' : peer.isMuted ? 'Mic off' : 'Mic on'}
             </span>
           </div>
         </div>
@@ -300,10 +303,10 @@ export default function PeerVoiceRoster({
       )}
 
       {/* Connected Peers Badges */}
-      {connectedPeers.map((peer) => (
+      {connectedPeers.map((peer, idx) => (
         <div key={peer.peerId} className="peer-badge-relative-wrapper">
           <PeerVoiceBadge
-            peer={peer}
+            peer={{ ...peer, avatarIndex: idx + 1 }}
             isSelected={selectedPeerId === peer.peerId}
             onClick={() => setSelectedPeerId((prev) => (prev === peer.peerId ? null : peer.peerId))}
           />
@@ -311,7 +314,7 @@ export default function PeerVoiceRoster({
           {/* Individual Volume Popover */}
           {selectedPeerId === peer.peerId && (
             <PeerAudioPopover
-              peer={peer}
+              peer={{ ...peer, avatarIndex: idx + 1 }}
               onClose={() => setSelectedPeerId(null)}
               onSetVolume={onSetPeerVolume}
               onToggleMute={onToggleMutePeer}
@@ -364,7 +367,7 @@ export function PeerVoicePanel({
             <svg viewBox="0 0 24 24" width="18" height="18" fill="#3ea6ff">
               <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z" />
             </svg>
-            <h3>Voice & Audio Levels</h3>
+            <h3>People</h3>
           </div>
           <div className="voice-panel-actions">
             {typeof onOpenAudioSettings === 'function' && (
@@ -386,7 +389,7 @@ export function PeerVoicePanel({
           </div>
         </div>
         <p className="voice-panel-desc">
-          Green pulsating rings indicate real-time speech. Volume sliders (0% to 200%) balance quiet or loud microphones.
+          A green ring means someone is talking. Turn anyone up or down below.
         </p>
       </div>
 
@@ -464,7 +467,7 @@ export function PeerVoicePanel({
 
       {/* Connected Peers Voice Cards */}
       <div className="voice-peers-section">
-        <h4 className="section-title">Connected Peers ({connectedPeers.length})</h4>
+        <h4 className="section-title">With you ({connectedPeers.length})</h4>
 
         {connectedPeers.length === 0 ? (
           <div className="voice-empty-state">
@@ -482,7 +485,7 @@ export function PeerVoicePanel({
             )}
           </div>
         ) : (
-          connectedPeers.map((peer) => {
+          connectedPeers.map((peer, idx) => {
             const volumePercent = Math.round((peer.volume !== undefined ? peer.volume : 1.0) * 100);
             return (
               <div
@@ -506,10 +509,10 @@ export function PeerVoicePanel({
                         {peer.isSpeaking
                           ? '🎙️ Speaking'
                           : peer.isLocalMuted
-                            ? '🔇 Muted by you'
+                            ? 'You muted them'
                             : peer.isMuted
-                              ? '🔇 Muted by them'
-                              : '🟢 Active'}
+                              ? 'Mic off'
+                              : 'Mic on'}
                       </span>
                       <PeerBuild build={peer.build} />
                     </div>

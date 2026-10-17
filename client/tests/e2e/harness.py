@@ -11,6 +11,7 @@ Servers (all local):
 Everything a run writes (logs, screenshots, media) goes to client/tests/e2e/.out (git-ignored).
 """
 import atexit
+import re
 import json
 import os
 import signal
@@ -357,11 +358,93 @@ def summary():
     sys.exit(0 if _results and all(_results) else 1)
 
 
+# People really connected (peer connections up), whatever the UI looks like: see people(pg). Part of
+# signal_init(); suites with their own init script add it themselves.
+PEOPLE_INIT = ("if(!window.__people){window.__pcs=window.__pcs||[];const __P=window.RTCPeerConnection;if(__P){window.RTCPeerConnection=class extends __P{"
+               "constructor(...a){super(...a);window.__pcs.push(this)}}}"
+               "window.__people=()=>1+window.__pcs.filter(p=>p.connectionState==='connected').length;}")
+
+
 def signal_init(url):
     """Init script: use this signaling server and record what it sends (window.__sig)."""
     return ("localStorage.setItem('webrtc_signal_url', '%s');localStorage.removeItem('3rtc_quick_picks');"
             "window.__sig=[];const __O=window.WebSocket;window.WebSocket=class extends __O{constructor(...a){super(...a);"
-            "this.addEventListener('message',e=>{try{window.__sig.push(JSON.parse(e.data))}catch{}})}};" % url)
+            "this.addEventListener('message',e=>{try{window.__sig.push(JSON.parse(e.data))}catch{}})}};"
+            % url) + PEOPLE_INIT
+
+
+def people(pg):
+    """How many people this page is connected with, itself included (live peer connections)."""
+    return pg.evaluate("window.__people ? window.__people() : 1")
 
 
 CHROMIUM_ARGS = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required']
+
+
+def create_room(pg):
+    """Create a room from the home screen (desktop or phone): the "Create a room" button."""
+    pg.get_by_role('button', name=re.compile(r'Create a room', re.I)).first.click()
+
+
+def open_activity(pg, name):
+    """Start a game / activity from the menu (phone: More sheet; computer: the Games button)."""
+    if pg.locator('.phone-actionbar').count():
+        pg.locator('.phone-actionbar').get_by_role('button', name='More').click()
+        pg.locator('.phone-row', has_text=name).first.click()
+    else:
+        pg.get_by_role('button', name='Games').click()
+        pg.get_by_role('menuitem', name=re.compile(name)).first.click()
+
+
+def join_activity(pg, timeout=10):
+    """Load a game someone else started: tap its "Join" bubble."""
+    bubble = pg.locator('.activity-bubble.is-invite')
+    end = time.time() + timeout
+    while time.time() < end and bubble.count() == 0:
+        time.sleep(0.2)
+    bubble.first.click()
+
+
+def toggle_playback_lock(pg):
+    """Host: turn "Only I control playback" on or off (computer: More options menu)."""
+    pg.get_by_role('button', name='More options').click()
+    pg.get_by_role('menuitemcheckbox', name=re.compile('Only I control playback')).click()
+
+
+def leave_room(pg):
+    """Leave the room with its own button (not a game's Leave)."""
+    if pg.locator('.dock-leave').count():
+        pg.locator('.dock-leave').click()
+    else:
+        pg.locator('.phone-actionbar').get_by_role('button', name='More').click()
+        pg.get_by_role('button', name=re.compile(r'^\s*Leave room')).click()
+    # "Leave room 12345?" (when a video or game is open): confirm
+    confirm = pg.locator('.leave-dialog-leave')
+    end = time.time() + 2
+    while time.time() < end and confirm.count() == 0:
+        time.sleep(0.1)
+    if confirm.count():
+        confirm.first.click()
+
+
+def mic_button(pg):
+    """The microphone on/off button (computer: the dock; phone: the action bar)."""
+    if pg.locator('.phone-actionbar').count():
+        return pg.locator('.phone-actionbar .phone-action').first
+    return pg.locator('.dock-mic-toggle')
+
+
+def stream_pill(pg):
+    """The streamed-video status as text: "Streaming · 42% | <name> · 3.1 MB/s · 60% from viewers"."""
+    return pg.evaluate("""(() => { const p = document.querySelector('.local-file-info-pill.is-streamed');
+        if (!p) { const old = document.querySelector('.local-filesize-text'); return old ? old.innerText : ''; }
+        const label = p.querySelector('.rd-stream-label'); return (label ? label.innerText : '') + ' | ' + (p.title || ''); })()""")
+
+
+def stream_percent(pg):
+    """How much of a streamed video this viewer has (100 once it's all here), or None."""
+    text = stream_pill(pg).split(' | ')[0]
+    if 'Streamed to you' in text:
+        return 100
+    m = re.search(r'(\d+)%', text)
+    return int(m.group(1)) if m else None

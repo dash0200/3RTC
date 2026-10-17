@@ -27,8 +27,7 @@ def open_page(b, tz, locale='en-US', keep=False):
     pg.on('pageerror', lambda e: errors.append(str(e)))
     pg.goto(BASE)
     pg.wait_for_timeout(1200)
-    pg.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    pg.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(pg)
     pg.wait_for_selector('.qp-card', timeout=20000)
     wait(lambda: pg.locator('.qp-region-btn').count() == 1, 10)
     return pg
@@ -66,8 +65,7 @@ with sync_playwright() as p:
     us.goto(BASE + '/about')  # leave, and come back another day
     us.goto(BASE)
     us.wait_for_timeout(1200)
-    us.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    us.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(us)
     us.wait_for_selector('.qp-card')
     check('...and the choice is remembered', wait(lambda: sel(us).count() and current(us) == 'JP', 10), current(us) if sel(us).count() else None)
     choose(us, 'GLOBAL')
