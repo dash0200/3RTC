@@ -1,14 +1,69 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const CLOUD_URL = 'wss://signal.3rtc.me';
 const LOCAL_URL = 'ws://localhost:8080';
 
 export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApply }) {
   const [url, setUrl] = useState(currentUrl);
+  const modalCardRef = useRef(null);
+  const prevActiveElementRef = useRef(null);
 
   useEffect(() => {
     setUrl(currentUrl);
   }, [currentUrl, isOpen]);
+
+  // Focus trapping and restoring for accessibility (UX-M05)
+  useEffect(() => {
+    if (!isOpen) return;
+    prevActiveElementRef.current = document.activeElement;
+
+    const card = modalCardRef.current;
+    if (card) {
+      const focusables = card.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusables.length > 0) {
+        focusables[0].focus();
+      } else {
+        card.focus();
+      }
+    }
+
+    const handleTabKey = (e) => {
+      if (e.key !== 'Tab') return;
+      const card = modalCardRef.current;
+      if (!card) return;
+      const focusables = Array.from(card.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || !card.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last || !card.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleTabKey);
+    return () => {
+      window.removeEventListener('keydown', handleTabKey);
+      if (prevActiveElementRef.current && typeof prevActiveElementRef.current.focus === 'function') {
+        prevActiveElementRef.current.focus();
+      }
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -34,11 +89,17 @@ export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApp
   };
 
   return (
-    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
-      <div className="modal-card">
+    <div
+      className="modal-backdrop"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="server-settings-title"
+    >
+      <div className="modal-card" ref={modalCardRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-title">Signaling Server Connection</div>
-          <button className="modal-close-btn" onClick={onClose}>&times;</button>
+          <div className="modal-title" id="server-settings-title">Signaling Server Connection</div>
+          <button className="modal-close-btn" onClick={onClose} aria-label="Close settings">&times;</button>
         </div>
         <div className="modal-body">
           <p className="modal-desc">

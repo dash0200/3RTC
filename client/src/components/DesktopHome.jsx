@@ -29,54 +29,57 @@ export default function DesktopHome({ username, initialPin = '', onCreate, onJoi
       </header>
 
       <main className="dh-main">
-        <section className="dh-hero">
-          <div className="dh-copy">
-            <p className="dh-eyebrow">Free · No sign-up · Nothing to install</p>
-            <h1>Watch anything together, in perfect sync.</h1>
-            <p className="dh-sub">
-              YouTube, any video link, or a movie on your laptop. Talk, chat and react while you watch —
-              straight between your devices, up to 6 people.
-            </p>
-          </div>
-
-          <RejoinCard rejoin={rejoin} />
-
-          <form className="dh-card" onSubmit={(e) => { e.preventDefault(); onCreate?.(displayName); }}>
-            <div className="dh-field">
-              <label htmlFor="dh-name">Your name</label>
-              <input
-                id="dh-name"
-                type="text"
-                maxLength={20}
-                autoComplete="nickname"
-                placeholder="So your friends know it’s you"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <button type="submit" className="rd-btn rd-btn-primary rd-btn-lg">Create a room</button>
-            <div className="dh-divider"><span>or join a friend’s room</span></div>
-            <div className="dh-join">
-              <fieldset className="dh-code">
-                <legend className="rd-visually-hidden">5-digit room code</legend>
-                {digits.map((_, i) => <input key={i} {...boxProps(i)} />)}
-              </fieldset>
-              <button
-                type="button"
-                className="rd-btn rd-btn-secondary rd-btn-lg"
-                disabled={!isComplete}
-                onClick={() => onJoin?.(code, displayName)}
-              >
-                Join
-              </button>
-            </div>
-          </form>
-
-          <ul className="dh-points">
-            <li><Check />Video, voice and chat stay between your devices</li>
-            <li><Check />Works on phone — add it to your home screen</li>
-          </ul>
+        {/* Top Centered Hero Intro */}
+        <section className="dh-hero-intro">
+          <p className="dh-eyebrow">Free · No sign-up · Nothing to install</p>
+          <h1 className="dh-headline">Watch anything together, in perfect sync.</h1>
+          <p className="dh-sub">
+            YouTube, any video link, or a movie on your laptop. Talk, chat and react while you watch —
+            straight between your devices, up to 6 people.
+          </p>
         </section>
+
+        {/* Parallel Side-by-Side Content Grid: Login/Join Card (Left) & Room Preview (Right) */}
+        <div className="dh-content-grid">
+          <div className="dh-action-column">
+            <RejoinCard rejoin={rejoin} />
+
+            <form className="dh-card" onSubmit={(e) => { e.preventDefault(); onCreate?.(displayName); }}>
+              <div className="dh-field">
+                <label htmlFor="dh-name">Your name</label>
+                <input
+                  id="dh-name"
+                  type="text"
+                  maxLength={20}
+                  autoComplete="nickname"
+                  placeholder="So your friends know it’s you"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+              <button type="submit" className="rd-btn rd-btn-primary rd-btn-lg">Create a room</button>
+              <div className="dh-divider"><span>or join a friend’s room</span></div>
+              <div className="dh-join">
+                <fieldset className="dh-code">
+                  <legend className="rd-visually-hidden">5-digit room code</legend>
+                  {digits.map((_, i) => <input key={i} {...boxProps(i)} />)}
+                </fieldset>
+                <button
+                  type="button"
+                  className="rd-btn rd-btn-secondary rd-btn-lg"
+                  disabled={!isComplete}
+                  onClick={() => onJoin?.(code, displayName)}
+                >
+                  Join
+                </button>
+              </div>
+            </form>
+
+            <ul className="dh-points">
+              <li><Check />Video, voice and chat stay between your devices</li>
+              <li><Check />Works on phone — add it to your home screen</li>
+            </ul>
+          </div>
 
         <section className="dh-preview" aria-label="What a room looks like">
           <div className="dh-preview-video">
@@ -94,6 +97,7 @@ export default function DesktopHome({ username, initialPin = '', onCreate, onJoi
             <p><strong>Arjun</strong> wait, rewind 10s — I missed that</p>
           </div>
         </section>
+        </div>
       </main>
 
       <footer className="dh-footer">

@@ -24,22 +24,22 @@ export function useActivityStatus({ attention = false, color = '', label = '' } 
     useEffect(() => () => report?.({ attention: false, color: '', label: '' }), [report]);
 }
 
-/** How the activity is shown on this device: over the stage, in a small window, or as a bubble. */
-export const ACTIVITY_VIEWS = ['full', 'window', 'bubble'];
+/** How the activity is shown on this device: over the stage, docked in sidebar, in a small window, or as a bubble. */
+export const ACTIVITY_VIEWS = ['full', 'sidebar', 'window', 'bubble'];
 
 /**
  * Where the game goes when something changes (pure, for tests):
- *   a video starts while a game is open -> small window on computers, bubble on phones
+ *   a video starts while a game is open -> docked in sidebar on computers, bubble on phones
  *   the video ends                       -> back to full
- *   a game opens                         -> full, or (a video already playing) window / bubble
+ *   a game opens                         -> full, or (a video already playing) sidebar / bubble
  */
 export function nextActivityView({ view, mediaActive, wasMediaActive, isPhone, activityOpen, activityJustOpened }) {
     if (!activityOpen) return 'full';
-    const aside = isPhone ? 'bubble' : 'window';
+    const aside = isPhone ? 'bubble' : 'sidebar';
     if (activityJustOpened) return mediaActive ? aside : 'full';
-    if (mediaActive && !wasMediaActive) return view === 'full' ? aside : view;
+    if (mediaActive && !wasMediaActive) return (view === 'full' || view === 'window') ? aside : view;
     if (!mediaActive && wasMediaActive) return 'full';
-    if (isPhone && view === 'window') return 'bubble'; // (no small window on phones)
+    if (isPhone && (view === 'window' || view === 'sidebar')) return 'bubble';
     return view;
 }
 

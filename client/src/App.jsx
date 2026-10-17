@@ -15,6 +15,7 @@ import ServerSettingsModal from './components/ServerSettingsModal';
 import AudioSettingsModal from './components/AudioSettingsModal';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
+import PreJoinModal from './components/PreJoinModal';
 import { PhoneTopBar, PhoneActionBar } from './components/phone/PhoneChrome';
 import { AddVideoSheet, MoreSheet, SoundboardSheet } from './components/phone/PhoneSheets';
 import PhoneHome from './components/phone/PhoneHome';
@@ -228,9 +229,9 @@ export default function App() {
         const memo = viewMemoRef.current;
         const justOpened = Boolean(activityKey) && activityKey !== memo.key;
         if (justOpened && joinedByTapRef.current) {
-            // Joined from its bubble: show it (a small window over a video on a computer)
+            // Joined from its bubble: show it (docked in sidebar over a video on a computer)
             joinedByTapRef.current = false;
-            setActivityView(!isPhone && isMediaActive ? 'window' : 'full');
+            setActivityView(!isPhone && isMediaActive ? 'sidebar' : 'full');
         } else {
             setActivityView((view) => nextActivityView({
                 view,
@@ -243,6 +244,28 @@ export default function App() {
         }
         viewMemoRef.current = { media: isMediaActive, key: activityKey };
     }, [isMediaActive, activityKey, isPhone]);
+
+    const [activityStatus, setActivityStatus] = useState({ attention: false, color: '', label: '' });
+
+    // When activityView transitions to 'sidebar' on desktop, ensure sidebar is open to the activity tab
+    const prevActivityViewRef = useRef(activityView);
+    useEffect(() => {
+        const prevView = prevActivityViewRef.current;
+        prevActivityViewRef.current = activityView;
+        if (prevView !== 'sidebar' && activityView === 'sidebar' && !isPhone) {
+            setIsChatOpen(true);
+            setSidebarTab('activity');
+        }
+    }, [activityView, isPhone]);
+
+    // When activity ends, return sidebar from activity tab back to chat
+    useEffect(() => {
+        if (!activityOn) {
+            if (sidebarTab === 'activity') {
+                setSidebarTab('chat');
+            }
+        }
+    }, [activityOn, sidebarTab]);
     const activityAside = activityOn && activityView !== 'full';
     const [activityChatSplit, setActivityChatSplit] = useState(() => {
         try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
@@ -315,11 +338,32 @@ export default function App() {
     };
     const handleConfirmCreate = (displayName) => {
         rememberName(displayName);
+        setSidebarTab('invite');
         mesh.createRoom();
     };
     const handleConfirmJoin = (pin, displayName) => {
         rememberName(displayName);
+        setSidebarTab('chat');
         mesh.joinRoom(pin);
+    };
+    // Pre-join Green Room check (UX-H01): preview microphone and audio devices before joining
+    const [preJoinConfig, setPreJoinConfig] = useState(null);
+    const handleInitiateCreate = (displayName) => {
+        setPreJoinConfig({ mode: 'create', name: displayName });
+    };
+    const handleInitiateJoin = (pin, displayName) => {
+        setPreJoinConfig({ mode: 'join', pin, name: displayName });
+    };
+    const handleConfirmPreJoin = ({ name: chosenName, micOn, pin }) => {
+        micOnAfterJoinRef.current = Boolean(micOn);
+        const mode = preJoinConfig?.mode;
+        const targetPin = pin || preJoinConfig?.pin;
+        setPreJoinConfig(null);
+        if (mode === 'create') {
+            handleConfirmCreate(chosenName);
+        } else {
+            handleConfirmJoin(targetPin, chosenName);
+        }
     };
     // Invite link (?room=12345): its own screen with one Join button; the mic choice is made there
     const [inviteDismissed, setInviteDismissed] = useState(false);
@@ -458,6 +502,13 @@ export default function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected, hostPeerId]);
 
+    // Auto-switch from invite tab to chat once a peer connects
+    useEffect(() => {
+        if (connectedPeers.length > 0 && sidebarTab === 'invite') {
+            setSidebarTab('chat');
+        }
+    }, [connectedPeers.length, sidebarTab]);
+
     const localUser = useMemo(() => (roomId ? {
         id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
     } : null), [roomId, username, isHost, isMicMuted]);
@@ -496,13 +547,19 @@ export default function App() {
             activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat}
             view={activityView} onViewChange={setActivityView} isPhone={isPhone} mediaActive={isMediaActive}
             loaded={activityLoad.loaded} onJoin={joinActivity} onLeave={activityLoad.leave}
+            onStatusChange={setActivityStatus}
         />
     ) : null;
+
+    const handleToggleChat = () => {
+        setIsChatOpen((prev) => !prev);
+    };
 
     // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)
     const renderStage = (extra = {}) => (
         <Stage
             roomId={roomId}
+            activityView={activityView}
             isHost={isHost}
             playbackLock={playbackLock}
             onTogglePlaybackLock={hostControls.toggle}
@@ -512,7 +569,7 @@ export default function App() {
             rejoin={rejoin}
             onCopyRoom={handleCopyRoom}
             onLeaveRoom={handleLeaveRoom}
-            onToggleChat={() => setIsChatOpen((prev) => !prev)}
+            onToggleChat={handleToggleChat}
             isChatOpen={isChatOpen}
             unreadChatCount={chat.unreadChatCount}
             chatCount={chat.unreadChatCount}
@@ -612,6 +669,11 @@ export default function App() {
             username={username}
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
+            activity={activities.current}
+            activityDefinition={activities.definition}
+            activityView={activityView}
+            onSetActivityView={setActivityView}
+            activityStatus={activityStatus}
             isAudioBlocked={isAudioBlocked}
             onToggleBlockAudio={toggleBlockAudio}
             signalStatus={signalStatus}
@@ -675,6 +737,7 @@ export default function App() {
                         signalStatus={signalStatus}
                         onOpenNetworkHud={openNetworkHud}
                         playbackLock={playbackLock}
+                        onLeaveRoom={handleLeaveRoom}
                     />
                     {roomId ? (
                         <>
@@ -699,8 +762,8 @@ export default function App() {
                         <PhoneHome
                             username={username}
                             initialPin={initialJoinPin}
-                            onCreate={handleConfirmCreate}
-                            onJoin={handleConfirmJoin}
+                            onCreate={handleInitiateCreate}
+                            onJoin={handleInitiateJoin}
                             onOpenServerSettings={openServerSettings}
                             rejoin={rejoin}
                         />
@@ -742,8 +805,8 @@ export default function App() {
                 ) : (
                     <DesktopHome
                         username={username}
-                        onCreate={handleConfirmCreate}
-                        onJoin={handleConfirmJoin}
+                        onCreate={handleInitiateCreate}
+                        onJoin={handleInitiateJoin}
                         onOpenServerSettings={openServerSettings}
                         rejoin={rejoin}
                         isOnline={signalStatus.connected}
@@ -761,6 +824,16 @@ export default function App() {
                         onOpenQrCode={openQrCode}
                         playbackLock={playbackLock}
                         nowPlaying={nowPlaying}
+                        isChatOpen={isChatOpen}
+                        onToggleChat={handleToggleChat}
+                        isMediaActive={isMediaActive}
+                        onExitVideo={playback.exitVideo}
+                        onVoteSkip={queueFeature.voteSkip}
+                        skipVotes={skipVotes}
+                        connectedPeers={connectedPeers}
+                        isHost={isHost}
+                        username={username}
+                        activityStatus={activityStatus}
                     />
                     <div className="room-desktop-body">
                         <div className="app-main-pane">
@@ -772,9 +845,7 @@ export default function App() {
                                 })}
                             </main>
                         </div>
-                        {connectedPeers.length === 0
-                            ? <InvitePanel roomId={roomId} onShowQr={openQrCode} onCopied={() => showToast('Invite link copied')} />
-                            : renderChat()}
+                        {renderChat()}
                     </div>
                     {renderAddVideoSheet()}
                 </div>
@@ -842,6 +913,17 @@ export default function App() {
                 isPlaying={isMediaActive || activityOn}
                 onStay={closeLeaveDialog}
                 onLeave={leaveRoomNow}
+            />
+            <PreJoinModal
+                isOpen={preJoinConfig !== null}
+                mode={preJoinConfig?.mode}
+                pin={preJoinConfig?.pin}
+                initialName={preJoinConfig?.name || username}
+                audioSettings={audioSettings}
+                onUpdateAudioSettings={handleUpdateAudioSettings}
+                onSelectOutput={selectOutputDevice}
+                onConfirm={handleConfirmPreJoin}
+                onCancel={() => setPreJoinConfig(null)}
             />
 
             {roomId && <NetworkBlockedBanner hint={mesh.networkHint} onDismiss={mesh.dismissNetworkHint} />}

@@ -10,6 +10,7 @@ import { PhoneEmptyMedia, PhoneStreamOffer } from './phone/PhoneMediaOverlays';
 import RejoinCard from './RejoinCard';
 import LinkPlayer from '../features/media/LinkPlayer';
 import { mediaKey } from '../features/media/sources';
+import AmbientCinemaGlow from './room/AmbientCinemaGlow';
 
 export default function Stage({
   rejoin = null,
@@ -83,6 +84,7 @@ export default function Stage({
   onOpenAddVideo,
   // Activities (features/activities): the open one is shown over the stage; the menu starts one
   activitySlot = null,
+  activityView = 'full',
   activityMenu = [],
   onStartActivity
 }) {
@@ -141,6 +143,7 @@ export default function Stage({
 
   return (
     <section className={`stage-section ${isPhone ? 'stage-phone' : ''} ${isMediaActive ? 'is-watching' : 'is-idle'}`}>
+      <AmbientCinemaGlow activeVideoId={activeVideoId} isMediaActive={isMediaActive} localVideoFile={localVideoFile} streamVideoUrl={streamVideoUrl} />
       {/* Main Canvas Area (Drag-and-Drop Video Target & Stage Canvas) */}
       <div
         className={`stage-canvas yt-sync-wrapper ${isMediaActive ? 'has-video' : ''} ${isStageDragOver ? 'stage-drag-active' : ''} ${phoneOverlay ? 'phone-overlay-active' : ''}`}
@@ -297,10 +300,10 @@ export default function Stage({
 
         {roomId && activitySlot}
 
-        {roomId && isMediaActive && !activitySlot && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
+        {roomId && !isMediaActive && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
           <SyncPill connectedPeers={connectedPeers} isHost={isHost} isPhone={isPhone} />
         )}
-        {roomId && isMediaActive && !activitySlot && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
+        {roomId && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
           <VideoPeopleOverlay
             connectedPeers={connectedPeers}
             localUser={localUser}
@@ -352,6 +355,8 @@ export default function Stage({
           isAudioBlocked={isAudioBlocked}
           onToggleMic={onToggleMic}
           onToggleBlockAudio={onToggleBlockAudio}
+          onSetPeerVolume={onSetPeerVolume}
+          onToggleMutePeer={onToggleMutePeer}
           audioSettings={audioSettings}
           onUpdateAudioSettings={onUpdateAudioSettings}
           onSelectOutput={onSelectOutput}
