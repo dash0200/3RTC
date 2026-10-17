@@ -57,8 +57,18 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
         };
     }, [bus, setQueue, setSkipVotes]);
 
-    usePeerMessageOn(bus, 'queue-action', (data) => {
-        const who = data.sender || 'Peer';
+    usePeerMessageOn(bus, 'queue-action', (data, from) => {
+        const who = room.peerName(from) || data.sender || 'Peer';
+        const isFromHost = room.isPeerHost(from);
+        const isLocked = hostControls.playbackLockRef.current;
+
+        // If host controls lock is enabled, non-host peers cannot control playback or manipulate the queue
+        if (isLocked && !isFromHost) {
+            if (data.action === 'next' || data.action === 'play-item' || data.action === 'clear' || data.action === 'reorder' || data.action === 'vote-skip' || data.action === 'vote-skip-passed') {
+                return;
+            }
+        }
+
         switch (data.action) {
             case 'add': {
                 const item = cleanItem(data.item);
@@ -98,12 +108,18 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
                 }
                 break;
             case 'vote-skip':
-                if (Array.isArray(data.skipVotes)) setSkipVotes(data.skipVotes);
+                if (Array.isArray(data.skipVotes)) setSkipVotes(data.skipVotes.filter((u) => typeof u === 'string'));
                 break;
-            case 'vote-skip-passed':
+            case 'vote-skip-passed': {
+                const required = Math.max(1, Math.ceil(Math.max(1, peerCount || 1) / 2));
+                const currentVotes = Array.isArray(data.skipVotes) ? data.skipVotes : skipVotesRef.current;
+                if (!isFromHost && currentVotes.length < required) {
+                    break;
+                }
                 setSkipVotes([]);
                 room.log('⏭️ Skip vote passed by consensus');
                 break;
+            }
             default:
                 break;
         }
@@ -172,7 +188,7 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
     // byVote: a passed vote-skip is the room deciding, so it goes through the host controls lock
     // auto: the video ended or failed on this device; with the lock on, the host's app moves on
     const playNextInQueue = useCallback(({ byVote = false, auto = false } = {}) => {
-        if (hostControls.isLockedForMe() && !byVote) {
+        if (hostControls.isLockedForMe()) {
             if (!auto) hostControls.onBlocked();
             return;
         }
@@ -192,6 +208,10 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
 
     const voteSkip = useCallback(() => {
         if (!playback.activeVideoIdRef.current && !playback.activeMediaRef.current) return;
+        if (hostControls.isLockedForMe()) {
+            hostControls.onBlocked();
+            return;
+        }
         const { username } = room.getSelf();
         const current = skipVotesRef.current;
         const alreadyVoted = current.includes(username);
@@ -214,7 +234,7 @@ export function useQueue({ room, playback, hostControls, peerCount }) {
             playback.closeByVote();
             room.log('🎬 Queue ended. Exited video player.');
         }
-    }, [peerCount, playback, playNextInQueue, room, send, setSkipVotes]);
+    }, [hostControls, peerCount, playback, playNextInQueue, room, send, setSkipVotes]);
 
     return {
         queue, skipVotes, queueRef, skipVotesRef, setQueue, setSkipVotes,

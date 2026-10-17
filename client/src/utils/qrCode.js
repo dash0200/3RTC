@@ -88,13 +88,16 @@ export function drawQrToCanvas(canvas, text, options = {}) {
 /**
  * Constructs the clean mobile join URL
  */
-export function getMobileJoinUrl(roomId, customHost = null) {
+export function getMobileJoinUrl(roomId, customHost = null, fromName = '') {
   const cleanRoom = String(roomId || '').trim();
+  // "Priya invited you": the inviter's name rides along in the link (no server lookup needed)
+  const from = String(fromName || '').trim();
+  const fromPart = from && !/^User_\d+$/.test(from) ? `&from=${encodeURIComponent(from.slice(0, 24))}` : '';
   if (typeof window === 'undefined') {
-    return `https://3rtc.me/?room=${cleanRoom}`;
+    return `https://3rtc.me/?room=${cleanRoom}${fromPart}`;
   }
 
   const origin = customHost ? customHost : window.location.origin;
   const pathname = window.location.pathname.endsWith('/') ? window.location.pathname : `${window.location.pathname}/`;
-  return `${origin}${pathname}?room=${cleanRoom}`;
+  return `${origin}${pathname}?room=${cleanRoom}${fromPart}`;
 }

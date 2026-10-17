@@ -8,8 +8,13 @@
  *   bubble a round button; it pulses when the game needs you ("Your turn"), tap to open
  * The activity stays mounted in every view, so its timers and sounds keep working.
  * Phone, game open over a video: swipe it down to put it away (like the YouTube app).
+ *
+ * Not loaded on this device (`loaded` false: someone else started it, or we left it): only its
+ * bubble, tagged "Join <game>"; tapping it loads the game (useActivityLoad.js). "Leave" on the bar
+ * unloads it again; "End" closes it for everyone.
  */
 import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import ChatPeek from './ChatPeek';
 import ActivityBubble from './ActivityBubble';
 import { ActivityHostProvider } from './activityHost';
@@ -203,28 +208,62 @@ class ActivityErrorBoundary extends Component {
     }
 }
 
-export default function ActivityStage({ activity, definition, onClose, selfId, chat = null, view = 'full', onViewChange, isPhone = false, mediaActive = false }) {
+export default function ActivityStage({
+    activity,
+    definition,
+    onClose,
+    selfId,
+    chat = null,
+    view = 'full',
+    onViewChange,
+    isPhone = false,
+    mediaActive = false,
+    loaded = true,
+    onJoin,
+    onLeave,
+    onStatusChange
+}) {
     const ActivityComponent = useMemo(() => (definition ? lazyFor(definition) : null), [definition]);
     const rootRef = useRef(null);
     const [isFull, toggleFull] = useStageFullscreen(rootRef);
     const [status, setStatus] = useState({ attention: false, color: '', label: '' });
-    const onStatus = useCallback((next) => setStatus((prev) => (
-        prev.attention === next.attention && prev.color === next.color && prev.label === next.label ? prev : next)), []);
-    const shown = view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
+    const onStatus = useCallback((next) => setStatus((prev) => {
+        if (prev.attention === next.attention && prev.color === next.color && prev.label === next.label) return prev;
+        onStatusChange?.(next);
+        return next;
+    }), [onStatusChange]);
+
+    const shown = view === 'sidebar' && !isPhone ? 'sidebar' : view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
     const { box, startDrag } = useFloatingBox(rootRef, shown === 'window');
     const setView = (v) => onViewChange?.(v);
-    // Where the bubble opens back to: the view it was minimised from (full or the small window)
-    const openedAs = useRef('full');
+
+    // Where the bubble opens back to: the view it was minimised from (sidebar, window, or full)
+    const openedAs = useRef('sidebar');
     if (shown !== 'bubble') openedAs.current = shown;
+
+    const [portalEl, setPortalEl] = useState(() => (typeof document !== 'undefined' ? document.getElementById('activity-sidebar-portal') : null));
+    useEffect(() => {
+        if (shown === 'sidebar' || (shown === 'bubble' && openedAs.current === 'sidebar')) {
+            const el = document.getElementById('activity-sidebar-portal');
+            if (el && el !== portalEl) setPortalEl(el);
+        }
+    }, [shown, portalEl]);
+
+    const targetEl = portalEl || (typeof document !== 'undefined' ? document.getElementById('activity-sidebar-portal') : null);
+    const shouldPortal = (shown === 'sidebar' || (shown === 'bubble' && openedAs.current === 'sidebar')) && Boolean(targetEl);
+
     const minimise = () => {
-        if (isFull) toggleFull(); // the bubble sits over the page, not in the game's full screen
+        if (isFull) toggleFull();
         setView('bubble');
     };
+
     // The game can be minimised at any time (a video playing or not): swipe it down on a phone
     const canSwipeAway = isPhone && shown === 'full';
     useSwipeDown(rootRef, canSwipeAway, minimise);
+
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
     const showPeek = chat && shown === 'full' && (isFull || !chat.isListVisible);
+
     if (!activity) return null;
     if (!definition) {
         // Started from a newer version of the app
@@ -238,11 +277,33 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
             </div>
         );
     }
+    if (!loaded) {
+        // Not loaded here: nothing of the game runs; its bubble invites us in
+        return (
+            <>
+                <div className="stage-activity-anchor" ref={rootRef} aria-hidden="true" />
+                <ActivityBubble
+                    icon={definition.icon}
+                    label={`${definition.name} is on (${activity.startedByName || 'someone'} started it). Join`}
+                    tag={`Join ${definition.name}`}
+                    invite
+                    isPhone={isPhone}
+                    anchorRef={rootRef}
+                    onOpen={onJoin}
+                />
+            </>
+        );
+    }
+
+    const leave = () => {
+        if (isFull) toggleFull();
+        onLeave?.();
+    };
     const startedBy = activity.startedBy === selfId ? 'you' : (activity.startedByName || 'someone');
-    const reopen = () => setView(!isPhone && (openedAs.current === 'window' || mediaActive) ? 'window' : 'full');
+    const reopen = () => setView(!isPhone && (openedAs.current === 'sidebar' || openedAs.current === 'window' || mediaActive) ? (openedAs.current === 'window' ? 'window' : 'sidebar') : 'full');
     const bubbleLabel = `${definition.name}${status.attention && status.label ? `: ${status.label}` : ''}. Open`;
-    return (
-        <>
+
+    const content = (
         <div
             className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
             role="region"
@@ -259,11 +320,36 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 <span className="activity-bar-icon" aria-hidden="true">{definition.icon}</span>
                 <span className="activity-bar-name">{definition.name}</span>
                 {shown === 'full' && <span className="activity-bar-meta">started by {startedBy}</span>}
+                {shown === 'sidebar' && <span className="activity-bar-meta">{status.attention && status.label ? status.label : `started by ${startedBy}`}</span>}
                 {shown === 'window' && <span className="activity-bar-meta">{status.attention && status.label ? status.label : 'drag to move'}</span>}
+
+                {/* Dock to Sidebar from Full stage */}
+                {shown === 'full' && !isPhone && (
+                    <button type="button" className="activity-bar-btn activity-sidebar-btn" onClick={() => setView('sidebar')} title="Dock the game into the sidebar next to the video">
+                        ⫸ Sidebar
+                    </button>
+                )}
+                {/* Small floating window from Full stage */}
                 {shown === 'full' && !isPhone && (
                     <button type="button" className="activity-bar-btn activity-window-btn" onClick={() => setView('window')} title={mediaActive ? 'Play in a small window over the video' : 'Play in a small window'}>
-                        ⧉ Small window
+                        ⧉ Window
                     </button>
+                )}
+
+                {/* Controls when docked in Sidebar */}
+                {shown === 'sidebar' && (
+                    <button type="button" className="activity-bar-btn activity-icon-btn activity-full-btn" onClick={() => setView('full')} title="Expand game full size over stage" aria-label="Full size">⤢</button>
+                )}
+                {shown === 'sidebar' && (
+                    <button type="button" className="activity-bar-btn activity-icon-btn activity-window-btn" onClick={() => setView('window')} title="Detach into a small floating window" aria-label="Small window">⧉</button>
+                )}
+                {shown === 'sidebar' && (
+                    <button type="button" className="activity-bar-btn activity-icon-btn activity-min-btn" onClick={() => setView('bubble')} title="Minimise: you get a nudge when it's your turn" aria-label="Minimise">–</button>
+                )}
+
+                {/* Controls when floating in Small Window */}
+                {shown === 'window' && (
+                    <button type="button" className="activity-bar-btn activity-icon-btn activity-sidebar-btn" onClick={() => setView('sidebar')} title="Dock game into sidebar beside the video" aria-label="Dock to sidebar">⫸</button>
                 )}
                 {shown === 'window' && (
                     <button type="button" className="activity-bar-btn activity-icon-btn activity-full-btn" onClick={() => setView('full')} title="Show the game full size" aria-label="Full size">⤢</button>
@@ -271,9 +357,9 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 {shown === 'window' && (
                     <button type="button" className="activity-bar-btn activity-icon-btn activity-min-btn" onClick={() => setView('bubble')} title="Minimise: you get a nudge when it's your turn" aria-label="Minimise">–</button>
                 )}
+
                 {shown === 'full' && (
-                    // Minimise to the bubble (it nudges you on your turn). Over a video it says where
-                    // you go: back to the video
+                    // Minimise to the bubble (it nudges you on your turn). Over a video it says where you go
                     <button type="button" className="activity-bar-btn activity-video-btn" onClick={minimise}
                         title={mediaActive ? 'Watch the video: the game becomes a bubble that nudges you on your turn' : 'Minimise: the game becomes a bubble that nudges you on your turn'}>
                         {mediaActive ? '▶ Video' : '▾ Minimise'}
@@ -282,7 +368,7 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                 {chat?.onToggleSplitView && !isFull && shown === 'full' && (
                     <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
                         aria-pressed={chat.splitView} title={chat.splitView ? 'Bigger board (hide chat messages)' : 'Show chat messages below the game'}>
-                        💬 Chat{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
+                        💬<span className="activity-btn-text"> Chat</span>{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
                     </button>
                 )}
                 {canFullscreen() && shown === 'full' && !isPhone && (
@@ -290,9 +376,17 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
                         {isFull ? 'Exit full screen' : 'Full screen'}
                     </button>
                 )}
-                <button type="button" className={`activity-close-btn ${shown === 'window' ? 'activity-icon-btn' : ''}`} onClick={onClose} title="Close for everyone" aria-label="Close for everyone">
-                    {shown === 'window' ? '✕' : 'Close'}
+
+                {/* Leave: just me (the game unloads here and goes on for the others). End: everyone. */}
+                <button type="button" className={`activity-bar-btn activity-leave-btn ${shown === 'window' || shown === 'sidebar' ? 'activity-icon-btn' : ''}`} onClick={leave}
+                    title={`Leave ${definition.name}: it closes on this device only and keeps going for the others`} aria-label={`Leave ${definition.name} (just you)`}>
+                    {shown === 'window' || shown === 'sidebar' ? '✕' : 'Leave'}
                 </button>
+                {(shown === 'full' || shown === 'sidebar') && (
+                    <button type="button" className="activity-close-btn" onClick={onClose} title="End it for everyone" aria-label="End for everyone">
+                        End
+                    </button>
+                )}
             </div>
             <div className="activity-body">
                 <ActivityErrorBoundary key={definition.id}>
@@ -305,18 +399,30 @@ export default function ActivityStage({ activity, definition, onClose, selfId, c
             </div>
             {showPeek && <ChatPeek messages={chat.messages} onOpenChat={isFull ? toggleFull : chat.onOpenChat} />}
         </div>
-        {shown === 'bubble' && (
-            <ActivityBubble
-                icon={definition.icon}
-                label={bubbleLabel}
-                tag={status.attention ? status.label : ''}
-                attention={status.attention}
-                color={status.color}
-                isPhone={isPhone}
-                anchorRef={rootRef}
-                onOpen={reopen}
-            />
-        )}
+    );
+
+    return (
+        <>
+            {shouldPortal ? (
+                <>
+                    <div className="stage-activity-anchor" ref={rootRef} aria-hidden="true" />
+                    {createPortal(content, targetEl)}
+                </>
+            ) : (
+                content
+            )}
+            {shown === 'bubble' && (
+                <ActivityBubble
+                    icon={definition.icon}
+                    label={bubbleLabel}
+                    tag={status.attention ? status.label : ''}
+                    attention={status.attention}
+                    color={status.color}
+                    isPhone={isPhone}
+                    anchorRef={rootRef}
+                    onOpen={reopen}
+                />
+            )}
         </>
     );
 }

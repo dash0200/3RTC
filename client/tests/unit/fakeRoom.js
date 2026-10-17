@@ -25,8 +25,8 @@ export function createFakeNetwork() {
         }
     });
 
-    function addPeer(id, { isHost = false, username = id } = {}) {
-        const app = { id, isHost, username, entries: new Map(), settings: {} };
+    function addPeer(id, { isHost = false, username = id, proto = 3 } = {}) {
+        const app = { id, isHost, username, proto, entries: new Map(), settings: {} };
         app.bus = createRoomBus({
             getPeers: () => app.entries,
             getSelf: () => ({ peerId: id, username: app.username, isHost: app.isHost }),
@@ -40,7 +40,7 @@ export function createFakeNetwork() {
             isPeerHost: (peerId) => (peerId === id ? app.isHost : Boolean(peers.get(peerId)?.isHost)),
             getHostPeerId: () => connectedPeers().find((p) => p.isHost)?.peerId || null,
             peerName: (peerId) => peers.get(peerId)?.username || null,
-            peerProtocol: () => 2,
+            peerProtocol: (peerId) => peers.get(peerId)?.proto ?? 3,
             getAuthorityId: () => pickAuthority(id, app.isHost, connectedPeers()),
             getRoomSettings: () => app.settings,
             notify: () => { },

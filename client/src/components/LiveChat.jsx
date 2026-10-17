@@ -7,7 +7,7 @@ import { EMOJI_CATEGORIES } from '../utils/emoji';
 import { useReactionSet, openReactionsEditor } from '../features/reactions/reactionSet';
 
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
-const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]|\s)+$/u;
+const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f]|[0-9#*]\ufe0f?\u20e3|\s)+$/u;
 const GRAPHEMES = typeof Intl !== 'undefined' && Intl.Segmenter
   ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : null;
@@ -24,11 +24,12 @@ function isEmojiOnly(text) {
 }
 import { copyToClipboard } from '../utils/clipboard';
 import { resolvePastedLink } from '../features/media/resolveLink';
-import { PeerVoicePanel } from './PeerVoiceRoster';
+import { PeerVoicePanel, getInitials } from './PeerVoiceRoster';
 import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal from './ImageLightboxModal';
 import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 import { useBackLayer } from '../core/backStack';
+import InvitePanel from './room/InvitePanel';
 
 
 
@@ -77,8 +78,6 @@ export default function LiveChat({
   onClose,
   isAudioBlocked = false,
   onToggleBlockAudio,
-  signalStatus,
-  onOpenSettings,
   queue = [],
   activeVideoId = null,
   activeMedia = null, // a link source playing (features/media)
@@ -115,10 +114,16 @@ export default function LiveChat({
   onSoundboardVolumeChange,
   onToggleSoundboardMute,
   onOpenQrCode,
+  // Activities (Ludo / Games docked into sidebar)
+  activity = null,
+  activityDefinition = null,
+  activityView = 'full',
+  onSetActivityView,
+  activityStatus = null,
   // Phone layout: shown in the page under the video (no floating sheet, header or resize)
   embedded = false
 }) {
-  const DEFAULT_WIDTH = 380;
+  const DEFAULT_WIDTH = 360;
   const MIN_WIDTH = 260;
   const MAX_WIDTH = 720;
 
@@ -215,6 +220,7 @@ export default function LiveChat({
   };
 
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [showReactions, setShowReactions] = useState(false);
   const [unreadLogsCount, setUnreadLogsCount] = useState(0);
   const [inputText, setInputText] = useState('');
   const [showScrollPill, setShowScrollPill] = useState(false);
@@ -406,7 +412,7 @@ export default function LiveChat({
   const handleCopyLogs = async () => {
     if (!displayLogs || displayLogs.length === 0) return;
     const formatted = displayLogs.map((log) => {
-      const d = new Date(log.timestamp || Date.now());
+      const d = new Date(log.timestamp || 0);
       const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
       return `[${timeStr}] ${log.text}`;
     }).join('\n');
@@ -426,6 +432,23 @@ export default function LiveChat({
       .map((msg) => msg.id)
   ), [messages]);
 
+  // UX-M02: Merge user chat messages and non-debug room events into a unified chronological stream
+  const displayTimeline = useMemo(() => {
+    const msgItems = (messages || []).map((msg) => ({
+      itemType: 'message',
+      id: msg.id,
+      timestamp: msg.timestamp || 0,
+      msg
+    }));
+    const sysItems = (displayLogs || []).map((log) => ({
+      itemType: 'system',
+      id: `sys-${log.id}`,
+      timestamp: log.timestamp || 0,
+      log
+    }));
+    return [...msgItems, ...sysItems].sort((a, b) => a.timestamp - b.timestamp);
+  }, [messages, displayLogs]);
+
   const wasNearBottomRef = useRef(true);
   useEffect(() => {
     // Opening the chat tab always lands on the latest messages
@@ -435,15 +458,16 @@ export default function LiveChat({
     const scroller = chatContainerRef.current;
     if (!scroller || activeTab !== 'chat') return;
 
-    const lastMsg = messages[messages.length - 1];
-    if (wasNearBottomRef.current || lastMsg?.isSelf) {
+    const lastItem = displayTimeline[displayTimeline.length - 1];
+    const isSelfMsg = lastItem?.itemType === 'message' && lastItem.msg?.isSelf;
+    if (wasNearBottomRef.current || isSelfMsg) {
       scroller.scrollTop = scroller.scrollHeight;
       wasNearBottomRef.current = true;
       setShowScrollPill(false);
     } else {
       setShowScrollPill(true);
     }
-  }, [messages, activeTab]);
+  }, [displayTimeline, activeTab]);
 
   // Auto-scroll room logs when new logs arrive (latest on top)
   useEffect(() => {
@@ -604,88 +628,80 @@ export default function LiveChat({
         </div>
         )}
 
-        {!embedded && (
-        <div className="chat-header">
-          <div className="chat-header-title-wrap">
-            <span className="chat-header-title">Live Chat & Activity</span>
-          </div>
-
-          <div className="chat-header-actions">
-            {signalStatus && (
-              <button
-                type="button"
-                className={`sidebar-cloud-pill ${signalStatus.connected ? 'connected' : ''} ${onOpenSettings ? '' : 'static'}`}
-                onClick={onOpenSettings}
-                disabled={!onOpenSettings}
-                title={
-                  (signalStatus.connected ? 'Connected to the 3RTC server.' : `Server: ${(signalStatus.label || 'Connecting...').replace(/\.*$/, '')}…`)
-                  + (onOpenSettings ? ' Click for server settings.' : '')
-                }
-              >
-                <span className={`signal-dot ${signalStatus.connected ? 'connected' : ''}`} />
-                <span className="sidebar-cloud-label">
-                  {signalStatus.connected ? 'Cloud Connected' : (signalStatus.label || 'Connecting...')}
-                </span>
-                {typeof onOpenSettings === 'function' && (
-                  <svg className="sidebar-cloud-gear" viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-                  </svg>
-                )}
-              </button>
-            )}
-
-            <button className="header-icon-btn close-sidebar-btn" onClick={onClose} title="Close Sidebar" aria-label="Close Sidebar">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              </svg>
+        {/* Tabs: Invite (if alone) vs Chat vs Queue vs Peers */}
+        <div className="chat-nav-tabs" role="tablist" aria-label="Room panel">
+          {connectedPeers.length === 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'invite'}
+              className={`chat-tab-btn ${activeTab === 'invite' ? 'active' : ''}`}
+              onClick={() => setActiveTab('invite')}
+            >
+              <span>Invite</span>
             </button>
-          </div>
-        </div>
-        )}
+          )}
 
-        {/* Tabs: Chat vs Queue vs Peers */}
-        <div className="chat-nav-tabs">
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'chat'}
             className={`chat-tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('chat');
               setUnreadChatCount(0);
             }}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-            </svg>
             <span>Chat</span>
-            {(messages.length > 0 || unreadChatCount > 0) && (
-              <span className="tab-badge chat-badge">{unreadChatCount || messages.length}</span>
+            {/* Unread only: the total message count used to show here forever, even on this tab */}
+            {activeTab !== 'chat' && unreadChatCount > 0 && (
+              <span className="tab-badge chat-badge" aria-label={`${unreadChatCount} unread`}>{unreadChatCount}</span>
             )}
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'queue'}
             className={`chat-tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
             onClick={() => setActiveTab('queue')}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M4 10h12v2H4zm0-4h12v2H4zm0 8h8v2H4zm10 0v6l5-3z" />
-            </svg>
             <span>Queue</span>
-            {queue.length > 0 && <span className="tab-badge queue-badge">{queue.length}</span>}
+            {queue.length > 0 && <span className="tab-count">{queue.length}</span>}
           </button>
 
           <button
             type="button"
+            role="tab"
+            aria-selected={activeTab === 'peers'}
             className={`chat-tab-btn ${activeTab === 'peers' ? 'active' : ''}`}
             onClick={() => setActiveTab('peers')}
-            title="Peers & Voice Status"
+            title="People and voice"
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z" />
-            </svg>
-            <span>Peers</span>
-            <span className="tab-badge peers-badge">{connectedPeers.length + 1}</span>
+            <span>People</span>
+            <span className="tab-count">{connectedPeers.length + 1}</span>
           </button>
+
+          {activity && !embedded && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'activity'}
+              className={`chat-tab-btn chat-tab-activity ${activeTab === 'activity' ? 'active' : ''} ${activityStatus?.attention ? 'needs-you' : ''}`}
+              onClick={() => {
+                setActiveTab('activity');
+                if (activityView !== 'sidebar') {
+                  onSetActivityView?.('sidebar');
+                }
+              }}
+              title={activityDefinition ? `${activityDefinition.name} game` : 'Activity'}
+            >
+              <span>{activityDefinition?.icon || '🎲'} {activityDefinition?.name || 'Game'}</span>
+              {activityStatus?.attention && (
+                <span className="tab-badge activity-badge" style={activityStatus?.color ? { backgroundColor: activityStatus.color } : undefined} aria-label={activityStatus?.label || 'Your turn'}>•</span>
+              )}
+            </button>
+          )}
         </div>
 
         {isAudioBlocked && (
@@ -709,48 +725,91 @@ export default function LiveChat({
           </div>
         )}
 
+        {/* TAB: Docked Activity (Ludo / Games) */}
+        {!embedded && (
+          <div
+            id="activity-sidebar-portal"
+            className={`activity-sidebar-container ${activeTab === 'activity' ? 'is-active' : ''}`}
+            style={{ display: activeTab === 'activity' ? 'flex' : 'none' }}
+          >
+            {activeTab === 'activity' && activityView !== 'sidebar' && (
+              <div className="activity-sidebar-detached-placeholder">
+                <span className="detached-icon">{activityDefinition?.icon || '🎲'}</span>
+                <p className="detached-title">{activityDefinition?.name || 'Game'} is {activityView === 'bubble' ? 'minimised' : 'floating'}</p>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => onSetActivityView?.('sidebar')}
+                >
+                  Dock here in sidebar
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 0: Invite Tab (when host is alone in room) */}
+        {activeTab === 'invite' && (
+          <InvitePanel
+            roomId={roomId}
+            onShowQr={onOpenQrCode}
+            onCopied={() => {}}
+            isTab={true}
+          />
+        )}
+
         {/* TAB 1: Real Peer Chat */}
         {activeTab === 'chat' && (
           <>
             <div className="chat-messages-container" ref={chatContainerRef} onScroll={handleScroll}>
-              {messages.length === 0 ? (
+              {displayTimeline.length === 0 ? (
                 <div className="chat-empty-state">
-                  <div className="empty-state-icon">💬</div>
                   <div className="empty-state-title">No messages yet</div>
-                  <div className="empty-state-subtitle">Say hello to your peers in the room!</div>
+                  <div className="empty-state-subtitle">Say hi — everyone in the room sees it.</div>
                 </div>
               ) : (
-                <div className="chat-messages-inner wa-chat">
-                  {messages.map((msg, index) => {
-                    const date = new Date(msg.timestamp || Date.now());
+                <div className="chat-messages-inner cm-feed">
+                  {displayTimeline.map((item, index) => {
+                    if (item.itemType === 'system') {
+                      return (
+                        <div key={item.id} className="cm-system-row" role="status">
+                          <span className="cm-system-pill">{item.log.text}</span>
+                        </div>
+                      );
+                    }
+                    const msg = item.msg;
+                    const date = new Date(msg.timestamp || 0);
                     const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-                    const msgInitial = (msg.sender?.[0] || '?').toUpperCase();
+                    const msgInitial = getInitials(msg.sender || '?');
                     const msgAvatarBg = getAvatarColor(msg.sender || 'Peer');
                     // Avatar colors are gradients; the name uses the gradient's first color
                     const msgNameColor = msgAvatarBg.match(/#[0-9a-f]{6}/i)?.[0] || '#53bdeb';
                     // Consecutive messages from the same person within 5 min form one group:
                     // name, avatar and bubble tail only on the first one (like WhatsApp)
-                    const prev = messages[index - 1];
-                    const startsGroup = !prev || prev.sender !== msg.sender ||
-                      Math.abs((msg.timestamp || 0) - (prev.timestamp || 0)) > 5 * 60 * 1000;
+                    let prevMsg = null;
+                    for (let p = index - 1; p >= 0; p--) {
+                      if (displayTimeline[p].itemType === 'message') {
+                        prevMsg = displayTimeline[p].msg;
+                        break;
+                      }
+                    }
+                    const startsGroup = !prevMsg || prevMsg.sender !== msg.sender ||
+                      Math.abs((msg.timestamp || 0) - (prevMsg.timestamp || 0)) > 5 * 60 * 1000;
                     const emojiOnly = emojiOnlyIds.has(msg.id);
-                    const side = msg.isSelf ? 'self' : 'peer';
 
                     return (
-                      <div key={msg.id} className={`wa-row ${side} ${startsGroup ? 'group-start' : ''}`}>
-                        {!msg.isSelf && (
-                          startsGroup
-                            ? <div className="wa-avatar" style={{ background: msgAvatarBg }} title={msg.sender}>{msgInitial}</div>
-                            : <div className="wa-avatar-spacer" />
-                        )}
-                        <div className={`wa-bubble ${side} ${startsGroup ? 'tail' : ''} ${emojiOnly ? 'emoji-only' : ''}`}>
-                          {!msg.isSelf && startsGroup && (
-                            <div className="wa-sender">
-                              <span className="wa-sender-name" style={{ color: msgNameColor }}>{msg.sender}</span>
-                              {msg.isHost && <span className="wa-host-badge">HOST</span>}
+                      <div key={msg.id} className={`cm-row ${startsGroup ? 'group-start' : ''} ${msg.isSelf ? 'is-self' : ''}`}>
+                        {startsGroup
+                          ? <div className="rd-av cm-av" style={{ '--av': msgAvatarBg }} aria-hidden="true">{msgInitial}</div>
+                          : <div className="cm-av-spacer" />}
+                        <div className="cm-body">
+                          {startsGroup && (
+                            <div className="cm-meta">
+                              <span className="cm-name" style={{ color: msgNameColor }}>{msg.isSelf ? 'You' : msg.sender}</span>
+                              {msg.isHost && <span className="cm-host">Host</span>}
+                              <span className="cm-time">{timeStr}</span>
                             </div>
                           )}
-
                               {/* Image Transfer in Progress */}
                               {msg.imageTransfer && (
                                 <div className="chat-image-transfer-card">
@@ -810,8 +869,7 @@ export default function LiveChat({
                                 </div>
                               )}
 
-                          {msg.text && <span className="wa-text">{renderMessageText(msg.text, onSeekTo)}</span>}
-                          <span className="wa-time">{timeStr}</span>
+                          {msg.text && <p className={`cm-text ${emojiOnly ? 'is-emoji' : ''}`}>{renderMessageText(msg.text, onSeekTo)}</p>}
                         </div>
                       </div>
                     );
@@ -920,9 +978,35 @@ export default function LiveChat({
                 </div>
               )}
 
+              {/* Quick reactions (phones: shown with the smiley button, to keep room for the chat) */}
+              {(!embedded || showReactions) && (
+              <div className="chat-quick-reactions-dock">
+                {quickReactions.map(({ emoji, key }) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    className="quick-reaction-dock-btn"
+                    onClick={() => handleReactionClick(emoji)}
+                    title={`React ${emoji} (key ${key})`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="quick-reaction-dock-btn quick-reaction-edit-btn"
+                  onClick={openReactionsEditor}
+                  title="Choose your reactions"
+                  aria-label="Choose your reactions"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" /></svg>
+                </button>
+              </div>
+              )}
               {/* Input Pill Container */}
               <div className="chat-input-pill-container">
-                {/* Smiley Button (Opens All Emojis Window) */}
+                {/* Smiley Button (Opens All Emojis Window); phones have their own emoji keyboard */}
+                {!embedded && (
                 <button
                   type="button"
                   ref={smileyBtnRef}
@@ -936,17 +1020,14 @@ export default function LiveChat({
                     <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" />
                   </svg>
                 </button>
+                )}
 
                 <textarea
                   ref={textareaRef}
                   className="chat-pill-textarea"
                   rows={1}
                   maxLength={200}
-                  placeholder={
-                    !isP2PConnected
-                      ? 'Waiting for connection...'
-                      : 'Type a message...'
-                  }
+                  placeholder={isP2PConnected ? 'Message the room' : 'Connecting…'}
                   value={inputText}
                   onChange={handleTextareaChange}
                   onKeyDown={handleKeyDown}
@@ -975,6 +1056,17 @@ export default function LiveChat({
                   </svg>
                 </button>
 
+                {embedded && (
+                  <button
+                    type="button"
+                    className={`chat-pill-smiley-btn chat-pill-react-btn ${showReactions ? 'active' : ''}`}
+                    onClick={() => setShowReactions((v) => !v)}
+                    aria-label={showReactions ? 'Hide reactions' : 'Reactions'}
+                    aria-expanded={showReactions}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01" /></svg>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="chat-pill-send-btn"
@@ -989,29 +1081,6 @@ export default function LiveChat({
                 </button>
               </div>
 
-              {/* Quick Reactions Dock Directly Below Input */}
-              <div className="chat-quick-reactions-dock">
-                {quickReactions.map(({ emoji, key }) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    className="quick-reaction-dock-btn"
-                    onClick={() => handleReactionClick(emoji)}
-                    title={`React ${emoji} (key ${key})`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className="quick-reaction-dock-btn quick-reaction-edit-btn"
-                  onClick={openReactionsEditor}
-                  title="Choose your reactions"
-                  aria-label="Choose your reactions"
-                >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" /></svg>
-                </button>
-              </div>
             </div>
           </>
         )}
@@ -1125,7 +1194,7 @@ export default function LiveChat({
             {/* Add Video to Queue Form */}
             <form className="queue-add-form" onSubmit={handleQueueSubmit}>
               <div className="queue-input-wrapper">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#FF0033" className="queue-input-icon">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="#e5143d" className="queue-input-icon">
                   <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
                 </svg>
                 <input
@@ -1314,7 +1383,7 @@ export default function LiveChat({
               ) : (
                 <div className="room-logs-list">
                   {[...displayLogs].reverse().map((log) => {
-                    const date = new Date(log.timestamp || Date.now());
+                    const date = new Date(log.timestamp || 0);
                     const timeStr = date.toLocaleTimeString([], {
                       hour: 'numeric',
                       minute: '2-digit',

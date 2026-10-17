@@ -36,10 +36,9 @@ VID = "document.querySelector('video')"
 def vstate(pg):
     return pg.evaluate(f"(() => {{ const v = {VID}; if (!v) return null; return {{ t: +v.currentTime.toFixed(2), paused: v.paused, rs: v.readyState, src: (v.currentSrc||'').slice(0, 40), err: v.error && v.error.code }}; }})()")
 def pill(pg):
-    el = pg.query_selector('.local-filesize-text')
-    return el.inner_text() if el else ''
+    return harness.stream_pill(pg)
 def pct(pg):
-    m = re.search(r'(\d+)%', pill(pg)); return int(m.group(1)) if m else None
+    return harness.stream_percent(pg)
 
 with sync_playwright() as p:
     b = p.chromium.launch(args=['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'])
@@ -54,16 +53,15 @@ with sync_playwright() as p:
             pg.reload(); wait(lambda: pg.evaluate('!!navigator.serviceWorker.controller'), 10)
     check('service worker controls both pages', host.evaluate('!!navigator.serviceWorker.controller') and guest.evaluate('!!navigator.serviceWorker.controller'))
 
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: next((m['roomId'] for m in host.evaluate('window.__sig') if m.get('type') == 'room-created'), None))
     guest.goto(f'{BASE}/?room={room}'); wait(lambda: guest.evaluate('!!navigator.serviceWorker.controller'), 10)
     guest.get_by_role('button', name='Join Room').click()
     check('peers connected', wait(lambda: 'Direct P2P' in host.content() and guest.get_by_text(re.compile('PEER|Peer')).count() >= 0, 15))
     time.sleep(2)
 
-    host.set_input_files('input[accept*="video/mp4"]', harness.media('test.mp4'))
-    btn = guest.get_by_role('button', name=re.compile('Stream from Peer'))
+    host.locator('input[accept*=".mp4"]').first.set_input_files(harness.media('test.mp4'))
+    btn = guest.get_by_role('button', name=re.compile('Stream from'))
     check('guest offered the stream', wait(lambda: btn.count() > 0, 15))
     t0 = time.time()
     btn.first.click()
@@ -112,7 +110,7 @@ with sync_playwright() as p:
     cdp.send('Network.setBypassServiceWorker', {'bypass': False})
     check('hard-refreshed page starts without the service worker', not late.evaluate('!!navigator.serviceWorker.controller'))
     late.get_by_role('button', name='Join Room').click()
-    lbtn = late.get_by_role('button', name=re.compile('Stream from Peer'))
+    lbtn = late.get_by_role('button', name=re.compile('Stream from'))
     check('hard-refreshed viewer offered the stream', wait(lambda: lbtn.count() > 0, 20))
     t2 = time.time()
     lbtn.first.click()

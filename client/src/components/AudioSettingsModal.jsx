@@ -36,6 +36,62 @@ export default function AudioSettingsModal({
   const [isRecordingKey, setIsRecordingKey] = useState(false);
   const [isTestPressed, setIsTestPressed] = useState(false);
   const recordBtnRef = useRef(null);
+  const modalCardRef = useRef(null);
+  const prevActiveElementRef = useRef(null);
+
+  // Focus trapping and restoring for accessibility (UX-M05)
+  useEffect(() => {
+    if (!isOpen) return;
+    prevActiveElementRef.current = document.activeElement;
+
+    // Focus first focusable element or modal card
+    const card = modalCardRef.current;
+    if (card) {
+      const focusables = card.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusables.length > 0) {
+        focusables[0].focus();
+      } else {
+        card.focus();
+      }
+    }
+
+    const handleTabKey = (e) => {
+      if (e.key !== 'Tab') return;
+      const card = modalCardRef.current;
+      if (!card) return;
+      const focusables = Array.from(card.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || !card.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last || !card.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleTabKey);
+    return () => {
+      window.removeEventListener('keydown', handleTabKey);
+      if (prevActiveElementRef.current && typeof prevActiveElementRef.current.focus === 'function') {
+        prevActiveElementRef.current.focus();
+      }
+    };
+  }, [isOpen]);
 
   // Handle recording custom PTT key
   useEffect(() => {
@@ -70,6 +126,22 @@ export default function AudioSettingsModal({
       window.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [isRecordingKey, audioSettings, onUpdateAudioSettings]);
+
+  // Handle Escape key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (isRecordingKey) {
+          setIsRecordingKey(false);
+        } else {
+          onClose?.();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isRecordingKey, onClose]);
 
   if (!isOpen) return null;
 
@@ -147,8 +219,8 @@ export default function AudioSettingsModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="audio-settings-title">
-      <div className="modal-card audio-settings-modal-card" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }} role="dialog" aria-modal="true" aria-labelledby="audio-settings-title">
+      <div className="modal-card audio-settings-modal-card" ref={modalCardRef} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         {/* Modal Header */}
         <div className="modal-header">
           <div className="modal-title-group">

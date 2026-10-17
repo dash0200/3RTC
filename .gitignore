@@ -74,3 +74,6 @@ __pycache__/
 
 # Signaling server secret (production, made on first start)
 .signal-secret
+
+# A root lockfile is only a side effect of installing from the repo root (Vercel installs from client/)
+/package-lock.json

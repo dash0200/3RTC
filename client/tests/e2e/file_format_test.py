@@ -53,8 +53,7 @@ with sync_playwright() as p:
     host = page(b, 'Hosty')
     guest = page(b, 'Guesty')
     host.evaluate("window.__sig = window.__sig || []")
-    host.locator('button.btn.btn-primary', has_text=re.compile('Create', re.I)).first.click()
-    host.get_by_role('button', name=re.compile('Generate 5-Digit Room')).click()
+    harness.create_room(host)
     room = wait(lambda: re.search(r'room=(\d+)', host.evaluate('location.href')) and re.search(r'room=(\d+)', host.evaluate('location.href')).group(1), 15)
     check('room created', room, host.evaluate('location.href'))
     join(guest, room)
@@ -63,7 +62,7 @@ with sync_playwright() as p:
 
     # ---- AC-3 audio: plays here as picture only --------------------------------------------
     host.set_input_files(VIDEO_INPUT, harness.media('ac3.mp4'))
-    check('guest is offered the stream', wait(lambda: guest.get_by_role('button', name=re.compile('Stream from Peer')).count() > 0, 15))
+    check('guest is offered the stream', wait(lambda: guest.get_by_role('button', name=re.compile('Stream from')).count() > 0, 15))
     check('guest is told there will be no sound, before streaming',
           wait(lambda: 'No sound on this device' in notice(guest, 'own') and 'AC-3' in notice(guest, 'own'), 10), notice(guest, 'own'))
     check('the host sees its own warning', wait(lambda: 'No sound' in notice(host, 'own'), 10), notice(host, 'own'))
@@ -82,7 +81,7 @@ with sync_playwright() as p:
           wait(lambda: 'English' in notice(host, 'subs') and 'Spanish' in notice(host, 'subs'), 10), notice(host, 'subs'))
     check('no format warning for a file that plays', notice(host, 'own') == '' and notice(host, 'others') == '', notice(host, 'others'))
     check('the guest is told only the first audio track plays', wait(lambda: '2 audio tracks' in notice(guest, 'audio'), 10), notice(guest, 'audio'))
-    guest.get_by_role('button', name=re.compile('Stream from Peer')).first.click()
+    guest.get_by_role('button', name=re.compile('Stream from')).first.click()
     check('guest stream starts', wait(lambda: guest.evaluate("(document.querySelector('video')||{}).readyState >= 1"), 30))
     check('the guest sees the subtitle tracks too', wait(lambda: 'Spanish' in notice(guest, 'subs'), 10), notice(guest, 'subs'))
 
@@ -99,7 +98,9 @@ with sync_playwright() as p:
     check('someone joining late learns the format', wait(lambda: '2 audio tracks' in notice(late, 'audio'), 25), notice(late, 'audio'))
 
     # The host switches to English (SRT) from the subtitle menu: remove, then pick
-    host.locator('.local-remove-sub-btn').first.click()
+    # (the player's subtitle menu: "Aa", then Remove)
+    host.locator('button[title^="Subtitle Appearance"]').first.evaluate('(el) => el.click()')
+    host.locator('.sub-settings-popover .sub-mini-btn.remove').first.click()
     check('the picker is back after removing the subtitles', wait(lambda: 'English' in notice(host, 'subs'), 5), notice(host, 'subs'))
     host.locator('[data-notice="subs"] .file-notice-track', has_text='English').click()
     check('everyone gets the English track (multi-line cue kept)',

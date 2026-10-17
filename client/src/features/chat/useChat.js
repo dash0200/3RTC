@@ -46,6 +46,30 @@ export function useChat({ room, isChatOpen }) {
         prevLengthRef.current = messages.length;
     }, [messages.length, isChatOpen]);
 
+    // Clear messages, revoke blob URLs, and reset unread counts when leaving a room
+    useEffect(() => bus.onEvent('room-left', () => {
+        setMessages((prev) => {
+            for (const m of prev) {
+                if (m.image?.url?.startsWith('blob:')) {
+                    try { URL.revokeObjectURL(m.image.url); } catch { /* already gone */ }
+                }
+            }
+            return [];
+        });
+        setUnreadChatCount(0);
+        prevLengthRef.current = 0;
+        lastReactionRef.current.clear();
+        p2pImageReceiver.reset();
+    }), [bus]);
+
+    // Periodically clean up stale/abandoned image transfers (L-03)
+    useEffect(() => {
+        const timer = setInterval(() => {
+            p2pImageReceiver.cleanStale(120000);
+        }, 60000);
+        return () => clearInterval(timer);
+    }, []);
+
     // Older apps also post every reaction-button tap as a chat message (the reaction first, then
     // the same emoji as text): skip those so the chat isn't flooded while people update
     const lastReactionRef = useRef(new Map()); // peerId -> { emoji, at }

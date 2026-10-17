@@ -43,7 +43,8 @@ function useLayer() {
     return layer;
 }
 
-export default function ActivityBubble({ icon, label, tag, attention, color, isPhone, anchorRef, onOpen }) {
+/** `invite`: the game isn't loaded here; the bubble asks you to join (its tag always shows). */
+export default function ActivityBubble({ icon, label, tag, attention, color, isPhone, anchorRef, onOpen, invite = false }) {
     const layer = useLayer();
     const btnRef = useRef(null);
     const [spot, setSpot] = useState(loadSpot);       // null: not moved yet (at the stage's edge)
@@ -136,7 +137,7 @@ export default function ActivityBubble({ icon, label, tag, attention, color, isP
         <button
             ref={btnRef}
             type="button"
-            className={`activity-bubble is-${p.side} ${attention ? 'is-attention' : ''} ${drag ? 'is-dragging' : ''} ${snapping ? 'is-snapping' : ''}`}
+            className={`activity-bubble is-${p.side} ${invite ? 'is-invite' : ''} ${attention ? 'is-attention' : ''} ${drag ? 'is-dragging' : ''} ${snapping ? 'is-snapping' : ''}`}
             style={{ left: p.x, top: p.y, ...(color ? { '--bubble-ring': color } : {}) }}
             onPointerDown={onPointerDown}
             onClick={onClick}

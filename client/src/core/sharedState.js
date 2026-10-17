@@ -25,26 +25,69 @@
  * - meta.clientOf(peerId): the app's stable id (same after a reload or a rejoin, unlike the peer
  *   id), so a game can give a returning player their seat back.
  * - Leaving the room ('room-left' event) puts the store back to `initial`, version 0.
+ * - Who has it: not everyone has every store (someone can skip a game or leave it: the store is
+ *   released, see releaseSharedStores). Everyone connected counts as having it unless they said
+ *   they don't ('room-state-gone': when a store is released, when someone without it connects,
+ *   and in answer to a message for a store they don't have, see answerForMissingStores). The
+ *   authority and meta.present are chosen among the people who have it ("members"); any message
+ *   for the store from a peer counts them in again. Apps from before this never say "gone", so
+ *   they always count (they load every game). getPresence() / subscribePresence() give
+ *   { authorityId, members } for the UI (useSharedPresence).
  *
  * Wire messages (all on the main channel):
  *   { type: 'room-state', key, v, state }        full state
  *   { type: 'room-state-action', key, action }   to the authority
  *   { type: 'room-state-request', key }          "send me your state if you have one"
+ *   { type: 'room-state-gone', key }             "I don't have this store"
  *
  * The reducer must be deterministic and must not mutate its input. State must be plain JSON.
  */
 
 const stores = new WeakMap(); // bus -> Map<key, store>
+const live = new WeakMap();   // bus -> Map<key, number of live stores> (made in any way)
+const countLive = (bus, key, delta) => {
+    if (!live.has(bus)) live.set(bus, new Map());
+    const map = live.get(bus);
+    const n = (map.get(key) || 0) + delta;
+    if (n > 0) map.set(key, n); else map.delete(key);
+};
 
 export function createSharedStore(bus, room, key, { initial, reducer }) {
     let state = initial;
     let version = 0;
+    let initialCatchUp = true;
+    countLive(bus, key, 1);
+    const catchUpTimer = setTimeout(() => {
+        initialCatchUp = false;
+    }, 3000);
+    catchUpTimer?.unref?.();
     const listeners = new Set();
     const notify = () => {
         for (const listener of [...listeners]) listener();
     };
 
-    const isAuthority = () => room.getAuthorityId() === room.getSelfId();
+    // ---- who has this store (members), and so who decides for it ----
+    const absent = new Set(); // peers that told us they don't have it
+    const presenceListeners = new Set();
+    let presence = { authorityId: null, members: [] };
+    const memberPeers = () => bus.connectedPeerIds().filter((id) => !absent.has(id));
+    const authorityId = () => {
+        const selfId = room.getSelfId();
+        return pickAuthority(selfId, room.getSelf().isHost, memberPeers().map((peerId) => ({ peerId, isHost: room.isPeerHost(peerId) })));
+    };
+    const refreshPresence = () => {
+        const members = [room.getSelfId(), ...memberPeers()].sort();
+        const next = { authorityId: authorityId(), members };
+        if (next.authorityId === presence.authorityId && next.members.join() === presence.members.join()) return;
+        presence = next;
+        for (const listener of [...presenceListeners]) listener();
+    };
+    const addMember = (id) => {
+        if (!id || !absent.delete(id)) return;
+        refreshPresence();
+    };
+
+    const isAuthority = () => authorityId() === room.getSelfId();
 
     const set = (nextState, nextVersion) => {
         state = nextState;
@@ -61,7 +104,7 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
                 isHost: room.isPeerHost(by),
                 selfId,
                 hostId: room.getSelf().isHost ? selfId : room.getHostPeerId(),
-                present: [selfId, ...bus.connectedPeerIds()],
+                present: [selfId, ...memberPeers()], // the people who have this game
                 clientOf: (id) => room.clientIdOf?.(id) || null,
                 settings: room.getRoomSettings()
             });
@@ -69,34 +112,69 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
             return; // a broken action never breaks the room
         }
         if (next === undefined || next === state) return;
+        initialCatchUp = false;
+        clearTimeout(catchUpTimer);
         set(next, version + 1);
         bus.broadcast('room-state', { key, v: version, state });
     };
 
     const offs = [
-        bus.on('room-state', (msg) => {
-            if (msg.key !== key || typeof msg.v !== 'number' || msg.v <= version) return;
+        bus.on('room-state', (msg, fromPeerId) => {
+            if (msg.key !== key) return;
+            addMember(fromPeerId);
+            if (typeof msg.v !== 'number' || msg.v <= version) return;
+
+            const currentAuthority = authorityId();
+            const amAuthority = currentAuthority === room.getSelfId();
+
+            if (!amAuthority) {
+                // Non-authority peers only accept states broadcast by the recognized authority
+                if (fromPeerId !== currentAuthority) return;
+            } else {
+                // The authority only adopts state during initial catch-up when version is 0
+                if (!initialCatchUp || version > 0) return;
+            }
+
             set(msg.state, msg.v);
         }),
         bus.on('room-state-action', (msg, fromPeerId) => {
-            if (msg.key !== key || !isAuthority()) return;
+            if (msg.key !== key) return;
+            addMember(fromPeerId);
+            if (!isAuthority()) return;
             apply(msg.action, fromPeerId);
         }),
         bus.on('room-state-request', (msg, fromPeerId) => {
-            if (msg.key !== key || version === 0) return;
+            if (msg.key !== key) return;
+            addMember(fromPeerId);
+            if (version === 0) return;
             bus.send(fromPeerId, 'room-state', { key, v: version, state });
+        }),
+        bus.on('room-state-gone', (msg, fromPeerId) => {
+            if (msg.key !== key || absent.has(fromPeerId)) return;
+            absent.add(fromPeerId);
+            refreshPresence();
         }),
         // Everyone who has a state sends it to a peer whose channel opens, not only the authority:
         // a host coming back (after leaving or reloading) is the authority again at once but has
         // nothing, so it must get the room's state from the others. The highest version wins.
         bus.onEvent('peer-open', (peerId) => {
             if (version > 0) bus.send(peerId, 'room-state', { key, v: version, state });
+            refreshPresence();
         }),
-        bus.onEvent('room-left', () => set(initial, 0))
+        bus.onEvent('channel-close', () => refreshPresence()),
+        bus.onEvent('peer-close', () => refreshPresence()),
+        bus.onEvent('room-left', () => {
+            absent.clear();
+            refreshPresence();
+            initialCatchUp = true;
+            set(initial, 0);
+        })
     ];
 
-    // A store created after people are already here (lazy feature): ask for what they have
+    // A store created after people are already here (lazy feature): ask for what they have (this
+    // also tells them we have it now)
     bus.broadcast('room-state-request', { key });
+    refreshPresence();
 
     return {
         key,
@@ -110,17 +188,28 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
             if (isAuthority()) {
                 apply(action, room.getSelfId());
             } else {
-                const authority = room.getAuthorityId();
+                const authority = authorityId(); // among the people who have this store
                 if (authority) bus.send(authority, 'room-state-action', { key, action });
             }
         },
+        /** { authorityId, members }: who decides, and who has this store (sorted peer ids). */
+        getPresence: () => presence,
+        subscribePresence(listener) {
+            presenceListeners.add(listener);
+            return () => presenceListeners.delete(listener);
+        },
         /** Back to the initial value locally (leaving the room). */
         reset() {
+            initialCatchUp = true;
             set(initial, 0);
         },
         destroy() {
+            clearTimeout(catchUpTimer);
+            countLive(bus, key, -1);
+            bus.broadcast('room-state-gone', { key });
             for (const off of offs) off();
             listeners.clear();
+            presenceListeners.clear();
         }
     };
 }
@@ -131,6 +220,38 @@ export function getSharedStore(bus, room, key, options) {
     const map = stores.get(bus);
     if (!map.has(key)) map.set(key, createSharedStore(bus, room, key, options));
     return map.get(key);
+}
+
+/**
+ * Drop stores we don't need any more (someone left a game): tells the others we don't have them,
+ * so they stop counting us, and frees the state. Using the key again makes a fresh store that gets
+ * the room's current state. `match(key)` picks the stores.
+ */
+export function releaseSharedStores(bus, match) {
+    const map = stores.get(bus);
+    if (!map) return;
+    for (const [key, store] of [...map]) {
+        if (!match(key)) continue;
+        store.destroy();
+        map.delete(key);
+    }
+}
+
+export const hasSharedStore = (bus, key) => Boolean(live.get(bus)?.get(key));
+
+/**
+ * For stores this app doesn't have (a game it skipped or left) whose keys match `match(key)`:
+ * answer requests and actions for them with "gone", so the others stop counting us (and stop
+ * sending us their moves). Returns a function to stop.
+ */
+export function answerForMissingStores(bus, match) {
+    const answer = (msg, fromPeerId) => {
+        const key = msg?.key;
+        if (typeof key !== 'string' || !match(key) || hasSharedStore(bus, key)) return;
+        bus.send(fromPeerId, 'room-state-gone', { key });
+    };
+    const offs = [bus.on('room-state-request', answer), bus.on('room-state-action', answer), bus.on('room-state', answer)];
+    return () => offs.forEach((off) => off());
 }
 
 /**

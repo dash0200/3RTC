@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { formatFileSize } from '../utils/p2pImageShare';
+import { formatFileSize, sanitizeImageFilename } from '../utils/p2pImageShare';
 
 export default function ImageLightboxModal({
   isOpen,
@@ -57,7 +57,7 @@ export default function ImageLightboxModal({
     if (!image?.url) return;
     const a = document.createElement('a');
     a.href = image.url;
-    a.download = image.name || 'shared-image.png';
+    a.download = sanitizeImageFilename(image.name);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

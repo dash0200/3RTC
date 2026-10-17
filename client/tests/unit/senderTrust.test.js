@@ -18,13 +18,13 @@ test('a peer saying it is the host is ignored when the server named someone else
     assert.equal(chat.isHost, false, 'no HOST badge on a chat message from a guest');
 });
 
-test('no host known (room brought back by a guest): nobody is host; an older server: claims are used', () => {
+test('no host known (room brought back by a guest, or host not yet established): nobody can self-claim host (L-04)', () => {
     const none = { type: 'chat', isHost: true };
     normalizeSender(none, 'guest-1', { current: null });
     assert.equal(none.isHost, false);
-    const legacy = { type: 'chat', isHost: true };
-    normalizeSender(legacy, 'guest-1', { current: undefined });
-    assert.equal(legacy.isHost, true);
+    const unestablished = { type: 'chat', isHost: true };
+    normalizeSender(unestablished, 'guest-1', { current: undefined });
+    assert.equal(unestablished.isHost, false, 'unestablished host never trusts sender-asserted isHost');
 });
 
 test('messages without the field are left as they are', () => {

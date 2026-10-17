@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
 import FloatingReactions from './FloatingReactions';
 import FileFormatNotice from '../features/files/FileFormatNotice';
+import { useAudioDucking } from '../features/audio/useAudioDucking';
+import ScrubberReactionHeatmap from './room/ScrubberReactionHeatmap';
 
 // Whole-file download (no on-demand streaming in this browser): rough time left
 const wholeFileEta = (p) => {
@@ -24,7 +26,7 @@ export function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export function formatFileSize(bytes) {
+function formatFileSize(bytes) {
   if (!bytes || isNaN(bytes)) return '';
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -52,8 +54,16 @@ export default function LocalVideoSyncPlayer({
   isPttSpaceActive = false,
   fileFormat = null // what's in the file, can it play here, its subtitle tracks (features/files)
 }) {
+  const initialUrlRef = useRef(null);
   const [file, setFile] = useState(initialFile);
-  const [objectUrl, setObjectUrl] = useState(null);
+  const [objectUrl, setObjectUrl] = useState(() => {
+    if (initialFile) {
+      const url = URL.createObjectURL(initialFile);
+      initialUrlRef.current = url;
+      return url;
+    }
+    return null;
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [durationSec, setDurationSec] = useState(0);
@@ -91,10 +101,26 @@ export default function LocalVideoSyncPlayer({
   const scrubberTrackRef = useRef(null);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
 
+  // Phase 3: Intelligent Dialogue Ducking (reduces volume by ~18 dB when peers speak)
+  const duckingFactor = useAudioDucking(Boolean(initialFile || streamVideoUrl));
+  useEffect(() => {
+    if (!videoRef.current || isMuted) return;
+    const effectiveVol = volume * duckingFactor;
+    videoRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
+  }, [duckingFactor, volume, isMuted]);
+
+  const handleSendReactionWithTime = useCallback((emoji) => {
+    if (typeof onSendReaction === 'function') {
+      onSendReaction(emoji, currentTimeSec);
+    }
+  }, [onSendReaction, currentTimeSec]);
+
   const videoRef = useRef(null);
   const playerContainerRef = useRef(null);
   const isHoveringTopRef = useRef(false);
   const isHoveringBottomRef = useRef(false);
+  const isHoveringReactionRef = useRef(false);
+  const hidePanelsTimerRef = useRef(null);
   const isRemoteActionRef = useRef(false);
   // Video events caused by applying a peer's command: only those are skipped, so pausing right
   // after someone else pressed play is still sent to the room
@@ -116,6 +142,16 @@ export default function LocalVideoSyncPlayer({
   // 1. Create or revoke object URL when local file changes
   useEffect(() => {
     if (file) {
+      if (initialUrlRef.current) {
+        const url = initialUrlRef.current;
+        initialUrlRef.current = null;
+        setSyncStatus('Local video ready');
+        return () => {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (e) { }
+        };
+      }
       const url = URL.createObjectURL(file);
       setObjectUrl(url);
       setSyncStatus('Local video ready');
@@ -259,15 +295,25 @@ export default function LocalVideoSyncPlayer({
           subtitleInfo: subtitles ? { fileName: subtitles.fileName, vttString: subtitles.vttString } : null
         };
       });
+      return () => onRegisterStateGetter(null);
     }
   }, [onRegisterStateGetter, remoteMeta, subtitles]);
+
+  const playerMountedAtRef = useRef(Date.now());
+  const lastProcessedActionRef = useRef(null);
 
   // 3. Handle incoming remote sync actions from peers
   useEffect(() => {
     if (!remoteAction) return;
+    if (remoteAction === lastProcessedActionRef.current) return;
+    lastProcessedActionRef.current = remoteAction;
+
     const { action, currentTime, sender, fileName } = remoteAction;
 
     if (action === 'close') {
+      const actionTime = remoteAction.at || remoteAction.timestamp || 0;
+      if (actionTime && actionTime < playerMountedAtRef.current) return;
+      if (!actionTime && Date.now() - playerMountedAtRef.current < 1000) return;
       onClose();
       return;
     }
@@ -785,25 +831,14 @@ export default function LocalVideoSyncPlayer({
           clearTimeout(idleTimeoutRef.current);
         }
       } else {
-        // When entering fullscreen, show all controls with initial grace period
+        // When entering fullscreen, start clean: hide panels unless cursor is at top/bottom edge
         setPanelsHidden(false);
-        setShowTopBar(true);
-        setShowBottomBar(true);
+        const y = lastMousePosRef.current.y;
+        const windowHeight = window.innerHeight || window.screen.height || 1080;
+        setShowTopBar(y <= 75);
+        setShowBottomBar(y >= windowHeight - 90);
         setIsCursorIdle(false);
         if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-        idleTimeoutRef.current = setTimeout(() => {
-          const isFs = Boolean(
-            document.fullscreenElement ||
-            document.webkitFullscreenElement ||
-            document.mozFullScreenElement ||
-            document.msFullscreenElement
-          );
-          if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings) {
-            setShowTopBar(false);
-            setShowBottomBar(false);
-            setIsCursorIdle(true);
-          }
-        }, 3500);
       }
     };
 
@@ -833,29 +868,19 @@ export default function LocalVideoSyncPlayer({
           if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           const y = e?.clientY ?? lastMousePosRef.current.y;
           const windowHeight = window.innerHeight || window.screen.height || 1080;
-          const inBottomZone = y >= windowHeight - 140 || isHoveringBottomRef.current;
-          const inTopZone = y <= 90 || isHoveringTopRef.current;
+          const inBottomZone = y >= windowHeight - 90 || isHoveringBottomRef.current;
+          const inTopZone = y <= 75 || isHoveringTopRef.current;
 
-          // While cursor is in controls zones or settings are open, keep visible
-          if (inBottomZone || inTopZone || showSubtitleSettings) {
-            setShowTopBar(true);
+          if (inBottomZone) {
             setShowBottomBar(true);
-            return;
+            setShowTopBar(false);
+          } else if (inTopZone) {
+            setShowTopBar(true);
+            setShowBottomBar(false);
+          } else if (!showSubtitleSettings && !showSettings) {
+            setShowTopBar(false);
+            setShowBottomBar(false);
           }
-
-          idleTimeoutRef.current = setTimeout(() => {
-            const isFs = Boolean(
-              document.fullscreenElement ||
-              document.webkitFullscreenElement ||
-              document.mozFullScreenElement ||
-              document.msFullscreenElement
-            );
-            if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !showSubtitleSettings) {
-              setShowTopBar(false);
-              setShowBottomBar(false);
-              setIsCursorIdle(true);
-            }
-          }, 3500);
         }
       }
     };
@@ -894,48 +919,60 @@ export default function LocalVideoSyncPlayer({
       return;
     }
 
-    // Normal Fullscreen Playback:
-    setIsCursorIdle(false);
-    setShowTopBar(true);
-    setShowBottomBar(true);
+    // Fullscreen Playback:
+    const x = e ? e.clientX : lastMousePosRef.current.x;
+    const y = e ? e.clientY : lastMousePosRef.current.y;
+    const windowHeight = window.innerHeight || window.screen.height || 1080;
+    const windowWidth = window.innerWidth || window.screen.width || 1920;
+
+    const inTopZone = y <= 75;
+    // Bottom zone includes bottom bar (90px) OR the reaction emojis dock area
+    // (floating dock is at bottom: 86px, height ~42px, right: 20px, width ~380px)
+    const inReactionArea = (y >= windowHeight - 165) && (x >= windowWidth - 480);
+    const inBottomZone = y >= windowHeight - 90 || inReactionArea || isHoveringReactionRef.current;
+
+    isHoveringTopRef.current = inTopZone;
+    isHoveringBottomRef.current = inBottomZone;
 
     if (idleTimeoutRef.current) {
       clearTimeout(idleTimeoutRef.current);
     }
 
-    const y = e ? e.clientY : lastMousePosRef.current.y;
-    const windowHeight = window.innerHeight || window.screen.height || 1080;
-
-    const inTopZone = y <= 90;
-    const inBottomZone = y >= windowHeight - 140;
-
-    isHoveringTopRef.current = inTopZone;
-    isHoveringBottomRef.current = inBottomZone;
-
-    // While cursor is over controls, actively scrubbing, or settings popover is open:
-    // Keep controls visible permanently! Do NOT auto-hide!
-    if (inTopZone || inBottomZone || isScrubbingRef.current || showSubtitleSettings) {
-      return;
-    }
-
-    // While cursor is in middle video viewing area:
-    // Schedule smooth auto-hide after 3.5 seconds of no mouse movement
-    idleTimeoutRef.current = setTimeout(() => {
-      const isFs = Boolean(
-        document.fullscreenElement ||
-        document.webkitFullscreenElement ||
-        document.mozFullScreenElement ||
-        document.msFullscreenElement
-      );
-      if (isFs) {
-        if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings) {
-          setShowTopBar(false);
-          setShowBottomBar(false);
-          setIsCursorIdle(true);
-        }
+    if (inTopZone) {
+      if (hidePanelsTimerRef.current) {
+        clearTimeout(hidePanelsTimerRef.current);
+        hidePanelsTimerRef.current = null;
       }
-    }, 3500);
-  }, [isFullscreen, showSubtitleSettings, panelsHidden]);
+      setIsCursorIdle(false);
+      setShowTopBar(true);
+      setShowBottomBar(false);
+    } else if (inBottomZone || isScrubbingRef.current || showSubtitleSettings || showSettings) {
+      if (hidePanelsTimerRef.current) {
+        clearTimeout(hidePanelsTimerRef.current);
+        hidePanelsTimerRef.current = null;
+      }
+      setIsCursorIdle(false);
+      setShowBottomBar(true);
+      setShowTopBar(false);
+    } else {
+      // Cursor is in video viewing area (out of the panel zones):
+      // Don't close immediately in 0ms! Give a gentle grace window (800ms) so moving towards emojis or
+      // minor mouse-out does not abruptly close controls under the user!
+      setIsCursorIdle(false);
+      if (!hidePanelsTimerRef.current) {
+        hidePanelsTimerRef.current = setTimeout(() => {
+          if (!isHoveringTopRef.current && !isHoveringBottomRef.current && !isHoveringReactionRef.current && !isScrubbingRef.current && !showSubtitleSettings && !showSettings) {
+            setShowTopBar(false);
+            setShowBottomBar(false);
+          }
+          hidePanelsTimerRef.current = null;
+        }, 800);
+      }
+      idleTimeoutRef.current = setTimeout(() => {
+        setIsCursorIdle(true);
+      }, 1800);
+    }
+  }, [isFullscreen, showSubtitleSettings, showSettings, panelsHidden]);
 
   // Window & document level mouse listeners when in fullscreen to ensure bottom-edge moves are never missed
   useEffect(() => {
@@ -948,6 +985,10 @@ export default function LocalVideoSyncPlayer({
       document.removeEventListener('mousemove', onGlobalMouseMove);
       document.removeEventListener('pointermove', onGlobalMouseMove);
       window.removeEventListener('mousemove', onGlobalMouseMove);
+      if (hidePanelsTimerRef.current) {
+        clearTimeout(hidePanelsTimerRef.current);
+        hidePanelsTimerRef.current = null;
+      }
     };
   }, [isFullscreen, handleMouseMove]);
 
@@ -1081,9 +1122,10 @@ export default function LocalVideoSyncPlayer({
 
   // Case A: User has not loaded their copy of the video file yet AND no active stream URL
   if (!activeVideoSrc) {
+    const sender = remoteMeta?.sender || 'A friend';
     return (
       <div
-        className={`yt-screen-card local-screen-card ${isDragOver ? 'drag-over' : ''}`}
+        className={`yt-screen-card local-screen-card rd-offer-wrap ${isDragOver ? 'drag-over' : ''}`}
         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
@@ -1096,218 +1138,73 @@ export default function LocalVideoSyncPlayer({
           onChange={handleFileInputChange}
         />
 
-        <div className="yt-hero-center local-hero-center">
-          <div className="yt-hero-icon-box local">
-            <svg viewBox="0 0 24 24" width="30" height="30" fill="#ffffff">
-              <path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z" />
-            </svg>
-          </div>
-
-          {remoteMeta ? (
-            <div className="local-dual-choice-container">
-              <div className="local-remote-banner">
-                <span className="local-remote-badge">PEER VIDEO LOADED</span>
-                <h2 className="local-remote-filename">"{remoteMeta.fileName}"</h2>
-                {remoteMeta.fileSize > 0 && (
-                  <span className="local-file-size-tag">({formatFileSize(remoteMeta.fileSize)})</span>
-                )}
-                <p className="local-waiting-subtitle">
-                  {remoteMeta.sender || 'A peer'} loaded this video file. Choose how you want to join the watch party:
-                </p>
-                {fileFormat && <FileFormatNotice info={fileFormat} hasSubtitles compact />}
-              </div>
-
-              <div className="p2p-stream-options-grid">
-                {/* Option 1: 1.4 WebRTC Direct Video Stream (MSE Chunk Sharing) */}
-                <div className={`stream-option-card card-streaming ${streamProgress ? 'is-streaming' : ''}`}>
-                  <div className="stream-card-badge">OPTION 1 • WEBRTC DIRECT STREAM</div>
-                  <div className="stream-card-icon">
-                    <svg viewBox="0 0 24 24" width="32" height="32" fill="#00e676">
-                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
-                    </svg>
-                  </div>
-                  <h3 className="stream-card-title">Stream from Peer (P2P)</h3>
-                  <p className="stream-card-desc">
-                    Don't have this video on your computer? Stream it directly peer-to-peer from <strong>{remoteMeta.sender || 'Peer'}</strong> with zero server upload.
-                  </p>
-
-                  {!streamProgress ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-stream-action"
-                      onClick={onRequestP2PStream}
-                    >
-                      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
-                      </svg>
-                      Stream from Peer (P2P)
-                    </button>
-                  ) : (
-                    <div className="p2p-stream-progress-card">
-                      <div className="p2p-stream-prog-header">
-                        <span className="p2p-stream-prog-status">
-                          <span className="p2p-pulse-dot"></span>
-                          {streamProgress.isCompleted
-                            ? '✅ Ready to play!'
-                            : streamProgress.wholeFile
-                              ? `⬇️ Downloading, plays when done${wholeFileEta(streamProgress)}`
-                              : streamProgress.isReady
-                                ? '▶️ Buffered initial chunks!'
-                                : '📡 Receiving chunks...'}
-                        </span>
-                        <span className="p2p-stream-prog-percent">{streamProgress.percent || 0}%</span>
-                      </div>
-                      <div className="p2p-stream-track">
-                        <div
-                          className="p2p-stream-fill"
-                          style={{ width: `${Math.max(4, streamProgress.percent || 0)}%` }}
-                        ></div>
-                      </div>
-                      <div className="p2p-stream-metrics">
-                        <span>
-                          {formatFileSize(streamProgress.receivedBytes || 0)} / {formatFileSize(remoteMeta.fileSize || streamProgress.totalBytes || 0)}
-                        </span>
-                        <span>⚡ {(streamProgress.speedMBs || 0).toFixed(1)} MB/s</span>
-                        {streamProgress.totalChunks > 0 && (
-                          <span>{streamProgress.receivedChunksCount || 0}/{streamProgress.totalChunks} chunks</span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm p2p-cancel-btn"
-                        onClick={onCancelP2PStream}
-                      >
-                        ✕ Cancel Stream
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="stream-card-tags">
-                    <span className="stream-mini-tag">⚡ Direct SCTP DataChannel</span>
-                    <span className="stream-mini-tag">🔒 End-to-End P2P</span>
-                  </div>
-                </div>
-
-                {/* Option 2: Current Behavior - Local Video File (0 Bandwidth) */}
-                <div className="stream-option-card card-local-file">
-                  <div className="stream-card-badge">OPTION 2 • ZERO NETWORK BANDWIDTH</div>
-                  <div className="stream-card-icon">
-                    <svg viewBox="0 0 24 24" width="32" height="32" fill="#3ea6ff">
-                      <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
-                    </svg>
-                  </div>
-                  <h3 className="stream-card-title">Select Local File (Current)</h3>
-                  <p className="stream-card-desc">
-                    Already have this identical file on your disk? Select or drag & drop it here for instant playback with <strong>0 MB/s network usage</strong>.
-                  </p>
-
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-file-action"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                      <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-                    </svg>
-                    Select File from Computer
-                  </button>
-
-                  <div className="stream-card-tags">
-                    <span className="stream-mini-tag">⚡ 0 Network Bandwidth</span>
-                    <span className="stream-mini-tag">📁 Drag & Drop Supported</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="local-action-buttons">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={handleExitVideo}
-                >
-                  Back to Stage
-                </button>
+        {remoteMeta ? (
+          <div className="rd-offer">
+            <div className="rd-offer-file">
+              <span className="rd-offer-icon" aria-hidden="true">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M10 9.5l5 2.5-5 2.5z" fill="currentColor" /></svg>
+              </span>
+              <div className="rd-offer-text">
+                <p className="rd-offer-who">{sender} is playing</p>
+                <h2 className="rd-offer-name" title={remoteMeta.fileName}>{remoteMeta.fileName}</h2>
+                {remoteMeta.fileSize > 0 && <p className="rd-offer-size">{formatFileSize(remoteMeta.fileSize)}</p>}
               </div>
             </div>
-          ) : (
-            <>
-              <h2 className="local-waiting-title">Drag & Drop Any Video File</h2>
-              <p className="local-waiting-subtitle">
-                Play your own local <strong>.mp4, .mkv, .webm, or .mov</strong> files. Video runs 100% locally with <strong>zero server upload</strong>, and peers can either stream it from you peer-to-peer or sync their local copies.
-              </p>
 
-              <div className="local-action-buttons">
-                <button
-                  type="button"
-                  className="btn btn-primary btn-lg"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
-                  </svg>
-                  Select Video from Computer
+            {fileFormat && <FileFormatNotice info={fileFormat} hasSubtitles compact />}
+
+            {!streamProgress ? (
+              <div className="rd-offer-actions">
+                <button type="button" className="rd-btn rd-btn-primary rd-btn-xl" onClick={onRequestP2PStream}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5z" /></svg>
+                  Stream from {sender}
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={handleExitVideo}
-                >
-                  Back to Stage
+                <button type="button" className="rd-btn rd-btn-secondary rd-btn-xl" onClick={() => fileInputRef.current?.click()}>
+                  I have this file
                 </button>
+                <p className="rd-offer-hint">Streaming sends the video from {sender}’s device to yours. Have the same file? Pick it and nothing needs to be sent.</p>
               </div>
-            </>
-          )}
+            ) : (
+              <div className="rd-offer-progress" role="status" aria-live="polite">
+                <div className="rd-offer-progress-row">
+                  <span>
+                    {streamProgress.isCompleted
+                      ? 'Ready to play'
+                      : streamProgress.wholeFile
+                        ? `Downloading — plays when done${wholeFileEta(streamProgress)}`
+                        : streamProgress.isReady
+                          ? 'Starting…'
+                          : `Getting the video from ${sender}…`}
+                  </span>
+                  <span className="rd-offer-percent">{streamProgress.percent || 0}%</span>
+                </div>
+                <div className="rd-offer-track"><div className="rd-offer-fill" style={{ width: `${Math.max(3, streamProgress.percent || 0)}%` }} /></div>
+                <p className="rd-offer-metrics">
+                  {formatFileSize(streamProgress.receivedBytes || 0)} of {formatFileSize(remoteMeta.fileSize || streamProgress.totalBytes || 0)} · {(streamProgress.speedMBs || 0).toFixed(1)} MB/s
+                </p>
+                <button type="button" className="rd-btn rd-btn-ghost" onClick={onCancelP2PStream}>Cancel</button>
+              </div>
+            )}
 
-          <div className="local-privacy-pills">
-            <span className="local-pill">⚡ 0 Network Bandwidth</span>
-            <span className="local-pill">🔒 100% Private Local Playback</span>
-            <span className="local-pill">🔄 Real-time P2P Sync</span>
+            <button type="button" className="rd-btn rd-btn-ghost rd-offer-back" onClick={handleExitVideo}>Not now</button>
           </div>
-        </div>
-
-        {/* Bottom Scrubber & Controls Bar */}
-        <div className="yt-screen-controls-bar">
-          <div className="yt-screen-ctrls-left">
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Play">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Next">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Volume">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
-              </svg>
-            </button>
+        ) : (
+          <div className="rd-offer">
+            <div className="rd-offer-file">
+              <span className="rd-offer-icon" aria-hidden="true">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></svg>
+              </span>
+              <div className="rd-offer-text">
+                <h2 className="rd-offer-name">Play a video from this computer</h2>
+                <p className="rd-offer-size">MP4, MKV, WebM · drop it here or choose it</p>
+              </div>
+            </div>
+            <div className="rd-offer-actions">
+              <button type="button" className="rd-btn rd-btn-primary rd-btn-xl" onClick={() => fileInputRef.current?.click()}>Choose a video file</button>
+            </div>
+            <button type="button" className="rd-btn rd-btn-ghost rd-offer-back" onClick={handleExitVideo}>Not now</button>
           </div>
-
-          <div className="yt-screen-scrubber-track">
-            <div className="yt-screen-scrubber-fill" style={{ width: '0%' }} />
-          </div>
-
-          <div className="yt-screen-ctrls-right">
-            <span className="yt-screen-time-text">0:00 / 0:00</span>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Settings">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Theater Mode">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm0 14H5V6h14v12z" />
-              </svg>
-            </button>
-            <button type="button" className="yt-screen-ctrl-icon" disabled title="Fullscreen">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+        )}
       </div>
     );
   }
@@ -1320,6 +1217,7 @@ export default function LocalVideoSyncPlayer({
     <div
       ref={playerContainerRef}
       className={`local-fullstage-player ${isPlaying ? 'is-playing' : 'is-paused'} ${isFullscreen ? 'is-fullscreen' : ''} ${isCursorIdle && isFullscreen ? 'hide-cursor' : ''} ${panelsHidden ? 'panels-hidden' : ''} ${(!showBottomBar || panelsHidden) && isFullscreen ? 'controls-hidden' : ''}`}
+      style={{ '--rd-progress': `${progressPercent}%` }}
       onMouseMove={handleMouseMove}
       onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
       onDragLeave={() => setIsDragOver(false)}
@@ -1340,38 +1238,37 @@ export default function LocalVideoSyncPlayer({
           isHoveringTopRef.current = true;
           if (isFullscreen) {
             setShowTopBar(true);
-            setShowBottomBar(true);
+            setShowBottomBar(false);
             setIsCursorIdle(false);
             if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           }
         }}
-        onMouseLeave={(e) => {
-          if (e.clientY > 90) {
-            isHoveringTopRef.current = false;
+        onMouseLeave={() => {
+          isHoveringTopRef.current = false;
+          if (isFullscreen) {
+            setShowTopBar(false);
           }
         }}
       >
         {isStreamed ? (
-          <div className="local-file-info-pill is-streamed" title={activeFileName}>
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="#00e676">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
-            </svg>
-            <span className="local-stream-badge">📡 P2P STREAM</span>
-            <span className="local-filename-text">{activeFileName}</span>
-            {streamProgress && (
-              <span className="local-filesize-text">
-                {streamProgress.wholeFile && !streamProgress.isCompleted
-                  ? `(downloading ${streamProgress.percent || 0}% • plays when done${wholeFileEta(streamProgress)})`
-                  : `(${streamProgress.percent}% ${streamProgress.isCompleted ? 'buffered' : `• ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s`}${streamProgress.fromPeersPercent > 0 ? ` • ${streamProgress.fromPeersPercent}% from viewers` : ''})`}
-              </span>
-            )}
+          <div
+            className="local-file-info-pill is-streamed"
+            title={`${activeFileName}${streamProgress ? ` · ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s${streamProgress.fromPeersPercent > 0 ? ` · ${streamProgress.fromPeersPercent}% from viewers` : ''}` : ''}`}
+          >
+            <span className="rd-stream-label">
+              {!streamProgress || streamProgress.isCompleted
+                ? 'Streamed to you'
+                : streamProgress.wholeFile
+                  ? `Downloading · ${streamProgress.percent || 0}%${wholeFileEta(streamProgress)}`
+                  : `Streaming · ${streamProgress.percent || 0}%`}
+            </span>
             <button
               type="button"
               className="local-replace-btn"
               onClick={() => fileInputRef.current?.click()}
-              title="Switch to playing local copy (0 network bandwidth)"
+              title="Have the same file? Play your own copy (nothing needs to be sent)"
             >
-              Use Local File
+              Use my copy
             </button>
           </div>
         ) : (
@@ -1438,18 +1335,6 @@ export default function LocalVideoSyncPlayer({
           <span className="yt-time-display">
             {formatTime(currentTimeSec)} / {formatTime(durationSec)}
           </span>
-
-          <button
-            type="button"
-            className="yt-ctrl-btn exit-video-btn compact"
-            onClick={handleExitVideo}
-            title="Exit local video and return to watch party stage"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-            <span>Exit Video</span>
-          </button>
         </div>
       </div>
 
@@ -1548,36 +1433,26 @@ export default function LocalVideoSyncPlayer({
         onMouseEnter={() => {
           isHoveringBottomRef.current = true;
           if (isFullscreen) {
-            setShowTopBar(true);
             setShowBottomBar(true);
+            setShowTopBar(false);
             setIsCursorIdle(false);
             if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           }
         }}
-        onMouseLeave={(e) => {
-          const windowHeight = window.innerHeight || window.screen.height || 1080;
-          if (e.clientY < windowHeight - 140 && !isScrubbingRef.current) {
-            isHoveringBottomRef.current = false;
+        onMouseLeave={() => {
+          isHoveringBottomRef.current = false;
+          if (isFullscreen && !isScrubbingRef.current && !showSubtitleSettings && !showSettings) {
+            setShowBottomBar(false);
           }
         }}
       >
         <div className="yt-screen-ctrls-left">
           <button
             type="button"
-            className="yt-screen-ctrl-icon"
-            onClick={() => handleSeekDelta(-5)}
-            title="Seek back 5s"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
-            </svg>
-          </button>
-
-          <button
-            type="button"
             className="yt-screen-ctrl-icon yt-play-btn"
             onClick={togglePlayPause}
-            title={isPlaying ? undefined : 'Play (Space)'}
+            aria-label={isPlaying ? 'Pause for everyone' : 'Play for everyone'}
+            title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
           >
             {isPlaying ? (
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -1592,21 +1467,53 @@ export default function LocalVideoSyncPlayer({
 
           <button
             type="button"
-            className="yt-screen-ctrl-icon"
-            onClick={() => handleSeekDelta(5)}
-            title="Seek forward 5s"
+            className="yt-screen-ctrl-icon rd-skip-btn"
+            onClick={() => handleSeekDelta(-10)}
+            aria-label="Back 10 seconds"
+            title="Back 10 seconds (←)"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
-            </svg>
+            −10
           </button>
+          <span className="yt-screen-time-text rd-time-now">{formatTime(currentTimeSec)}</span>
+        </div>
 
+        {/* Center: Interactive Scrubber Timeline */}
+        <div
+          ref={scrubberTrackRef}
+          className="yt-screen-scrubber-track interactive"
+          onMouseDown={handleScrubberMouseDown}
+          onTouchStart={handleScrubberMouseDown}
+          onMouseMove={handleScrubberMouseMove}
+          onMouseLeave={handleScrubberMouseLeave}
+        >
+          <div
+            className="yt-screen-scrubber-fill"
+            style={{ width: `${progressPercent}%` }}
+          />
+          <ScrubberReactionHeatmap
+            durationSec={durationSec}
+            currentTimeSec={currentTimeSec}
+            feed={reactionFeed}
+          />
+          {hoverPreview && (
+            <div
+              className="yt-scrubber-hover-preview"
+              style={{ left: `${hoverPreview.percent}%` }}
+            >
+              {formatTime(hoverPreview.time)}
+            </div>
+          )}
+        </div>
+
+        <div className="yt-screen-ctrls-right">
+          <span className="yt-screen-time-text rd-time-total">{formatTime(durationSec)}</span>
           {/* Volume Control Group */}
-          <div className="yt-volume-control-group">
+          <div className="yt-volume-control-group rd-volume">
             <button
               type="button"
               className="yt-screen-ctrl-icon yt-vol-btn"
               onClick={toggleMute}
+              aria-label={isMuted ? 'Unmute video' : 'Mute video'}
               title={isMuted ? 'Unmute (M)' : 'Mute (M)'}
             >
               {isMuted || volume === 0 ? (
@@ -1633,41 +1540,13 @@ export default function LocalVideoSyncPlayer({
                 onChange={handleVolumeChange}
                 className="yt-volume-slider"
                 style={{
-                  background: `linear-gradient(to right, #ff0033 0%, #ff0033 ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) 100%)`
+                  background: `linear-gradient(to right, #e5143d 0%, #e5143d ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) ${(isMuted ? 0 : volume) * 100}%, rgba(255, 255, 255, 0.25) 100%)`
                 }}
                 title={`Volume: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
               />
             </div>
           </div>
-        </div>
 
-        {/* Center: Interactive Scrubber Timeline */}
-        <div
-          ref={scrubberTrackRef}
-          className="yt-screen-scrubber-track interactive"
-          onMouseDown={handleScrubberMouseDown}
-          onTouchStart={handleScrubberMouseDown}
-          onMouseMove={handleScrubberMouseMove}
-          onMouseLeave={handleScrubberMouseLeave}
-        >
-          <div
-            className="yt-screen-scrubber-fill"
-            style={{ width: `${progressPercent}%` }}
-          />
-          {hoverPreview && (
-            <div
-              className="yt-scrubber-hover-preview"
-              style={{ left: `${hoverPreview.percent}%` }}
-            >
-              {formatTime(hoverPreview.time)}
-            </div>
-          )}
-        </div>
-
-        <div className="yt-screen-ctrls-right">
-          <span className="yt-screen-time-text">
-            {formatTime(currentTimeSec)} / {formatTime(durationSec)}
-          </span>
 
 
           {/* Feature 1.5: Subtitles Control Group (Independent Toggle + Appearance & Delay Settings) */}
@@ -1676,6 +1555,7 @@ export default function LocalVideoSyncPlayer({
               type="button"
               className={`local-icon-button local-cc-button ${subtitles ? (subtitlesVisible ? 'active' : 'off') : 'no-subtitles'}`}
               onClick={handleToggleSubtitles}
+              aria-label={subtitles ? (subtitlesVisible ? 'Hide subtitles' : 'Show subtitles') : 'Add subtitles'}
               title={
                 subtitles
                   ? (subtitlesVisible
@@ -1694,8 +1574,8 @@ export default function LocalVideoSyncPlayer({
               )}
             </button>
 
-            {/* Subtitle Appearance & Timing Settings Button */}
-            <button
+            {/* Subtitle Appearance & Timing Settings Button (only once there are subtitles) */}
+            {subtitles && (<button
               type="button"
               className={`local-icon-button local-sub-settings-btn ${showSubtitleSettings ? 'active' : ''}`}
               onClick={(e) => {
@@ -1708,7 +1588,7 @@ export default function LocalVideoSyncPlayer({
                 <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
               </svg>
               <span className="sub-settings-btn-icon">Aa</span>
-            </button>
+            </button>)}
 
             {/* Glassmorphic Subtitle Appearance & Timing Settings Popover Card */}
             {showSubtitleSettings && (
@@ -1999,29 +1879,28 @@ export default function LocalVideoSyncPlayer({
                       <span>Sync Pulse with Peers</span>
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="yt-menu-action-btn"
+                    onClick={() => { setShowSettings(false); handleToggleAllPanels(); }}
+                  >
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                      <path d="M19 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H5V6h14v12z" />
+                    </svg>
+                    <span>Cinema view (H)</span>
+                  </button>
                 </div>
               </div>
             )}
           </div>
-
-          {/* Toggle All Panels (Cinema View) Button */}
-          <button
-            type="button"
-            className="yt-screen-ctrl-icon"
-            onClick={handleToggleAllPanels}
-            title="Cinema View: Hide all panels (H)"
-          >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-              <path d="M19 4H5c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H5V6h14v12z" />
-            </svg>
-          </button>
 
           {/* Fullscreen Button */}
           <button
             type="button"
             className="yt-screen-ctrl-icon"
             onClick={toggleFullscreen}
-            title={isFullscreen ? 'Exit Fullscreen (F)' : 'Fullscreen (F)'}
+            aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+            title={isFullscreen ? 'Exit full screen (F)' : 'Full screen (F)'}
           >
             {isFullscreen ? (
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
@@ -2055,12 +1934,37 @@ export default function LocalVideoSyncPlayer({
 
       {/* Floating Live Reactions in Fullscreen */}
       {isFullscreen && typeof onSendReaction === 'function' && (
-        <FloatingReactions
-          feed={reactionFeed}
-          onSendReaction={onSendReaction}
-          showDock={Boolean(roomId)}
-          hasMedia={true}
-        />
+        <div
+          className="fullscreen-reaction-wrapper"
+          onMouseEnter={() => {
+            isHoveringReactionRef.current = true;
+            if (hidePanelsTimerRef.current) {
+              clearTimeout(hidePanelsTimerRef.current);
+              hidePanelsTimerRef.current = null;
+            }
+            setShowBottomBar(true);
+            setIsCursorIdle(false);
+          }}
+          onMouseLeave={() => {
+            isHoveringReactionRef.current = false;
+            if (!hidePanelsTimerRef.current) {
+              hidePanelsTimerRef.current = setTimeout(() => {
+                if (!isHoveringTopRef.current && !isHoveringBottomRef.current && !isHoveringReactionRef.current && !isScrubbingRef.current && !showSubtitleSettings && !showSettings) {
+                  setShowTopBar(false);
+                  setShowBottomBar(false);
+                }
+                hidePanelsTimerRef.current = null;
+              }, 800);
+            }
+          }}
+        >
+          <FloatingReactions
+            feed={reactionFeed}
+            onSendReaction={handleSendReactionWithTime}
+            showDock={Boolean(roomId)}
+            hasMedia={true}
+          />
+        </div>
       )}
     </div>
   );
