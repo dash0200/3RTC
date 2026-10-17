@@ -4,7 +4,7 @@
  */
 import { useState, useCallback, useRef } from 'react';
 
-export const MAX_SYSTEM_LOGS = 200;
+export const MAX_SYSTEM_LOGS = 15;
 const TOAST_MS = 2800;
 
 export function useNotices() {

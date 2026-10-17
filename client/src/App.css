@@ -3662,21 +3662,22 @@ video::cue {
 /* Glassmorphic Subtitle Appearance & Timing Popover Card */
 .sub-settings-popover {
   position: absolute;
-  bottom: 46px;
+  bottom: calc(100% + 8px);
   right: 0;
-  width: 336px;
-  max-width: calc(100vw - 32px);
+  width: 340px;
+  max-width: min(340px, calc(100vw - 24px));
+  max-height: min(440px, calc(100vh - 160px));
   background: rgba(11, 18, 33, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 14px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), 0 0 24px rgba(0, 229, 255, 0.16);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  padding: 16px;
+  padding: 0;
+  overflow: hidden;
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  gap: 13px;
   animation: subPopoverIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   pointer-events: auto;
   user-select: none;
@@ -3695,18 +3696,20 @@ video::cue {
 }
 
 .sub-settings-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 8px;
+  padding: 12px 14px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.75);
 }
 
 .sub-settings-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   font-weight: 700;
   color: #f1f5f9;
 }
@@ -3715,16 +3718,103 @@ video::cue {
   background: transparent;
   border: none;
   color: #94a3b8;
-  font-size: 1rem;
+  font-size: 0.95rem;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 3px 6px;
   border-radius: 4px;
   transition: all 0.15s ease;
+  line-height: 1;
 }
 
 .sub-close-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
+}
+
+/* Tab Navigation Switcher */
+.sub-settings-tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sub-tab-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
+  color: #94a3b8;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sub-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #f1f5f9;
+}
+
+.sub-tab-btn.active {
+  background: rgba(0, 229, 255, 0.14);
+  border-color: rgba(0, 229, 255, 0.35);
+  color: #00e5ff;
+}
+
+.sub-tab-count {
+  background: rgba(0, 229, 255, 0.2);
+  color: #00e5ff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
+.sub-tab-badge {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
+/* Scrollable Popover Body */
+.sub-settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sub-settings-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.sub-settings-body::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.sub-settings-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.sub-settings-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 229, 255, 0.5);
 }
 
 /* Subtitle File Quick Action / Status inside Popover */
@@ -4024,11 +4114,172 @@ video::cue {
 }
 
 .sub-settings-footer {
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: 0.67rem;
+  flex-shrink: 0;
+  padding: 8px 14px;
+  background: rgba(0, 0, 0, 0.3);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
   color: #64748b;
   text-align: center;
+  line-height: 1.3;
+}
+
+/* Embedded Subtitles & Audio Track Selector Styles */
+.local-cc-button.has-tracks {
+  color: #38bdf8;
+}
+
+.local-cc-badge.badge-available {
+  background: #0284c7;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.local-audio-control-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.local-audio-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5e1;
+  transition: all 0.15s ease;
+}
+
+.local-audio-btn:hover,
+.local-audio-btn.active {
+  color: #38bdf8;
+}
+
+.local-audio-badge {
+  position: absolute;
+  bottom: -3px;
+  right: -5px;
+  font-size: 8px;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #0284c7;
+  color: #ffffff;
+  line-height: 1.1;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.audio-settings-popover {
+  width: 320px;
+}
+
+.sub-track-list,
+.audio-track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.sub-track-list::-webkit-scrollbar,
+.audio-track-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sub-track-list::-webkit-scrollbar-thumb,
+.audio-track-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.sub-track-item,
+.audio-track-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.sub-track-item:hover:not(:disabled),
+.audio-track-item:hover:not(:disabled) {
+  background: rgba(0, 229, 255, 0.12);
+  border-color: rgba(0, 229, 255, 0.35);
+  color: #ffffff;
+}
+
+.sub-track-item.active,
+.audio-track-item.active {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.sub-track-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sub-track-radio,
+.audio-track-radio {
+  font-size: 0.82rem;
+  line-height: 1;
+  color: inherit;
+  flex-shrink: 0;
+}
+
+.sub-track-info,
+.audio-track-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sub-track-name,
+.audio-track-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.8rem;
+}
+
+.sub-track-codec,
+.audio-track-codec {
+  font-size: 0.66rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.sub-track-check,
+.audio-track-check {
+  font-weight: 800;
+  color: #38bdf8;
+  font-size: 0.88rem;
+  flex-shrink: 0;
+}
+
+.sub-track-extracting {
+  font-size: 0.7rem;
+  color: #f59e0b;
+  font-weight: 600;
 }
 
 /* ==========================================================================

@@ -788,8 +788,8 @@
 .chat-section .chat-tab-btn:hover { color: var(--rd-text); background: rgba(255, 255, 255, 0.03); }
 .chat-section .chat-tab-btn.active { background: var(--rd-raised); color: var(--rd-text); font-weight: 700; border: 0; box-shadow: none; }
 .chat-section .chat-tab-btn.active::after { display: none; }
-.chat-section .tab-count { color: var(--rd-text-3); font-weight: 600; }
-.chat-section .tab-badge.chat-badge {
+.chat-section .tab-badge.chat-badge,
+.chat-section .tab-badge.logs-badge {
   min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
   background: var(--rd-accent); color: #fff; font-size: 12px; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center;
