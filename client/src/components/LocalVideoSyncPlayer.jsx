@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { parseSubtitleFile, parseSubtitleString, cuesToWebVTT } from '../utils/subtitleParser';
 import FloatingReactions from './FloatingReactions';
 import FileFormatNotice from '../features/files/FileFormatNotice';
+import { useAudioDucking } from '../features/audio/useAudioDucking';
+import ScrubberReactionHeatmap from './room/ScrubberReactionHeatmap';
 
 // Whole-file download (no on-demand streaming in this browser): rough time left
 const wholeFileEta = (p) => {
@@ -52,8 +54,16 @@ export default function LocalVideoSyncPlayer({
   isPttSpaceActive = false,
   fileFormat = null // what's in the file, can it play here, its subtitle tracks (features/files)
 }) {
+  const initialUrlRef = useRef(null);
   const [file, setFile] = useState(initialFile);
-  const [objectUrl, setObjectUrl] = useState(null);
+  const [objectUrl, setObjectUrl] = useState(() => {
+    if (initialFile) {
+      const url = URL.createObjectURL(initialFile);
+      initialUrlRef.current = url;
+      return url;
+    }
+    return null;
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [durationSec, setDurationSec] = useState(0);
@@ -91,10 +101,26 @@ export default function LocalVideoSyncPlayer({
   const scrubberTrackRef = useRef(null);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
 
+  // Phase 3: Intelligent Dialogue Ducking (reduces volume by ~18 dB when peers speak)
+  const duckingFactor = useAudioDucking(Boolean(initialFile || streamVideoUrl));
+  useEffect(() => {
+    if (!videoRef.current || isMuted) return;
+    const effectiveVol = volume * duckingFactor;
+    videoRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
+  }, [duckingFactor, volume, isMuted]);
+
+  const handleSendReactionWithTime = useCallback((emoji) => {
+    if (typeof onSendReaction === 'function') {
+      onSendReaction(emoji, currentTimeSec);
+    }
+  }, [onSendReaction, currentTimeSec]);
+
   const videoRef = useRef(null);
   const playerContainerRef = useRef(null);
   const isHoveringTopRef = useRef(false);
   const isHoveringBottomRef = useRef(false);
+  const isHoveringReactionRef = useRef(false);
+  const hidePanelsTimerRef = useRef(null);
   const isRemoteActionRef = useRef(false);
   // Video events caused by applying a peer's command: only those are skipped, so pausing right
   // after someone else pressed play is still sent to the room
@@ -116,6 +142,16 @@ export default function LocalVideoSyncPlayer({
   // 1. Create or revoke object URL when local file changes
   useEffect(() => {
     if (file) {
+      if (initialUrlRef.current) {
+        const url = initialUrlRef.current;
+        initialUrlRef.current = null;
+        setSyncStatus('Local video ready');
+        return () => {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (e) { }
+        };
+      }
       const url = URL.createObjectURL(file);
       setObjectUrl(url);
       setSyncStatus('Local video ready');
@@ -259,15 +295,25 @@ export default function LocalVideoSyncPlayer({
           subtitleInfo: subtitles ? { fileName: subtitles.fileName, vttString: subtitles.vttString } : null
         };
       });
+      return () => onRegisterStateGetter(null);
     }
   }, [onRegisterStateGetter, remoteMeta, subtitles]);
+
+  const playerMountedAtRef = useRef(Date.now());
+  const lastProcessedActionRef = useRef(null);
 
   // 3. Handle incoming remote sync actions from peers
   useEffect(() => {
     if (!remoteAction) return;
+    if (remoteAction === lastProcessedActionRef.current) return;
+    lastProcessedActionRef.current = remoteAction;
+
     const { action, currentTime, sender, fileName } = remoteAction;
 
     if (action === 'close') {
+      const actionTime = remoteAction.at || remoteAction.timestamp || 0;
+      if (actionTime && actionTime < playerMountedAtRef.current) return;
+      if (!actionTime && Date.now() - playerMountedAtRef.current < 1000) return;
       onClose();
       return;
     }
@@ -785,25 +831,14 @@ export default function LocalVideoSyncPlayer({
           clearTimeout(idleTimeoutRef.current);
         }
       } else {
-        // When entering fullscreen, show all controls with initial grace period
+        // When entering fullscreen, start clean: hide panels unless cursor is at top/bottom edge
         setPanelsHidden(false);
-        setShowTopBar(true);
-        setShowBottomBar(true);
+        const y = lastMousePosRef.current.y;
+        const windowHeight = window.innerHeight || window.screen.height || 1080;
+        setShowTopBar(y <= 75);
+        setShowBottomBar(y >= windowHeight - 90);
         setIsCursorIdle(false);
         if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
-        idleTimeoutRef.current = setTimeout(() => {
-          const isFs = Boolean(
-            document.fullscreenElement ||
-            document.webkitFullscreenElement ||
-            document.mozFullScreenElement ||
-            document.msFullscreenElement
-          );
-          if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings) {
-            setShowTopBar(false);
-            setShowBottomBar(false);
-            setIsCursorIdle(true);
-          }
-        }, 3500);
       }
     };
 
@@ -833,29 +868,19 @@ export default function LocalVideoSyncPlayer({
           if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           const y = e?.clientY ?? lastMousePosRef.current.y;
           const windowHeight = window.innerHeight || window.screen.height || 1080;
-          const inBottomZone = y >= windowHeight - 140 || isHoveringBottomRef.current;
-          const inTopZone = y <= 90 || isHoveringTopRef.current;
+          const inBottomZone = y >= windowHeight - 90 || isHoveringBottomRef.current;
+          const inTopZone = y <= 75 || isHoveringTopRef.current;
 
-          // While cursor is in controls zones or settings are open, keep visible
-          if (inBottomZone || inTopZone || showSubtitleSettings) {
-            setShowTopBar(true);
+          if (inBottomZone) {
             setShowBottomBar(true);
-            return;
+            setShowTopBar(false);
+          } else if (inTopZone) {
+            setShowTopBar(true);
+            setShowBottomBar(false);
+          } else if (!showSubtitleSettings && !showSettings) {
+            setShowTopBar(false);
+            setShowBottomBar(false);
           }
-
-          idleTimeoutRef.current = setTimeout(() => {
-            const isFs = Boolean(
-              document.fullscreenElement ||
-              document.webkitFullscreenElement ||
-              document.mozFullScreenElement ||
-              document.msFullscreenElement
-            );
-            if (isFs && !isHoveringBottomRef.current && !isHoveringTopRef.current && !showSubtitleSettings) {
-              setShowTopBar(false);
-              setShowBottomBar(false);
-              setIsCursorIdle(true);
-            }
-          }, 3500);
         }
       }
     };
@@ -894,48 +919,60 @@ export default function LocalVideoSyncPlayer({
       return;
     }
 
-    // Normal Fullscreen Playback:
-    setIsCursorIdle(false);
-    setShowTopBar(true);
-    setShowBottomBar(true);
+    // Fullscreen Playback:
+    const x = e ? e.clientX : lastMousePosRef.current.x;
+    const y = e ? e.clientY : lastMousePosRef.current.y;
+    const windowHeight = window.innerHeight || window.screen.height || 1080;
+    const windowWidth = window.innerWidth || window.screen.width || 1920;
+
+    const inTopZone = y <= 75;
+    // Bottom zone includes bottom bar (90px) OR the reaction emojis dock area
+    // (floating dock is at bottom: 86px, height ~42px, right: 20px, width ~380px)
+    const inReactionArea = (y >= windowHeight - 165) && (x >= windowWidth - 480);
+    const inBottomZone = y >= windowHeight - 90 || inReactionArea || isHoveringReactionRef.current;
+
+    isHoveringTopRef.current = inTopZone;
+    isHoveringBottomRef.current = inBottomZone;
 
     if (idleTimeoutRef.current) {
       clearTimeout(idleTimeoutRef.current);
     }
 
-    const y = e ? e.clientY : lastMousePosRef.current.y;
-    const windowHeight = window.innerHeight || window.screen.height || 1080;
-
-    const inTopZone = y <= 90;
-    const inBottomZone = y >= windowHeight - 140;
-
-    isHoveringTopRef.current = inTopZone;
-    isHoveringBottomRef.current = inBottomZone;
-
-    // While cursor is over controls, actively scrubbing, or settings popover is open:
-    // Keep controls visible permanently! Do NOT auto-hide!
-    if (inTopZone || inBottomZone || isScrubbingRef.current || showSubtitleSettings) {
-      return;
-    }
-
-    // While cursor is in middle video viewing area:
-    // Schedule smooth auto-hide after 3.5 seconds of no mouse movement
-    idleTimeoutRef.current = setTimeout(() => {
-      const isFs = Boolean(
-        document.fullscreenElement ||
-        document.webkitFullscreenElement ||
-        document.mozFullScreenElement ||
-        document.msFullscreenElement
-      );
-      if (isFs) {
-        if (!isHoveringBottomRef.current && !isHoveringTopRef.current && !isScrubbingRef.current && !showSubtitleSettings) {
-          setShowTopBar(false);
-          setShowBottomBar(false);
-          setIsCursorIdle(true);
-        }
+    if (inTopZone) {
+      if (hidePanelsTimerRef.current) {
+        clearTimeout(hidePanelsTimerRef.current);
+        hidePanelsTimerRef.current = null;
       }
-    }, 3500);
-  }, [isFullscreen, showSubtitleSettings, panelsHidden]);
+      setIsCursorIdle(false);
+      setShowTopBar(true);
+      setShowBottomBar(false);
+    } else if (inBottomZone || isScrubbingRef.current || showSubtitleSettings || showSettings) {
+      if (hidePanelsTimerRef.current) {
+        clearTimeout(hidePanelsTimerRef.current);
+        hidePanelsTimerRef.current = null;
+      }
+      setIsCursorIdle(false);
+      setShowBottomBar(true);
+      setShowTopBar(false);
+    } else {
+      // Cursor is in video viewing area (out of the panel zones):
+      // Don't close immediately in 0ms! Give a gentle grace window (800ms) so moving towards emojis or
+      // minor mouse-out does not abruptly close controls under the user!
+      setIsCursorIdle(false);
+      if (!hidePanelsTimerRef.current) {
+        hidePanelsTimerRef.current = setTimeout(() => {
+          if (!isHoveringTopRef.current && !isHoveringBottomRef.current && !isHoveringReactionRef.current && !isScrubbingRef.current && !showSubtitleSettings && !showSettings) {
+            setShowTopBar(false);
+            setShowBottomBar(false);
+          }
+          hidePanelsTimerRef.current = null;
+        }, 800);
+      }
+      idleTimeoutRef.current = setTimeout(() => {
+        setIsCursorIdle(true);
+      }, 1800);
+    }
+  }, [isFullscreen, showSubtitleSettings, showSettings, panelsHidden]);
 
   // Window & document level mouse listeners when in fullscreen to ensure bottom-edge moves are never missed
   useEffect(() => {
@@ -948,6 +985,10 @@ export default function LocalVideoSyncPlayer({
       document.removeEventListener('mousemove', onGlobalMouseMove);
       document.removeEventListener('pointermove', onGlobalMouseMove);
       window.removeEventListener('mousemove', onGlobalMouseMove);
+      if (hidePanelsTimerRef.current) {
+        clearTimeout(hidePanelsTimerRef.current);
+        hidePanelsTimerRef.current = null;
+      }
     };
   }, [isFullscreen, handleMouseMove]);
 
@@ -1197,14 +1238,15 @@ export default function LocalVideoSyncPlayer({
           isHoveringTopRef.current = true;
           if (isFullscreen) {
             setShowTopBar(true);
-            setShowBottomBar(true);
+            setShowBottomBar(false);
             setIsCursorIdle(false);
             if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           }
         }}
-        onMouseLeave={(e) => {
-          if (e.clientY > 90) {
-            isHoveringTopRef.current = false;
+        onMouseLeave={() => {
+          isHoveringTopRef.current = false;
+          if (isFullscreen) {
+            setShowTopBar(false);
           }
         }}
       >
@@ -1293,18 +1335,6 @@ export default function LocalVideoSyncPlayer({
           <span className="yt-time-display">
             {formatTime(currentTimeSec)} / {formatTime(durationSec)}
           </span>
-
-          <button
-            type="button"
-            className="yt-ctrl-btn exit-video-btn compact"
-            onClick={handleExitVideo}
-            title="Exit local video and return to watch party stage"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-            </svg>
-            <span>Exit video</span>
-          </button>
         </div>
       </div>
 
@@ -1403,16 +1433,16 @@ export default function LocalVideoSyncPlayer({
         onMouseEnter={() => {
           isHoveringBottomRef.current = true;
           if (isFullscreen) {
-            setShowTopBar(true);
             setShowBottomBar(true);
+            setShowTopBar(false);
             setIsCursorIdle(false);
             if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current);
           }
         }}
-        onMouseLeave={(e) => {
-          const windowHeight = window.innerHeight || window.screen.height || 1080;
-          if (e.clientY < windowHeight - 140 && !isScrubbingRef.current) {
-            isHoveringBottomRef.current = false;
+        onMouseLeave={() => {
+          isHoveringBottomRef.current = false;
+          if (isFullscreen && !isScrubbingRef.current && !showSubtitleSettings && !showSettings) {
+            setShowBottomBar(false);
           }
         }}
       >
@@ -1459,6 +1489,11 @@ export default function LocalVideoSyncPlayer({
           <div
             className="yt-screen-scrubber-fill"
             style={{ width: `${progressPercent}%` }}
+          />
+          <ScrubberReactionHeatmap
+            durationSec={durationSec}
+            currentTimeSec={currentTimeSec}
+            feed={reactionFeed}
           />
           {hoverPreview && (
             <div
@@ -1899,12 +1934,37 @@ export default function LocalVideoSyncPlayer({
 
       {/* Floating Live Reactions in Fullscreen */}
       {isFullscreen && typeof onSendReaction === 'function' && (
-        <FloatingReactions
-          feed={reactionFeed}
-          onSendReaction={onSendReaction}
-          showDock={Boolean(roomId)}
-          hasMedia={true}
-        />
+        <div
+          className="fullscreen-reaction-wrapper"
+          onMouseEnter={() => {
+            isHoveringReactionRef.current = true;
+            if (hidePanelsTimerRef.current) {
+              clearTimeout(hidePanelsTimerRef.current);
+              hidePanelsTimerRef.current = null;
+            }
+            setShowBottomBar(true);
+            setIsCursorIdle(false);
+          }}
+          onMouseLeave={() => {
+            isHoveringReactionRef.current = false;
+            if (!hidePanelsTimerRef.current) {
+              hidePanelsTimerRef.current = setTimeout(() => {
+                if (!isHoveringTopRef.current && !isHoveringBottomRef.current && !isHoveringReactionRef.current && !isScrubbingRef.current && !showSubtitleSettings && !showSettings) {
+                  setShowTopBar(false);
+                  setShowBottomBar(false);
+                }
+                hidePanelsTimerRef.current = null;
+              }, 800);
+            }
+          }}
+        >
+          <FloatingReactions
+            feed={reactionFeed}
+            onSendReaction={handleSendReactionWithTime}
+            showDock={Boolean(roomId)}
+            hasMedia={true}
+          />
+        </div>
       )}
     </div>
   );

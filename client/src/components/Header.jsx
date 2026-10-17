@@ -17,7 +17,17 @@ export default function Header({
   onOpenNetworkHud,
   onOpenQrCode,
   playbackLock = false,
-  nowPlaying = ''
+  nowPlaying = '',
+  isChatOpen = true,
+  onToggleChat,
+  unreadCount = 0,
+  isMediaActive = false,
+  onExitVideo = null,
+  onVoteSkip = null,
+  skipVotes = [],
+  connectedPeers = [],
+  isHost = false,
+  username = ''
 }) {
   const [copied, setCopied] = useState(false);
   const ping = networkStats?.avgPingMs;
@@ -26,6 +36,11 @@ export default function Header({
   const connection = isP2PConnected
     ? (isWeak ? { tone: 'weak', text: 'Weak connection' } : { tone: 'ok', text: 'Connected' })
     : alone ? { tone: 'idle', text: 'Waiting for friends' } : { tone: 'weak', text: 'Connecting…' };
+
+  const hostPeer = isHost ? null : connectedPeers.find((p) => p.isHost);
+  const totalParticipants = connectedPeers.length + 1;
+  const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
+  const hasVotedSkip = skipVotes.includes(username);
 
   const copy = async () => {
     if (!roomId) return;
@@ -47,11 +62,51 @@ export default function Header({
           <Icon name={copied ? 'check' : 'copy'} size={15} />
         </button>
       )}
+
+      {/* When media is active, show clean sync pill in header */}
+      {isMediaActive && (
+        <span className="rh-sync-pill" role="status" title="Sync status with peers">
+          <span className="rh-sync-dot" aria-hidden="true" />
+          <span>{isHost ? 'In sync · You are host' : hostPeer ? `In sync · ${hostPeer.username}` : 'In sync'}</span>
+        </span>
+      )}
+
       <p className="rh-now" title={nowPlaying || undefined}>{nowPlaying ? `Now playing · ${nowPlaying}` : ''}</p>
+
       {playbackLock && (
         <span className="rh-lock" title="Only the host can play, pause, seek or change the video">
           <Icon name="lock" size={15} />Host controls
         </span>
+      )}
+
+      {/* Dedicated video action buttons in Header - keeps video canvas 100% clean */}
+      {isMediaActive && (
+        <div className="rh-video-actions">
+          {typeof onVoteSkip === 'function' && totalParticipants > 1 && (
+            <button
+              type="button"
+              className={`rh-action-btn rh-skip-btn ${hasVotedSkip ? 'is-voted' : ''}`}
+              onClick={onVoteSkip}
+              title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} needed)`}
+            >
+              <Icon name="skipForward" size={14} />
+              <span>Skip ({skipVotes.length}/{requiredVotes})</span>
+            </button>
+          )}
+
+          {typeof onExitVideo === 'function' && (
+            <button
+              type="button"
+              className="rh-action-btn rh-exit-btn"
+              onClick={onExitVideo}
+              title="Exit video and return to watch party stage"
+              aria-label="Exit video"
+            >
+              <Icon name="close" size={14} strokeWidth={2.4} />
+              <span>Exit</span>
+            </button>
+          )}
+        </div>
       )}
       <button type="button" className={`rh-conn is-${connection.tone}`} onClick={onOpenNetworkHud} aria-label={`${connection.text}. Open connection details`}>
         <Icon name="signal" size={16} strokeWidth={2.4} />
@@ -62,6 +117,21 @@ export default function Header({
         {alone ? 'Invite friends' : 'Invite'}
         {!alone && <span className="rh-count">{peerCount} / {MAX_ROOM_SIZE}</span>}
       </button>
+      {onToggleChat && (
+        <button
+          type="button"
+          className={`rh-chat-toggle ${isChatOpen ? 'is-open' : ''}`}
+          onClick={onToggleChat}
+          aria-label={isChatOpen ? 'Hide side panel' : 'Open chat and queue panel'}
+          title={isChatOpen ? 'Hide side panel' : 'Open chat and queue panel'}
+        >
+          <Icon name="chat" size={16} strokeWidth={2.2} />
+          <span className="rh-chat-toggle-text">{isChatOpen ? 'Hide Panel' : 'Panel'}</span>
+          {!isChatOpen && unreadCount > 0 && (
+            <span className="rh-chat-badge">{unreadCount}</span>
+          )}
+        </button>
+      )}
     </header>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Icon } from './icons';
 import { getAvatarColor } from '../utils/sound';
 import { getInitials } from './PeerVoiceRoster';
@@ -22,6 +22,8 @@ export default function PreJoinModal({
 }) {
   const [name, setName] = useState(initialName);
   const [micOn, setMicOn] = useState(false);
+  const modalCardRef = useRef(null);
+  const prevActiveElementRef = useRef(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -29,6 +31,59 @@ export default function PreJoinModal({
       setMicOn(false);
     }
   }, [isOpen, initialName]);
+
+  // Focus trapping and restoring for accessibility (UX-M05 / UX-H01)
+  useEffect(() => {
+    if (!isOpen) return;
+    prevActiveElementRef.current = document.activeElement;
+
+    const card = modalCardRef.current;
+    if (card) {
+      const focusables = card.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusables.length > 0) {
+        focusables[0].focus();
+      } else {
+        card.focus();
+      }
+    }
+
+    const handleTabKey = (e) => {
+      if (e.key !== 'Tab') return;
+      const card = modalCardRef.current;
+      if (!card) return;
+      const focusables = Array.from(card.querySelectorAll(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || !card.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last || !card.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleTabKey);
+    return () => {
+      window.removeEventListener('keydown', handleTabKey);
+      if (prevActiveElementRef.current && typeof prevActiveElementRef.current.focus === 'function') {
+        prevActiveElementRef.current.focus();
+      }
+    };
+  }, [isOpen]);
 
   // Handle Escape key
   useEffect(() => {
@@ -55,9 +110,15 @@ export default function PreJoinModal({
   };
 
   return (
-    <div className="leave-dialog-backdrop prejoin-backdrop" onClick={onCancel} role="presentation">
+    <div
+      className="leave-dialog-backdrop prejoin-backdrop"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}
+      role="presentation"
+    >
       <div
         className="modal-card prejoin-modal-card"
+        ref={modalCardRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="prejoin-title"
@@ -109,7 +170,6 @@ export default function PreJoinModal({
               <small>Choose devices &amp; test your mic</small>
             </div>
             <AudioDevicePicker
-              compact
               audioSettings={audioSettings}
               onUpdateAudioSettings={onUpdateAudioSettings}
               onSelectOutput={onSelectOutput}

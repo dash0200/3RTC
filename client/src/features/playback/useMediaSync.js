@@ -52,6 +52,16 @@ export function useMediaSync({ room, playback, queue, hostControls }) {
             bus.send(from, 'local-video-sync-state', { mediaType: 'local', fileName: file.name, fileSize: file.size, currentTime: 0, isPlaying: false });
             return;
         }
+        if (playback.remoteLocalVideoMeta) {
+            bus.send(from, 'local-video-sync-state', {
+                mediaType: 'local',
+                fileName: playback.remoteLocalVideoMeta.fileName,
+                fileSize: playback.remoteLocalVideoMeta.fileSize,
+                currentTime: 0,
+                isPlaying: false
+            });
+            return;
+        }
         // Nothing playing here (lets a guest under the host controls lock drop what it opened)
         bus.send(from, 'yt-sync-state', { videoId: null, nothingPlaying: true });
     });
@@ -64,6 +74,11 @@ export function useMediaSync({ room, playback, queue, hostControls }) {
             return;
         }
         if (!data.videoId) return;
+        // If we are currently watching or hosting our own local video, ignore incoming yt-sync-state
+        // from peers unless it's a host lock revert
+        if ((playback.localVideoFileRef.current || playback.streamVideoUrlRef?.current || playback.remoteLocalVideoMeta) && !isLockRevert) {
+            return;
+        }
         // Already watching this video: the answer came from someone who just joined (their player
         // may still be at 0:00), so only take the queue; the host-lock revert is the exception
         const alreadyHere = data.videoId === playback.activeVideoIdRef.current;
@@ -83,6 +98,11 @@ export function useMediaSync({ room, playback, queue, hostControls }) {
         const isLockRevert = hostControls.consumeLockRevert();
         const media = normalizeMedia(data.media);
         if (!media) return;
+        // If we are currently watching or hosting our own local video, ignore incoming media-sync-state
+        // from peers unless it's a host lock revert
+        if ((playback.localVideoFileRef.current || playback.streamVideoUrlRef?.current || playback.remoteLocalVideoMeta) && !isLockRevert) {
+            return;
+        }
         // Already watching this: the answer came from someone who just joined (see yt-sync-state)
         const alreadyHere = playback.activeMediaRef.current?.url === media.url;
         if (alreadyHere && !isLockRevert) return;
@@ -100,6 +120,8 @@ export function useMediaSync({ room, playback, queue, hostControls }) {
     usePeerMessageOn(bus, 'local-video-sync-state', (data) => {
         const isLockRevert = hostControls.consumeLockRevert();
         if (!data.fileName) return;
+        // If we already have the local file loaded locally on disk as owner, keep it!
+        if (playback.localVideoFileRef.current && !isLockRevert) return;
         // Already watching this file: don't jump to a newcomer's spot (see yt-sync-state)
         const here = playback.localVideoFileRef.current?.name || playback.remoteLocalVideoMeta?.fileName;
         if (here === data.fileName && !isLockRevert) return;

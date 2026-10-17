@@ -426,6 +426,23 @@ export default function LiveChat({
       .map((msg) => msg.id)
   ), [messages]);
 
+  // UX-M02: Merge user chat messages and non-debug room events into a unified chronological stream
+  const displayTimeline = useMemo(() => {
+    const msgItems = (messages || []).map((msg) => ({
+      itemType: 'message',
+      id: msg.id,
+      timestamp: msg.timestamp || 0,
+      msg
+    }));
+    const sysItems = (displayLogs || []).map((log) => ({
+      itemType: 'system',
+      id: `sys-${log.id}`,
+      timestamp: log.timestamp || 0,
+      log
+    }));
+    return [...msgItems, ...sysItems].sort((a, b) => a.timestamp - b.timestamp);
+  }, [messages, displayLogs]);
+
   const wasNearBottomRef = useRef(true);
   useEffect(() => {
     // Opening the chat tab always lands on the latest messages
@@ -435,15 +452,16 @@ export default function LiveChat({
     const scroller = chatContainerRef.current;
     if (!scroller || activeTab !== 'chat') return;
 
-    const lastMsg = messages[messages.length - 1];
-    if (wasNearBottomRef.current || lastMsg?.isSelf) {
+    const lastItem = displayTimeline[displayTimeline.length - 1];
+    const isSelfMsg = lastItem?.itemType === 'message' && lastItem.msg?.isSelf;
+    if (wasNearBottomRef.current || isSelfMsg) {
       scroller.scrollTop = scroller.scrollHeight;
       wasNearBottomRef.current = true;
       setShowScrollPill(false);
     } else {
       setShowScrollPill(true);
     }
-  }, [messages, activeTab]);
+  }, [displayTimeline, activeTab]);
 
   // Auto-scroll room logs when new logs arrive (latest on top)
   useEffect(() => {
@@ -694,14 +712,22 @@ export default function LiveChat({
         {activeTab === 'chat' && (
           <>
             <div className="chat-messages-container" ref={chatContainerRef} onScroll={handleScroll}>
-              {messages.length === 0 ? (
+              {displayTimeline.length === 0 ? (
                 <div className="chat-empty-state">
                   <div className="empty-state-title">No messages yet</div>
                   <div className="empty-state-subtitle">Say hi — everyone in the room sees it.</div>
                 </div>
               ) : (
                 <div className="chat-messages-inner cm-feed">
-                  {messages.map((msg, index) => {
+                  {displayTimeline.map((item, index) => {
+                    if (item.itemType === 'system') {
+                      return (
+                        <div key={item.id} className="cm-system-row" role="status">
+                          <span className="cm-system-pill">{item.log.text}</span>
+                        </div>
+                      );
+                    }
+                    const msg = item.msg;
                     const date = new Date(msg.timestamp || 0);
                     const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
                     const msgInitial = getInitials(msg.sender || '?');
@@ -710,9 +736,15 @@ export default function LiveChat({
                     const msgNameColor = msgAvatarBg.match(/#[0-9a-f]{6}/i)?.[0] || '#53bdeb';
                     // Consecutive messages from the same person within 5 min form one group:
                     // name, avatar and bubble tail only on the first one (like WhatsApp)
-                    const prev = messages[index - 1];
-                    const startsGroup = !prev || prev.sender !== msg.sender ||
-                      Math.abs((msg.timestamp || 0) - (prev.timestamp || 0)) > 5 * 60 * 1000;
+                    let prevMsg = null;
+                    for (let p = index - 1; p >= 0; p--) {
+                      if (displayTimeline[p].itemType === 'message') {
+                        prevMsg = displayTimeline[p].msg;
+                        break;
+                      }
+                    }
+                    const startsGroup = !prevMsg || prevMsg.sender !== msg.sender ||
+                      Math.abs((msg.timestamp || 0) - (prevMsg.timestamp || 0)) > 5 * 60 * 1000;
                     const emojiOnly = emojiOnlyIds.has(msg.id);
 
                     return (
