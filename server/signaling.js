@@ -9,15 +9,77 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from './log.js';
 import { createSeats, loadSecret, newEpoch, isValidPeerId } from './seats.js';
+import { createRateLimiter } from './rateLimit.js';
 
 // People per room. Everyone connects directly to everyone (mesh); 6 keeps voice light on each
 // person's upload, and local video files are passed along a relay tree instead of the owner
 // uploading to every viewer.
 export const MAX_ROOM_USERS = Math.max(2, Number(process.env.MAX_ROOM_USERS) || 6);
 
+/**
+ * Validate WebSocket Origin header to protect against Cross-Site WebSocket Hijacking (H-05).
+ */
+export function isOriginAllowed(origin, allowedOriginsEnv = process.env.ALLOWED_ORIGINS, appUrlEnv = process.env.APP_URL) {
+  if (!origin) return true; // Non-browser clients (tests, CLI)
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') return true;
+    if (host === '3rtc.me' || host.endsWith('.3rtc.me')) return true;
+    if (appUrlEnv) {
+      try {
+        const appHost = new URL(appUrlEnv).hostname.toLowerCase();
+        if (host === appHost || host.endsWith('.' + appHost)) return true;
+      } catch { /* ignore */ }
+    }
+    if (allowedOriginsEnv) {
+      const allowedList = allowedOriginsEnv.split(',').map((s) => s.trim().toLowerCase());
+      for (const item of allowedList) {
+        if (!item) continue;
+        if (item.startsWith('http://') || item.startsWith('https://')) {
+          try {
+            if (new URL(item).origin.toLowerCase() === parsed.origin.toLowerCase()) return true;
+          } catch { /* ignore */ }
+        } else if (item.startsWith('*.')) {
+          const suffix = item.slice(2);
+          if (host === suffix || host.endsWith('.' + suffix)) return true;
+        } else if (host === item) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export function getClientIp(req, ws) {
+  const forwarded = req?.headers?.['x-forwarded-for'];
+  if (forwarded && typeof forwarded === 'string') {
+    const first = forwarded.split(',')[0].trim();
+    if (first) return first;
+  }
+  return req?.socket?.remoteAddress || ws?._socket?.remoteAddress || '127.0.0.1';
+}
+
 /** Accept signaling connections on `server` (an http.Server). Returns the WebSocketServer. */
-export function attachSignaling(server) {
-  const wss = new WebSocketServer({ server });
+export function attachSignaling(server, options = {}) {
+  const rateLimiter = options.rateLimiter || createRateLimiter(options.rateLimits);
+
+  const wss = new WebSocketServer({
+    server,
+    maxPayload: 65536, // 64 KB limit to prevent event-loop freezing on massive payloads (M-05)
+    verifyClient: (info, callback) => {
+      const origin = info.req.headers.origin;
+      if (!isOriginAllowed(origin, options.allowedOrigins)) {
+        log('WARN', `Rejected WebSocket connection from untrusted origin: "${origin}"`);
+        callback(false, 403, 'Forbidden: Origin not allowed');
+        return;
+      }
+      callback(true);
+    }
+  });
 
   // Map<roomId, Map<peerId, WebSocket>>
   const rooms = new Map();
@@ -32,14 +94,19 @@ export function attachSignaling(server) {
   }
 
   /**
-   * May `ws` sit as `peerId` in this room? A free seat, or one held by this same socket, yes. A seat
-   * held by another live socket only with a seat token for it (a peer reclaiming its own seat after
-   * its signaling dropped): ids are public, so naming one proves nothing.
+   * May `ws` sit as `peerId` in this room?
+   * If claiming the host's seat, cryptographic seatToken verification is strictly required (H-03).
+   * A seat held by another live socket also requires a seat token.
    */
   function maySit(roomId, room, peerId, ws, token) {
+    const info = roomInfo.get(roomId);
+    if (!info) return false;
+    if (info.hostPeerId && peerId === info.hostPeerId) {
+      return seats.checkSeat(token, roomId, peerId) === info.epoch;
+    }
     const holder = room.get(peerId);
     if (!holder || holder === ws || holder.readyState !== WebSocket.OPEN) return true;
-    return seats.checkSeat(token, roomId, peerId) === roomInfo.get(roomId)?.epoch;
+    return seats.checkSeat(token, roomId, peerId) === info.epoch;
   }
 
   /** Who is the host (the peer that created the room, or got it back with its host token). The
@@ -47,13 +114,13 @@ export function attachSignaling(server) {
    *  guest after a restart, until the host returns). */
   const hostOf = (roomId) => roomInfo.get(roomId)?.hostPeerId ?? null;
 
-  /** Seat and host tokens for the client (tokens are only ever sent to their owner). */
-  function tokensFor(roomId, peerId) {
+  /** Seat and host tokens for the client. Host token is only issued if host identity is verified. */
+  function tokensFor(roomId, peerId, isHostVerified = false) {
     const info = roomInfo.get(roomId);
     if (!info) return {};
     return {
       seatToken: seats.seatToken(roomId, info.epoch, peerId),
-      ...(info.hostPeerId === peerId ? { hostToken: seats.hostToken(roomId, info.epoch) } : {})
+      ...(info.hostPeerId === peerId && isHostVerified ? { hostToken: seats.hostToken(roomId, info.epoch) } : {})
     };
   }
 
@@ -108,12 +175,13 @@ export function attachSignaling(server) {
     ws.roomId = null;
   }
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     ws.peerId = crypto.randomUUID();
     ws.roomId = null;
     ws.isAlive = true;
+    ws.clientIp = getClientIp(req, ws);
 
-    log('CONN', `New client connected, assigned peerId: ${ws.peerId}`);
+    log('CONN', `New client connected from ${ws.clientIp}, assigned peerId: ${ws.peerId}`);
 
     ws.on('pong', () => {
       ws.isAlive = true;
@@ -170,13 +238,24 @@ export function attachSignaling(server) {
               peerId,
               peers: otherPeers.map((p) => p.peerId),
               hostPeerId: peerId,
-              ...tokensFor(resumeRoomId, peerId)
+              ...tokensFor(resumeRoomId, peerId, true)
             });
             for (const peer of otherPeers) {
               safeSend(peer.ws, { type: 'host', hostPeerId: peerId });
               safeSend(peer.ws, { type: 'peer-joined', peerId });
             }
             break;
+          }
+
+          // Rate limit room creation per IP to prevent room pool DoS (H-02)
+          if (!rateLimiter.checkCreateRoom(ws.clientIp)) {
+            log('WARN', `Rate limited create-room attempt from IP ${ws.clientIp}`);
+            safeSend(ws, {
+              type: 'error',
+              code: 'rate-limited',
+              message: 'Too many rooms created recently. Please wait a few minutes.'
+            });
+            return;
           }
 
           // A new room: an unused random 5-digit code (10000-99999)
@@ -208,12 +287,34 @@ export function attachSignaling(server) {
             peerId: ws.peerId,
             peers: [],
             hostPeerId: ws.peerId,
-            ...tokensFor(generatedRoomId, ws.peerId)
+            ...tokensFor(generatedRoomId, ws.peerId, true)
           });
           break;
         }
 
         case 'join': {
+          // Check brute-force PIN sweep ban (H-01)
+          if (rateLimiter.isJoinBanned(ws.clientIp).banned) {
+            log('WARN', `Join attempt from temporarily banned IP ${ws.clientIp} rejected`);
+            safeSend(ws, {
+              type: 'error',
+              code: 'rate-limited',
+              message: 'Too many invalid room attempts. Temporarily blocked.'
+            });
+            return;
+          }
+
+          // Check instantaneous join rate
+          if (!rateLimiter.checkJoinRate(ws.clientIp)) {
+            log('WARN', `Rapid join attempts from IP ${ws.clientIp} throttled`);
+            safeSend(ws, {
+              type: 'error',
+              code: 'rate-limited',
+              message: 'Too many join attempts. Please slow down.'
+            });
+            return;
+          }
+
           const rawRoom = data.roomId ?? data.room;
           const roomId = rawRoom !== undefined && rawRoom !== null ? String(rawRoom).trim() : '';
 
@@ -239,6 +340,7 @@ export function attachSignaling(server) {
           }
 
           if (!rooms.has(roomId)) {
+            rateLimiter.recordInvalidJoin(ws.clientIp);
             safeSend(ws, {
               type: 'error',
               code: 'not-found',
@@ -249,6 +351,19 @@ export function attachSignaling(server) {
           }
 
           const room = rooms.get(roomId);
+          const info = roomInfo.get(roomId);
+          const isHostSeat = Boolean(info?.hostPeerId && peerId === info.hostPeerId);
+          const hasValidSeatToken = Boolean(
+            data.seatToken && seats.checkSeat(data.seatToken, roomId, peerId) === info?.epoch
+          );
+
+          // Prevent unauthenticated claim of the host's seat (H-03)
+          if (isHostSeat && !hasValidSeatToken) {
+            log('WARN', `Refused unauthenticated attempt to claim host seat ${peerId} in room "${roomId}"`);
+            safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
+            return;
+          }
+
           if (!maySit(roomId, room, peerId, ws, data.seatToken)) {
             log('WARN', `Refused peer id ${peerId} in room "${roomId}": in use, no seat token`);
             safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
@@ -275,6 +390,8 @@ export function attachSignaling(server) {
           room.set(ws.peerId, ws);
           ws.roomId = roomId;
 
+          rateLimiter.recordSuccessfulJoin(ws.clientIp);
+
           const otherPeers = getOtherPeers(roomId, ws.peerId);
           const peerIdsInRoom = otherPeers.map(p => p.peerId);
 
@@ -287,7 +404,7 @@ export function attachSignaling(server) {
             peerId: ws.peerId,
             peers: peerIdsInRoom,
             hostPeerId: hostOf(roomId),
-            ...tokensFor(roomId, ws.peerId)
+            ...tokensFor(roomId, ws.peerId, isHostSeat && hasValidSeatToken)
           });
 
           // Notify other peers about the newcomer
@@ -383,8 +500,9 @@ export function attachSignaling(server) {
     });
   });
 
-  // Periodic heartbeat to clean up broken sockets
+  // Periodic heartbeat to clean up broken sockets and stale rate limit entries
   const heartbeatInterval = setInterval(() => {
+    rateLimiter.cleanUp();
     wss.clients.forEach((ws) => {
       if (!ws.isAlive) {
         log('WARN', `Terminating inactive peer: ${ws.peerId}`);
