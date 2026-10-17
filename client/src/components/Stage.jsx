@@ -11,6 +11,7 @@ import RejoinCard from './RejoinCard';
 import LinkPlayer from '../features/media/LinkPlayer';
 import { mediaKey } from '../features/media/sources';
 import AmbientCinemaGlow from './room/AmbientCinemaGlow';
+import ScreenShareStage from './room/ScreenShareStage';
 
 export default function Stage({
   rejoin = null,
@@ -86,11 +87,14 @@ export default function Stage({
   activitySlot = null,
   activityView = 'full',
   activityMenu = [],
-  onStartActivity
+  onStartActivity,
+  screenShare = null,
+  bus = null
 }) {
   const isPhone = layout === 'phone';
   const isPttMode = audioSettings?.inputMode === 'ptt';
-  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl || activeMedia);
+  const isScreenSharing = Boolean(screenShare?.isScreenShareActive);
+  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl || activeMedia || isScreenSharing);
 
   const handleSelectReaction = (emoji) => {
     if (typeof onSendReaction === 'function') {
@@ -216,6 +220,21 @@ export default function Stage({
               <p className="build-label" title={BUILD.time ? `Built ${new Date(BUILD.time).toLocaleString()}${BUILD.branch ? ` from ${BUILD.branch}` : ''}` : undefined}>{BUILD_LABEL}</p>
             </div>
           </div>
+        ) : screenShare?.isScreenShareActive ? (
+          /* Case 2S: Live WebRTC Screen Share */
+          <ScreenShareStage
+            stream={screenShare.activeStream}
+            isLocal={screenShare.isSharingScreen}
+            presenterName={screenShare.screenSharer?.username || (screenShare.isSharingScreen ? (localUser?.username || username) : 'Peer')}
+            hasAudio={screenShare.hasAudio}
+            onStopSharing={screenShare.stopScreenShare}
+            onExit={screenShare.dismissScreenShare}
+            reactionFeed={reactionFeed}
+            onSendReaction={onSendReaction}
+            roomId={roomId}
+            bus={bus}
+            localUser={localUser}
+          />
         ) : activeMedia ? (
           /* Case 2C: a link source, in sync through features/media */
           <LinkPlayer
@@ -283,6 +302,7 @@ export default function Stage({
             onOpenQueue={onOpenQueue}
             onPlayLink={onPlayLink}
             onQueueLink={onQueueLink}
+            onStartScreenShare={screenShare?.startScreenShare}
           />
         )}
 
@@ -373,6 +393,10 @@ export default function Stage({
           onToggleSoundboardMute={onToggleSoundboardMute}
           isMediaActive={isMediaActive}
           onOpenAddVideo={onOpenAddVideo}
+          isScreenSharing={screenShare?.isSharingScreen}
+          screenSharer={screenShare?.screenSharer}
+          isScreenShareDismissed={screenShare?.isDismissed}
+          onToggleScreenShare={screenShare?.toggleScreenShare}
           activityMenu={activityMenu}
           onStartActivity={onStartActivity}
           playbackLock={playbackLock}

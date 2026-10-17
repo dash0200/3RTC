@@ -1072,6 +1072,18 @@
 }
 .phone-app .stage-phone .stage-canvas:has(.link-player) { padding: 0; }
 
+/* Screen share active on phone (features/screenshare/ScreenShareStage.jsx) */
+.phone-app .stage-section.stage-phone:has(.screen-share-stage) {
+  aspect-ratio: auto;
+  height: calc(100vw * 9 / 16);
+  min-height: 220px;
+  max-height: 60dvh;
+}
+.phone-app .stage-phone .stage-canvas:has(.screen-share-stage) {
+  padding: 0;
+  border-radius: 0;
+}
+
 /* The game as a bubble over the video (phones) */
 .phone-app .activity-bubble { width: 50px; height: 50px; }
 .phone-app .activity-bubble-icon { font-size: 23px; }

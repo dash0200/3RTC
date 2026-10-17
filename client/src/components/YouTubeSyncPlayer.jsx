@@ -71,7 +71,8 @@ export default function YouTubeSyncPlayer({
   username = '',
   onOpenQueue,
   onPlayLink,   // a pasted Vimeo / Twitch / video-file link: play for everyone
-  onQueueLink   // ...or add it to the queue
+  onQueueLink,  // ...or add it to the queue
+  onStartScreenShare
 }) {
   const [urlInput, setUrlInput] = useState('');
   const [playerReady, setPlayerReady] = useState(false);
@@ -905,6 +906,12 @@ export default function YouTubeSyncPlayer({
               <>
                 <button type="button" className="rd-inline-link" onClick={() => localFileInputRef.current?.click()}>browse files</button>
                 <span className="rd-drop-types">MP4, MKV, WebM</span>
+                {typeof onStartScreenShare === 'function' && (
+                  <>
+                    <span>·</span>
+                    <button type="button" className="rd-inline-link" onClick={onStartScreenShare}>share screen</button>
+                  </>
+                )}
               </>
             )}
           </p>
