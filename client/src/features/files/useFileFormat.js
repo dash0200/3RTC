@@ -42,6 +42,7 @@ export function useFileFormat({ room, playback }) {
     useEffect(() => {
         setReports({});
         setJob(null);
+        setPendingSubtitle(null);
         if (!file) {
             setOwnFormat(null);
             return undefined;
@@ -73,6 +74,7 @@ export function useFileFormat({ room, playback }) {
         setFormats({});
         setReports({});
         setJob(null);
+        setPendingSubtitle(null);
     });
 
     usePeerMessageOn(bus, 'file-format-report', (data, from) => {
@@ -90,6 +92,8 @@ export function useFileFormat({ room, playback }) {
         const format = cleanFormat(data.format);
         if (!format) return;
         if (fileRef.current?.name === data.fileName) return; // we have it ourselves
+        setPendingSubtitle(null);
+        setJob(null);
         setFormats((f) => ({ ...f, [data.fileName]: { format, from, sender: data.sender } }));
         const check = checkPlayable(format);
         bus.send(from, 'file-format-report', { fileName: data.fileName, verdict: check.verdict, message: check.message, device: deviceName() });
@@ -107,7 +111,7 @@ export function useFileFormat({ room, playback }) {
         const key = `${f.name}#${trackNumber}`;
         const progress = (p, extra = {}) => bus.broadcast('file-subtitle-progress', { fileName: f.name, track: trackNumber, progress: p, ...extra });
         if (extractedRef.current.has(key)) {
-            setPendingSubtitle({ id: Date.now(), fileName: name, vttString: extractedRef.current.get(key) });
+            setPendingSubtitle({ id: Date.now(), fileName: name, vttString: extractedRef.current.get(key), trackNumber });
             return;
         }
         if (busyRef.current) return;
@@ -131,7 +135,7 @@ export function useFileFormat({ room, playback }) {
             if (!cues.length) throw new Error('That subtitle track is empty');
             const vtt = cuesToVtt(cues);
             extractedRef.current.set(key, vtt);
-            setPendingSubtitle({ id: Date.now(), fileName: name, vttString: vtt });
+            setPendingSubtitle({ id: Date.now(), fileName: name, vttString: vtt, trackNumber });
             setJob(null);
             progress(1, { done: true });
         } catch (err) {
