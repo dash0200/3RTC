@@ -21,7 +21,7 @@ export default function PhoneHome({ username, initialPin = '', onCreate, onJoin,
             </svg>
           </span>
           <h1>Watch together</h1>
-          <p>Video, voice and chat straight between your devices. Up to 6 people.</p>
+          <p>Video, voice and chat straight between your devices. Up to 4 people.</p>
         </div>
 
         <RejoinCard rejoin={rejoin} />

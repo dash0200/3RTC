@@ -89,15 +89,22 @@ async function servePage(request, url) {
   } catch (err) {
     const cached = await caches.match(url.pathname, { cacheName: SHELL_CACHE });
     if (cached) return cached;
-    throw err;
+    return new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
   }
 }
 
 const isAppPath = (pathname) => pathname === '/' || pathname === '/index.html';
 
 async function cacheFirst(request) {
-  const cached = await caches.match(request, { cacheName: SHELL_CACHE });
-  return cached || fetch(request);
+  try {
+    const cached = await caches.match(request, { cacheName: SHELL_CACHE });
+    if (cached) return cached;
+    return await fetch(request);
+  } catch (err) {
+    const anyCached = await caches.match(request);
+    if (anyCached) return anyCached;
+    return new Response('', { status: 504, statusText: 'Gateway Timeout' });
+  }
 }
 
 // Hashed asset: current shell cache, then assets kept from earlier versions, then the network
@@ -112,9 +119,15 @@ async function cacheOnFirstUse(request) {
   const cache = await caches.open(ASSET_CACHE);
   const cached = await cache.match(request);
   if (cached) return cached;
-  const response = await fetch(request);
-  if (response.ok) cache.put(request, response.clone());
-  return response;
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) cache.put(request, response.clone());
+    return response;
+  } catch (err) {
+    const anyCached = await caches.match(request);
+    if (anyCached) return anyCached;
+    return new Response('', { status: 504, statusText: 'Gateway Timeout' });
+  }
 }
 
 async function staleWhileRevalidate(request) {
