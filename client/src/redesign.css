@@ -286,9 +286,9 @@
   --av-size: 36px;
   width: var(--av-size); height: var(--av-size); flex: none;
   border-radius: 50%; border: 0; padding: 0;
-  background: var(--av, #6aa8ff); color: var(--rd-bg);
+  background: var(--av, #6aa8ff); color: var(--rd-bg, #0a0a0d);
   display: inline-flex; align-items: center; justify-content: center;
-  font: inherit; font-weight: 700; font-size: calc(var(--av-size) * 0.4); line-height: 1;
+  font: inherit; font-weight: 700; font-size: calc(var(--av-size) * 0.42); line-height: 1;
   transition: box-shadow 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
 }
 
@@ -314,7 +314,12 @@
   z-index: 2;
   position: relative;
 }
-.rd-av.is-quiet { opacity: 0.6; }
+.rd-av.is-quiet { opacity: 1; }
+.card-avatar,
+.peer-avatar-circle {
+  color: var(--rd-bg, #0a0a0d) !important;
+  font-weight: 700 !important;
+}
 
 /* ==========================================================================
    Desktop room: frame (header / stage / dock / side panel)
@@ -648,7 +653,19 @@
   padding: 1px 6px; border-radius: 6px; background: var(--rd-raised); color: var(--rd-text-2);
 }
 .cm-time { font-size: 12px; color: var(--rd-text-3); }
-.cm-text { font-size: 15px; line-height: 1.45; color: var(--rd-text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.cm-text { font-size: 14px; line-height: 1.45; color: var(--rd-text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.cm-text:not(.is-emoji) {
+  background: var(--rd-raised);
+  border-radius: 4px 14px 14px 14px;
+  padding: 8px 12px;
+  margin: 2px 0 0 0;
+  width: fit-content;
+  max-width: 100%;
+}
+.cm-row.is-self .cm-text:not(.is-emoji) {
+  background: #1e2230;
+  border-radius: 14px 4px 14px 14px;
+}
 .cm-text.is-emoji { font-size: 30px; line-height: 1.2; }
 .cm-body .chat-image-card, .cm-body .chat-image-transfer-card { margin-top: 4px; max-width: 260px; }
 
@@ -835,9 +852,17 @@
 /* ==========================================================================
    Room, watching (desktop): padded stage, rounded video, people on the video
    ========================================================================== */
-.app-container:not(.phone-app) .stage-section.is-watching { padding: 16px 16px 0; gap: 12px; }
+.app-container:not(.phone-app) .stage-section.is-watching {
+  padding: 16px 16px 0; gap: 12px;
+  position: relative;
+  overflow: visible;
+}
 .app-container:not(.phone-app) .stage-section.is-watching .stage-canvas {
-  border-radius: 16px; overflow: hidden; background: var(--rd-video, #120e19);
+  position: relative;
+  z-index: 2 !important;
+  border-radius: 16px; overflow: hidden;
+  background: #000000 !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.75);
 }
 .stage-section.is-watching .rd-sync-pill {
   display: none !important;
@@ -853,21 +878,25 @@
   position: relative; width: 56px; display: flex; flex-direction: column; align-items: center; gap: 5px; pointer-events: auto;
 }
 .vpo-av {
-  --av-size: 44px; --ring-gap: #120e19; cursor: pointer;
-  box-shadow: 0 0 0 3px rgba(10, 10, 13, 0.7);
+  --av-size: 40px; --ring-gap: rgba(10, 10, 13, 0.85); cursor: pointer;
+  background: var(--av, #6aa8ff) !important;
+  color: var(--rd-bg, #0a0a0d) !important;
+  font-weight: 700 !important;
+  border: 0 !important;
+  box-shadow: 0 0 0 2px rgba(10, 10, 13, 0.85);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 @keyframes speakingPulseStage {
   0% {
-    box-shadow: 0 0 0 3px rgba(10, 10, 13, 0.7), 0 0 0 4px var(--rd-live), 0 0 0 rgba(54, 211, 153, 0.4);
+    box-shadow: 0 0 0 2px rgba(10, 10, 13, 0.85), 0 0 0 4px var(--rd-live), 0 0 0 rgba(54, 211, 153, 0.4);
     transform: scale(1);
   }
   50% {
-    box-shadow: 0 0 0 3px rgba(10, 10, 13, 0.7), 0 0 0 7px var(--rd-live), 0 0 18px rgba(54, 211, 153, 0.7);
-    transform: scale(1.06);
+    box-shadow: 0 0 0 2px rgba(10, 10, 13, 0.85), 0 0 0 6px var(--rd-live), 0 0 14px rgba(54, 211, 153, 0.7);
+    transform: scale(1.05);
   }
   100% {
-    box-shadow: 0 0 0 3px rgba(10, 10, 13, 0.7), 0 0 0 4px var(--rd-live), 0 0 0 rgba(54, 211, 153, 0.4);
+    box-shadow: 0 0 0 2px rgba(10, 10, 13, 0.85), 0 0 0 4px var(--rd-live), 0 0 0 rgba(54, 211, 153, 0.4);
     transform: scale(1);
   }
 }
@@ -1170,26 +1199,31 @@
 .chat-section .chat-messages-container { display: flex; flex-direction: column; }
 .chat-section .cm-feed { margin-top: auto; }
 
-/* Ambient Dynamic Cinema Glow (Phase 3 Innovation - Alphabet Benchmark) */
+/* Ambient Dynamic Cinema Glow (strictly BEHIND video stage, z-index 0 vs 2) */
 .stage-ambient-cinema-layer {
   position: absolute;
   inset: -60px;
   pointer-events: none;
-  z-index: 1;
+  z-index: 0 !important;
   overflow: visible;
 }
 .stage-ambient-glow {
   position: absolute;
   inset: 0;
   filter: blur(80px);
-  opacity: 0.7;
+  opacity: 0.75;
   border-radius: 40px;
-  transform: scale(1.06);
-  transition: background 1.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.8s ease;
+  transform: scale(1.08);
+  pointer-events: none;
+  transition: background 1.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.8s ease;
 }
 
 /* Watching: the player's top row floats on the video, sync pill first (Figma) */
-.app-container:not(.phone-app) .stage-section.is-watching .stage-canvas { position: relative; }
+.app-container:not(.phone-app) .stage-section.is-watching .stage-canvas {
+  position: relative;
+  z-index: 2 !important;
+  background: #000000 !important;
+}
 .app-container:not(.phone-app) .stage-section.is-watching .yt-stage-topbar,
 .app-container:not(.phone-app) .stage-section.is-watching .link-player-bar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 12;
@@ -1603,6 +1637,171 @@
 
 *::-webkit-scrollbar-corner {
   background: transparent !important;
+}
+
+/* ---- Docked Activity in Sidebar (Ludo / Games) ---- */
+.activity-sidebar-container {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--rd-panel);
+}
+
+.stage-activity.is-sidebar {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--rd-panel);
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.stage-activity.is-sidebar .activity-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 44px;
+  background: var(--rd-raised);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stage-activity.is-sidebar .activity-bar-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.stage-activity.is-sidebar .activity-bar-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--rd-text);
+}
+
+.stage-activity.is-sidebar .activity-bar-meta {
+  font-size: 12px;
+  color: var(--rd-text-3);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-activity.is-sidebar.needs-you .activity-bar-meta {
+  color: var(--rd-accent, #3ea6ff);
+  font-weight: 700;
+}
+
+.stage-activity.is-sidebar .activity-bar-btn {
+  border: 1px solid var(--rd-raised);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--rd-text);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.stage-activity.is-sidebar .activity-bar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.stage-activity.is-sidebar .activity-close-btn {
+  border: 1px solid rgba(229, 57, 53, 0.4);
+  background: rgba(229, 57, 53, 0.15);
+  color: #ff6b6b;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stage-activity.is-sidebar .activity-close-btn:hover {
+  background: rgba(229, 57, 53, 0.3);
+}
+
+.stage-activity.is-sidebar .activity-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--rd-panel);
+}
+
+.chat-section .chat-tab-btn.chat-tab-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-section .chat-tab-btn.chat-tab-activity.needs-you {
+  color: var(--rd-text);
+  animation: tab-activity-pulse 2s ease-in-out infinite;
+}
+
+@keyframes tab-activity-pulse {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(62, 166, 255, 0.18); }
+}
+
+.chat-section .tab-badge.activity-badge {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--rd-accent, #3ea6ff);
+  color: transparent;
+  display: inline-block;
+  box-shadow: 0 0 8px var(--rd-accent, #3ea6ff);
+}
+
+.activity-sidebar-detached-placeholder {
+  margin: auto;
+  padding: 32px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--rd-text-2);
+}
+
+.activity-sidebar-detached-placeholder .detached-icon {
+  font-size: 48px;
+}
+
+.activity-sidebar-detached-placeholder .detached-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rd-text);
+  margin: 0;
+}
+
+.activity-bar-btn.activity-sidebar-btn {
+  border-color: rgba(62, 166, 255, 0.4) !important;
+  color: var(--rd-text) !important;
+  background: rgba(62, 166, 255, 0.14) !important;
+  font-weight: 600;
+}
+
+.activity-bar-btn.activity-sidebar-btn:hover {
+  background: rgba(62, 166, 255, 0.25) !important;
 }
 
 

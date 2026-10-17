@@ -36,7 +36,7 @@ export default function VideoPeopleOverlay({ connectedPeers, localUser, isPhone 
 
   return (
     <ul className={`vpo ${isPhone ? 'vpo-phone' : ''}`} aria-label="People in the room">
-      {shown.map((p) => (
+      {shown.map((p, idx) => (
         <li key={p.key} className="vpo-person">
           <button
             type="button"

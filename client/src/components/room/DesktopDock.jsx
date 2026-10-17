@@ -70,7 +70,7 @@ export default function DesktopDock({
         {/* Connected peers in dock: clean, prominent voice indicators outside video canvas */}
         {peers && peers.length > 0 && (
           <div className="dock-peers-strip" aria-label="People in room">
-            {peers.map((peer) => {
+            {peers.map((peer, idx) => {
               const peerName = peer.username || 'Peer';
               const isSpeaking = Boolean(peer.isSpeaking) && !peer.isMuted;
               const isQuiet = Boolean(peer.isMuted);

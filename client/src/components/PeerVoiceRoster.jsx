@@ -303,10 +303,10 @@ export default function PeerVoiceRoster({
       )}
 
       {/* Connected Peers Badges */}
-      {connectedPeers.map((peer) => (
+      {connectedPeers.map((peer, idx) => (
         <div key={peer.peerId} className="peer-badge-relative-wrapper">
           <PeerVoiceBadge
-            peer={peer}
+            peer={{ ...peer, avatarIndex: idx + 1 }}
             isSelected={selectedPeerId === peer.peerId}
             onClick={() => setSelectedPeerId((prev) => (prev === peer.peerId ? null : peer.peerId))}
           />
@@ -314,7 +314,7 @@ export default function PeerVoiceRoster({
           {/* Individual Volume Popover */}
           {selectedPeerId === peer.peerId && (
             <PeerAudioPopover
-              peer={peer}
+              peer={{ ...peer, avatarIndex: idx + 1 }}
               onClose={() => setSelectedPeerId(null)}
               onSetVolume={onSetPeerVolume}
               onToggleMute={onToggleMutePeer}
@@ -485,7 +485,7 @@ export function PeerVoicePanel({
             )}
           </div>
         ) : (
-          connectedPeers.map((peer) => {
+          connectedPeers.map((peer, idx) => {
             const volumePercent = Math.round((peer.volume !== undefined ? peer.volume : 1.0) * 100);
             return (
               <div

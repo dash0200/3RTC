@@ -26,7 +26,7 @@ export function formatTime(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-export function formatFileSize(bytes) {
+function formatFileSize(bytes) {
   if (!bytes || isNaN(bytes)) return '';
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
