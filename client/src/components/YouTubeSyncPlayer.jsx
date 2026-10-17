@@ -5,6 +5,7 @@ import { resolvePastedLink } from '../features/media/resolveLink';
 
 // (Moved to utils/youtubeId.js so plain modules and tests can use it)
 import { extractYouTubeId } from '../utils/youtubeId';
+import { useAudioDucking } from '../features/audio/useAudioDucking';
 export { extractYouTubeId };
 
 export function formatTime(seconds) {
@@ -91,6 +92,14 @@ export default function YouTubeSyncPlayer({
   const [showTopControls, setShowTopControls] = useState(true);
   const idleTimerRef = useRef(null);
 
+  // Phase 3: Intelligent Dialogue Ducking (reduces volume by ~18 dB when peers speak)
+  const duckingFactor = useAudioDucking(Boolean(videoId));
+  useEffect(() => {
+    if (!playerRef.current || isMuted) return;
+    const effectiveVol = Math.round(volume * duckingFactor);
+    playerRef.current.setVolume?.(effectiveVol);
+  }, [duckingFactor, volume, isMuted]);
+
   const handleStageActivity = () => {
     setShowTopControls(true);
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -162,6 +171,7 @@ export default function YouTubeSyncPlayer({
           isBuffering: state === 3
         };
       });
+      return () => onRegisterStateGetter(null);
     }
   }, [onRegisterStateGetter]);
 
@@ -262,10 +272,16 @@ export default function YouTubeSyncPlayer({
   // Cleanup player on unmount
   useEffect(() => {
     return () => {
-      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+      if (playerRef.current) {
         try {
-          playerRef.current.destroy();
+          if (typeof playerRef.current.stopVideo === 'function') {
+            playerRef.current.stopVideo();
+          }
+          if (typeof playerRef.current.destroy === 'function') {
+            playerRef.current.destroy();
+          }
         } catch (e) { }
+        playerRef.current = null;
       }
     };
   }, []);
@@ -799,83 +815,29 @@ export default function YouTubeSyncPlayer({
         onMouseEnter={handleStageActivity}
         onMouseLeave={() => setShowTopControls(false)}
       >
-        {/* Sleek, Clean Top Bar (Auto-hides on idle to prevent subtitle and control collision) */}
-        <div className={`yt-stage-topbar ${showTopControls ? 'is-active' : 'is-idle'}`}>
-          <form className="yt-stage-url-form" onSubmit={handleLoadUrl}>
-            <div className="yt-input-wrapper compact">
-              <svg className="yt-input-icon" viewBox="0 0 24 24" width="16" height="16" fill="#e5143d">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-              </svg>
-              <input
-                type="text"
-                className="yt-url-input"
-                placeholder="Paste a new link (YouTube, Vimeo, Twitch, .mp4…)"
-                value={urlInput}
-                onChange={(e) => {
-                  setUrlInput(e.target.value);
-                  if (inputError) setInputError('');
-                }}
-              />
-              {urlInput && (
+        {/* Fullscreen Overlay: auto-hiding top controls when browser chrome/Header is hidden */}
+        {isFullscreen && (
+          <div className={`yt-stage-topbar ${showTopControls ? 'is-active' : 'is-idle'}`}>
+            <div className="yt-stage-top-controls">
+              {/* Vote to Skip (shown if peers are present) */}
+              {totalParticipants > 1 && (
                 <button
                   type="button"
-                  className="yt-clear-btn"
-                  onClick={() => setUrlInput('')}
-                  title="Clear input"
+                  className={`yt-ctrl-btn vote-skip-btn compact ${hasVotedSkip ? 'voted' : ''}`}
+                  onClick={onVoteSkip}
+                  title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} needed)`}
                 >
-                  &times;
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                    <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
+                  </svg>
+                  <span>Skip ({skipVotes.length}/{requiredVotes})</span>
                 </button>
               )}
+
+              {/* Exit video button removed: Header provides global Exit Video button */}
             </div>
-            <button type="submit" className="btn btn-primary yt-load-btn compact" title="Play immediately for all">
-              Load
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary yt-queue-add-btn compact"
-              onClick={handleQueueUrl}
-              title="Add to shared collaborative queue"
-            >
-              + Queue
-            </button>
-          </form>
-
-          <div className="yt-stage-top-controls">
-            {activeVideoTitle && (
-              <span className="yt-active-title" title={activeVideoTitle}>
-                {activeVideoTitle}
-              </span>
-            )}
-
-            {/* Vote to Skip (shown if peers are present) */}
-            {totalParticipants > 1 && (
-              <button
-                type="button"
-                className={`yt-ctrl-btn vote-skip-btn compact ${hasVotedSkip ? 'voted' : ''}`}
-                onClick={onVoteSkip}
-                title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} needed)`}
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-                  <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
-                </svg>
-                <span>Skip ({skipVotes.length}/{requiredVotes})</span>
-              </button>
-            )}
-
-            {/* Exit video button */}
-            <button
-              type="button"
-              className="yt-ctrl-btn exit-video-btn compact"
-              onClick={handleCloseVideo}
-              title="Exit video and return to watch party stage"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-              </svg>
-              <span>Exit</span>
-            </button>
           </div>
-        </div>
+        )}
 
         {/* Video Viewport occupying full space */}
         <div className="yt-stage-canvas-viewport" ref={iframeContainerRef}>

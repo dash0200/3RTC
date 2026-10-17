@@ -705,6 +705,7 @@ export default function App() {
                         signalStatus={signalStatus}
                         onOpenNetworkHud={openNetworkHud}
                         playbackLock={playbackLock}
+                        onLeaveRoom={handleLeaveRoom}
                     />
                     {roomId ? (
                         <>
@@ -791,6 +792,15 @@ export default function App() {
                         onOpenQrCode={openQrCode}
                         playbackLock={playbackLock}
                         nowPlaying={nowPlaying}
+                        isChatOpen={isChatOpen}
+                        onToggleChat={() => setIsChatOpen((prev) => !prev)}
+                        isMediaActive={isMediaActive}
+                        onExitVideo={playback.exitVideo}
+                        onVoteSkip={queueFeature.voteSkip}
+                        skipVotes={skipVotes}
+                        connectedPeers={connectedPeers}
+                        isHost={isHost}
+                        username={username}
                     />
                     <div className="room-desktop-body">
                         <div className="app-main-pane">
