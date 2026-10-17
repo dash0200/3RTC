@@ -311,7 +311,9 @@ export function MoreSheet({
   playbackLock = false,
   onTogglePlaybackLock,
   activityMenu = [],
-  onStartActivity
+  onStartActivity,
+  isScreenSharing = false,
+  onToggleScreenShare
 }) {
   const isolationOn = Boolean(audioSettings?.voiceIsolation);
   const isPtt = audioSettings?.inputMode === 'ptt';
@@ -389,6 +391,18 @@ export function MoreSheet({
             </span>
           </div>
         ) : null}
+        {typeof onToggleScreenShare === 'function' && typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getDisplayMedia) && (
+          <button type="button" className="phone-row" onClick={then(onToggleScreenShare)}>
+            <span className="phone-row-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" /></svg>
+            </span>
+            <span className="phone-row-text">
+              <span>{isScreenSharing ? 'Stop sharing screen' : 'Share screen'}</span>
+              <span className="phone-row-sub">{isScreenSharing ? 'You are currently presenting' : 'Stream your device screen to the room'}</span>
+            </span>
+            {Chevron}
+          </button>
+        )}
         <button type="button" className="phone-row" onClick={then(onOpenSoundboard)}>
           <span className="phone-row-icon" aria-hidden="true">{MoreIcon.music}</span>
           <span className="phone-row-text">Soundboard</span>

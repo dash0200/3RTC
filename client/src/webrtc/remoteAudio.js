@@ -7,8 +7,17 @@ import { routeMediaElement } from '../utils/audioDevices';
  */
 export function attachRemoteAudio(pc, ctx) {
     const { isAudioBlockedRef, localMutedPeersRef, logLocalDebug, peerEntry, peerVolumesRef, targetPeerId } = ctx;
-    // Handle incoming audio stream from remote peer
+    // Handle incoming audio and video streams from remote peer
     pc.ontrack = (event) => {
+        if (event.track.kind === 'video') {
+            const videoStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+            peerEntry.remoteVideoStream = videoStream;
+            ctx.onRemoteVideoStream?.(targetPeerId, videoStream, event.track);
+            event.track.onended = () => {
+                ctx.onRemoteVideoStreamEnded?.(targetPeerId);
+            };
+            return;
+        }
 
         // 1. Audio Element Pipeline (Offscreen layout instead of display:none to prevent Chrome background throttling)
         let audioEl = peerEntry.audioElement;

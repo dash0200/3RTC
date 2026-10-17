@@ -244,6 +244,15 @@ export function useFileFormat({ room, playback }) {
         setAudioJob(null);
     }, []);
 
+    const clearTranscodedAudio = useCallback(() => {
+        if (transcodeAbortRef.current) {
+            transcodeAbortRef.current.abort();
+            transcodeAbortRef.current = null;
+        }
+        setAudioJob(null);
+        setTranscodedAudioUrl(null);
+    }, []);
+
     const check = useMemo(() => (format ? checkPlayable(format) : null), [format]);
     const problems = useMemo(() => (isOwner ? Object.values(reports).filter(isProblem) : []), [isOwner, reports]);
 
@@ -260,6 +269,7 @@ export function useFileFormat({ room, playback }) {
         audioJob,
         transcodedAudioUrl,
         transcodeAudio,
-        cancelTranscode
+        cancelTranscode,
+        clearTranscodedAudio
     };
 }
