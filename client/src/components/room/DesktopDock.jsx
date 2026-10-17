@@ -21,6 +21,7 @@ export default function DesktopDock({
   onSendReaction,
   soundboardSettings, activeSoundboardSfx, activeSfxCooldowns, onPlaySoundboardClip, onSoundboardVolumeChange, onToggleSoundboardMute,
   isMediaActive, onOpenAddVideo,
+  isScreenSharing = false, screenSharer = null, isScreenShareDismissed = false, onToggleScreenShare,
   activityMenu = [], onStartActivity,
   playbackLock, onTogglePlaybackLock,
   onOpenNetworkHud, onOpenQrCode, onLeaveRoom,
@@ -181,6 +182,35 @@ export default function DesktopDock({
         <button type="button" className="dock-btn" aria-label="Add a video" title="Add a video" onClick={onOpenAddVideo}>
           <Icon name="videoAdd" />
         </button>
+
+        {/* Screen share button */}
+        {typeof onToggleScreenShare === 'function' && (
+          <button
+            type="button"
+            className={`dock-btn ${isScreenSharing ? 'is-active is-danger' : (screenSharer && !isScreenShareDismissed) ? 'is-active is-presenting' : ''}`}
+            aria-label={
+              isScreenSharing
+                ? 'Stop sharing screen'
+                : screenSharer && isScreenShareDismissed
+                  ? `Watch ${screenSharer.username}'s screen`
+                  : screenSharer
+                    ? `Hide ${screenSharer.username}'s screen`
+                    : 'Share screen'
+            }
+            title={
+              isScreenSharing
+                ? 'Stop sharing screen'
+                : screenSharer && isScreenShareDismissed
+                  ? `Watch ${screenSharer.username}'s screen`
+                  : screenSharer
+                    ? `Hide ${screenSharer.username}'s screen`
+                    : 'Share screen'
+            }
+            onClick={onToggleScreenShare}
+          >
+            <Icon name={isScreenSharing ? 'screenShareOff' : 'screenShare'} />
+          </button>
+        )}
 
         {/* Play together (Games) is always available if games are loaded */}
         {activityMenu.length > 0 && (

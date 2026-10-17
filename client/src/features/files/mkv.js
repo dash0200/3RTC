@@ -195,10 +195,118 @@ export async function extractMkvSubtitles(readAt, fileSize, tracks, { timecodeSc
 }
 
 /**
+ * Create a standard 7-byte MPEG-4 ADTS header for an AAC access unit.
+ */
+export function makeAdtsHeader(frameLength, sampleRateIndex = 3, channelConfig = 2, profile = 1) {
+    const packetLen = frameLength + 7;
+    const h = new Uint8Array(7);
+    h[0] = 0xff;
+    h[1] = 0xf1; // MPEG-4, Layer 0, No CRC
+    h[2] = ((profile & 0x3) << 6) | ((sampleRateIndex & 0xf) << 2) | ((channelConfig >> 2) & 0x1);
+    h[3] = ((channelConfig & 0x3) << 6) | ((packetLen >> 11) & 0x3);
+    h[4] = (packetLen >> 3) & 0xff;
+    h[5] = ((packetLen & 0x7) << 5) | 0x1f;
+    h[6] = 0xfc;
+    return h;
+}
+
+/**
+ * Unlace a Matroska SimpleBlock or Block payload into individual frame slices.
+ * Handles:
+ * - No lacing (0x00)
+ * - Xiph lacing (0x02)
+ * - Fixed-size lacing (0x04)
+ * - EBML lacing (0x06)
+ * @param {Uint8Array} win - buffer containing the block
+ * @param {number} payloadStart - offset right after the 1-byte flags
+ * @param {number} payloadEnd - end offset of the block
+ * @param {number} lacingType - 0: none, 1: Xiph, 2: Fixed, 3: EBML
+ * @returns {Uint8Array[]} Array of individual frame byte arrays
+ */
+export function unlaceBlock(win, payloadStart, payloadEnd, lacingType) {
+    if (payloadEnd <= payloadStart) return [];
+    if (lacingType === 0) {
+        return [win.slice(payloadStart, payloadEnd)];
+    }
+
+    if (payloadStart >= payloadEnd) return [];
+    const numFrames = win[payloadStart] + 1;
+    let p = payloadStart + 1;
+    const frameSizes = new Array(numFrames);
+    let totalKnownSizes = 0;
+
+    if (lacingType === 1) {
+        // Xiph lacing
+        for (let i = 0; i < numFrames - 1; i++) {
+            let size = 0;
+            while (p < payloadEnd) {
+                const b = win[p++];
+                size += b;
+                if (b < 255) break;
+            }
+            frameSizes[i] = size;
+            totalKnownSizes += size;
+        }
+        frameSizes[numFrames - 1] = Math.max(0, (payloadEnd - p) - totalKnownSizes);
+    } else if (lacingType === 2) {
+        // Fixed-size lacing
+        const totalRemaining = payloadEnd - p;
+        const frameSize = Math.floor(totalRemaining / numFrames);
+        for (let i = 0; i < numFrames; i++) {
+            frameSizes[i] = frameSize;
+        }
+    } else if (lacingType === 3) {
+        // EBML lacing
+        const firstVint = readVint(win, p);
+        if (!firstVint) return [win.slice(payloadStart, payloadEnd)];
+        p += firstVint.length;
+        frameSizes[0] = firstVint.value;
+        totalKnownSizes += frameSizes[0];
+        let prevSize = frameSizes[0];
+
+        for (let i = 1; i < numFrames - 1; i++) {
+            if (p >= payloadEnd) break;
+            const lead = win[p];
+            if (!lead) break;
+            let len = 1;
+            let mask = 0x80;
+            while (len <= 8 && !(lead & mask)) {
+                mask >>= 1;
+                len++;
+            }
+            if (len > 8 || p + len > payloadEnd) break;
+            let raw = lead & (mask - 1);
+            for (let j = 1; j < len; j++) {
+                raw = (raw << 8) | win[p + j];
+            }
+            p += len;
+            const bias = (1 << (7 * len - 1)) - 1;
+            const diff = raw - bias;
+            const size = prevSize + diff;
+            frameSizes[i] = Math.max(0, size);
+            totalKnownSizes += frameSizes[i];
+            prevSize = size;
+        }
+        frameSizes[numFrames - 1] = Math.max(0, (payloadEnd - p) - totalKnownSizes);
+    }
+
+    const frames = [];
+    for (let i = 0; i < numFrames; i++) {
+        const size = frameSizes[i];
+        if (size > 0 && p + size <= payloadEnd) {
+            frames.push(win.slice(p, p + size));
+            p += size;
+        }
+    }
+    return frames;
+}
+
+/**
  * Read the whole MKV/WebM file and collect the raw frames of the given audio track.
+ * Supports AAC, AC-3, E-AC-3, DTS, MP3, FLAC, Opus.
  * Returns Uint8Array of the concatenated raw audio bitstream.
  */
-export async function extractMkvAudioTrack(readAt, fileSize, trackNumber, { onProgress, isCancelled } = {}) {
+export async function extractMkvAudioTrack(readAt, fileSize, trackNumber, { onProgress, isCancelled, codec, codecPrivate } = {}) {
     let win = new Uint8Array(0);
     let winStart = 0;
     const ensure = async (pos, need) => {
@@ -209,6 +317,19 @@ export async function extractMkvAudioTrack(readAt, fileSize, trackNumber, { onPr
         return pos + need <= winStart + win.length;
     };
     const at = (pos) => pos - winStart;
+
+    const isAac = (codec || '').toLowerCase().includes('aac');
+    let sampleRateIndex = 3; // 48kHz default
+    let channelConfig = 2;   // Stereo default
+    let aacProfile = 1;      // AAC-LC
+    if (codecPrivate && codecPrivate.length >= 2) {
+        const p = (codecPrivate[0] >> 3) & 0x1f;
+        if (p > 0) aacProfile = (p - 1) & 0x3;
+        sampleRateIndex = ((codecPrivate[0] & 0x7) << 1) | ((codecPrivate[1] >> 7) & 0x1);
+        channelConfig = (codecPrivate[1] >> 3) & 0x0f;
+    }
+    if (sampleRateIndex < 0 || sampleRateIndex > 12) sampleRateIndex = 3;
+    if (channelConfig <= 0 || channelConfig > 7) channelConfig = 2;
 
     const chunks = [];
     let totalBytes = 0;
@@ -233,12 +354,21 @@ export async function extractMkvAudioTrack(readAt, fileSize, trackNumber, { onPr
             if (tn && tn.value === trackNumber) {
                 await ensure(dataPos, h.size);
                 const o = at(dataPos) + tn.length;
+                const flags = win[o + 2];
+                const lacingType = (flags & 0x06) >> 1;
                 const payloadStart = o + 3;
                 const payloadEnd = at(dataPos) + h.size;
                 if (payloadEnd > payloadStart) {
-                    const chunk = win.slice(payloadStart, payloadEnd);
-                    chunks.push(chunk);
-                    totalBytes += chunk.length;
+                    const frames = unlaceBlock(win, payloadStart, payloadEnd, lacingType);
+                    for (const chunk of frames) {
+                        if (isAac && chunk.length > 0 && chunk[0] !== 0xff) {
+                            const adts = makeAdtsHeader(chunk.length, sampleRateIndex, channelConfig, aacProfile);
+                            chunks.push(adts);
+                            totalBytes += 7;
+                        }
+                        chunks.push(chunk);
+                        totalBytes += chunk.length;
+                    }
                 }
             }
         }

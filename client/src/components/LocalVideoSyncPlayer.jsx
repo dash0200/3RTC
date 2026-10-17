@@ -246,7 +246,10 @@ export default function LocalVideoSyncPlayer({
     setSelectedAudioTrack(0);
     setShowSubtitleSettings(false);
     setShowAudioSettings(false);
-  }, []);
+    if (typeof fileFormat?.clearTranscodedAudio === 'function') {
+      fileFormat.clearTranscodedAudio();
+    }
+  }, [fileFormat]);
 
   // Cleanup PGS WASM renderer on player unmount
   useEffect(() => {
@@ -604,18 +607,97 @@ export default function LocalVideoSyncPlayer({
     return codec ? `${desc} (${codec})` : desc;
   }, []);
 
-  const handleSelectAudioTrack = useCallback((index) => {
-    setSelectedAudioTrack(index);
+  const handleSelectAudioTrack = useCallback(async (index) => {
     const vid = videoRef.current;
+    const targetTrack = availableAudioTracks[index];
+    if (!targetTrack && index !== 0) return;
+
+    setSelectedAudioTrack(index);
+
+    // 1. If browser natively supports HTMLMediaElement.audioTracks (e.g. Safari with native MP4)
     if (vid?.audioTracks && vid.audioTracks.length > 0) {
       for (let i = 0; i < vid.audioTracks.length; i++) {
         vid.audioTracks[i].enabled = (i === index);
       }
+      if (typeof fileFormat?.clearTranscodedAudio === 'function') {
+        fileFormat.clearTranscodedAudio();
+      }
+      vid.muted = isMuted;
+      const trackName = targetTrack ? getAudioTrackLabel(targetTrack, index) : `Track ${index + 1}`;
+      setDelayToast(`🎧 Audio: ${trackName}`);
+      return;
     }
-    const track = availableAudioTracks[index];
-    const trackName = track ? getAudioTrackLabel(track, index) : `Track ${index + 1}`;
-    setDelayToast(`🎧 Audio: ${trackName}`);
-  }, [availableAudioTracks, getAudioTrackLabel]);
+
+    // 2. Browsers without native audio track switching (Chrome, Edge, Firefox, or MKV files)
+    const track0 = availableAudioTracks[0];
+    const isTrack0Unplayable = fileFormat?.check && fileFormat.check.verdict === 'no-audio';
+
+    // If user selects Track 0 and Track 0 is natively playable by this browser
+    if (index === 0 && !isTrack0Unplayable) {
+      if (typeof fileFormat?.clearTranscodedAudio === 'function') {
+        fileFormat.clearTranscodedAudio();
+      }
+      if (vid) {
+        vid.muted = isMuted;
+        const effectiveVol = isMuted ? 0 : volume * duckingFactor;
+        vid.volume = Math.max(0, Math.min(1, effectiveVol));
+      }
+      const trackName = track0 ? getAudioTrackLabel(track0, 0) : 'Default Audio';
+      setDelayToast(`🎧 Audio: ${trackName}`);
+      return;
+    }
+
+    // Otherwise, extract and transcode the selected audio track to play via auxiliary <audio>
+    const trackNum = targetTrack?.number ?? (index + 1);
+    const trackName = targetTrack ? getAudioTrackLabel(targetTrack, index) : `Track ${index + 1}`;
+    setDelayToast(`⏳ Switching audio to ${trackName}…`);
+
+    if (typeof fileFormat?.transcodeAudio === 'function') {
+      try {
+        await fileFormat.transcodeAudio(trackNum);
+        setDelayToast(`🎧 Audio: ${trackName} (Active)`);
+      } catch (err) {
+        console.error('Failed to switch audio track:', err);
+        setDelayToast(`⚠️ Could not switch audio track: ${err?.message || 'Error'}`);
+      }
+    }
+  }, [availableAudioTracks, getAudioTrackLabel, fileFormat, isMuted, volume, duckingFactor]);
+
+  // Keep selectedAudioTrack in sync when fileFormat.audioJob completes or changes track
+  useEffect(() => {
+    if (fileFormat?.audioJob?.trackNumber !== undefined) {
+      const idx = availableAudioTracks.findIndex((t) => t.number === fileFormat.audioJob.trackNumber);
+      if (idx >= 0 && idx !== selectedAudioTrack) {
+        setSelectedAudioTrack(idx);
+      }
+    }
+  }, [fileFormat?.audioJob?.trackNumber, availableAudioTracks, selectedAudioTrack]);
+
+  // Synchronize auxiliary transcoded audio track with the video element
+  useEffect(() => {
+    const vid = videoRef.current;
+    const audioEl = transcodedAudioRef.current;
+    if (fileFormat?.transcodedAudioUrl) {
+      if (vid) {
+        vid.muted = true; // Mute original track 0 so only selected audio track plays
+      }
+      if (audioEl && vid) {
+        audioEl.currentTime = vid.currentTime;
+        audioEl.playbackRate = vid.playbackRate || playbackRate;
+        const effectiveVol = isMuted ? 0 : volume * duckingFactor;
+        audioEl.volume = Math.max(0, Math.min(1, effectiveVol));
+        audioEl.muted = isMuted;
+        if (!vid.paused) {
+          audioEl.play().catch(() => {});
+        }
+      }
+    } else if (vid) {
+      // Revert to native video audio
+      vid.muted = isMuted;
+      const effectiveVol = isMuted ? 0 : volume * duckingFactor;
+      vid.volume = Math.max(0, Math.min(1, effectiveVol));
+    }
+  }, [fileFormat?.transcodedAudioUrl, isMuted, volume, duckingFactor, playbackRate]);
 
   // Sync native audioTracks on loadedmetadata
   useEffect(() => {
@@ -839,11 +921,12 @@ export default function LocalVideoSyncPlayer({
   };
 
   const handleVideoSeeked = () => {
-    if (!videoRef.current || isEcho('seeked')) return;
+    if (!videoRef.current) return;
     const cur = videoRef.current.currentTime;
     if (transcodedAudioRef.current) {
       transcodedAudioRef.current.currentTime = cur;
     }
+    if (isEcho('seeked')) return;
     setSyncStatus(`Seeked to ${formatTime(cur)} (Synced)`);
     if (typeof onBroadcastAction === 'function') {
       onBroadcastAction('seek', {
@@ -858,6 +941,9 @@ export default function LocalVideoSyncPlayer({
       const cur = videoRef.current.currentTime;
       setCurrentTimeSec(cur);
       if (transcodedAudioRef.current && !videoRef.current.paused) {
+        if (transcodedAudioRef.current.paused) {
+          transcodedAudioRef.current.play().catch(() => {});
+        }
         const drift = Math.abs(transcodedAudioRef.current.currentTime - cur);
         if (drift > 0.08) {
           transcodedAudioRef.current.currentTime = cur;
@@ -909,6 +995,9 @@ export default function LocalVideoSyncPlayer({
     const target = Math.max(0, Math.min(vid.duration || 0, vid.currentTime + deltaSec));
     expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
     vid.currentTime = target;
+    if (transcodedAudioRef.current) {
+      transcodedAudioRef.current.currentTime = target;
+    }
     setCurrentTimeSec(target);
     setSyncStatus(`Seeked ${deltaSec > 0 ? `+${deltaSec}s` : `${deltaSec}s`} (Synced)`);
     if (typeof onBroadcastAction === 'function') {
@@ -924,6 +1013,9 @@ export default function LocalVideoSyncPlayer({
     if (!vid) return;
     expectEcho('seeked', 8000); // broadcast below, not again from the seeked event
     vid.currentTime = 0;
+    if (transcodedAudioRef.current) {
+      transcodedAudioRef.current.currentTime = 0;
+    }
     setCurrentTimeSec(0);
     setSyncStatus('Restarted video (Synced)');
     if (typeof onBroadcastAction === 'function') {
@@ -1066,18 +1158,30 @@ export default function LocalVideoSyncPlayer({
     const vid = videoRef.current;
     if (!vid) return;
     const newMuted = !isMuted;
-    vid.muted = newMuted;
+    if (fileFormat?.transcodedAudioUrl) {
+      vid.muted = true;
+      if (transcodedAudioRef.current) transcodedAudioRef.current.muted = newMuted;
+    } else {
+      vid.muted = newMuted;
+    }
     setIsMuted(newMuted);
   };
 
   const handleVolumeChange = (e) => {
     const val = parseFloat(e.target.value);
     setVolume(val);
-    if (videoRef.current) {
-      videoRef.current.volume = val;
+    const effectiveVol = isMuted ? 0 : val * duckingFactor;
+    if (fileFormat?.transcodedAudioUrl) {
+      if (videoRef.current) videoRef.current.muted = true;
+      if (transcodedAudioRef.current) {
+        transcodedAudioRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
+        transcodedAudioRef.current.muted = val === 0;
+      }
+    } else if (videoRef.current) {
+      videoRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
       videoRef.current.muted = val === 0;
-      setIsMuted(val === 0);
     }
+    setIsMuted(val === 0);
   };
 
   const toggleFullscreen = () => {
@@ -1686,6 +1790,12 @@ export default function LocalVideoSyncPlayer({
           onSeeked={handleVideoSeeked}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
+          onWaiting={() => transcodedAudioRef.current?.pause()}
+          onPlaying={() => {
+            if (transcodedAudioRef.current && !videoRef.current?.paused) {
+              transcodedAudioRef.current.play().catch(() => {});
+            }
+          }}
         >
           {activeVttUrl && (
             <track
@@ -1704,6 +1814,24 @@ export default function LocalVideoSyncPlayer({
             src={fileFormat.transcodedAudioUrl}
             playsInline
             style={{ display: 'none' }}
+            onCanPlay={() => {
+              const audioEl = transcodedAudioRef.current;
+              const vid = videoRef.current;
+              if (audioEl && vid) {
+                vid.muted = true;
+                const drift = Math.abs(audioEl.currentTime - vid.currentTime);
+                if (drift > 0.05) {
+                  audioEl.currentTime = vid.currentTime;
+                }
+                audioEl.playbackRate = vid.playbackRate || playbackRate;
+                const effectiveVol = isMuted ? 0 : volume * duckingFactor;
+                audioEl.volume = Math.max(0, Math.min(1, effectiveVol));
+                audioEl.muted = isMuted;
+                if (!vid.paused) {
+                  audioEl.play().catch(() => {});
+                }
+              }
+            }}
           />
         )}
 
@@ -2317,21 +2445,28 @@ export default function LocalVideoSyncPlayer({
                       <div className="audio-track-list">
                         {availableAudioTracks.map((track, idx) => {
                           const isSelected = selectedAudioTrack === idx;
+                          const isConverting = fileFormat?.audioJob && fileFormat.audioJob.trackNumber === track.number && !fileFormat.audioJob.done && !fileFormat.audioJob.error;
                           return (
                             <button
                               key={idx}
                               type="button"
-                              className={`audio-track-item ${isSelected ? 'active' : ''}`}
+                              className={`audio-track-item ${isSelected ? 'active' : ''} ${isConverting ? 'is-busy' : ''}`}
+                              disabled={Boolean(isConverting)}
                               onClick={() => handleSelectAudioTrack(idx)}
                             >
                               <span className="audio-track-radio">{isSelected ? '●' : '○'}</span>
                               <div className="audio-track-info">
                                 <span className="audio-track-name">{getAudioTrackLabel(track, idx)}</span>
-                                {track.codec && (
+                                {isConverting ? (
+                                  <span className="sub-track-extracting">
+                                    {fileFormat.audioJob.stage || `Converting ${Math.round((fileFormat.audioJob.progress || 0) * 100)}%`}
+                                  </span>
+                                ) : track.codec ? (
                                   <span className="audio-track-codec">{track.codec.toUpperCase()}</span>
-                                )}
+                                ) : null}
                               </div>
-                              {isSelected && <span className="audio-track-check">✓</span>}
+                              {isSelected && !isConverting && <span className="audio-track-check">✓</span>}
+                              {isConverting && <span className="sub-track-extracting">⚡</span>}
                             </button>
                           );
                         })}
@@ -2343,7 +2478,7 @@ export default function LocalVideoSyncPlayer({
                     <span>
                       {videoRef.current?.audioTracks && videoRef.current.audioTracks.length > 0
                         ? '✓ Native audio switching enabled'
-                        : '🎧 Multi-track audio stream selector'}
+                        : '⚡ In-browser WebAssembly audio track switching'}
                     </span>
                   </div>
                 </div>
@@ -2396,18 +2531,25 @@ export default function LocalVideoSyncPlayer({
                       <div className="audio-track-list">
                         {availableAudioTracks.map((track, idx) => {
                           const isSelected = selectedAudioTrack === idx;
+                          const isConverting = fileFormat?.audioJob && fileFormat.audioJob.trackNumber === track.number && !fileFormat.audioJob.done && !fileFormat.audioJob.error;
                           return (
                             <button
                               key={idx}
                               type="button"
-                              className={`audio-track-item ${isSelected ? 'active' : ''}`}
+                              className={`audio-track-item ${isSelected ? 'active' : ''} ${isConverting ? 'is-busy' : ''}`}
+                              disabled={Boolean(isConverting)}
                               onClick={() => handleSelectAudioTrack(idx)}
                             >
                               <span className="audio-track-radio">{isSelected ? '●' : '○'}</span>
                               <div className="audio-track-info">
                                 <span className="audio-track-name">{getAudioTrackLabel(track, idx)}</span>
+                                {isConverting && (
+                                  <span className="sub-track-extracting" style={{ marginLeft: 6 }}>
+                                    {Math.round((fileFormat.audioJob.progress || 0) * 100)}%
+                                  </span>
+                                )}
                               </div>
-                              {isSelected && <span className="audio-track-check">✓</span>}
+                              {isSelected && !isConverting && <span className="audio-track-check">✓</span>}
                             </button>
                           );
                         })}
