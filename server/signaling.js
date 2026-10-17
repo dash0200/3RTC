@@ -69,6 +69,7 @@ export function attachSignaling(server, options = {}) {
 
   const wss = new WebSocketServer({
     server,
+    maxPayload: 65536, // 64 KB limit to prevent event-loop freezing on massive payloads (M-05)
     verifyClient: (info, callback) => {
       const origin = info.req.headers.origin;
       if (!isOriginAllowed(origin, options.allowedOrigins)) {

@@ -303,6 +303,32 @@ describe('signaling server', () => {
             /403|unexpected server response/i
         );
     });
+
+    it('rejects oversized WebSocket messages exceeding maxPayload (M-05)', async () => {
+        const c = await connected('oversized-sender');
+        const largeString = 'a'.repeat(70000); // 70 KB > 64 KB maxPayload
+        const closePromise = new Promise((resolve) => {
+            c.ws.on('close', (code) => {
+                resolve(code);
+            });
+        });
+        c.ws.send(JSON.stringify({ type: 'ping', data: largeString }));
+        const code = await closePromise;
+        assert.equal(code, 1009, 'Server closes connection with code 1009 for oversized payload');
+    });
+
+    it('serves defensive security headers on HTTP responses (L-01)', async () => {
+        const res = await fetch(`http://localhost:${PORT}/api/quick-picks`);
+        assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+        assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN');
+    });
+
+    it('handles CRLF and malformed requests resiliently without crashing (M-04)', async () => {
+        const res = await fetch(`http://localhost:${PORT}/api/quick-picks?foo=bar%0d%0aSet-Cookie:evil=true`);
+        assert.ok(res.status === 200 || res.status === 503);
+        const ping = await fetch(`http://localhost:${PORT}/api/quick-picks`);
+        assert.ok(ping.status === 200 || ping.status === 503);
+    });
 });
 
 describe('isOriginAllowed (H-05)', () => {
