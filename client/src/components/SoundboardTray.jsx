@@ -31,23 +31,10 @@ export default function SoundboardTray({
           <div>
             <div className="soundboard-title-row">
               <h3 className="soundboard-title">Soundboard</h3>
-              <span className="soundboard-sync-badge" title="Sound clips play simultaneously for everyone in the room">
-                P2P SYNC
-              </span>
             </div>
             <p className="soundboard-subtitle">Instant SFX synchronized across room peers</p>
           </div>
         </div>
-
-        {/* Live Audio Equalizer Wave if SFX is currently playing */}
-        {activeSfx && (
-          <div className="soundboard-equalizer-live" title={`Playing: ${activeSfx.soundName}`}>
-            <span className="eq-bar bar-1" />
-            <span className="eq-bar bar-2" />
-            <span className="eq-bar bar-3" />
-            <span className="eq-bar bar-4" />
-          </div>
-        )}
 
         {isFloating && typeof onClose === 'function' && (
           <button
@@ -142,17 +129,6 @@ export default function SoundboardTray({
           );
         })}
       </div>
-
-      {/* Active Sound HUD Status Bar */}
-      {activeSfx && (
-        <div className="soundboard-active-banner">
-          <span className="banner-pulse">🔊</span>
-          <span className="banner-text">
-            <strong>{activeSfx.sender || 'You'}</strong> played{' '}
-            <span className="banner-name">{activeSfx.soundName}</span>
-          </span>
-        </div>
-      )}
 
       {/* Footer Hint */}
       <div className="soundboard-footer">
