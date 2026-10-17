@@ -1,15 +1,12 @@
-/**
- * Subtitle tracks inside a video file, as WebVTT text the player (and the room) can use.
- * MKV/WebM text tracks (SRT, ASS/SSA, WebVTT) are read in a worker, so a 2 GB file doesn't
- * freeze the page; picture subtitles (PGS, VobSub) can't be turned into text.
- */
-import { extractMkvSubtitles } from './mkv';
+import { extractMkvSubtitles, extractMkvPgsSubtitles } from './mkv';
 import { cuesToWebVTT } from '../../utils/subtitleParser';
 
-/** Can we turn this track (from format.subtitles) into text? */
-export const canExtract = (track) => Boolean(track) && track.kind === 'text' && !track.embeddedMp4;
+export const isPgsTrack = (track) => Boolean(track) && (track.codec === 'S_HDMV/PGS' || /pgs/i.test(track.codec || '') || /pgs/i.test(track.label || ''));
 
-function runInWorker(file, tracks, timecodeScale, onProgress) {
+/** Can we turn this track (from format.subtitles) into subtitles the player can display? */
+export const canExtract = (track) => Boolean(track) && (track.kind === 'text' || isPgsTrack(track)) && !track.embeddedMp4;
+
+function runInWorker(file, tracks, timecodeScale, onProgress, isPgs, trackNumber) {
     return new Promise((resolve, reject) => {
         let worker;
         try {
@@ -22,7 +19,11 @@ function runInWorker(file, tracks, timecodeScale, onProgress) {
             if (data.progress !== undefined) onProgress?.(data.progress);
             if (data.done) {
                 worker.terminate();
-                resolve(new Map(data.cues));
+                if (data.isPgs) {
+                    resolve({ isPgs: true, supBytes: data.supBytes, trackNumber: data.trackNumber });
+                } else {
+                    resolve(new Map(data.cues));
+                }
             } else if (data.error) {
                 worker.terminate();
                 reject(new Error(data.error));
@@ -32,25 +33,36 @@ function runInWorker(file, tracks, timecodeScale, onProgress) {
             worker.terminate();
             reject(new Error(e.message || 'worker failed'));
         };
-        worker.postMessage({ file, tracks, timecodeScale });
+        worker.postMessage({ file, tracks, timecodeScale, isPgs, trackNumber });
     });
 }
 
 /**
- * The cues of one subtitle track: [{ startSec, endSec, text }]. `track` is from format.subtitles.
+ * The cues of one subtitle track: [{ startSec, endSec, text }] OR { isPgs: true, supBytes, trackNumber }.
  */
 export async function extractSubtitleTrack(file, track, { timecodeScale = 1000000, onProgress } = {}) {
+    const isPgs = isPgsTrack(track);
     const tracks = [{ number: track.number, codecId: track.codec }];
-    let cues;
+    let result;
     try {
-        cues = await runInWorker(file, tracks, timecodeScale, onProgress);
+        result = await runInWorker(file, tracks, timecodeScale, onProgress, isPgs, track.number);
     } catch (err) {
         if (typeof Worker !== 'undefined' && !/worker/i.test(String(err?.message))) throw err;
-        // No module workers here: read on this thread instead
+        // Fallback: read on this thread
         const readAt = async (pos, len) => new Uint8Array(await file.slice(pos, pos + len).arrayBuffer());
-        cues = await extractMkvSubtitles(readAt, file.size, tracks, { timecodeScale, onProgress });
+        if (isPgs) {
+            const supBytes = await extractMkvPgsSubtitles(readAt, file.size, track.number, { timecodeScale, onProgress });
+            return { isPgs: true, supBytes, trackNumber: track.number };
+        }
+        const cues = await extractMkvSubtitles(readAt, file.size, tracks, { timecodeScale, onProgress });
+        return cues.get(track.number) || [];
     }
-    return cues.get(track.number) || [];
+
+    if (isPgs) {
+        return result;
+    }
+    return result.get(track.number) || [];
 }
 
 export const cuesToVtt = (cues) => cuesToWebVTT(cues);
+

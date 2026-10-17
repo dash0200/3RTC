@@ -48,7 +48,7 @@ export function formatFromMkv(header) {
     if (video) video.label = codecLabel(video.codec);
     const audio = tracks.filter((t) => t.type === 'audio').map((t) => {
         const codec = mkvCodec(MKV_AUDIO, t.codecId);
-        return { codec, label: codecLabel(codec), language: t.language, name: t.name };
+        return { number: t.number, codec, label: codecLabel(codec), language: t.language, name: t.name };
     });
     const subtitles = tracks.filter((t) => t.type === 'subtitle').map((t) => ({
         number: t.number,
@@ -239,6 +239,7 @@ export function cleanFormat(f) {
     const container = Object.hasOwn(CONTAINER_LABELS, f.container) ? f.container : 'unknown';
     const video = f.video && typeof f.video.codec === 'string' ? { codec: str(f.video.codec), label: codecLabel(str(f.video.codec)) } : null;
     const audio = (Array.isArray(f.audio) ? f.audio : []).slice(0, 16).map((a) => ({
+        number: Number.isInteger(a?.number) ? a.number : 0,
         codec: str(a?.codec), label: codecLabel(str(a?.codec)), language: str(a?.language, 12) || 'und', name: str(a?.name, 80)
     }));
     const subtitles = (Array.isArray(f.subtitles) ? f.subtitles : []).slice(0, 32).map((s) => ({
