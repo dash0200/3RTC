@@ -124,16 +124,16 @@ describe('signaling server', () => {
         host.send({ type: 'create-room', peerId: host.peerId });
         const { roomId } = await host.next('room-created');
         const others = [];
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 3; i++) {
             const c = await connected(`p3-${i}`);
             c.send({ type: 'join', roomId, peerId: c.peerId });
             await c.next('joined');
             others.push(c);
         }
-        const seventh = await connected('p3-late');
-        seventh.send({ type: 'join', roomId, peerId: seventh.peerId });
-        assert.match((await seventh.next('error')).message, /full/);
-        for (const c of [host, ...others, seventh]) c.close();
+        const fifth = await connected('p3-late');
+        fifth.send({ type: 'join', roomId, peerId: fifth.peerId });
+        assert.match((await fifth.next('error')).message, /full/);
+        for (const c of [host, ...others, fifth]) c.close();
     });
 
     it('tells the room when someone leaves', async () => {
