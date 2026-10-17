@@ -348,11 +348,9 @@ export function attachSignaling(server) {
           } else if (otherPeers.length === 0) {
             log('WARN', `Peer ${ws.peerId} sent ${normalizedType} but room is empty`);
           } else {
-            // If multi-peer room and no targetId was specified, broadcast to all other peers
-            for (const peer of otherPeers) {
-              safeSend(peer.ws, outgoingPayload);
-            }
-            log('SIGNAL', `${normalizedType.toUpperCase()} from ${ws.peerId} broadcast to ${otherPeers.length} peers`);
+            // In a multi-peer room (3+ participants), P2P signals must be explicitly targeted
+            safeSend(ws, { type: 'error', message: 'targetId required in multi-peer rooms' });
+            log('WARN', `Rejected ${normalizedType.toUpperCase()} from ${ws.peerId}: targetId required in multi-peer rooms`);
           }
           break;
         }

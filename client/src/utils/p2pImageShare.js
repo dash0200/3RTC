@@ -292,6 +292,10 @@ export class P2PImageReceiver {
     this.transfers.delete(transferId);
   }
 
+  reset() {
+    this.transfers.clear();
+  }
+
   cleanStale(maxAgeMs = 120000) {
     const now = Date.now();
     for (const [tid, tr] of this.transfers.entries()) {
