@@ -12,6 +12,36 @@
 export const IMAGE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
 export const MAGIC_IMG1 = 0x494D4731;  // 'IMG1' in ASCII hex
 
+export const ALLOWED_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif'
+]);
+
+export const MAX_IMAGE_CHUNKS = 500; // ~30 MB (well within 15 MB limit)
+export const MAX_IMAGE_FILE_SIZE = 30 * 1024 * 1024;
+
+/**
+ * Sanitize download filename: strip path traversal, directory chars, and enforce safe image extension.
+ */
+export function sanitizeImageFilename(name) {
+  if (typeof name !== 'string' || !name.trim()) return 'shared-image.png';
+  const clean = name.split(/[/\\]/).pop().replace(/\.\.+/g, '').trim();
+  const lastDot = clean.lastIndexOf('.');
+  if (lastDot > 0) {
+    const ext = clean.slice(lastDot + 1).toLowerCase();
+    const base = clean.slice(0, lastDot).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 50);
+    if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'webp' || ext === 'gif') {
+      return `${base || 'image'}.${ext}`;
+    }
+    return `${base || 'image'}.png`;
+  }
+  const base = clean.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 50);
+  return `${base || 'image'}.png`;
+}
+
 /**
  * Human readable file size formatter
  */
@@ -23,13 +53,13 @@ export function formatFileSize(bytes) {
 }
 
 /**
- * Checks whether a File or Blob is an image
+ * Checks whether a File or Blob is a safe raster image
  */
 export function isImageFile(file) {
   if (!file) return false;
-  if (file.type && file.type.startsWith('image/')) return true;
+  if (file.type && ALLOWED_IMAGE_MIMES.has(file.type.toLowerCase())) return true;
   const name = (file.name || '').toLowerCase();
-  return /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(name);
+  return /\.(png|jpe?g|webp|gif)$/i.test(name);
 }
 
 /**
@@ -222,15 +252,32 @@ export class P2PImageReceiver {
   }
 
   handleStart(headerMsg) {
+    if (!headerMsg || typeof headerMsg !== 'object') return;
     const { transferId, id, fileName, fileSize, mimeType, totalChunks, sender, isHost, caption, timestamp } = headerMsg;
-    if (!transferId || !totalChunks) return;
+    if (!transferId || typeof transferId !== 'string') return;
+
+    // Validate totalChunks to prevent RangeError / memory exhaustion crashes (M-01)
+    if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_IMAGE_CHUNKS) {
+      console.warn(`[P2PImageReceiver] Rejected transfer ${transferId}: invalid totalChunks ${totalChunks}`);
+      return;
+    }
+
+    if (fileSize && (typeof fileSize !== 'number' || fileSize < 0 || fileSize > MAX_IMAGE_FILE_SIZE)) {
+      console.warn(`[P2PImageReceiver] Rejected transfer ${transferId}: invalid fileSize ${fileSize}`);
+      return;
+    }
+
+    // Whitelist MIME type to safe raster image formats to prevent XSS (M-02)
+    const normalizedMime = (mimeType || '').toLowerCase().trim();
+    const safeMime = ALLOWED_IMAGE_MIMES.has(normalizedMime) ? normalizedMime : 'image/png';
+    const safeFileName = sanitizeImageFilename(fileName);
 
     this.transfers.set(transferId, {
       id: id || crypto.randomUUID(),
       transferId,
-      fileName: fileName || 'shared-image.png',
+      fileName: safeFileName,
       fileSize: fileSize || 0,
-      mimeType: mimeType || 'image/png',
+      mimeType: safeMime,
       totalChunks,
       sender: sender || 'Peer',
       isHost: Boolean(isHost),
@@ -251,10 +298,21 @@ export class P2PImageReceiver {
     const transfer = this.transfers.get(transferId);
     if (!transfer) return null;
 
+    // Validate chunk bounds
+    if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= transfer.totalChunks) {
+      console.warn(`[P2PImageReceiver] Chunk index out of bounds: ${chunkIndex} (total: ${transfer.totalChunks})`);
+      return null;
+    }
+
     if (!transfer.chunks[chunkIndex]) {
       transfer.chunks[chunkIndex] = data;
       transfer.receivedCount++;
       transfer.receivedBytes += data.byteLength;
+
+      if (transfer.receivedBytes > MAX_IMAGE_FILE_SIZE) {
+        this.transfers.delete(transferId);
+        return null;
+      }
 
       const percent = Math.min(100, Math.round((transfer.receivedCount / transfer.totalChunks) * 100));
       if (typeof callbacks.onProgress === 'function') {
@@ -263,7 +321,7 @@ export class P2PImageReceiver {
 
       if (transfer.receivedCount >= transfer.totalChunks) {
         // Complete! Assemble Blob & create Object URL
-        const blob = new Blob(transfer.chunks, { type: transfer.mimeType || 'image/png' });
+        const blob = new Blob(transfer.chunks, { type: transfer.mimeType });
         const objectUrl = URL.createObjectURL(blob);
         const result = {
           transferId,
