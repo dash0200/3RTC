@@ -114,6 +114,12 @@ export default function LiveChat({
   onSoundboardVolumeChange,
   onToggleSoundboardMute,
   onOpenQrCode,
+  // Activities (Ludo / Games docked into sidebar)
+  activity = null,
+  activityDefinition = null,
+  activityView = 'full',
+  onSetActivityView,
+  activityStatus = null,
   // Phone layout: shown in the page under the video (no floating sheet, header or resize)
   embedded = false
 }) {
@@ -675,6 +681,27 @@ export default function LiveChat({
             <span>People</span>
             <span className="tab-count">{connectedPeers.length + 1}</span>
           </button>
+
+          {activity && !embedded && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'activity'}
+              className={`chat-tab-btn chat-tab-activity ${activeTab === 'activity' ? 'active' : ''} ${activityStatus?.attention ? 'needs-you' : ''}`}
+              onClick={() => {
+                setActiveTab('activity');
+                if (activityView !== 'sidebar') {
+                  onSetActivityView?.('sidebar');
+                }
+              }}
+              title={activityDefinition ? `${activityDefinition.name} game` : 'Activity'}
+            >
+              <span>{activityDefinition?.icon || '🎲'} {activityDefinition?.name || 'Game'}</span>
+              {activityStatus?.attention && (
+                <span className="tab-badge activity-badge" style={activityStatus?.color ? { backgroundColor: activityStatus.color } : undefined} aria-label={activityStatus?.label || 'Your turn'}>•</span>
+              )}
+            </button>
+          )}
         </div>
 
         {isAudioBlocked && (
@@ -694,6 +721,29 @@ export default function LiveChat({
               >
                 Unblock
               </button>
+            )}
+          </div>
+        )}
+
+        {/* TAB: Docked Activity (Ludo / Games) */}
+        {!embedded && (
+          <div
+            id="activity-sidebar-portal"
+            className={`activity-sidebar-container ${activeTab === 'activity' ? 'is-active' : ''}`}
+            style={{ display: activeTab === 'activity' ? 'flex' : 'none' }}
+          >
+            {activeTab === 'activity' && activityView !== 'sidebar' && (
+              <div className="activity-sidebar-detached-placeholder">
+                <span className="detached-icon">{activityDefinition?.icon || '🎲'}</span>
+                <p className="detached-title">{activityDefinition?.name || 'Game'} is {activityView === 'bubble' ? 'minimised' : 'floating'}</p>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => onSetActivityView?.('sidebar')}
+                >
+                  Dock here in sidebar
+                </button>
+              </div>
             )}
           </div>
         )}

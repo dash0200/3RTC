@@ -230,9 +230,9 @@ export default function App() {
         const memo = viewMemoRef.current;
         const justOpened = Boolean(activityKey) && activityKey !== memo.key;
         if (justOpened && joinedByTapRef.current) {
-            // Joined from its bubble: show it (a small window over a video on a computer)
+            // Joined from its bubble: show it (docked in sidebar over a video on a computer)
             joinedByTapRef.current = false;
-            setActivityView(!isPhone && isMediaActive ? 'window' : 'full');
+            setActivityView(!isPhone && isMediaActive ? 'sidebar' : 'full');
         } else {
             setActivityView((view) => nextActivityView({
                 view,
@@ -245,6 +245,28 @@ export default function App() {
         }
         viewMemoRef.current = { media: isMediaActive, key: activityKey };
     }, [isMediaActive, activityKey, isPhone]);
+
+    const [activityStatus, setActivityStatus] = useState({ attention: false, color: '', label: '' });
+
+    // When activityView transitions to 'sidebar' on desktop, ensure sidebar is open to the activity tab
+    const prevActivityViewRef = useRef(activityView);
+    useEffect(() => {
+        const prevView = prevActivityViewRef.current;
+        prevActivityViewRef.current = activityView;
+        if (prevView !== 'sidebar' && activityView === 'sidebar' && !isPhone) {
+            setIsChatOpen(true);
+            setSidebarTab('activity');
+        }
+    }, [activityView, isPhone]);
+
+    // When activity ends, return sidebar from activity tab back to chat
+    useEffect(() => {
+        if (!activityOn) {
+            if (sidebarTab === 'activity') {
+                setSidebarTab('chat');
+            }
+        }
+    }, [activityOn, sidebarTab]);
     const activityAside = activityOn && activityView !== 'full';
     const [activityChatSplit, setActivityChatSplit] = useState(() => {
         try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
@@ -526,13 +548,19 @@ export default function App() {
             activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat}
             view={activityView} onViewChange={setActivityView} isPhone={isPhone} mediaActive={isMediaActive}
             loaded={activityLoad.loaded} onJoin={joinActivity} onLeave={activityLoad.leave}
+            onStatusChange={setActivityStatus}
         />
     ) : null;
+
+    const handleToggleChat = () => {
+        setIsChatOpen((prev) => !prev);
+    };
 
     // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)
     const renderStage = (extra = {}) => (
         <Stage
             roomId={roomId}
+            activityView={activityView}
             isHost={isHost}
             playbackLock={playbackLock}
             onTogglePlaybackLock={hostControls.toggle}
@@ -542,7 +570,7 @@ export default function App() {
             rejoin={rejoin}
             onCopyRoom={handleCopyRoom}
             onLeaveRoom={handleLeaveRoom}
-            onToggleChat={() => setIsChatOpen((prev) => !prev)}
+            onToggleChat={handleToggleChat}
             isChatOpen={isChatOpen}
             unreadChatCount={chat.unreadChatCount}
             chatCount={chat.unreadChatCount}
@@ -642,6 +670,11 @@ export default function App() {
             username={username}
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
+            activity={activities.current}
+            activityDefinition={activities.definition}
+            activityView={activityView}
+            onSetActivityView={setActivityView}
+            activityStatus={activityStatus}
             isAudioBlocked={isAudioBlocked}
             onToggleBlockAudio={toggleBlockAudio}
             signalStatus={signalStatus}
@@ -793,7 +826,7 @@ export default function App() {
                         playbackLock={playbackLock}
                         nowPlaying={nowPlaying}
                         isChatOpen={isChatOpen}
-                        onToggleChat={() => setIsChatOpen((prev) => !prev)}
+                        onToggleChat={handleToggleChat}
                         isMediaActive={isMediaActive}
                         onExitVideo={playback.exitVideo}
                         onVoteSkip={queueFeature.voteSkip}
@@ -801,6 +834,7 @@ export default function App() {
                         connectedPeers={connectedPeers}
                         isHost={isHost}
                         username={username}
+                        activityStatus={activityStatus}
                     />
                     <div className="room-desktop-body">
                         <div className="app-main-pane">

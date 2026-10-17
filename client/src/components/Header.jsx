@@ -27,7 +27,8 @@ export default function Header({
   skipVotes = [],
   connectedPeers = [],
   isHost = false,
-  username = ''
+  username = '',
+  activityStatus = null
 }) {
   const [copied, setCopied] = useState(false);
   const ping = networkStats?.avgPingMs;
@@ -120,15 +121,17 @@ export default function Header({
       {onToggleChat && (
         <button
           type="button"
-          className={`rh-chat-toggle ${isChatOpen ? 'is-open' : ''}`}
+          className={`rh-chat-toggle ${isChatOpen ? 'is-open' : ''} ${!isChatOpen && activityStatus?.attention ? 'needs-you' : ''}`}
           onClick={onToggleChat}
           aria-label={isChatOpen ? 'Hide side panel' : 'Open chat and queue panel'}
           title={isChatOpen ? 'Hide side panel' : 'Open chat and queue panel'}
         >
           <Icon name="chat" size={16} strokeWidth={2.2} />
           <span className="rh-chat-toggle-text">{isChatOpen ? 'Hide Panel' : 'Panel'}</span>
-          {!isChatOpen && unreadCount > 0 && (
-            <span className="rh-chat-badge">{unreadCount}</span>
+          {!isChatOpen && (activityStatus?.attention || unreadCount > 0) && (
+            <span className={`rh-chat-badge ${activityStatus?.attention ? 'is-activity' : ''}`} style={activityStatus?.color ? { backgroundColor: activityStatus.color } : undefined}>
+              {activityStatus?.attention ? (activityStatus.label || '🎲') : unreadCount}
+            </span>
           )}
         </button>
       )}
