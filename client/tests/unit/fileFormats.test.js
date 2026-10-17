@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readVint, readElementHeader } from '../../src/features/files/ebml.js';
-import { parseMkvHeader, extractMkvSubtitles, assEventText } from '../../src/features/files/mkv.js';
+import { parseMkvHeader, extractMkvSubtitles, extractMkvAudioTrack, extractMkvPgsSubtitles, assEventText } from '../../src/features/files/mkv.js';
 import { parseMp4 } from '../../src/features/files/mp4.js';
 import { probeFile, checkPlayable, cleanFormat, describeFormat, sniffContainer, subtitleTrackLabel, deviceName } from '../../src/features/files/formats.js';
+import { canExtract, isPgsTrack } from '../../src/features/files/extractSubtitles.js';
 
 // ---- building test files ----------------------------------------------------------------------
 const enc = new TextEncoder();
@@ -18,6 +19,7 @@ const el = (id, ...children) => {
 const uint = (id, v, len = 1) => el(id, Array.from({ length: len }, (_, i) => (v >> (8 * (len - 1 - i))) & 0xff));
 const float8 = (id, v) => { const b = new Uint8Array(8); new DataView(b.buffer).setFloat64(0, v); return el(id, [...b]); };
 const block = (track, rel, text) => [0x80 | track, (rel >> 8) & 0xff, rel & 0xff, 0x80, ...enc.encode(text)];
+const rawBlock = (track, rel, dataBytes) => [0x80 | track, (rel >> 8) & 0xff, rel & 0xff, 0x80, ...dataBytes];
 
 function mkvFile() {
     const track = (n, type, codec, lang, name = '') => el(0xae, uint(0xd7, n), uint(0x83, type), el(0x86, codec), el(0x22b59c, lang), ...(name ? [el(0x536e, name)] : []));
@@ -34,9 +36,12 @@ function mkvFile() {
                 track(6, 17, 'S_HDMV/PGS', 'eng')),
             el(0x1f43b675, uint(0xe7, 1000, 2),
                 el(0xa3, block(1, 0, 'videodata')),
+                el(0xa3, block(2, 0, 'ac3_payload_frame_1')),
                 el(0xa3, block(4, 0, 'First line\r\nsecond row')),
-                el(0xa0, el(0xa1, block(5, 500, '0,0,Default,,0,0,0,,{\\i1}Hola{\\i0}\\Nmundo')), uint(0x9b, 2000, 2))),
+                el(0xa0, el(0xa1, block(5, 500, '0,0,Default,,0,0,0,,{\\i1}Hola{\\i0}\\Nmundo')), uint(0x9b, 2000, 2)),
+                el(0xa3, rawBlock(6, 0, [0x16, 0x00, 0x02, 0xaa, 0xbb]))),
             el(0x1f43b675, uint(0xe7, 5000, 2),
+                el(0xa3, block(2, 0, 'ac3_payload_frame_2')),
                 el(0xa3, block(4, 0, 'Third')),
                 el(0xa3, block(4, 1000, 'Fourth'))))
     ]);
@@ -77,6 +82,31 @@ test('MKV subtitle text: SRT and ASS, timing, durations', async () => {
     ]);
     assert.deepEqual(cues.get(5), [{ startSec: 1.5, endSec: 3.5, text: 'Hola\nmundo' }]);
     assert.equal(assEventText('0,0,Default,,0,0,0,,Hi, there {\\pos(1,2)}you'), 'Hi, there you');
+});
+
+test('MKV audio bitstream extraction', async () => {
+    const bytes = mkvFile();
+    const rawAudio = await extractMkvAudioTrack(reader(bytes), bytes.length, 2);
+    const text = new TextDecoder().decode(rawAudio);
+    assert.equal(text, 'ac3_payload_frame_1ac3_payload_frame_2');
+});
+
+test('MKV PGS subtitle extraction and Blu-ray .sup packet framing', async () => {
+    const bytes = mkvFile();
+    assert.equal(canExtract({ codec: 's_hdmv/pgs' }), true);
+    assert.equal(isPgsTrack({ codec: 's_hdmv/pgs' }), true);
+    assert.equal(isPgsTrack({ codec: 's_text/utf8' }), false);
+
+    const supBytes = await extractMkvPgsSubtitles(reader(bytes), bytes.length, 6);
+    assert.ok(supBytes instanceof Uint8Array);
+    assert.equal(supBytes.length, 15);
+    // Header should start with 'PG' (0x50, 0x47)
+    assert.equal(supBytes[0], 0x50);
+    assert.equal(supBytes[1], 0x47);
+    // PTS at 1000ms: 1000 * 90 = 90,000 = 0x00015f90
+    assert.deepEqual(Array.from(supBytes.subarray(2, 6)), [0x00, 0x01, 0x5f, 0x90]);
+    // Segment data payload
+    assert.deepEqual(Array.from(supBytes.subarray(10)), [0x16, 0x00, 0x02, 0xaa, 0xbb]);
 });
 
 function box(type, ...children) {

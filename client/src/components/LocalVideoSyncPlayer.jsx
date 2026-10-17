@@ -5,7 +5,8 @@ import FileFormatNotice from '../features/files/FileFormatNotice';
 import { useAudioDucking } from '../features/audio/useAudioDucking';
 import ScrubberReactionHeatmap from './room/ScrubberReactionHeatmap';
 import { languageName, subtitleTrackLabel } from '../features/files/formats';
-import { canExtract } from '../features/files/extractSubtitles';
+import { canExtract, isPgsTrack } from '../features/files/extractSubtitles';
+import { createPgsRenderer } from '../features/subtitles/pgsRenderer';
 
 // Whole-file download (no on-demand streaming in this browser): rough time left
 const wholeFileEta = (p) => {
@@ -104,6 +105,7 @@ export default function LocalVideoSyncPlayer({
   const [delayToast, setDelayToast] = useState(null);
   const toastTimeoutRef = useRef(null);
   const subtitleSettingsRef = useRef(null);
+  const pgsRendererRef = useRef(null);
   const settingsRef = useRef(null);
   const scrubberTrackRef = useRef(null);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
@@ -132,21 +134,43 @@ export default function LocalVideoSyncPlayer({
     return () => window.removeEventListener('resize', updateMaxHeight);
   }, [showSubtitleSettings, showAudioSettings, isFullscreen]);
 
+  const videoRef = useRef(null);
+  const transcodedAudioRef = useRef(null);
+
   // Phase 3: Intelligent Dialogue Ducking (reduces volume by ~18 dB when peers speak)
   const duckingFactor = useAudioDucking(Boolean(initialFile || streamVideoUrl));
   useEffect(() => {
-    if (!videoRef.current || isMuted) return;
-    const effectiveVol = volume * duckingFactor;
-    videoRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
-  }, [duckingFactor, volume, isMuted]);
-
-  const handleSendReactionWithTime = useCallback((emoji) => {
-    if (typeof onSendReaction === 'function') {
-      onSendReaction(emoji, currentTimeSec);
+    const effectiveVol = isMuted ? 0 : volume * duckingFactor;
+    if (fileFormat?.transcodedAudioUrl) {
+      if (videoRef.current) videoRef.current.muted = true;
+      if (transcodedAudioRef.current) {
+        transcodedAudioRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
+        transcodedAudioRef.current.muted = isMuted;
+      }
+    } else {
+      if (videoRef.current) {
+        videoRef.current.muted = isMuted;
+        videoRef.current.volume = Math.max(0, Math.min(1, effectiveVol));
+      }
     }
-  }, [onSendReaction, currentTimeSec]);
+  }, [duckingFactor, volume, isMuted, fileFormat?.transcodedAudioUrl]);
 
-  const videoRef = useRef(null);
+  // Synchronize transcoded audio when its URL becomes available
+  useEffect(() => {
+    if (!fileFormat?.transcodedAudioUrl) return;
+    const audio = transcodedAudioRef.current;
+    const vid = videoRef.current;
+    if (!audio || !vid) return;
+    audio.currentTime = vid.currentTime;
+    audio.playbackRate = vid.playbackRate || 1;
+    const effectiveVol = isMuted ? 0 : volume * duckingFactor;
+    audio.volume = Math.max(0, Math.min(1, effectiveVol));
+    audio.muted = isMuted;
+    vid.muted = true;
+    if (!vid.paused) {
+      audio.play().catch(() => {});
+    }
+  }, [fileFormat?.transcodedAudioUrl, duckingFactor, isMuted, volume]);
   const playerContainerRef = useRef(null);
   const isHoveringTopRef = useRef(false);
   const isHoveringBottomRef = useRef(false);
@@ -207,6 +231,10 @@ export default function LocalVideoSyncPlayer({
   const lastActiveVideoKeyRef = useRef(activeVideoKey);
 
   const clearCurrentSubtitlesAndAudio = useCallback(() => {
+    if (pgsRendererRef.current) {
+      try { pgsRendererRef.current.dispose(); } catch (e) { }
+      pgsRendererRef.current = null;
+    }
     setSubtitles((prev) => {
       if (prev?.vttUrl) {
         try { URL.revokeObjectURL(prev.vttUrl); } catch (e) { }
@@ -218,6 +246,16 @@ export default function LocalVideoSyncPlayer({
     setSelectedAudioTrack(0);
     setShowSubtitleSettings(false);
     setShowAudioSettings(false);
+  }, []);
+
+  // Cleanup PGS WASM renderer on player unmount
+  useEffect(() => {
+    return () => {
+      if (pgsRendererRef.current) {
+        try { pgsRendererRef.current.dispose(); } catch (e) { }
+        pgsRendererRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -451,8 +489,10 @@ export default function LocalVideoSyncPlayer({
         if (currentTime !== undefined && Math.abs(vid.currentTime - currentTime) > 0.8) {
           expectEcho('seeked', 8000);
           vid.currentTime = currentTime;
+          if (transcodedAudioRef.current) transcodedAudioRef.current.currentTime = currentTime;
         }
         if (vid.paused) expectEcho('play');
+        transcodedAudioRef.current?.play()?.catch(() => {});
         vid.play().then(() => {
           setIsPlaying(true);
         }).catch(() => {
@@ -463,14 +503,17 @@ export default function LocalVideoSyncPlayer({
         if (currentTime !== undefined && Math.abs(vid.currentTime - currentTime) > 0.8) {
           expectEcho('seeked', 8000);
           vid.currentTime = currentTime;
+          if (transcodedAudioRef.current) transcodedAudioRef.current.currentTime = currentTime;
         }
         if (!vid.paused) expectEcho('pause');
+        transcodedAudioRef.current?.pause();
         vid.pause();
         setIsPlaying(false);
       } else if (action === 'seek') {
         if (currentTime !== undefined) {
           expectEcho('seeked', 8000); // streamed video: the seek can take a few seconds
           vid.currentTime = currentTime;
+          if (transcodedAudioRef.current) transcodedAudioRef.current.currentTime = currentTime;
           setCurrentTimeSec(currentTime);
           setSyncStatus(`⏩ ${sender || 'Peer'} seeked to ${formatTime(currentTime)}`);
         }
@@ -487,6 +530,10 @@ export default function LocalVideoSyncPlayer({
   // 4. File drag and drop handlers
   /** Show these subtitles here and send them to the room. */
   const shareSubtitles = (parsed) => {
+    if (pgsRendererRef.current) {
+      try { pgsRendererRef.current.dispose(); } catch (e) { }
+      pgsRendererRef.current = null;
+    }
     setSubtitles((prev) => {
       if (prev?.vttUrl) {
         try { URL.revokeObjectURL(prev.vttUrl); } catch (e) { }
@@ -589,21 +636,101 @@ export default function LocalVideoSyncPlayer({
     };
   }, [selectedAudioTrack, objectUrl, streamVideoUrl]);
 
+  // Load and initialize in-browser WebAssembly PGS subtitle rendering (libbitsub)
+  const handleLoadPgsSubtitles = useCallback(async (supBytes, fileName, trackNumber) => {
+    const vid = videoRef.current;
+    if (!vid || !supBytes) return;
+
+    if (pgsRendererRef.current) {
+      try { pgsRendererRef.current.dispose(); } catch (e) { }
+      pgsRendererRef.current = null;
+    }
+    if (subtitles?.vttUrl) {
+      try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) { }
+    }
+
+    try {
+      setSyncStatus(`Loading Blu-ray graphics subtitles: ${fileName || 'BD-PGS'}…`);
+      const renderer = await createPgsRenderer({
+        video: vid,
+        supBytes,
+        onLoaded: () => {
+          setSyncStatus(`Blu-ray subtitles active: ${fileName || 'BD-PGS'}`);
+        },
+        onError: (err) => {
+          console.error('[BD-PGS] Render error:', err);
+          setSyncStatus('Failed to display Blu-ray subtitles');
+        }
+      });
+
+      if (subtitleDelay !== 0) {
+        renderer.timeOffset = subtitleDelay;
+      }
+      if (renderer.canvas) {
+        renderer.canvas.style.display = subtitlesVisible ? 'block' : 'none';
+      }
+
+      pgsRendererRef.current = renderer;
+      setSubtitles({
+        fileName: fileName || 'Blu-ray Subtitles',
+        isPgs: true,
+        trackNumber,
+        cues: []
+      });
+      setSubtitlesVisible(true);
+      setSyncStatus(`Blu-ray subtitles active: ${fileName || 'BD-PGS'}`);
+    } catch (err) {
+      console.error('[BD-PGS] Setup error:', err);
+      setSyncStatus('Failed to initialize Blu-ray subtitles');
+    }
+  }, [subtitles?.vttUrl, subtitleDelay, subtitlesVisible]);
+
   // Subtitles read out of the video file (picked here or by someone in the room): use and share them
   const pendingSubtitle = fileFormat?.pendingSubtitle;
   useEffect(() => {
-    if (!pendingSubtitle?.vttString) return;
-    try {
-      const parsed = parseSubtitleString(pendingSubtitle.vttString, pendingSubtitle.fileName);
-      if (pendingSubtitle.trackNumber !== undefined) {
-        parsed.trackNumber = pendingSubtitle.trackNumber;
+    if (!pendingSubtitle) return;
+    if (pendingSubtitle.isPgs && pendingSubtitle.supBytes) {
+      handleLoadPgsSubtitles(pendingSubtitle.supBytes, pendingSubtitle.fileName, pendingSubtitle.trackNumber);
+      return;
+    }
+    if (pendingSubtitle.vttString) {
+      if (pgsRendererRef.current) {
+        try { pgsRendererRef.current.dispose(); } catch (e) { }
+        pgsRendererRef.current = null;
       }
-      shareSubtitles(parsed);
-    } catch (err) {
-      setSyncStatus('Failed to load the subtitles from the file');
+      try {
+        const parsed = parseSubtitleString(pendingSubtitle.vttString, pendingSubtitle.fileName);
+        if (pendingSubtitle.trackNumber !== undefined) {
+          parsed.trackNumber = pendingSubtitle.trackNumber;
+        }
+        shareSubtitles(parsed);
+      } catch (err) {
+        setSyncStatus('Failed to load the subtitles from the file');
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingSubtitle?.id]);
+  }, [pendingSubtitle?.id, handleLoadPgsSubtitles]);
+
+  // Sync PGS subtitles visibility
+  useEffect(() => {
+    if (pgsRendererRef.current) {
+      if (pgsRendererRef.current.canvas) {
+        pgsRendererRef.current.canvas.style.display = subtitlesVisible ? 'block' : 'none';
+      }
+      try {
+        pgsRendererRef.current.setDisplaySettings({ opacity: subtitlesVisible ? 1 : 0 });
+      } catch (e) { }
+    }
+  }, [subtitlesVisible]);
+
+  // Sync PGS subtitles delay offset
+  useEffect(() => {
+    if (pgsRendererRef.current) {
+      try {
+        pgsRendererRef.current.timeOffset = subtitleDelay;
+      } catch (e) { }
+    }
+  }, [subtitleDelay]);
 
   const handleToggleSubtitles = () => {
     if (!subtitles) {
@@ -623,6 +750,10 @@ export default function LocalVideoSyncPlayer({
   const handleRemoveSubtitles = () => {
     if (subtitles?.vttUrl) {
       try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) { }
+    }
+    if (pgsRendererRef.current) {
+      try { pgsRendererRef.current.dispose(); } catch (e) { }
+      pgsRendererRef.current = null;
     }
     setSubtitles(null);
     setSyncStatus('Subtitles turned off');
@@ -683,6 +814,7 @@ export default function LocalVideoSyncPlayer({
   // 5. Video event listeners (play, pause, seeked, timeupdate)
   const handleVideoPlay = () => {
     setIsPlaying(true);
+    transcodedAudioRef.current?.play()?.catch(() => {});
     if (isEcho('play')) return;
     setSyncStatus('Playing (Synced)');
     if (typeof onBroadcastAction === 'function' && videoRef.current) {
@@ -695,6 +827,7 @@ export default function LocalVideoSyncPlayer({
 
   const handleVideoPause = () => {
     setIsPlaying(false);
+    transcodedAudioRef.current?.pause();
     if (isEcho('pause')) return;
     setSyncStatus('Paused (Synced)');
     if (typeof onBroadcastAction === 'function' && videoRef.current) {
@@ -708,6 +841,9 @@ export default function LocalVideoSyncPlayer({
   const handleVideoSeeked = () => {
     if (!videoRef.current || isEcho('seeked')) return;
     const cur = videoRef.current.currentTime;
+    if (transcodedAudioRef.current) {
+      transcodedAudioRef.current.currentTime = cur;
+    }
     setSyncStatus(`Seeked to ${formatTime(cur)} (Synced)`);
     if (typeof onBroadcastAction === 'function') {
       onBroadcastAction('seek', {
@@ -719,7 +855,14 @@ export default function LocalVideoSyncPlayer({
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
-      setCurrentTimeSec(videoRef.current.currentTime);
+      const cur = videoRef.current.currentTime;
+      setCurrentTimeSec(cur);
+      if (transcodedAudioRef.current && !videoRef.current.paused) {
+        const drift = Math.abs(transcodedAudioRef.current.currentTime - cur);
+        if (drift > 0.08) {
+          transcodedAudioRef.current.currentTime = cur;
+        }
+      }
     }
   };
 
@@ -795,6 +938,9 @@ export default function LocalVideoSyncPlayer({
     setPlaybackRate(rate);
     if (videoRef.current) {
       videoRef.current.playbackRate = rate;
+    }
+    if (transcodedAudioRef.current) {
+      transcodedAudioRef.current.playbackRate = rate;
     }
     setShowSettings(false);
     setSyncStatus(`Speed: ${rate}x`);
@@ -1552,6 +1698,14 @@ export default function LocalVideoSyncPlayer({
             />
           )}
         </video>
+        {fileFormat?.transcodedAudioUrl && (
+          <audio
+            ref={transcodedAudioRef}
+            src={fileFormat.transcodedAudioUrl}
+            playsInline
+            style={{ display: 'none' }}
+          />
+        )}
 
         {/* Delay Offset HUD Toast Notification */}
         {delayToast && (
@@ -1855,6 +2009,7 @@ export default function LocalVideoSyncPlayer({
 
                           {/* Available Subtitle Tracks from Video */}
                           {availableSubtitles.map((t) => {
+                            const isPgs = isPgsTrack(t);
                             const extractable = canExtract(t);
                             const isExtracting = fileFormat?.job?.track === t.number;
                             const isTrackActive = subtitles && subtitlesVisible && (
@@ -1869,11 +2024,14 @@ export default function LocalVideoSyncPlayer({
                                 className={`sub-track-item ${isTrackActive ? 'active' : ''} ${isExtracting ? 'is-extracting' : ''}`}
                                 disabled={!extractable || Boolean(isExtracting && !fileFormat?.job?.error)}
                                 onClick={() => handleSelectEmbeddedSubtitle(t.number)}
-                                title={extractable ? subtitleTrackLabel(t) : `${subtitleTrackLabel(t)} (Image subtitles not supported in browser)`}
+                                title={extractable ? (isPgs ? `${subtitleTrackLabel(t)} (WASM BD-PGS graphics)` : subtitleTrackLabel(t)) : `${subtitleTrackLabel(t)} (Image subtitles not supported in browser)`}
                               >
                                 <span className="sub-track-radio">{isTrackActive ? '●' : '○'}</span>
                                 <div className="sub-track-info">
-                                  <span className="sub-track-name">{subtitleTrackLabel(t)}</span>
+                                  <div className="sub-track-title-row">
+                                    <span className="sub-track-name">{subtitleTrackLabel(t)}</span>
+                                    {isPgs && <span className="sub-track-wasm-pill">BD-PGS</span>}
+                                  </div>
                                   {isExtracting ? (
                                     <span className="sub-track-extracting">
                                       {fileFormat.job.asked && !fileFormat.job.progress
