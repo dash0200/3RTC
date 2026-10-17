@@ -400,9 +400,7 @@ export default function LiveChat({
   const hasVotedSkip = skipVotes.includes(username);
 
   const chatContainerRef = useRef(null);
-  const chatEndRef = useRef(null);
   const logsContainerRef = useRef(null);
-  const logsEndRef = useRef(null);
   const textareaRef = useRef(null);
 
   const displayLogs = useMemo(() => {
