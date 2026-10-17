@@ -1100,7 +1100,7 @@
 
 .toast {
   position: fixed;
-  bottom: 24px;
+  bottom: 104px;
   left: 50%;
   transform: translateX(-50%) translateY(0);
   background-color: var(--bg-surface);
@@ -1112,6 +1112,7 @@
   font-weight: 500;
   box-shadow: var(--shadow-elevated);
   z-index: 200;
+  pointer-events: none;
   animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -1473,9 +1474,11 @@
   opacity: 0 !important;
   pointer-events: none !important;
   transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease !important;
-  background: linear-gradient(to bottom, rgba(12, 12, 14, 0.98) 0%, rgba(12, 12, 14, 0.88) 75%, transparent 100%) !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7) !important;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.2) 65%, transparent 100%) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
 }
 
 .local-fullstage-player.is-fullscreen .local-stage-topbar.visible,
@@ -3140,14 +3143,23 @@
 /* In Fullscreen: Synchronize reaction dock with player controls */
 .local-fullstage-player.is-fullscreen .floating-reaction-dock {
   z-index: 105 !important;
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease !important;
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.28s ease !important;
   opacity: 1 !important;
   transform: translateY(0) !important;
   pointer-events: auto !important;
 }
 
-/* Auto-hide reaction dock when controls auto-hide or in Cinema View (matches player controls) */
-.local-fullstage-player.is-fullscreen.controls-hidden .floating-reaction-dock,
+/* Ensure reaction dock stays 100% visible and interactive whenever hovered or focused */
+.local-fullstage-player.is-fullscreen .floating-reaction-dock:hover,
+.local-fullstage-player.is-fullscreen .floating-reaction-dock:focus-within,
+.local-fullstage-player.is-fullscreen .fullscreen-reaction-wrapper:hover {
+  opacity: 1 !important;
+  transform: translateY(0) scale(1) !important;
+  pointer-events: auto !important;
+}
+
+/* Auto-hide reaction dock only when not hovered or focused (matches player controls) */
+.local-fullstage-player.is-fullscreen.controls-hidden .floating-reaction-dock:not(:hover):not(:focus-within),
 .local-fullstage-player.is-fullscreen.panels-hidden .floating-reaction-dock {
   opacity: 0 !important;
   transform: translateY(24px) scale(0.95) !important;
@@ -3204,8 +3216,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 50%;
   cursor: pointer;
   padding: 0;
@@ -3213,8 +3225,8 @@
 }
 
 .reaction-dock-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.22);
   transform: translateY(-3px) scale(1.15);
 }
 
@@ -9621,8 +9633,11 @@ video::cue {
   z-index: 100 !important;
   height: 60px !important;
   padding: 0 24px !important;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.98) 0%, rgba(0, 0, 0, 0.82) 75%, transparent 100%) !important;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0.25) 65%, transparent 100%) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
   border-top: none !important;
+  box-shadow: none !important;
   transform: translateY(100%) !important;
   opacity: 0 !important;
   pointer-events: none !important;
@@ -10801,7 +10816,7 @@ video::cue {
 /* Build number (home footer, Peers tab): which deploy this is */
 .build-label {
   margin: 10px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
@@ -10813,7 +10828,7 @@ video::cue {
   align-items: center;
   gap: 6px;
   margin-top: 3px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -10823,7 +10838,7 @@ video::cue {
   border-radius: 5px;
   background: rgba(242, 183, 5, 0.18);
   color: #f2c94c;
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -10880,7 +10895,7 @@ video::cue {
   border-radius: 9px;
   background: var(--accent-red, #ff1744);
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 18px;
   text-align: center;
@@ -10959,7 +10974,7 @@ video::cue {
 }
 .link-player-badge {
   flex: none;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
