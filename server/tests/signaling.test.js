@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { WebSocket } from 'ws';
+import { isOriginAllowed } from '../signaling.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 18000 + Math.floor(Math.random() * 1000);
@@ -258,5 +259,64 @@ describe('signaling server', () => {
         const res = await fetch(`http://localhost:${PORT}/api/quick-picks`);
         assert.equal(res.status, 503);
         assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    });
+
+    it('refuses unauthenticated claim of an unoccupied host seat (H-03)', async () => {
+        const host = await connected('host-hijack');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId, hostToken, seatToken: hostSeatToken } = await host.next('room-created');
+        assert.ok(hostToken && hostSeatToken);
+
+        const guest = await connected('guest-innocent');
+        guest.send({ type: 'join', roomId, peerId: 'guest-innocent' });
+        await guest.next('joined');
+
+        // Host temporarily leaves / disconnects while guest remains
+        host.close();
+        await new Promise((r) => setTimeout(r, 50));
+
+        // Attacker attempts to sit in the host's seat without the host's seat token
+        const attacker = await connected('host-hijack');
+        attacker.send({ type: 'join', roomId, peerId: 'host-hijack' });
+        const err = await attacker.next('error');
+        assert.equal(err.code, 'seat-taken');
+
+        // Legitimate host reclaims seat with valid seat token
+        const legitimateHost = await connected('host-hijack');
+        legitimateHost.send({ type: 'join', roomId, peerId: 'host-hijack', seatToken: hostSeatToken });
+        const joined = await legitimateHost.next('joined');
+        assert.equal(joined.roomId, roomId);
+        assert.ok(joined.hostToken, 'verified host receives host token');
+
+        attacker.close();
+        guest.close();
+        legitimateHost.close();
+    });
+
+    it('rejects WebSocket handshake from unauthorized third-party origin (H-05)', async () => {
+        await assert.rejects(
+            new Promise((resolve, reject) => {
+                const ws = new WebSocket(URL, { headers: { Origin: 'https://evil-attacker.com' } });
+                ws.on('open', () => { ws.close(); resolve('opened'); });
+                ws.on('error', (err) => reject(err));
+            }),
+            /403|unexpected server response/i
+        );
+    });
+});
+
+describe('isOriginAllowed (H-05)', () => {
+    it('allows same-origin, local development, and trusted domains', () => {
+        assert.equal(isOriginAllowed(undefined), true);
+        assert.equal(isOriginAllowed('http://localhost:5173'), true);
+        assert.equal(isOriginAllowed('http://127.0.0.1:8080'), true);
+        assert.equal(isOriginAllowed('https://3rtc.me'), true);
+        assert.equal(isOriginAllowed('https://dev.3rtc.me'), true);
+    });
+
+    it('rejects malicious external origins', () => {
+        assert.equal(isOriginAllowed('https://attacker.com'), false);
+        assert.equal(isOriginAllowed('https://evil-3rtc.me.fake.com'), false);
+        assert.equal(isOriginAllowed('javascript:void(0)'), false);
     });
 });
