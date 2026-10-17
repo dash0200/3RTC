@@ -12,7 +12,7 @@ import { defineConfig } from 'vite'
 // of the precache so visitors who never enable it don't download them; the service worker
 // caches them on first use instead.
 // hls.js (HLS links) too: only people who play a .m3u8 stream need it
-const ON_DEMAND_ASSET = /(^|\/)(rnnoise[^/]*\.wasm|workletProcessor-[^/]*\.js|hls-[^/]*\.js|subtitleWorker-[^/]*\.js)$/
+const ON_DEMAND_ASSET = /(^|\/)(rnnoise[^/]*\.wasm|workletProcessor-[^/]*\.js|hls-[^/]*\.js|subtitleWorker-[^/]*\.js|ffmpeg[^/]*|audioTranscode[^/]*|libbitsub[^/]*)$/
 // Files for search engines and link previews; the app itself never needs them
 const NOT_PRECACHED = /^(og-image\.png|robots\.txt|sitemap\.xml|404\.html)$/
 
@@ -45,7 +45,7 @@ function pwaServiceWorker() {
             walk(full)
           } else {
             const rel = path.relative(publicDir, full).split(path.sep).join('/')
-            if (NOT_PRECACHED.test(rel)) continue
+            if (NOT_PRECACHED.test(rel) || ON_DEMAND_ASSET.test(rel) || rel.startsWith('ffmpeg/') || rel.startsWith('libbitsub/')) continue
             files.push(rel)
             hash.update(rel)
             hash.update(fs.readFileSync(full))
