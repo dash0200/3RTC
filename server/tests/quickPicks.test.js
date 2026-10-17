@@ -1,7 +1,16 @@
 // Quick picks: no Shorts; trending per country.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isShort, parseDuration, isPlayableIn, mixCharts, picksFor, QUICK_PICKS_REGIONS } from '../quickPicks.js';
+import {
+    isShort,
+    parseDuration,
+    isPlayableIn,
+    mixCharts,
+    picksFor,
+    QUICK_PICKS_REGIONS,
+    serveQuickPicks,
+    invalidateQuickPicksCache
+} from '../quickPicks.js';
 
 const video = ({ title = 'A video', description = '', duration = 'PT4M10S', w = 480, h = 270, live = 'none', tags } = {}) => ({
     snippet: { title, description, liveBroadcastContent: live, tags },
@@ -75,3 +84,27 @@ describe('trending per country', () => {
         assert.deepEqual(picksFor({ categories: [row('trending-music', 'Trending'), row('lofi', 'Music')] }, 'US').categories.map((c) => c.id), ['trending-music', 'lofi']);
     });
 });
+
+describe('quick picks pre-serialization caching and headers (M-05, L-01)', () => {
+    it('invalidates cache without errors', () => {
+        assert.doesNotThrow(() => invalidateQuickPicksCache());
+    });
+
+    it('serves quick picks response with defensive security headers', () => {
+        let headersSent = {};
+        let statusSent = 0;
+        const req = { method: 'GET', url: '/api/quick-picks?region=IN' };
+        const res = {
+            writeHead(status, headers) {
+                statusSent = status;
+                headersSent = headers;
+            },
+            end() {}
+        };
+        serveQuickPicks(req, res);
+        assert.ok([200, 503].includes(statusSent));
+        assert.equal(headersSent['X-Content-Type-Options'], 'nosniff');
+        assert.equal(headersSent['X-Frame-Options'], 'SAMEORIGIN');
+    });
+});
+

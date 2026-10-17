@@ -8,6 +8,7 @@ import {
   MAX_IMAGE_CHUNKS
 } from '../../src/utils/p2pImageShare.js';
 import { P2PStreamReceiver, MAX_STREAM_CHUNKS } from '../../src/utils/p2pStreamer.js';
+import { getIceServers, DEFAULT_ICE_SERVERS } from '../../src/webrtc/config.js';
 
 describe('sanitizeImageFilename (M-02)', () => {
   it('strips directory traversal and path separators', () => {
@@ -123,3 +124,37 @@ describe('P2PStreamReceiver bounds validation (M-01)', () => {
     assert.equal(excessiveError, true);
   });
 });
+
+describe('getIceServers configuration (L-02)', () => {
+  it('returns DEFAULT_ICE_SERVERS by default', () => {
+    const servers = getIceServers();
+    assert.deepEqual(servers, DEFAULT_ICE_SERVERS);
+    assert.ok(servers.length >= 2);
+  });
+
+  it('reads custom TURN relay servers from window.__RTC_ICE_SERVERS__ when configured', () => {
+    globalThis.window = {
+      __RTC_ICE_SERVERS__: [
+        { urls: 'turn:turn.example.com:3478', username: 'user', credential: 'password' }
+      ]
+    };
+    try {
+      const servers = getIceServers();
+      assert.equal(servers.length, 1);
+      assert.equal(servers[0].urls, 'turn:turn.example.com:3478');
+    } finally {
+      delete globalThis.window;
+    }
+  });
+
+  it('falls back safely if window.__RTC_ICE_SERVERS__ is not an array', () => {
+    globalThis.window = { __RTC_ICE_SERVERS__: 'invalid-turn-string' };
+    try {
+      const servers = getIceServers();
+      assert.deepEqual(servers, DEFAULT_ICE_SERVERS);
+    } finally {
+      delete globalThis.window;
+    }
+  });
+});
+
