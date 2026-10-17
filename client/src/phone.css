@@ -99,6 +99,7 @@
   aspect-ratio: 16 / 9;
   height: auto;
   max-height: 45dvh;
+  min-height: 180px;
   background: #000;
 }
 
@@ -225,6 +226,11 @@
   z-index: auto;
   display: flex;
   flex-direction: column;
+}
+
+.phone-app .chat-section.embedded .chat-messages-container {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .phone-app .chat-section.embedded .chat-nav-tabs {

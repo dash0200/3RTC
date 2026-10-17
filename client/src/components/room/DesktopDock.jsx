@@ -38,7 +38,6 @@ export default function DesktopDock({
   const status = isAudioBlocked ? 'Sound off' : isPtt ? (isPttActive ? 'Talking' : `Hold ${audioSettings?.pttKeyLabel || 'Space'} to talk`) : isMicMuted ? 'Mic off' : speaking ? 'Speaking' : 'Mic on';
   const micLabel = isAudioBlocked ? 'Mic blocked' : isPtt ? (isPttActive ? 'Talking' : `Hold ${audioSettings?.pttKeyLabel || 'Space'}`) : isMicMuted ? 'Mic off' : 'Mic on';
   const micOff = isMicMuted || isAudioBlocked;
-  const showGames = !isMediaActive && activityMenu.length > 0;
 
   return (
     <div className="dock">
@@ -125,7 +124,13 @@ export default function DesktopDock({
           )}
         </div>
 
-        {showGames ? (
+        {/* Add video is always available on the dock */}
+        <button type="button" className="dock-btn" aria-label="Add a video" title="Add a video" onClick={onOpenAddVideo}>
+          <Icon name="videoAdd" />
+        </button>
+
+        {/* Play together (Games) is always available if games are loaded */}
+        {activityMenu.length > 0 && (
           <div className="dock-anchor" ref={games.ref}>
             <button type="button" className={`dock-btn ${games.open ? 'is-active' : ''}`} aria-label="Games" title="Play together" aria-expanded={games.open} onClick={games.toggle}>
               <Icon name="games" />
@@ -142,10 +147,6 @@ export default function DesktopDock({
               </div>
             )}
           </div>
-        ) : (
-          <button type="button" className="dock-btn" aria-label="Add a video" title="Add a video" onClick={onOpenAddVideo}>
-            <Icon name="videoAdd" />
-          </button>
         )}
 
         <div className="dock-anchor" ref={more.ref}>
@@ -166,17 +167,6 @@ export default function DesktopDock({
               ) : playbackLock ? (
                 <p className="dock-menu-note"><Icon name="lock" size={18} />The host controls playback</p>
               ) : null}
-              {!showGames && activityMenu.length > 0 && (
-                <>
-                  <p className="dock-menu-label">Play together</p>
-                  {activityMenu.map((a) => (
-                    <button key={a.id} type="button" role="menuitem" className="dock-menu-item" disabled={Boolean(a.disabledReason) || a.isOpen} title={a.disabledReason || a.description}
-                      onClick={() => { more.close(); onStartActivity?.(a.id); }}>
-                      <span className="dock-menu-emoji" aria-hidden="true">{a.icon}</span>{a.name}
-                    </button>
-                  ))}
-                </>
-              )}
             </div>
           )}
         </div>

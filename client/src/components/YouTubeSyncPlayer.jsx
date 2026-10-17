@@ -88,6 +88,22 @@ export default function YouTubeSyncPlayer({
   const [hoverPreview, setHoverPreview] = useState(null);
   const [isDropOver, setIsDropOver] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
+  const [showTopControls, setShowTopControls] = useState(true);
+  const idleTimerRef = useRef(null);
+
+  const handleStageActivity = () => {
+    setShowTopControls(true);
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      setShowTopControls(false);
+    }, 3500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, []);
 
   const playerRef = useRef(null);
   const fullstageRef = useRef(null);
@@ -779,9 +795,12 @@ export default function YouTubeSyncPlayer({
       <div
         className={`yt-fullstage-player ${isFullscreen ? 'is-fullscreen' : ''}`}
         ref={fullstageRef}
+        onMouseMove={handleStageActivity}
+        onMouseEnter={handleStageActivity}
+        onMouseLeave={() => setShowTopControls(false)}
       >
-        {/* Sleek, Clean Top Bar */}
-        <div className="yt-stage-topbar">
+        {/* Sleek, Clean Top Bar (Auto-hides on idle to prevent subtitle and control collision) */}
+        <div className={`yt-stage-topbar ${showTopControls ? 'is-active' : 'is-idle'}`}>
           <form className="yt-stage-url-form" onSubmit={handleLoadUrl}>
             <div className="yt-input-wrapper compact">
               <svg className="yt-input-icon" viewBox="0 0 24 24" width="16" height="16" fill="#e5143d">
@@ -827,11 +846,6 @@ export default function YouTubeSyncPlayer({
                 {activeVideoTitle}
               </span>
             )}
-
-            <div className={`yt-sync-pill ${isPlaying ? 'playing' : 'paused'}`}>
-              <span className="yt-sync-dot"></span>
-              <span>{syncStatus}</span>
-            </div>
 
             {/* Vote to Skip (shown if peers are present) */}
             {totalParticipants > 1 && (
