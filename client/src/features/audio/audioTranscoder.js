@@ -64,6 +64,19 @@ export async function getFFmpeg(onLog) {
     }
 }
 
+export function getAudioExtension(codec) {
+    const c = (codec || '').toLowerCase();
+    if (c.includes('eac3') || c.includes('ec-3') || c.includes('dolby digital plus')) return 'eac3';
+    if (c.includes('ac3') || c.includes('ac-3') || c.includes('dolby')) return 'ac3';
+    if (c.includes('aac')) return 'aac';
+    if (c.includes('dts')) return 'dts';
+    if (c.includes('mp3') || c.includes('mpeg')) return 'mp3';
+    if (c.includes('flac')) return 'flac';
+    if (c.includes('opus')) return 'opus';
+    if (c.includes('vorbis') || c.includes('ogg')) return 'ogg';
+    return 'audio';
+}
+
 /**
  * Transcode an unsupported audio track (e.g. E-AC-3) in the video file to AAC (.m4a).
  * @param {File} file
@@ -79,11 +92,11 @@ export async function transcodeAudioTrack(file, { format, trackNumber, onProgres
 
     // Pick target audio track
     const audioTracks = format?.audio || [];
-    const targetTrack = trackNumber
+    const targetTrack = (trackNumber !== undefined && trackNumber !== null)
         ? audioTracks.find((a) => a.number === trackNumber) || audioTracks[0]
         : audioTracks[0];
 
-    const targetNumber = targetTrack?.number || 1;
+    const targetNumber = targetTrack?.number ?? 1;
     const cacheKey = `${file.name}-${file.size}-${file.lastModified}-${targetNumber}`;
 
     if (transcodeCache.has(cacheKey)) {
@@ -98,15 +111,18 @@ export async function transcodeAudioTrack(file, { format, trackNumber, onProgres
 
     if (signal?.aborted) throw new Error('Transcoding aborted');
 
+    const ext = getAudioExtension(targetTrack?.codec);
+    let inputName = `input.${ext}`;
     let inputBytes = null;
-    let inputName = 'input.audio';
 
     const isMkv = format?.container === 'matroska' || format?.container === 'webm' || /\.mkv$/i.test(file.name);
 
-    if (isMkv && targetTrack?.number) {
+    if (isMkv && targetTrack?.number !== undefined) {
         onProgress?.(0.05, 'Extracting audio bitstream…');
         const readAt = readerFor(file);
         inputBytes = await extractMkvAudioTrack(readAt, file.size, targetTrack.number, {
+            codec: targetTrack.codec,
+            codecPrivate: targetTrack.codecPrivate,
             onProgress: (p) => {
                 if (signal?.aborted) throw new Error('Transcoding aborted');
                 onProgress?.(0.05 + p * 0.25, `Extracting audio track (${Math.round(p * 100)}%)…`);
@@ -128,12 +144,20 @@ export async function transcodeAudioTrack(file, { format, trackNumber, onProgres
     if (signal?.aborted) throw new Error('Transcoding aborted');
 
     onProgress?.(0.35, 'Initializing WebAssembly encoder…');
+    try { await ffmpeg.deleteFile(inputName); } catch {}
+    try { await ffmpeg.deleteFile(outputName); } catch {}
     await ffmpeg.writeFile(inputName, inputBytes);
 
     // Free memory from JS side
     inputBytes = null;
 
     const outputName = 'output.m4a';
+    const logs = [];
+
+    const logHandler = ({ message }) => {
+        logs.push(message);
+        if (logs.length > 40) logs.shift();
+    };
 
     const progressHandler = ({ progress }) => {
         if (typeof progress === 'number' && progress >= 0 && progress <= 1) {
@@ -142,15 +166,25 @@ export async function transcodeAudioTrack(file, { format, trackNumber, onProgres
         }
     };
 
+    ffmpeg.on('log', logHandler);
     ffmpeg.on('progress', progressHandler);
 
     try {
         onProgress?.(0.40, 'Transcoding audio to AAC…');
+        const isContainerInput = inputName.endsWith('.mp4') || inputName.endsWith('.mkv');
+        const audioIndex = audioTracks.findIndex((a) => a.number === targetNumber);
+        const mapArgs = isContainerInput
+            ? ['-map', `0:a:${audioIndex >= 0 ? audioIndex : 0}`]
+            : [];
         // Command: extract/transcode to standard 192k stereo AAC (.m4a)
-        const args = ['-i', inputName, '-vn', '-c:a', 'aac', '-b:a', '192k', outputName];
-        await ffmpeg.exec(args);
+        const args = ['-y', '-i', inputName, ...mapArgs, '-vn', '-c:a', 'aac', '-b:a', '192k', outputName];
+        const exitCode = await ffmpeg.exec(args);
 
         if (signal?.aborted) throw new Error('Transcoding aborted');
+        if (exitCode !== 0) {
+            const lastLog = logs.slice(-4).join('; ');
+            throw new Error(`FFmpeg transcoding failed (code ${exitCode}): ${lastLog || 'Unknown error'}`);
+        }
 
         onProgress?.(0.96, 'Finalizing audio track…');
         const outputData = await ffmpeg.readFile(outputName);
@@ -163,6 +197,7 @@ export async function transcodeAudioTrack(file, { format, trackNumber, onProgres
         onProgress?.(1, 'Audio converted successfully');
         return result;
     } finally {
+        ffmpeg.off('log', logHandler);
         ffmpeg.off('progress', progressHandler);
         // Clean up virtual files
         try { await ffmpeg.deleteFile(inputName); } catch {}

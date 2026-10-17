@@ -48,6 +48,7 @@ import ActivityStage from './features/activities/ActivityStage';
 import { nextActivityView } from './features/activities/activityHost';
 import { useActivityLoad } from './features/activities/useActivityLoad';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
+import { useScreenShare } from './features/screenshare/useScreenShare';
 import './App.css';
 import './phone.css';
 import './redesign.css';
@@ -181,6 +182,13 @@ export default function App() {
         signalUrl, fallbackUrls, setSignalStatus, logLocalDebug
     });
     const { roomId, isHost, peerCount, isP2PConnected, p2pStatusText } = mesh;
+
+    const localUser = useMemo(() => (roomId ? {
+        id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
+    } : null), [roomId, username, isHost, isMicMuted]);
+
+    const screenShare = useScreenShare(bus, { localUser });
+    const isScreenSharingActive = Boolean(screenShare.isScreenShareActive);
 
     // ---- features ----------------------------------------------------------------------------
     const hostControls = useHostControls({ room, isHost, peerMetadata });
@@ -328,7 +336,7 @@ export default function App() {
     });
 
     // Keep the screen on while watching together (phones would dim, lock and pause the stream)
-    useWakeLock(Boolean(roomId) && isMediaActive);
+    useWakeLock(Boolean(roomId) && (isMediaActive || isScreenSharingActive));
 
     // ---- room actions ------------------------------------------------------------------------
     const rememberName = (displayName) => {
@@ -509,10 +517,6 @@ export default function App() {
         }
     }, [connectedPeers.length, sidebarTab]);
 
-    const localUser = useMemo(() => (roomId ? {
-        id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
-    } : null), [roomId, username, isHost, isMicMuted]);
-
     // What components deeper down read with useRoom()
     const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock }),
         [room, roomId, isHost, username, connectedPeers, playbackLock]);
@@ -567,6 +571,8 @@ export default function App() {
             isP2PConnected={isP2PConnected}
             p2pStatusText={p2pStatusText}
             rejoin={rejoin}
+            screenShare={screenShare}
+            bus={bus}
             onCopyRoom={handleCopyRoom}
             onLeaveRoom={handleLeaveRoom}
             onToggleChat={handleToggleChat}
@@ -632,10 +638,12 @@ export default function App() {
             {...extra}
         />
     );
-    const nowPlaying = playback.activeMedia
-        ? (playback.activeMedia.title || '')
-        : activeVideoId ? (activeVideoTitle || 'YouTube video')
-            : (localVideoFile?.name || remoteLocalVideoMeta?.fileName || remoteLocalVideoMeta?.name || '');
+    const nowPlaying = isScreenSharingActive
+        ? `${screenShare.screenSharer?.username || (screenShare.isSharingScreen ? 'Your' : 'Peer')}'s screen`
+        : playback.activeMedia
+            ? (playback.activeMedia.title || '')
+            : activeVideoId ? (activeVideoTitle || 'YouTube video')
+                : (localVideoFile?.name || remoteLocalVideoMeta?.fileName || remoteLocalVideoMeta?.name || '');
     const renderAddVideoSheet = () => (
         <AddVideoSheet
             isOpen={phoneSheet === 'add'}
@@ -787,6 +795,8 @@ export default function App() {
                         onTogglePlaybackLock={hostControls.toggle}
                         activityMenu={activityMenu}
                         onStartActivity={startOrJoinActivity}
+                        isScreenSharing={screenShare.isSharingScreen}
+                        onToggleScreenShare={screenShare.toggleScreenShare}
                     />
                     <SoundboardSheet
                         isOpen={phoneSheet === 'soundboard'}
@@ -826,8 +836,15 @@ export default function App() {
                         nowPlaying={nowPlaying}
                         isChatOpen={isChatOpen}
                         onToggleChat={handleToggleChat}
-                        isMediaActive={isMediaActive}
-                        onExitVideo={playback.exitVideo}
+                        isMediaActive={isMediaActive || isScreenSharingActive}
+                        onExitVideo={() => {
+                            if (screenShare.isSharingScreen) {
+                                screenShare.stopScreenShare();
+                            } else if (screenShare.isScreenShareActive) {
+                                screenShare.dismissScreenShare();
+                            }
+                            playback.exitVideo();
+                        }}
                         onVoteSkip={queueFeature.voteSkip}
                         skipVotes={skipVotes}
                         connectedPeers={connectedPeers}

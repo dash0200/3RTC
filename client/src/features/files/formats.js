@@ -48,7 +48,15 @@ export function formatFromMkv(header) {
     if (video) video.label = codecLabel(video.codec);
     const audio = tracks.filter((t) => t.type === 'audio').map((t) => {
         const codec = mkvCodec(MKV_AUDIO, t.codecId);
-        return { number: t.number, codec, label: codecLabel(codec), language: t.language, name: t.name };
+        return {
+            number: t.number,
+            codec,
+            codecId: t.codecId,
+            label: codecLabel(codec),
+            language: t.language,
+            name: t.name,
+            ...(t.codecPrivate ? { codecPrivate: t.codecPrivate } : {})
+        };
     });
     const subtitles = tracks.filter((t) => t.type === 'subtitle').map((t) => ({
         number: t.number,
@@ -74,7 +82,13 @@ export function formatFromMkv(header) {
 export function formatFromMp4(info) {
     const v = info.tracks.find((t) => t.type === 'video');
     const video = v ? { codec: v.codec, label: codecLabel(v.codec) } : null;
-    const audio = info.tracks.filter((t) => t.type === 'audio').map((t) => ({ codec: t.codec, label: codecLabel(t.codec), language: t.language, name: '' }));
+    const audio = info.tracks.filter((t) => t.type === 'audio').map((t, i) => ({
+        number: t.id || (i + 1),
+        codec: t.codec,
+        label: codecLabel(t.codec),
+        language: t.language,
+        name: ''
+    }));
     const subtitles = info.tracks.filter((t) => t.type === 'subtitle').map((t, i) => ({
         number: i + 1, codec: t.codec, kind: 'text', label: t.codec === 'tx3g' ? 'MP4 text' : t.codec, language: t.language, name: '', isDefault: false, embeddedMp4: true
     }));
@@ -240,7 +254,8 @@ export function cleanFormat(f) {
     const video = f.video && typeof f.video.codec === 'string' ? { codec: str(f.video.codec), label: codecLabel(str(f.video.codec)) } : null;
     const audio = (Array.isArray(f.audio) ? f.audio : []).slice(0, 16).map((a) => ({
         number: Number.isInteger(a?.number) ? a.number : 0,
-        codec: str(a?.codec), label: codecLabel(str(a?.codec)), language: str(a?.language, 12) || 'und', name: str(a?.name, 80)
+        codec: str(a?.codec), label: codecLabel(str(a?.codec)), language: str(a?.language, 12) || 'und', name: str(a?.name, 80),
+        ...(a?.codecPrivate instanceof Uint8Array ? { codecPrivate: a.codecPrivate } : {})
     }));
     const subtitles = (Array.isArray(f.subtitles) ? f.subtitles : []).slice(0, 32).map((s) => ({
         number: Number.isInteger(s?.number) ? s.number : 0,
