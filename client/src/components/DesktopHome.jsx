@@ -35,7 +35,7 @@ export default function DesktopHome({ username, initialPin = '', onCreate, onJoi
           <h1 className="dh-headline">Watch anything together, in perfect sync.</h1>
           <p className="dh-sub">
             YouTube, any video link, or a movie on your laptop. Talk, chat and react while you watch —
-            straight between your devices, up to 6 people.
+            straight between your devices, up to 4 people.
           </p>
         </section>
 
