@@ -15,6 +15,7 @@ import ServerSettingsModal from './components/ServerSettingsModal';
 import AudioSettingsModal from './components/AudioSettingsModal';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
+import PreJoinModal from './components/PreJoinModal';
 import { PhoneTopBar, PhoneActionBar } from './components/phone/PhoneChrome';
 import { AddVideoSheet, MoreSheet, SoundboardSheet } from './components/phone/PhoneSheets';
 import PhoneHome from './components/phone/PhoneHome';
@@ -316,11 +317,32 @@ export default function App() {
     };
     const handleConfirmCreate = (displayName) => {
         rememberName(displayName);
+        setSidebarTab('invite');
         mesh.createRoom();
     };
     const handleConfirmJoin = (pin, displayName) => {
         rememberName(displayName);
+        setSidebarTab('chat');
         mesh.joinRoom(pin);
+    };
+    // Pre-join Green Room check (UX-H01): preview microphone and audio devices before joining
+    const [preJoinConfig, setPreJoinConfig] = useState(null);
+    const handleInitiateCreate = (displayName) => {
+        setPreJoinConfig({ mode: 'create', name: displayName });
+    };
+    const handleInitiateJoin = (pin, displayName) => {
+        setPreJoinConfig({ mode: 'join', pin, name: displayName });
+    };
+    const handleConfirmPreJoin = ({ name: chosenName, micOn, pin }) => {
+        micOnAfterJoinRef.current = Boolean(micOn);
+        const mode = preJoinConfig?.mode;
+        const targetPin = pin || preJoinConfig?.pin;
+        setPreJoinConfig(null);
+        if (mode === 'create') {
+            handleConfirmCreate(chosenName);
+        } else {
+            handleConfirmJoin(targetPin, chosenName);
+        }
     };
     // Invite link (?room=12345): its own screen with one Join button; the mic choice is made there
     const [inviteDismissed, setInviteDismissed] = useState(false);
@@ -458,6 +480,13 @@ export default function App() {
         // peerCount / isP2PConnected: the peer map itself isn't state
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected, hostPeerId]);
+
+    // Auto-switch from invite tab to chat once a peer connects
+    useEffect(() => {
+        if (connectedPeers.length > 0 && sidebarTab === 'invite') {
+            setSidebarTab('chat');
+        }
+    }, [connectedPeers.length, sidebarTab]);
 
     const localUser = useMemo(() => (roomId ? {
         id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
@@ -700,8 +729,8 @@ export default function App() {
                         <PhoneHome
                             username={username}
                             initialPin={initialJoinPin}
-                            onCreate={handleConfirmCreate}
-                            onJoin={handleConfirmJoin}
+                            onCreate={handleInitiateCreate}
+                            onJoin={handleInitiateJoin}
                             onOpenServerSettings={openServerSettings}
                             rejoin={rejoin}
                         />
@@ -743,8 +772,8 @@ export default function App() {
                 ) : (
                     <DesktopHome
                         username={username}
-                        onCreate={handleConfirmCreate}
-                        onJoin={handleConfirmJoin}
+                        onCreate={handleInitiateCreate}
+                        onJoin={handleInitiateJoin}
                         onOpenServerSettings={openServerSettings}
                         rejoin={rejoin}
                         isOnline={signalStatus.connected}
@@ -773,9 +802,7 @@ export default function App() {
                                 })}
                             </main>
                         </div>
-                        {connectedPeers.length === 0
-                            ? <InvitePanel roomId={roomId} onShowQr={openQrCode} onCopied={() => showToast('Invite link copied')} />
-                            : renderChat()}
+                        {renderChat()}
                     </div>
                     {renderAddVideoSheet()}
                 </div>
@@ -843,6 +870,17 @@ export default function App() {
                 isPlaying={isMediaActive || activityOn}
                 onStay={closeLeaveDialog}
                 onLeave={leaveRoomNow}
+            />
+            <PreJoinModal
+                isOpen={preJoinConfig !== null}
+                mode={preJoinConfig?.mode}
+                pin={preJoinConfig?.pin}
+                initialName={preJoinConfig?.name || username}
+                audioSettings={audioSettings}
+                onUpdateAudioSettings={handleUpdateAudioSettings}
+                onSelectOutput={selectOutputDevice}
+                onConfirm={handleConfirmPreJoin}
+                onCancel={() => setPreJoinConfig(null)}
             />
 
             {roomId && <NetworkBlockedBanner hint={mesh.networkHint} onDismiss={mesh.dismissNetworkHint} />}

@@ -29,6 +29,7 @@ import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal from './ImageLightboxModal';
 import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 import { useBackLayer } from '../core/backStack';
+import InvitePanel from './room/InvitePanel';
 
 
 
@@ -603,8 +604,20 @@ export default function LiveChat({
         </div>
         )}
 
-        {/* Tabs: Chat vs Queue vs Peers */}
+        {/* Tabs: Invite (if alone) vs Chat vs Queue vs Peers */}
         <div className="chat-nav-tabs" role="tablist" aria-label="Room panel">
+          {connectedPeers.length === 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'invite'}
+              className={`chat-tab-btn ${activeTab === 'invite' ? 'active' : ''}`}
+              onClick={() => setActiveTab('invite')}
+            >
+              <span>Invite</span>
+            </button>
+          )}
+
           <button
             type="button"
             role="tab"
@@ -665,6 +678,16 @@ export default function LiveChat({
               </button>
             )}
           </div>
+        )}
+
+        {/* TAB 0: Invite Tab (when host is alone in room) */}
+        {activeTab === 'invite' && (
+          <InvitePanel
+            roomId={roomId}
+            onShowQr={onOpenQrCode}
+            onCopied={() => {}}
+            isTab={true}
+          />
         )}
 
         {/* TAB 1: Real Peer Chat */}

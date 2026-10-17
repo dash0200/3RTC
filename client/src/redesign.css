@@ -427,6 +427,9 @@
   background: var(--rd-panel); border-left: 1px solid var(--rd-raised);
   overflow-y: auto;
 }
+.chat-section .ip, .chat-section .ip-tab {
+  width: 100%; border-left: 0; flex: 1; padding: 20px 16px;
+}
 .ip-head { display: flex; flex-direction: column; gap: 6px; }
 .ip-head h2 { font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .ip-head p { font-size: 15px; line-height: 1.5; color: var(--rd-text-2); }
@@ -905,6 +908,12 @@
   padding: 16px 16px 28px;
   background: linear-gradient(rgba(10, 10, 13, 0.7), rgba(10, 10, 13, 0));
   justify-content: flex-start; align-items: center; flex-wrap: wrap;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.app-container:not(.phone-app) .stage-section.is-watching .yt-stage-topbar.is-idle:not(:focus-within):not(:hover) {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
 }
 .app-container:not(.phone-app) .stage-section.is-watching .yt-stage-top-controls { display: contents; }
 .app-container:not(.phone-app) .stage-section.is-watching .yt-sync-pill { order: -2; background: rgba(10, 10, 13, 0.8); height: 34px; padding: 0 14px; font-size: 14px; }
@@ -1028,3 +1037,64 @@
 .phone-app .local-screen-controls-bar .rd-time-total { display: none; }
 .phone-app .local-screen-controls-bar .yt-screen-time-text { font-size: 12px; }
 .phone-app .local-screen-controls-bar .yt-screen-scrubber-track { margin: 0 6px; }
+
+/* ==========================================================================
+   Pre-Join Green Room / Device Check Modal (UX-H01)
+   ========================================================================== */
+.prejoin-backdrop {
+  position: fixed; inset: 0; z-index: 999;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.prejoin-modal-card {
+  width: 100%; max-width: 480px;
+  background: var(--rd-surface); border: 1px solid var(--rd-line);
+  border-radius: 24px; padding: 24px;
+  display: flex; flex-direction: column; gap: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+  animation: prejoinPop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes prejoinPop {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.prejoin-head { display: flex; align-items: center; gap: 14px; position: relative; }
+.prejoin-icon-ring {
+  width: 48px; height: 48px; border-radius: 16px;
+  background: var(--rd-danger-bg); color: var(--rd-danger-text);
+  display: flex; align-items: center; justify-content: center; flex: none;
+}
+.prejoin-head-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.prejoin-head-text h2 {
+  font-family: var(--font-display); font-size: 20px; font-weight: 700;
+  letter-spacing: -0.01em; margin: 0; color: var(--rd-text);
+}
+.prejoin-head-text p { font-size: 13px; color: var(--rd-text-2); margin: 0; line-height: 1.4; }
+.prejoin-body { display: flex; flex-direction: column; gap: 18px; }
+.prejoin-name-section { display: flex; align-items: center; gap: 14px; }
+.prejoin-avatar { width: 44px; height: 44px; font-size: 17px; flex: none; }
+.prejoin-name-field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.prejoin-name-field label { font-size: 13px; font-weight: 600; color: var(--rd-text); }
+.prejoin-name-field input {
+  height: 44px; border-radius: 12px; border: 1px solid var(--rd-line-strong);
+  background: var(--rd-bg); color: var(--rd-text); padding: 0 14px; font-size: 15px;
+}
+.prejoin-name-field input:focus { border-color: var(--rd-focus); outline: none; }
+.prejoin-devices-box {
+  background: var(--rd-raised); border: 1px solid var(--rd-line);
+  border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.prejoin-section-label {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.05em; color: var(--rd-text-3);
+}
+.prejoin-section-label small { font-size: 12px; color: var(--rd-text-2); font-weight: 500; }
+.prejoin-mic-toggle {
+  background: var(--rd-raised); border: 1px solid var(--rd-line);
+  border-radius: 14px; padding: 12px 14px;
+}
+.prejoin-actions { display: flex; gap: 10px; margin-top: 4px; }
+.prejoin-submit-btn { flex: 1; }
+
