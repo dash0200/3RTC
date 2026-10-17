@@ -90,7 +90,7 @@ CTA = '''<div class="cta-row"><a class="btn" href="/">Start a watch party</a>
 # ---------------------------------------------------------------- /about (with FAQ)
 FAQ = [
     ('Is 3RTC free?', 'Yes. There is no account, no subscription and no ads. Open 3rtc.me, create a room and share the code.'),
-    ('How many people can watch together?', 'A room holds up to 6 people. Everyone connects directly to everyone else, which keeps voice and chat fast and private, and when someone shares a video file, viewers pass it along to each other so the person sharing it doesn\u2019t have to upload it to everyone.'),
+    ('How many people can watch together?', 'A room holds up to 4 people. Everyone connects directly to everyone else, which keeps voice and chat fast and private, and when someone shares a video file, viewers pass it along to each other so the person sharing it doesn\u2019t have to upload it to everyone.'),
     ('Do my friends need to install anything?', 'No. 3RTC runs in any modern browser, on computers and phones. You can also install it from the browser menu ("Install app" or "Add to Home screen") so it opens like a normal app.'),
     ('Can we watch a video file that only I have?', 'Yes. Pick an MP4, WebM or MKV file on your device and the others can stream it straight from you. Playback starts after a few seconds, the file is never uploaded to a server, and your friends do not need their own copy.'),
     ('Does it work with YouTube?', 'Yes. Paste any YouTube link, including live streams, and play, pause and seeking stay in sync for everyone in the room. You can also line up a queue of videos and vote to skip.'),
@@ -254,7 +254,7 @@ MOVIE_FAQ = [
     ('Do my friends need the movie file too?', 'No. Only the person sharing it needs the file. It streams straight from their device to everyone in the room, starting within seconds, and it is never uploaded to a server.'),
     ('Can we watch Netflix or Prime Video together?', 'Not inside 3RTC: Netflix, Prime Video, Disney+ and similar services only play inside their own apps and sites. 3RTC works with YouTube, Vimeo, Twitch, video links and movie files you have on your device. For Netflix, you can still open a 3RTC room for voice chat while each of you plays it on your own account.'),
     ('Can we have subtitles?', 'Yes. Drop an .srt subtitle file on the player, or pick a subtitle track inside an MKV movie, and everyone gets it. Each person can change the size and timing for themselves.'),
-    ('How many people can join a movie night?', 'Up to 6 people per room. When someone shares a movie file, viewers pass it along to each other, so the person sharing it doesn’t have to upload a copy for everyone.'),
+    ('How many people can join a movie night?', 'Up to 4 people per room. When someone shares a movie file, viewers pass it along to each other, so the person sharing it doesn’t have to upload a copy for everyone.'),
 ]
 movies_faq_html, movies_faq_ld = faq(MOVIE_FAQ)
 
@@ -437,7 +437,7 @@ ALT_FAQ = [
     ('Is 3RTC a good Watch2Gether alternative?', 'If you watch with a small group of friends and want to talk, yes: 3RTC has voice chat built in, connects your devices directly, and lets you share a movie file from your own device without uploading it. For big public rooms with many people, a server-based site suits better.'),
     ('Is 3RTC a Teleparty alternative?', 'For YouTube, Vimeo, Twitch and your own video files, yes, with voice chat and no extension to install. For Netflix, Prime Video or Disney+, no: those only play in their own apps; see the Netflix watch party page for how to watch those together.'),
     ('Do my friends need an account or an extension?', 'No. They open the link or type the 5-digit code in any browser, on a phone or a computer.'),
-    ('How many people can join?', 'Up to 6 people per room. Everyone connects directly to everyone else, which keeps voice and sync fast and private.'),
+    ('How many people can join?', 'Up to 4 people per room. Everyone connects directly to everyone else, which keeps voice and sync fast and private.'),
 ]
 alt_faq_html, alt_faq_ld = faq(ALT_FAQ)
 
@@ -457,7 +457,7 @@ alt = f"""<p class="eyebrow">Compare</p>
 </ul>
 
 <h2>When another tool fits better</h2>
-<p>Every watch party app makes different trade-offs. Server-based rooms such as Watch2Gether suit large public rooms with many people. Browser extensions such as Teleparty sync streaming services like Netflix for people who each have their own subscription, on a computer. 3RTC is made for a small group of friends (up to 6 people) who want to talk the whole time, and for sharing video files you have yourself.</p>
+<p>Every watch party app makes different trade-offs. Server-based rooms such as Watch2Gether suit large public rooms with many people. Browser extensions such as Teleparty sync streaming services like Netflix for people who each have their own subscription, on a computer. 3RTC is made for a small group of friends (up to 4 people) who want to talk the whole time, and for sharing video files you have yourself.</p>
 
 <table>
 <tr><th>You want to…</th><th>3RTC</th></tr>
@@ -466,7 +466,7 @@ alt = f"""<p class="eyebrow">Compare</p>
 <tr><td>Watch Twitch, Vimeo or a video link</td><td>Yes</td></tr>
 <tr><td>Join on a phone without installing anything</td><td>Yes</td></tr>
 <tr><td>Watch Netflix or Prime Video inside the app</td><td>No, no website can (<a href="/netflix-watch-party">what you can do instead</a>)</td></tr>
-<tr><td>Host a room for dozens of people</td><td>No, up to 6 people</td></tr>
+<tr><td>Host a room for dozens of people</td><td>No, up to 4 people</td></tr>
 </table>
 
 <h2>Questions</h2>
