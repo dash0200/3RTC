@@ -193,3 +193,167 @@ export async function extractMkvSubtitles(readAt, fileSize, tracks, { timecodeSc
     onProgress?.(1);
     return cues;
 }
+
+/**
+ * Read the whole MKV/WebM file and collect the raw frames of the given audio track.
+ * Returns Uint8Array of the concatenated raw audio bitstream.
+ */
+export async function extractMkvAudioTrack(readAt, fileSize, trackNumber, { onProgress, isCancelled } = {}) {
+    let win = new Uint8Array(0);
+    let winStart = 0;
+    const ensure = async (pos, need) => {
+        if (pos >= winStart && pos + need <= winStart + win.length) return true;
+        if (pos >= fileSize) return false;
+        win = await readAt(pos, Math.min(Math.max(CHUNK, need), fileSize - pos));
+        winStart = pos;
+        return pos + need <= winStart + win.length;
+    };
+    const at = (pos) => pos - winStart;
+
+    const chunks = [];
+    let totalBytes = 0;
+    let pos = 0;
+    let lastReport = 0;
+    while (pos < fileSize) {
+        if (isCancelled?.()) throw new Error('cancelled');
+        if (!(await ensure(pos, 16))) {
+            if (!(await ensure(pos, 2))) break;
+        }
+        const h = readElementHeader(win, at(pos));
+        if (!h) break;
+        const dataPos = pos + h.headerLength;
+        if (CONTAINERS.has(h.id)) {
+            pos = dataPos;
+            continue;
+        }
+        if (h.size === UNKNOWN_SIZE) break;
+        if (h.id === ID.SimpleBlock || h.id === ID.Block) {
+            await ensure(dataPos, Math.min(h.size, 8));
+            const tn = readVint(win, at(dataPos));
+            if (tn && tn.value === trackNumber) {
+                await ensure(dataPos, h.size);
+                const o = at(dataPos) + tn.length;
+                const payloadStart = o + 3;
+                const payloadEnd = at(dataPos) + h.size;
+                if (payloadEnd > payloadStart) {
+                    const chunk = win.slice(payloadStart, payloadEnd);
+                    chunks.push(chunk);
+                    totalBytes += chunk.length;
+                }
+            }
+        }
+        pos = dataPos + h.size;
+        if (onProgress && pos - lastReport > CHUNK) {
+            lastReport = pos;
+            onProgress(Math.min(1, pos / fileSize));
+        }
+    }
+    const combined = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const c of chunks) {
+        combined.set(c, offset);
+        offset += c.length;
+    }
+    onProgress?.(1);
+    return combined;
+}
+
+/**
+ * Read the whole MKV/WebM file and collect PGS subtitles (S_HDMV/PGS) into a compliant .sup bitstream.
+ * Prepends standard 10-byte 'PG' header (Magic 0x50 0x47, 4-byte 90kHz PTS, 4-byte 90kHz DTS) to each segment.
+ * Returns Uint8Array of the complete .sup bitstream.
+ */
+export async function extractMkvPgsSubtitles(readAt, fileSize, trackNumber, { timecodeScale = 1000000, onProgress, isCancelled } = {}) {
+    let win = new Uint8Array(0);
+    let winStart = 0;
+    const ensure = async (pos, need) => {
+        if (pos >= winStart && pos + need <= winStart + win.length) return true;
+        if (pos >= fileSize) return false;
+        win = await readAt(pos, Math.min(Math.max(CHUNK, need), fileSize - pos));
+        winStart = pos;
+        return pos + need <= winStart + win.length;
+    };
+    const at = (pos) => pos - winStart;
+    const scale = timecodeScale / 1e9; // ticks -> seconds
+
+    const chunks = [];
+    let totalBytes = 0;
+    let pos = 0;
+    let clusterTime = 0;
+    let lastReport = 0;
+
+    while (pos < fileSize) {
+        if (isCancelled?.()) throw new Error('cancelled');
+        if (!(await ensure(pos, 16))) {
+            if (!(await ensure(pos, 2))) break;
+        }
+        const h = readElementHeader(win, at(pos));
+        if (!h) break;
+        const dataPos = pos + h.headerLength;
+        if (CONTAINERS.has(h.id)) {
+            pos = dataPos;
+            continue;
+        }
+        if (h.size === UNKNOWN_SIZE) break;
+        if (h.id === ID.Timecode) {
+            await ensure(dataPos, h.size);
+            clusterTime = readUint(win, at(dataPos), h.size);
+        } else if (h.id === ID.SimpleBlock || h.id === ID.Block) {
+            await ensure(dataPos, Math.min(h.size, 8));
+            const tn = readVint(win, at(dataPos));
+            if (tn && tn.value === trackNumber) {
+                await ensure(dataPos, h.size);
+                const o = at(dataPos) + tn.length;
+                const rel = (win[o] << 8 | win[o + 1]) << 16 >> 16;
+                const blockTimeSec = Math.max(0, (clusterTime + rel) * scale);
+                // 90 kHz PTS/DTS ticks for Blu-ray SUP format
+                const pts = Math.round(blockTimeSec * 90000) >>> 0;
+                const dts = pts;
+
+                const payloadStart = o + 3;
+                const payloadEnd = at(dataPos) + h.size;
+                let segOffset = payloadStart;
+
+                while (segOffset + 3 <= payloadEnd) {
+                    const segLen = (win[segOffset + 1] << 8) | win[segOffset + 2];
+                    const segTotalLen = 3 + segLen;
+                    const end = Math.min(segOffset + segTotalLen, payloadEnd);
+                    const actualLen = end - segOffset;
+
+                    const supPacket = new Uint8Array(10 + actualLen);
+                    supPacket[0] = 0x50; // 'P'
+                    supPacket[1] = 0x47; // 'G'
+                    supPacket[2] = (pts >>> 24) & 0xff;
+                    supPacket[3] = (pts >>> 16) & 0xff;
+                    supPacket[4] = (pts >>> 8) & 0xff;
+                    supPacket[5] = pts & 0xff;
+                    supPacket[6] = (dts >>> 24) & 0xff;
+                    supPacket[7] = (dts >>> 16) & 0xff;
+                    supPacket[8] = (dts >>> 8) & 0xff;
+                    supPacket[9] = dts & 0xff;
+                    supPacket.set(win.subarray(segOffset, end), 10);
+
+                    chunks.push(supPacket);
+                    totalBytes += supPacket.length;
+
+                    segOffset += Math.max(1, segTotalLen);
+                }
+            }
+        }
+        pos = dataPos + h.size;
+        if (onProgress && pos - lastReport > CHUNK) {
+            lastReport = pos;
+            onProgress(Math.min(1, pos / fileSize));
+        }
+    }
+
+    const combined = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const c of chunks) {
+        combined.set(c, offset);
+        offset += c.length;
+    }
+    onProgress?.(1);
+    return combined;
+}
+
