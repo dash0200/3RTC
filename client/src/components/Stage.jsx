@@ -182,7 +182,7 @@ export default function Stage({
 
               <h1 className="stage-title">3RTC Watch Party</h1>
               <p className="stage-subtitle">
-                Watch together online: create a room or enter a code to connect directly peer-to-peer (up to 6 people).
+                Watch together online: create a room or enter a code to connect directly peer-to-peer (up to 4 people).
                 Watch YouTube videos together.
               </p>
 
@@ -323,7 +323,7 @@ export default function Stage({
         {roomId && !isMediaActive && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
           <SyncPill connectedPeers={connectedPeers} isHost={isHost} isPhone={isPhone} />
         )}
-        {roomId && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
+        {isPhone && roomId && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
           <VideoPeopleOverlay
             connectedPeers={connectedPeers}
             localUser={localUser}

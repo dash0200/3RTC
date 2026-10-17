@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { log } from './log.js';
 import { createSeats, loadSecret, newEpoch, isValidPeerId } from './seats.js';
 
-// People per room. Everyone connects directly to everyone (mesh); 6 keeps voice light on each
+// People per room. Everyone connects directly to everyone (mesh); 4 keeps voice light on each
 // person's upload, and local video files are passed along a relay tree instead of the owner
 // uploading to every viewer.
-export const MAX_ROOM_USERS = Math.max(2, Number(process.env.MAX_ROOM_USERS) || 6);
+export const MAX_ROOM_USERS = Math.max(2, Number(process.env.MAX_ROOM_USERS) || 4);
 
 /** Accept signaling connections on `server` (an http.Server). Returns the WebSocketServer. */
 export function attachSignaling(server) {

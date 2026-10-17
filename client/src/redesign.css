@@ -633,75 +633,167 @@
 /* Dock */
 .dock {
   flex: none; height: 80px;
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
   padding: 0 20px;
   background: var(--rd-panel);
   border-top: 1px solid var(--rd-raised);
   position: relative; z-index: 30;
 }
 .stage-section.is-watching .dock {
-  height: 68px; padding: 0 16px; background: rgba(10, 10, 13, 0.6);
-  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  height: 68px; padding: 0 14px; background: rgba(10, 10, 13, 0.75);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border-top: 1px solid var(--rd-line); border-radius: 14px; margin: 8px 12px 10px;
+  gap: 10px;
 }
-.dock-people-group { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; }
-.dock-you { flex: none; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.dock-people-group {
+  flex: 1 1 0%;
+  min-width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dock-you { flex: 0 0 auto; min-width: 0; display: flex; align-items: center; gap: 10px; }
 .dock-you .rd-av { --av-size: 36px; --ring-gap: var(--rd-panel); }
 .dock-you-text { min-width: 0; display: flex; flex-direction: column; }
-.dock-you-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dock-you-name {
+  font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 120px;
+}
 .dock-you-name span { color: var(--rd-text-3); font-weight: 500; }
-.dock-you-status { font-size: 13px; color: var(--rd-text-2); }
+.dock-you-status { font-size: 12px; color: var(--rd-text-2); white-space: nowrap; }
 .dock-you-status.is-live { color: var(--rd-live-text); }
 .dock-you-status.is-off { color: var(--rd-danger-text); }
+
 .dock-peers-strip {
-  display: flex; align-items: center; gap: 8px;
-  padding-left: 12px; border-left: 1px solid var(--rd-line);
+  display: flex; align-items: center; gap: 6px;
+  padding-left: 10px; border-left: 1px solid var(--rd-line);
+  flex: 0 0 auto;
 }
-.dock-peer-wrap { position: relative; }
+.dock-peer-wrap { position: relative; flex: 0 0 auto; }
 .dock-peer-av {
-  --av-size: 34px; --ring-gap: var(--rd-panel);
-  cursor: pointer; border: 0; background: transparent; padding: 0;
+  --av-size: 34px;
+  --ring-gap: var(--rd-panel);
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+  background: var(--av, #6aa8ff) !important;
+  color: #0a0a0d !important;
+  font-weight: 700 !important;
+  position: relative;
+  flex-shrink: 0;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .dock-peer-av:hover { transform: scale(1.08); }
 .dock-pop-peer { bottom: calc(100% + 10px); left: 0; }
 
-.dock-controls { display: flex; align-items: center; gap: 10px; }
-.dock-anchor { position: relative; }
+.dock-peer-muted-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ef4444;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 0 2px var(--ring-gap, var(--rd-panel));
+}
+
+.dock-peers-more {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--rd-raised);
+  border: 1px solid var(--rd-line);
+  color: var(--rd-text-2);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.dock-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dock-anchor { position: relative; flex: 0 0 auto; }
 .dock-btn {
-  width: 48px; height: 48px; border-radius: 14px; border: 0;
+  width: 46px; height: 46px; border-radius: 13px; border: 0;
   background: var(--rd-raised); color: var(--rd-text);
   display: inline-flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: background-color 0.15s ease;
+  cursor: pointer; transition: background-color 0.15s ease, transform 0.12s ease;
+  flex: 0 0 auto;
 }
 .dock-btn:hover, .dock-btn.is-active { background: #262630; }
 .dock-btn.is-off { background: var(--rd-danger-bg); color: var(--rd-danger-text); }
-.dock-mic { position: relative; display: flex; border-radius: 14px; background: var(--rd-raised); }
+.dock-mic {
+  position: relative;
+  display: flex;
+  border-radius: 13px;
+  background: var(--rd-raised);
+  flex: 0 0 auto;
+}
 .dock-mic.is-off { background: var(--rd-danger-bg); color: var(--rd-danger-text); }
 .dock-mic-toggle {
-  height: 48px; padding: 0 16px 0 14px;
+  height: 46px; padding: 0 14px 0 12px;
   display: inline-flex; align-items: center; gap: 8px;
   border: 0; background: transparent; color: inherit;
   font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
-  border-radius: 14px 0 0 14px;
+  border-radius: 13px 0 0 13px;
+  white-space: nowrap;
 }
 .dock-mic.is-on .dock-mic-toggle { color: var(--rd-text); }
 .dock-mic-caret {
-  width: 36px; height: 48px; border: 0;
+  width: 32px; height: 46px; border: 0;
   border-left: 1px solid var(--rd-line);
   background: transparent; color: var(--rd-text-2);
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-  border-radius: 0 14px 14px 0;
+  border-radius: 0 13px 13px 0;
 }
 .dock-mic.is-off .dock-mic-caret { border-left-color: var(--rd-danger-line); color: var(--rd-danger-text); }
 .dock-mic-toggle:hover, .dock-mic-caret:hover { background: rgba(255, 255, 255, 0.05); }
-.dock-end { flex: 1; display: flex; justify-content: flex-end; }
+
+.dock-end {
+  flex: 1 1 0%;
+  min-width: max-content;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
 .dock-leave {
-  height: 44px; padding: 0 18px; border-radius: 12px;
+  height: 42px; padding: 0 16px; border-radius: 11px;
   border: 1px solid var(--rd-danger-line); background: transparent; color: var(--rd-danger-text);
-  font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; flex: 0 0 auto;
 }
 .dock-leave:hover { background: var(--rd-danger-bg); }
+
+/* Compact dock in is-watching mode */
+.stage-section.is-watching .dock-controls { gap: 6px; }
+.stage-section.is-watching .dock-btn { width: 40px; height: 40px; border-radius: 11px; }
+.stage-section.is-watching .dock-mic { border-radius: 11px; }
+.stage-section.is-watching .dock-mic-toggle { height: 40px; padding: 0 12px 0 10px; font-size: 13px; border-radius: 11px 0 0 11px; }
+.stage-section.is-watching .dock-mic-caret { width: 28px; height: 40px; border-radius: 0 11px 11px 0; }
+.stage-section.is-watching .dock-leave { height: 38px; padding: 0 14px; font-size: 13px; border-radius: 10px; }
+.stage-section.is-watching .dock-you .rd-av { --av-size: 32px; }
+.stage-section.is-watching .dock-peer-av { --av-size: 32px; }
+.stage-section.is-watching .dock-people-group { gap: 10px; }
+.stage-section.is-watching .dock-peers-strip { gap: 5px; padding-left: 8px; }
+
+/* Responsive dock for smaller screens */
+@media (max-width: 1150px) {
+  .dock-mic-toggle span { display: none; }
+  .dock-mic-toggle { padding: 0 11px; }
+  .dock-you-status { display: none; }
+  .dock-you-name { max-width: 90px; }
+}
 
 /* Dock popovers */
 .dock-pop {

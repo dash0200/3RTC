@@ -71,7 +71,7 @@ export default function DesktopDock({
         {/* Connected peers in dock: clean, prominent voice indicators outside video canvas */}
         {peers && peers.length > 0 && (
           <div className="dock-peers-strip" aria-label="People in room">
-            {peers.map((peer, idx) => {
+            {peers.slice(0, 3).map((peer, idx) => {
               const peerName = peer.username || 'Peer';
               const isSpeaking = Boolean(peer.isSpeaking) && !peer.isMuted;
               const isQuiet = Boolean(peer.isMuted);
@@ -87,6 +87,11 @@ export default function DesktopDock({
                     onClick={() => setSelectedPeer(isSelected ? null : peer)}
                   >
                     {getInitials(peerName)}
+                    {isQuiet && (
+                      <span className="dock-peer-muted-badge" title="Muted">
+                        <Icon name="micOff" size={9} strokeWidth={2.8} />
+                      </span>
+                    )}
                   </button>
                   {isSelected && (
                     <div className="dock-pop dock-pop-peer">
@@ -101,6 +106,11 @@ export default function DesktopDock({
                 </div>
               );
             })}
+            {peers.length > 3 && (
+              <span className="dock-peers-more" title={`${peers.length - 3} more in room`}>
+                +{peers.length - 3}
+              </span>
+            )}
           </div>
         )}
       </div>

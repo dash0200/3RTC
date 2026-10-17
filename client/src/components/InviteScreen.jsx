@@ -38,7 +38,7 @@ export default function InviteScreen({ pin, username, onJoin, onDismiss }) {
             </span>
           )}
           <h1>{inviter ? `${inviter} invited you to watch together` : 'You’re invited to watch together'}</h1>
-          <p>Room <span className="invite-code">{pin}</span> · up to 6 people, video, voice and chat</p>
+          <p>Room <span className="invite-code">{pin}</span> · up to 4 people, video, voice and chat</p>
         </div>
 
         <div className="invite-fields">
