@@ -75,7 +75,7 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
         feed.emit({
             id: typeof data.id === 'string' ? data.id.slice(0, 40) : crypto.randomUUID(),
             emoji: data.emoji,
-            sender: String(data.sender || 'Peer').slice(0, 24),
+            sender: String(room.peerName(from) || data.sender || 'Peer').slice(0, 24),
             isSelf: false,
             lane: typeof data.lane === 'number' ? Math.max(10, Math.min(90, data.lane)) : 20 + Math.random() * 60,
             combo,

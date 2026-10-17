@@ -39,6 +39,12 @@ export function useRoomCodeInput(initialPin = '', onComplete) {
   const onKeyDown = (index, e) => {
     if (e.key === 'Backspace' && !digits[index] && index > 0) {
       boxRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowLeft' && index > 0) {
+      e.preventDefault();
+      boxRefs.current[index - 1]?.focus();
+    } else if (e.key === 'ArrowRight' && index < CODE_LENGTH - 1) {
+      e.preventDefault();
+      boxRefs.current[index + 1]?.focus();
     } else if (e.key === 'Enter' && isComplete) {
       onComplete?.(code);
     }
@@ -50,12 +56,20 @@ export function useRoomCodeInput(initialPin = '', onComplete) {
     type: 'text',
     inputMode: 'numeric',
     autoComplete: i === 0 ? 'one-time-code' : 'off',
-    maxLength: i === 0 ? CODE_LENGTH : 1,
+    maxLength: CODE_LENGTH,
     'aria-label': `Digit ${i + 1}`,
     value: digits[i],
     onChange: (e) => setDigit(i, e.target.value),
     onKeyDown: (e) => onKeyDown(i, e),
-    onFocus: (e) => e.target.select()
+    onFocus: (e) => e.target.select(),
+    onPaste: (e) => {
+      e.preventDefault();
+      const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, CODE_LENGTH);
+      if (pasted) {
+        setDigits(Array.from({ length: CODE_LENGTH }, (_, idx) => pasted[idx] || ''));
+        boxRefs.current[Math.min(pasted.length, CODE_LENGTH) - 1]?.focus();
+      }
+    }
   });
 
   return { digits, code, isComplete, boxProps };

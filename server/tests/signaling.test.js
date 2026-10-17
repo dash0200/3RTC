@@ -90,6 +90,29 @@ describe('signaling server', () => {
         guest.close();
     });
 
+    it('rejects untargeted offer in multi-peer room', async () => {
+        const host = await connected('host-mp');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId } = await host.next('room-created');
+        const guest1 = await connected('guest-mp-1');
+        guest1.send({ type: 'join', roomId, peerId: guest1.peerId });
+        await guest1.next('joined');
+        await host.next('peer-joined');
+        const guest2 = await connected('guest-mp-2');
+        guest2.send({ type: 'join', roomId, peerId: guest2.peerId });
+        await guest2.next('joined');
+        await host.next('peer-joined');
+        await guest1.next('peer-joined');
+
+        host.send({ type: 'offer', offer: { type: 'offer', sdp: 'xyz' } });
+        const err = await host.next('error');
+        assert.equal(err.message, 'targetId required in multi-peer rooms');
+
+        host.close();
+        guest1.close();
+        guest2.close();
+    });
+
     it('refuses an unknown room and a full room', async () => {
         const lost = await connected('lost');
         lost.send({ type: 'join', roomId: '00000', peerId: lost.peerId });

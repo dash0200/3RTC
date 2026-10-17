@@ -55,7 +55,12 @@ const countLive = (bus, key, delta) => {
 export function createSharedStore(bus, room, key, { initial, reducer }) {
     let state = initial;
     let version = 0;
+    let initialCatchUp = true;
     countLive(bus, key, 1);
+    const catchUpTimer = setTimeout(() => {
+        initialCatchUp = false;
+    }, 3000);
+    catchUpTimer?.unref?.();
     const listeners = new Set();
     const notify = () => {
         for (const listener of [...listeners]) listener();
@@ -107,6 +112,8 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
             return; // a broken action never breaks the room
         }
         if (next === undefined || next === state) return;
+        initialCatchUp = false;
+        clearTimeout(catchUpTimer);
         set(next, version + 1);
         bus.broadcast('room-state', { key, v: version, state });
     };
@@ -116,6 +123,18 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
             if (msg.key !== key) return;
             addMember(fromPeerId);
             if (typeof msg.v !== 'number' || msg.v <= version) return;
+
+            const currentAuthority = authorityId();
+            const amAuthority = currentAuthority === room.getSelfId();
+
+            if (!amAuthority) {
+                // Non-authority peers only accept states broadcast by the recognized authority
+                if (fromPeerId !== currentAuthority) return;
+            } else {
+                // The authority only adopts state during initial catch-up when version is 0
+                if (!initialCatchUp || version > 0) return;
+            }
+
             set(msg.state, msg.v);
         }),
         bus.on('room-state-action', (msg, fromPeerId) => {
@@ -147,6 +166,7 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
         bus.onEvent('room-left', () => {
             absent.clear();
             refreshPresence();
+            initialCatchUp = true;
             set(initial, 0);
         })
     ];
@@ -180,9 +200,11 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
         },
         /** Back to the initial value locally (leaving the room). */
         reset() {
+            initialCatchUp = true;
             set(initial, 0);
         },
         destroy() {
+            clearTimeout(catchUpTimer);
             countLive(bus, key, -1);
             bus.broadcast('room-state-gone', { key });
             for (const off of offs) off();
