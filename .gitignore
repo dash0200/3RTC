@@ -43,9 +43,13 @@ wheels/
 *.cert
 *service-account*.json
 *credentials*.json
+.youtube-api-key
+*.youtube-api-key
 
 # Temporary & deployment scratch files
 _startup_script.sh
+_oracle*
+.oracle*
 *.log
 tmp/
 temp/

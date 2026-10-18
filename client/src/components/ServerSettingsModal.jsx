@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const CLOUD_URL = 'wss://signal.3rtc.me';
+const ORACLE_URL = 'wss://orc.3rtc.me';
+const GCP_URL = 'wss://gcp.3rtc.me';
 const LOCAL_URL = 'ws://localhost:8080';
 
 export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApply }) {
@@ -108,13 +109,23 @@ export default function ServerSettingsModal({ isOpen, onClose, currentUrl, onApp
 
           <div className="quick-servers">
             <button
-              className={`server-preset-btn ${url === CLOUD_URL ? 'active' : ''}`}
-              onClick={() => handlePreset(CLOUD_URL)}
+              type="button"
+              className={`server-preset-btn ${url === ORACLE_URL ? 'active' : ''}`}
+              onClick={() => handlePreset(ORACLE_URL)}
             >
-              <span className="preset-name">3RTC Cloud Server</span>
-              <span className="preset-url">{CLOUD_URL}</span>
+              <span className="preset-name">Oracle Cloud (Always Free)</span>
+              <span className="preset-url">{ORACLE_URL}</span>
             </button>
             <button
+              type="button"
+              className={`server-preset-btn ${url === GCP_URL ? 'active' : ''}`}
+              onClick={() => handlePreset(GCP_URL)}
+            >
+              <span className="preset-name">Google Cloud (GCP)</span>
+              <span className="preset-url">{GCP_URL}</span>
+            </button>
+            <button
+              type="button"
               className={`server-preset-btn ${url === LOCAL_URL ? 'active' : ''}`}
               onClick={() => handlePreset(LOCAL_URL)}
             >

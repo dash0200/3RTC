@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getMobileJoinUrl } from '../../utils/qrCode';
+import { getMobileJoinUrl, getServerTag } from '../../utils/qrCode';
 import { copyToClipboard } from '../../utils/clipboard';
 import { Icon } from '../icons';
 import { useRoom } from '../../core/RoomContext';
@@ -7,8 +7,8 @@ import { useRoom } from '../../core/RoomContext';
 /** Desktop side panel or tab while you're alone in the room: getting friends in comes first. */
 export default function InvitePanel({ roomId, onShowQr, onCopied, isTab = false }) {
   const [copied, setCopied] = useState(false);
-  const { username } = useRoom() || {};
-  const link = getMobileJoinUrl(roomId, null, username);
+  const { username, signalUrl } = useRoom() || {};
+  const link = getMobileJoinUrl(roomId, null, username, getServerTag(signalUrl));
   const copy = async () => {
     if (await copyToClipboard(link)) {
       setCopied(true);
