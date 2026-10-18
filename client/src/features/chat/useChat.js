@@ -62,6 +62,14 @@ export function useChat({ room, isChatOpen }) {
         p2pImageReceiver.reset();
     }), [bus]);
 
+    // Periodically clean up stale/abandoned image transfers (L-03)
+    useEffect(() => {
+        const timer = setInterval(() => {
+            p2pImageReceiver.cleanStale(120000);
+        }, 60000);
+        return () => clearInterval(timer);
+    }, []);
+
     // Older apps also post every reaction-button tap as a chat message (the reaction first, then
     // the same emoji as text): skip those so the chat isn't flooded while people update
     const lastReactionRef = useRef(new Map()); // peerId -> { emoji, at }
