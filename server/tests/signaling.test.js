@@ -259,6 +259,72 @@ describe('signaling server', () => {
         const res = await fetch(`http://localhost:${PORT}/api/quick-picks`);
         assert.equal(res.status, 503);
         assert.equal(res.headers.get('access-control-allow-origin'), '*');
+
+        // Trusted 3RTC domain
+        const resTrusted = await fetch(`http://localhost:${PORT}/api/quick-picks`, {
+            headers: { Origin: 'https://3rtc.me' }
+        });
+        assert.equal(resTrusted.headers.get('access-control-allow-origin'), 'https://3rtc.me');
+        assert.equal(resTrusted.headers.get('vary'), 'Origin');
+
+        // Trusted Vercel preview domain
+        const resPreview = await fetch(`http://localhost:${PORT}/api/quick-picks`, {
+            headers: { Origin: 'https://branch-preview.vercel.app' }
+        });
+        assert.equal(resPreview.headers.get('access-control-allow-origin'), 'https://branch-preview.vercel.app');
+
+        // Untrusted domain (should NOT be granted CORS)
+        const resUntrusted = await fetch(`http://localhost:${PORT}/api/quick-picks`, {
+            headers: { Origin: 'https://malicious-attacker.com' }
+        });
+        assert.equal(resUntrusted.headers.get('access-control-allow-origin'), null);
+    });
+
+    it('rate-limits repeated failed room joins to prevent room code brute-force', async () => {
+        const c = await connected('scanner');
+        let rateLimited = false;
+        for (let i = 0; i < 16; i++) {
+            c.send({ type: 'join', roomId: '99990', peerId: 'scanner' });
+            const msg = await c.next('error');
+            if (msg.code === 'rate-limited') {
+                rateLimited = true;
+                break;
+            }
+        }
+        assert.equal(rateLimited, true, 'client was rate-limited after repeated failed joins');
+        c.close();
+    });
+
+    it('rejects WebSocket connections from untrusted origins', async () => {
+        await assert.rejects(
+            () => new Promise((resolve, reject) => {
+                const ws = new WebSocket(`ws://localhost:${PORT}`, {
+                    headers: { Origin: 'https://evil.com' }
+                });
+                ws.on('open', () => {
+                    ws.close();
+                    resolve();
+                });
+                ws.on('error', (err) => reject(err));
+                ws.on('unexpected-response', (req, res) => {
+                    reject(new Error(`Server responded with ${res.statusCode}`));
+                });
+            }),
+            (err) => {
+                assert.match(err.message, /403/);
+                return true;
+            }
+        );
+
+        // Trusted origin connects cleanly
+        const trustedWs = new WebSocket(`ws://localhost:${PORT}`, {
+            headers: { Origin: 'https://3rtc.me' }
+        });
+        await new Promise((resolve, reject) => {
+            trustedWs.on('open', resolve);
+            trustedWs.on('error', reject);
+        });
+        trustedWs.close();
     });
 
     it('refuses unauthenticated claim of an unoccupied host seat (H-03)', async () => {
@@ -346,3 +412,4 @@ describe('isOriginAllowed (H-05)', () => {
         assert.equal(isOriginAllowed('javascript:void(0)'), false);
     });
 });
+

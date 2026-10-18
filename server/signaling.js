@@ -9,75 +9,33 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from './log.js';
 import { createSeats, loadSecret, newEpoch, isValidPeerId } from './seats.js';
-import { createRateLimiter } from './rateLimit.js';
+import { isAllowedOrigin } from './quickPicks.js';
 
 // People per room. Everyone connects directly to everyone (mesh); 4 keeps voice light on each
 // person's upload, and local video files are passed along a relay tree instead of the owner
 // uploading to every viewer.
 export const MAX_ROOM_USERS = Math.max(2, Number(process.env.MAX_ROOM_USERS) || 4);
+export const MAX_SIGNAL_PAYLOAD_BYTES = 64 * 1024; // 64 KB max payload to prevent memory exhaustion DoS
 
-/**
- * Validate WebSocket Origin header to protect against Cross-Site WebSocket Hijacking (H-05).
- */
-export function isOriginAllowed(origin, allowedOriginsEnv = process.env.ALLOWED_ORIGINS, appUrlEnv = process.env.APP_URL) {
-  if (!origin) return true; // Non-browser clients (tests, CLI)
-  try {
-    const parsed = new URL(origin);
-    const host = parsed.hostname.toLowerCase();
-    if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1') return true;
-    if (host === '3rtc.me' || host.endsWith('.3rtc.me')) return true;
-    if (appUrlEnv) {
-      try {
-        const appHost = new URL(appUrlEnv).hostname.toLowerCase();
-        if (host === appHost || host.endsWith('.' + appHost)) return true;
-      } catch { /* ignore */ }
-    }
-    if (allowedOriginsEnv) {
-      const allowedList = allowedOriginsEnv.split(',').map((s) => s.trim().toLowerCase());
-      for (const item of allowedList) {
-        if (!item) continue;
-        if (item.startsWith('http://') || item.startsWith('https://')) {
-          try {
-            if (new URL(item).origin.toLowerCase() === parsed.origin.toLowerCase()) return true;
-          } catch { /* ignore */ }
-        } else if (item.startsWith('*.')) {
-          const suffix = item.slice(2);
-          if (host === suffix || host.endsWith('.' + suffix)) return true;
-        } else if (host === item) {
-          return true;
-        }
-      }
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
-
-export function getClientIp(req, ws) {
-  const forwarded = req?.headers?.['x-forwarded-for'];
-  if (forwarded && typeof forwarded === 'string') {
-    const first = forwarded.split(',')[0].trim();
-    if (first) return first;
-  }
-  return req?.socket?.remoteAddress || ws?._socket?.remoteAddress || '127.0.0.1';
-}
+export const RATE_LIMIT = {
+  maxFailedJoins: 15,        // Max failed room joins before temporary throttle
+  failedJoinWindowMs: 30000, // 30-second sliding window
+  maxMessagesPerSec: 60      // Max signaling messages per second per socket
+};
 
 /** Accept signaling connections on `server` (an http.Server). Returns the WebSocketServer. */
-export function attachSignaling(server, options = {}) {
-  const rateLimiter = options.rateLimiter || createRateLimiter(options.rateLimits);
-
+export function attachSignaling(server) {
   const wss = new WebSocketServer({
     server,
-    maxPayload: 65536, // 64 KB limit to prevent event-loop freezing on massive payloads (M-05)
+    maxPayload: MAX_SIGNAL_PAYLOAD_BYTES,
     verifyClient: (info, callback) => {
-      const origin = info.req.headers.origin;
-      if (!isOriginAllowed(origin, options.allowedOrigins)) {
-        log('WARN', `Rejected WebSocket connection from untrusted origin: "${origin}"`);
-        callback(false, 403, 'Forbidden: Origin not allowed');
-        return;
+      const origin = info.origin || info.req?.headers?.origin;
+      // Allow non-browser clients (tests, curl, CLI) or verified 3RTC origins
+      if (!origin || isAllowedOrigin(origin)) {
+        return callback(true);
       }
-      callback(true);
+      log('WARN', `Rejected WebSocket upgrade from unauthorized origin: ${origin}`);
+      callback(false, 403, 'Forbidden Origin');
     }
   });
 
@@ -179,15 +137,34 @@ export function attachSignaling(server, options = {}) {
     ws.peerId = crypto.randomUUID();
     ws.roomId = null;
     ws.isAlive = true;
-    ws.clientIp = getClientIp(req, ws);
+    ws.failedJoins = [];
+    ws.msgTokens = RATE_LIMIT.maxMessagesPerSec;
+    ws.lastTokenRefill = Date.now();
+    ws.ip = req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.socket?.remoteAddress || 'unknown';
 
-    log('CONN', `New client connected from ${ws.clientIp}, assigned peerId: ${ws.peerId}`);
+    log('CONN', `New client connected, assigned peerId: ${ws.peerId} from ${ws.ip}`);
 
     ws.on('pong', () => {
       ws.isAlive = true;
     });
 
     ws.on('message', (rawData) => {
+      if (rawData && rawData.length > MAX_SIGNAL_PAYLOAD_BYTES) {
+        safeSend(ws, { type: 'error', message: 'Payload exceeds maximum allowed size' });
+        return;
+      }
+
+      const now = Date.now();
+      const elapsed = Math.max(0, (now - ws.lastTokenRefill) / 1000);
+      ws.msgTokens = Math.min(RATE_LIMIT.maxMessagesPerSec, ws.msgTokens + elapsed * RATE_LIMIT.maxMessagesPerSec);
+      ws.lastTokenRefill = now;
+
+      if (ws.msgTokens < 1) {
+        safeSend(ws, { type: 'error', code: 'rate-limited', message: 'Message rate limit exceeded. Please slow down.' });
+        return;
+      }
+      ws.msgTokens -= 1;
+
       let data;
       try {
         data = JSON.parse(rawData.toString());
@@ -329,6 +306,18 @@ export function attachSignaling(server, options = {}) {
 
           const peerId = isValidPeerId(data.peerId) ? data.peerId : ws.peerId;
 
+          const nowJoin = Date.now();
+          ws.failedJoins = (ws.failedJoins || []).filter((t) => nowJoin - t < RATE_LIMIT.failedJoinWindowMs);
+          if (ws.failedJoins.length >= RATE_LIMIT.maxFailedJoins) {
+            log('WARN', `Rate limited peer ${ws.peerId} (${ws.ip}): exceeded failed join attempts`);
+            safeSend(ws, {
+              type: 'error',
+              code: 'rate-limited',
+              message: 'Too many failed join attempts. Please wait 30 seconds before trying again.'
+            });
+            return;
+          }
+
           // A peer reconnecting after a server restart may arrive before the host does: it may
           // bring the room back, with its seat token for it (a stranger can't make up rooms)
           if (!rooms.has(roomId) && data.rejoin === true) {
@@ -340,7 +329,7 @@ export function attachSignaling(server, options = {}) {
           }
 
           if (!rooms.has(roomId)) {
-            rateLimiter.recordInvalidJoin(ws.clientIp);
+            ws.failedJoins.push(Date.now());
             safeSend(ws, {
               type: 'error',
               code: 'not-found',
@@ -351,6 +340,7 @@ export function attachSignaling(server, options = {}) {
             return;
           }
 
+          ws.failedJoins = [];
           const room = rooms.get(roomId);
           const info = roomInfo.get(roomId);
           const isHostSeat = Boolean(info?.hostPeerId && peerId === info.hostPeerId);

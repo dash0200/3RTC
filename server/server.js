@@ -27,7 +27,7 @@ const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'SAMEORIGIN',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'camera=(), microphone=(self)'
+  'Permissions-Policy': 'camera=(self), microphone=(self), display-capture=(self), geolocation=()'
 };
 
 const server = http.createServer((req, res) => {
@@ -39,40 +39,25 @@ const server = http.createServer((req, res) => {
     // (signal.3rtc.me, the sslip.io address, old invite links) go to the app, keeping ?room=…
     if (process.env.NODE_ENV === 'production') {
       const appUrl = (process.env.APP_URL || 'https://3rtc.me').replace(/\/$/, '');
-      const rawQuery = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-      // Strip CRLF to prevent header injection / ERR_INVALID_CHAR crash (M-04)
-      const query = encodeURI(rawQuery.replace(/[\r\n]/g, ''));
+      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
       res.writeHead(302, {
+        ...SECURITY_HEADERS,
         Location: `${appUrl}/${query}`,
         'Cache-Control': 'no-cache',
-        'X-Robots-Tag': 'noindex',
-        ...SECURITY_HEADERS
+        'X-Robots-Tag': 'noindex'
       });
       return res.end();
     }
     if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
 
-    // Prevent directory traversal or invalid path characters (Windows device names, null bytes)
-    if (reqPath.includes('\0') || /[\0<>:"|?*]/.test(reqPath)) {
-      res.writeHead(400, { 'Content-Type': 'text/plain', ...SECURITY_HEADERS });
-      return res.end('400 Bad Request');
-    }
-
     let safePath = path.normalize(path.join(clientDir, reqPath));
-    let isFile = false;
-    try {
-      isFile = safePath.startsWith(clientDir) && fs.existsSync(safePath) && fs.statSync(safePath).isFile();
-    } catch {
-      isFile = false;
-    }
-
-    if (!isFile) {
+    if (!safePath.startsWith(clientDir) || !fs.existsSync(safePath) || !fs.statSync(safePath).isFile()) {
       // SPA fallback to index.html
       const indexPath = path.join(clientDir, 'index.html');
       if (fs.existsSync(indexPath)) {
         safePath = indexPath;
       } else {
-        res.writeHead(404, { 'Content-Type': 'text/plain', ...SECURITY_HEADERS });
+        res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain' });
         return res.end('404 Not Found');
       }
     }
@@ -89,21 +74,12 @@ const server = http.createServer((req, res) => {
     };
 
     res.writeHead(200, {
+      ...SECURITY_HEADERS,
       'Content-Type': mimeTypes[ext] || 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-      ...SECURITY_HEADERS
+      'Cache-Control': 'no-cache'
     });
     fs.createReadStream(safePath).pipe(res);
-  } catch (err) {
-    console.error('[HTTP_HANDLER_ERROR]', err);
-    try {
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'text/plain', ...SECURITY_HEADERS });
-        res.end('500 Internal Server Error');
-      }
-    } catch { /* socket already destroyed */ }
-  }
-});
+  });
 
 attachSignaling(server);
 startQuickPicks();
