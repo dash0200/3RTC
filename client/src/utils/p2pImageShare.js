@@ -12,6 +12,7 @@
 export const IMAGE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
 export const MAGIC_IMG1 = 0x494D4731;  // 'IMG1' in ASCII hex
 export const MAX_IMAGE_CHUNKS = 2048;   // 2048 * 60 KB = ~122 MB max
+export const MAX_IMAGE_FILE_SIZE = MAX_IMAGE_CHUNKS * IMAGE_CHUNK_SIZE;
 
 export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -22,6 +23,7 @@ export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/avif',
   'image/bmp'
 ]);
+export const ALLOWED_IMAGE_MIMES = ALLOWED_IMAGE_MIME_TYPES;
 
 export function sanitizeImageMimeType(mime) {
   if (typeof mime !== 'string') return 'image/png';
@@ -35,9 +37,9 @@ export function sanitizeImageMimeType(mime) {
 export function safeImageDownloadName(name, mimeType) {
   const mime = String(mimeType || '').toLowerCase();
   const ext = mime.includes('jpeg') || mime.includes('jpg') ? '.jpg' :
-              mime.includes('webp') ? '.webp' :
-              mime.includes('gif') ? '.gif' :
-              mime.includes('avif') ? '.avif' : '.png';
+    mime.includes('webp') ? '.webp' :
+      mime.includes('gif') ? '.gif' :
+        mime.includes('avif') ? '.avif' : '.png';
 
   const base = String(name || 'shared-image')
     .replace(/\.[^/.]+$/, '') // remove incoming extension
@@ -59,13 +61,13 @@ export function formatFileSize(bytes) {
 }
 
 /**
- * Checks whether a File or Blob is an image
+ * Checks whether a File or Blob is a safe raster image
  */
 export function isImageFile(file) {
   if (!file) return false;
-  if (file.type && file.type.startsWith('image/')) return true;
+  if (file.type && ALLOWED_IMAGE_MIMES.has(file.type.toLowerCase())) return true;
   const name = (file.name || '').toLowerCase();
-  return /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(name);
+  return /\.(png|jpe?g|webp|gif)$/i.test(name);
 }
 
 /**
@@ -131,9 +133,9 @@ export class P2PImageSender {
     this.sender = options.sender || 'Peer';
     this.isHost = Boolean(options.isHost);
     this.caption = options.caption || '';
-    this.onProgress = options.onProgress || (() => {});
-    this.onComplete = options.onComplete || (() => {});
-    this.onError = options.onError || (() => {});
+    this.onProgress = options.onProgress || (() => { });
+    this.onComplete = options.onComplete || (() => { });
+    this.onError = options.onError || (() => { });
     this.totalChunks = Math.ceil(file.size / IMAGE_CHUNK_SIZE) || 1;
     this.currentChunkIndex = 0;
     this.isAborted = false;
@@ -167,7 +169,7 @@ export class P2PImageSender {
     for (const dc of channels) {
       try {
         dc.send(startMsg);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     // 2. Begin pumping binary chunks
@@ -221,7 +223,7 @@ export class P2PImageSender {
           if (dc.readyState === 'open') {
             dc.send(packet);
           }
-        } catch (e) {}
+        } catch (e) { }
       }
 
       const percent = Math.min(100, Math.round((this.currentChunkIndex / this.totalChunks) * 100));
@@ -301,6 +303,11 @@ export class P2PImageReceiver {
       transfer.receivedCount++;
       transfer.receivedBytes += data.byteLength;
 
+      if (transfer.receivedBytes > MAX_IMAGE_FILE_SIZE) {
+        this.transfers.delete(transferId);
+        return null;
+      }
+
       const percent = Math.min(100, Math.round((transfer.receivedCount / transfer.totalChunks) * 100));
       if (typeof callbacks.onProgress === 'function') {
         callbacks.onProgress(transferId, percent, transfer);
@@ -308,7 +315,7 @@ export class P2PImageReceiver {
 
       if (transfer.receivedCount >= transfer.totalChunks) {
         // Complete! Assemble Blob & create Object URL
-        const blob = new Blob(transfer.chunks, { type: transfer.mimeType || 'image/png' });
+        const blob = new Blob(transfer.chunks, { type: transfer.mimeType });
         const objectUrl = URL.createObjectURL(blob);
         const result = {
           transferId,
