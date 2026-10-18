@@ -27,7 +27,7 @@ FREE_REGIONS = {
 
 FIREWALL_RULE_NAME = "allow-webrtc-signaling"
 FIREWALL_TAG = "webrtc-signaling-server"
-SIGNAL_DOMAIN = "signal.3rtc.me"  # the app connects to wss://signal.3rtc.me (A record -> VM IP)
+SIGNAL_DOMAIN = "gcp.3rtc.me"  # the app connects to wss://gcp.3rtc.me (A record -> VM IP)
 DEFAULT_INSTANCE_NAME = "webrtc-signaling-free"
 DEFAULT_PORT = "443"
 ALT_PORT = "8443"
@@ -55,16 +55,19 @@ def update_command(server_files):
     """Shell command run on the VM: move the uploaded files into place, install new dependencies
     if package.json changed, (re)install the service as its own user, restart it. Safe to repeat;
     it also moves an older VM (service as root, Node open on all interfaces) to the current setup."""
-    moves = " && ".join(f"sudo mv /tmp/{f.name} /opt/webrtc-server/{f.name}" for f in server_files)
-    return (f"{moves} && cd /opt/webrtc-server"
+    moves = " && ".join(f"sudo mv \"$STAGING_DIR/{f.name}\" /opt/webrtc-server/{f.name}" for f in server_files)
+    return ('STAGING_DIR="$HOME/staging_3rtc" && '
+            "sudo mkdir -p /opt/webrtc-server && "
+            f"{moves} && cd /opt/webrtc-server"
             " && (sudo npm install --omit=dev --no-audit --no-fund --silent || echo 'npm install failed: keeping the installed modules')"
             f" && (id -u {SERVICE_USER} >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin {SERVICE_USER})"
             f" && sudo chown -R {SERVICE_USER}:{SERVICE_USER} /opt/webrtc-server"
             " && (sudo chmod 600 /opt/webrtc-server/.youtube-api-key 2>/dev/null || true)"
-            f" && sudo mv /tmp/{SERVICE_FILE} /etc/systemd/system/{SERVICE_FILE}"
+            f" && sudo mv \"$STAGING_DIR/{SERVICE_FILE}\" /etc/systemd/system/{SERVICE_FILE}"
             f" && sudo chown root:root /etc/systemd/system/{SERVICE_FILE}"
             " && sudo systemctl daemon-reload"
-            " && sudo systemctl restart webrtc-signaling")
+            " && sudo systemctl restart webrtc-signaling"
+            ' && rm -rf "$STAGING_DIR"')
 
 def print_step(title):
     print(f"\n{'=' * 60}")
@@ -377,15 +380,20 @@ cat <<EOF > /etc/caddy/Caddyfile
     admin off
 }}
 
-# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443. {SIGNAL_DOMAIN} needs a DNS A
-# record pointing at this VM's IP; until it has one, Caddy keeps retrying and the sslip.io name works.
-{SIGNAL_DOMAIN}:443, ${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
+# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443 for gcp.3rtc.me, signal.3rtc.me, and sslip.io.
+{SIGNAL_DOMAIN}:443, {SIGNAL_DOMAIN}:8443, signal.3rtc.me:443, signal.3rtc.me:8443, ${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
     reverse_proxy 127.0.0.1:8080
 }}
 
-# HTTP status check & ACME challenge support on port 80
+# Automatically redirect all plain HTTP requests on port 80 to HTTPS while supporting health checks
 :80 {{
-    respond "WebRTC Signaling Server Ready at wss://${{DOMAIN}}:443" 200
+    @health path /healthz /status
+    handle @health {{
+        respond "WebRTC Signaling Server Ready at wss://${{DOMAIN}}:443" 200
+    }}
+    handle {{
+        redir https://{{host}}{{uri}} permanent
+    }}
 }}
 EOF
 
@@ -424,7 +432,12 @@ def deploy_vm(gcloud, zone, server_files):
         if c == "1":
             print(f"\nUploading latest server files to '{instance_name}'...")
             run_cmd([
-                gcloud, "compute", "scp", *[str(f) for f in server_files], str(Path(server_files[0]).parent / SERVICE_FILE), f"{instance_name}:/tmp/",
+                gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+                '--command=mkdir -p "$HOME/staging_3rtc" && chmod 700 "$HOME/staging_3rtc"',
+                "--quiet"
+            ], capture_output=False)
+            run_cmd([
+                gcloud, "compute", "scp", *[str(f) for f in server_files], str(Path(server_files[0]).parent / SERVICE_FILE), f"{instance_name}:staging_3rtc/",
                 f"--zone={zone}", "--quiet"
             ], capture_output=False)
             print("Restarting webrtc-signaling service...")
@@ -532,6 +545,33 @@ def wait_for_ready(external_ip):
     print("=" * 60 + "\n")
 
 
+def get_existing_gcp_youtube_key(gcloud, zone, instance_name):
+    try:
+        res = subprocess.run([
+            gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+            "--command=sudo cat /opt/webrtc-server/.youtube-api-key 2>/dev/null || true",
+            "--quiet"
+        ], capture_output=True, text=True, check=False)
+        key = (res.stdout or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+
+    env_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    local_key_file = Path(__file__).resolve().parent / ".youtube-api-key"
+    if local_key_file.exists():
+        try:
+            fkey = local_key_file.read_text(encoding="utf-8").strip()
+            if fkey:
+                return fkey
+        except Exception:
+            pass
+    return None
+
+
 def configure_quick_picks(gcloud, zone, instance_name):
     """Upload the YouTube Data API key that powers the quick-pick videos (optional).
 
@@ -543,30 +583,58 @@ def configure_quick_picks(gcloud, zone, instance_name):
     print("Quick picks can be filled from live YouTube searches instead of the built-in list.")
     print("This needs a YouTube Data API v3 key: https://console.cloud.google.com/apis/credentials")
     print("(Enable 'YouTube Data API v3' for the project, create an API key, and restrict it to that API.)")
-    key = os.environ.get("YOUTUBE_API_KEY", "").strip()
-    if key:
-        print("Using YOUTUBE_API_KEY from your environment.")
+
+    existing_key = get_existing_gcp_youtube_key(gcloud, zone, instance_name)
+    if existing_key:
+        print(f"\nExisting YouTube Data API Key: {existing_key}")
+        prompt = "Enter new YouTube Data API key (or press Enter to keep existing): "
     else:
-        key = getpass.getpass("Paste the API key (input hidden), or press Enter to keep the current setting: ").strip()
-    if not key:
-        print("Skipped. Quick picks keep their current source.")
-        return
+        print("\nExisting YouTube Data API Key: No API key")
+        prompt = "Enter YouTube Data API key (or press Enter to skip): "
+
+    new_key = input(prompt).strip()
+    if not new_key:
+        if existing_key:
+            print("[OK] Keeping existing YouTube Data API key.")
+            check_remote = subprocess.run([
+                gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+                "--command=sudo test -f /opt/webrtc-server/.youtube-api-key && echo 'EXISTS' || true",
+                "--quiet"
+            ], capture_output=True, text=True, check=False)
+            if "EXISTS" in (check_remote.stdout or ""):
+                return
+            key_to_upload = existing_key
+        else:
+            print("Skipped. Quick picks keep their current source.")
+            return
+    else:
+        key_to_upload = new_key
+        try:
+            local_key_file = Path(__file__).resolve().parent / ".youtube-api-key"
+            local_key_file.write_text(key_to_upload + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
     fd, local_path = tempfile.mkstemp(prefix="yt-key-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(key + "\n")
+            f.write(key_to_upload + "\n")
         os.chmod(local_path, 0o600)
         run_cmd([
-            gcloud, "compute", "scp", local_path, f"{instance_name}:/tmp/.youtube-api-key",
+            gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+            '--command=mkdir -p "$HOME/staging_3rtc" && chmod 700 "$HOME/staging_3rtc"',
+            "--quiet"
+        ], capture_output=False)
+        run_cmd([
+            gcloud, "compute", "scp", local_path, f"{instance_name}:staging_3rtc/.youtube-api-key",
             f"--zone={zone}", "--quiet"
         ], capture_output=False)
     finally:
         os.remove(local_path)
     run_cmd([
         gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
-        f"--command=sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} /tmp/.youtube-api-key /opt/webrtc-server/.youtube-api-key"
-        " && rm -f /tmp/.youtube-api-key && sudo rm -f /opt/webrtc-server/quick-picks-cache.json"
+        f"--command=STAGING_DIR=\"$HOME/staging_3rtc\" && sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} \"$STAGING_DIR/.youtube-api-key\" /opt/webrtc-server/.youtube-api-key"
+        ' && rm -f "$STAGING_DIR/.youtube-api-key" && sudo rm -f /opt/webrtc-server/quick-picks-cache.json'
         " && sudo systemctl restart webrtc-signaling",
         "--quiet"
     ], capture_output=False)

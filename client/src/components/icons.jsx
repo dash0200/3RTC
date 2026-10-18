@@ -30,8 +30,11 @@ const paths = {
   qr: <><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h3v-3" /></>,
   lock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
   pencil: <path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4" />,
-  chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />,
-  logout: <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H3" />
+  logout: <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H3" />,
+  skipForward: <><path d="M5 4l10 8-10 8V4z" fill="currentColor" /><rect x="17" y="4" width="2.5" height="16" rx="1" fill="currentColor" /></>,
+  screenShare: <><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4M12 13V7M9 10l3-3 3 3" /></>,
+  screenShareOff: <><path d="M2 3l20 20M9 3h11a2 2 0 0 1 2 2v10a2 2 0 0 1-1.2 1.8M2 7v8a2 2 0 0 0 2 2h10M8 21h8M12 17v4" /></>,
+  laserPointer: <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
 };
 
 const filled = {

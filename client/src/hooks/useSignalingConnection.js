@@ -45,7 +45,14 @@ export function useSignalingConnection(ctx) {
         const urls = [signalUrl, ...fallbackKey.split(' ').filter((u) => u && u !== signalUrl)];
         let urlIndex = 0;
         const isLocalServer = signalUrl.includes('localhost') || signalUrl.includes('127.0.0.1');
-        const serverLabel = isLocalServer ? 'Local' : 'Cloud';
+
+        const getServerLabel = (url) => {
+            if (!url) return 'Cloud';
+            if (url.includes('orc.3rtc.me')) return 'Oracle Cloud';
+            if (url.includes('gcp.3rtc.me')) return 'Google Cloud';
+            if (url.includes('localhost') || url.includes('127.0.0.1')) return 'Local';
+            return 'Cloud';
+        };
 
         const connect = () => {
             if (isCancelled) return;
@@ -53,9 +60,12 @@ export function useSignalingConnection(ctx) {
 
             setSignalStatus({ connected: false, label: 'Connecting...' });
 
+            const activeUrl = urls[urlIndex] || signalUrl;
+            const activeLabel = getServerLabel(activeUrl);
+
             let ws;
             try {
-                ws = new WebSocket(urls[urlIndex]);
+                ws = new WebSocket(activeUrl);
                 wsRef.current = ws;
             } catch (err) {
                 if (isCancelled) return;
@@ -71,8 +81,11 @@ export function useSignalingConnection(ctx) {
                     return;
                 }
 
-                setSignalStatus({ connected: true, label: `${serverLabel} Connected` });
-                showToast(`Connected to ${serverLabel} signaling`);
+                setSignalStatus({ connected: true, label: `${activeLabel} Connected`, activeUrl });
+                showToast(`Connected to ${activeLabel} signaling`);
+                if (urlIndex > 0) {
+                    addSystemMessage(`🔄 Connected to backup signaling server (${activeLabel}).`);
+                }
 
                 // If previously inside a room before connection drop, re-announce
                 if (currentRoomRef.current) {
@@ -147,7 +160,7 @@ export function useSignalingConnection(ctx) {
 
                 // Show friendly prompt if local dev server was selected but is not running
                 if (isLocalServer && !hasOpened) {
-                    showToast('Local server not reachable on port 8080. Start "node server.js" or switch to GCP Cloud Server.');
+                    showToast('Local server not reachable on port 8080. Start "node server.js" or switch to Oracle/GCP Cloud Server.');
                 }
 
                 // Never reached this address: try the next one (a working address is kept)

@@ -4,13 +4,13 @@ import { Logo } from '../Logo';
 import { Icon as LineIcon } from '../icons';
 import { getAvatarColor } from '../../utils/sound';
 import { getInitials } from '../PeerVoiceRoster';
-import { getMobileJoinUrl } from '../../utils/qrCode';
+import { getMobileJoinUrl, getServerTag } from '../../utils/qrCode';
 
 /**
  * Phone top bar (Figma). Before a room: logo + status. In a room: the room code (tap to share the
  * invite link), the connection as a signal icon (tap for details) and who's here (tap for People).
  */
-export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, signalStatus, onOpenNetworkHud, playbackLock = false, people = [], onOpenPeople, username = '' }) {
+export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, signalStatus, onOpenNetworkHud, playbackLock = false, people = [], onOpenPeople, username = '', signalUrl = '', onLeaveRoom }) {
   const ping = networkStats?.avgPingMs;
   if (!roomId) {
     const online = Boolean(signalStatus?.connected);
@@ -28,7 +28,7 @@ export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, 
   const tone = isP2PConnected ? (weak ? 'weak' : 'ok') : 'wait';
   const toneText = isP2PConnected ? (weak ? 'Weak connection' : 'Connected') : 'Waiting for friends';
   const share = async () => {
-    const url = getMobileJoinUrl(roomId, null, username);
+    const url = getMobileJoinUrl(roomId, null, username, getServerTag(signalUrl));
     if (navigator.share) {
       try { await navigator.share({ title: '3RTC', text: 'Watch with me on 3RTC', url }); return; } catch { /* cancelled: fall back to copy */ }
     }
@@ -56,6 +56,22 @@ export function PhoneTopBar({ roomId, onCopyRoom, networkStats, isP2PConnected, 
         ))}
         {extra > 0 && <span className="rd-av phone-people-more" style={{ zIndex: 0 }} aria-hidden="true">+{extra}</span>}
       </button>
+      {onLeaveRoom && (
+        <button
+          type="button"
+          className="phone-leave-btn"
+          onClick={onLeaveRoom}
+          aria-label="Leave room"
+          title="Leave room"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+            <polyline points="16 17 21 12 16 7" />
+            <line x1="21" y1="12" x2="9" y2="12" />
+          </svg>
+          <span>Exit</span>
+        </button>
+      )}
     </header>
   );
 }

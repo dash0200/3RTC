@@ -89,15 +89,22 @@ async function servePage(request, url) {
   } catch (err) {
     const cached = await caches.match(url.pathname, { cacheName: SHELL_CACHE });
     if (cached) return cached;
-    throw err;
+    return new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
   }
 }
 
 const isAppPath = (pathname) => pathname === '/' || pathname === '/index.html';
 
 async function cacheFirst(request) {
-  const cached = await caches.match(request, { cacheName: SHELL_CACHE });
-  return cached || fetch(request);
+  try {
+    const cached = await caches.match(request, { cacheName: SHELL_CACHE });
+    if (cached) return cached;
+    return await fetch(request);
+  } catch (err) {
+    const anyCached = await caches.match(request);
+    if (anyCached) return anyCached;
+    return new Response('', { status: 504, statusText: 'Gateway Timeout' });
+  }
 }
 
 // Hashed asset: current shell cache, then assets kept from earlier versions, then the network
@@ -112,9 +119,15 @@ async function cacheOnFirstUse(request) {
   const cache = await caches.open(ASSET_CACHE);
   const cached = await cache.match(request);
   if (cached) return cached;
-  const response = await fetch(request);
-  if (response.ok) cache.put(request, response.clone());
-  return response;
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) cache.put(request, response.clone());
+    return response;
+  } catch (err) {
+    const anyCached = await caches.match(request);
+    if (anyCached) return anyCached;
+    return new Response('', { status: 504, statusText: 'Gateway Timeout' });
+  }
 }
 
 async function staleWhileRevalidate(request) {
@@ -213,11 +226,36 @@ async function serveP2PStream(event, url) {
     }
   });
 
+const ALLOWED_STREAM_MIME_TYPES = new Set([
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+  'video/quicktime',
+  'video/x-matroska',
+  'audio/mp4',
+  'audio/webm',
+  'audio/ogg',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/aac',
+  'audio/flac',
+  'audio/opus'
+]);
+
+function sanitizeStreamMime(mime) {
+  if (typeof mime !== 'string') return 'video/mp4';
+  const clean = mime.toLowerCase().trim().split(';')[0];
+  return ALLOWED_STREAM_MIME_TYPES.has(clean) ? clean : 'video/mp4';
+}
+
+  const contentType = sanitizeStreamMime(meta.mimeType);
   const headers = {
-    'Content-Type': meta.mimeType || 'video/mp4',
+    'Content-Type': contentType,
     'Content-Length': String(end - start + 1),
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "sandbox; default-src 'none';"
   };
   if (match) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
   return new Response(body, { status: match ? 206 : 200, headers });
