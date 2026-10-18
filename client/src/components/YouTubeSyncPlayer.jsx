@@ -5,7 +5,6 @@ import { resolvePastedLink } from '../features/media/resolveLink';
 
 // (Moved to utils/youtubeId.js so plain modules and tests can use it)
 import { extractYouTubeId } from '../utils/youtubeId';
-import { useAudioDucking } from '../features/audio/useAudioDucking';
 export { extractYouTubeId };
 
 export function formatTime(seconds) {
@@ -93,13 +92,6 @@ export default function YouTubeSyncPlayer({
   const [showTopControls, setShowTopControls] = useState(true);
   const idleTimerRef = useRef(null);
 
-  // Phase 3: Intelligent Dialogue Ducking (reduces volume by ~18 dB when peers speak)
-  const duckingFactor = useAudioDucking(Boolean(videoId));
-  useEffect(() => {
-    if (!playerRef.current || isMuted) return;
-    const effectiveVol = Math.round(volume * duckingFactor);
-    playerRef.current.setVolume?.(effectiveVol);
-  }, [duckingFactor, volume, isMuted]);
 
   const handleStageActivity = () => {
     setShowTopControls(true);
