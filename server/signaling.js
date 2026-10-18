@@ -344,6 +344,7 @@ export function attachSignaling(server, options = {}) {
             safeSend(ws, {
               type: 'error',
               code: 'not-found',
+              roomId,
               message: `Room "${roomId}" not found. Please verify the 5-digit code or create a room.`
             });
             log('WARN', `Peer ${peerId} tried to join non-existent room "${roomId}"`);
