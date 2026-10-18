@@ -85,7 +85,7 @@ export default function ImageLightboxModal({
         await navigator.clipboard.writeText(image.url);
         setIsCopied(true);
         setTimeout(() => setIsCopied(false), 2000);
-      } catch (err) {}
+      } catch (err) { }
     }
   };
 

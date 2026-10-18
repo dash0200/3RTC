@@ -48,9 +48,9 @@ export class P2PStreamSender {
     this.senderName = options.senderName || 'Peer';
     this.streamId = options.streamId || crypto.randomUUID();
     this.targetPeerId = options.targetPeerId || '';
-    this.onProgress = options.onProgress || (() => {});
-    this.onComplete = options.onComplete || (() => {});
-    this.onError = options.onError || (() => {});
+    this.onProgress = options.onProgress || (() => { });
+    this.onComplete = options.onComplete || (() => { });
+    this.onError = options.onError || (() => { });
     this.isAborted = false;
     this.totalChunks = Math.ceil(file.size / STREAM_CHUNK_SIZE);
     this.currentChunkIndex = 0;
@@ -110,7 +110,7 @@ export class P2PStreamSender {
       };
       try {
         this.dataChannel.send(JSON.stringify(completeMsg));
-      } catch (e) {}
+      } catch (e) { }
 
       this.onComplete({
         streamId: this.streamId,
@@ -199,7 +199,7 @@ export class P2PStreamSender {
           streamId: this.streamId,
           timestamp: Date.now()
         }));
-      } catch (e) {}
+      } catch (e) { }
     }
   }
 }
@@ -209,22 +209,22 @@ export class P2PStreamSender {
  */
 export class P2PStreamReceiver {
   constructor(header, options = {}) {
-    this.streamId = header.streamId;
-    this.fileName = typeof header.fileName === 'string' ? header.fileName.slice(0, 180) : 'video';
-    this.fileSize = Number.isFinite(header.fileSize) && header.fileSize > 0 ? header.fileSize : 0;
-    this.mimeType = sanitizeMediaMimeType(header.mimeType);
-    this.chunkSize = Number.isInteger(header.chunkSize) && header.chunkSize > 0 && header.chunkSize <= 1024 * 1024
+    this.streamId = header?.streamId;
+    this.fileName = typeof header?.fileName === 'string' ? header.fileName.slice(0, 180) : 'video';
+    this.fileSize = Number.isFinite(header?.fileSize) && header.fileSize > 0 ? header.fileSize : 0;
+    this.mimeType = sanitizeMediaMimeType(header?.mimeType);
+    this.chunkSize = Number.isInteger(header?.chunkSize) && header.chunkSize > 0 && header.chunkSize <= 1024 * 1024
       ? header.chunkSize
       : STREAM_CHUNK_SIZE;
     const computedChunks = this.fileSize > 0 ? Math.ceil(this.fileSize / this.chunkSize) : 0;
-    const rawChunks = Number.isInteger(header.totalChunks) && header.totalChunks > 0 ? header.totalChunks : computedChunks;
+    const rawChunks = Number.isInteger(header?.totalChunks) && header?.totalChunks > 0 ? header.totalChunks : computedChunks;
     this.totalChunks = Math.min(Math.max(1, rawChunks), MAX_STREAM_CHUNKS);
-    this.sender = typeof header.sender === 'string' ? header.sender.slice(0, 64) : 'Peer';
+    this.sender = typeof header?.sender === 'string' ? header.sender.slice(0, 64) : 'Peer';
 
-    this.onReady = options.onReady || (() => {});
-    this.onProgress = options.onProgress || (() => {});
-    this.onComplete = options.onComplete || (() => {});
-    this.onError = options.onError || (() => {});
+    this.onReady = options.onReady || (() => { });
+    this.onProgress = options.onProgress || (() => { });
+    this.onComplete = options.onComplete || (() => { });
+    this.onError = options.onError || (() => { });
 
     this.chunks = new Array(this.totalChunks);
     this.receivedBytes = 0;
@@ -304,7 +304,7 @@ export class P2PStreamReceiver {
 
       if (isFinal) {
         if (this.currentObjectUrl && this.currentObjectUrl !== newUrl) {
-          try { URL.revokeObjectURL(this.currentObjectUrl); } catch (e) {}
+          try { URL.revokeObjectURL(this.currentObjectUrl); } catch (e) { }
         }
         this.currentObjectUrl = newUrl;
         this.isCompleted = true;
@@ -339,7 +339,7 @@ export class P2PStreamReceiver {
     if (this.currentObjectUrl) {
       try {
         URL.revokeObjectURL(this.currentObjectUrl);
-      } catch (e) {}
+      } catch (e) { }
       this.currentObjectUrl = null;
     }
     this.chunks = [];
