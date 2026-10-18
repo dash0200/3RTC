@@ -35,7 +35,7 @@ export const BULK_CHANNEL_ID = 512;
 export const PROTOCOL_VERSION = 2;
 
 // People per room (the signaling server enforces the same number)
-export const MAX_ROOM_SIZE = 6;
+export const MAX_ROOM_SIZE = 4;
 
 // P2P connection recovery (network change, Wi-Fi drop): ICE restart over the signaling socket
 export const RECOVERY = {

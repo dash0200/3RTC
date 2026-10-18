@@ -1,17 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveVoiceUsers } from '../../utils/speakingActivity';
 import { getAvatarColor } from '../../utils/sound';
 import { getInitials, PeerAudioPopover } from '../PeerVoiceRoster';
 import { Icon } from '../icons';
+import { spatialAudio } from '../../features/audio/spatialAudio';
 
 /**
  * Who's watching, on the video itself (Figma "People on video"): a ring shows who is talking,
  * so nobody has to look away from the picture. Desktop: everyone; tap a friend for their volume.
  * Phone: only whoever is talking right now.
+ * Phase 3: Maps peer screen positions to Web Audio directional stereo pan (-0.75 to +0.75).
  */
 export default function VideoPeopleOverlay({ connectedPeers, localUser, isPhone = false, onSetPeerVolume, onToggleMutePeer }) {
   const { peers, localUser: me } = useLiveVoiceUsers(connectedPeers, localUser);
   const [selected, setSelected] = useState(null);
+
+  // Phase 3: Spatial Co-Presence - compute stereo pan from visual screen position
+  useEffect(() => {
+    if (!peers || peers.length === 0) return;
+    peers.forEach((peer, index) => {
+      const peerId = peer.peerId || peer.id;
+      if (peerId) {
+        const pan = spatialAudio.calculateRosterPan(index, peers.length);
+        spatialAudio.setPan(peerId, pan);
+      }
+    });
+  }, [peers]);
+
   const people = [
     ...peers.map((p) => ({ key: p.peerId || p.id, name: p.username || 'Friend', speaking: Boolean(p.isSpeaking) && !p.isMuted, muted: Boolean(p.isMuted), peer: p })),
     ...(me ? [{ key: 'me', name: 'You', initialsFrom: me.username, speaking: Boolean(me.isSpeaking) && !me.isMuted, muted: Boolean(me.isMuted) }] : [])
@@ -21,7 +36,7 @@ export default function VideoPeopleOverlay({ connectedPeers, localUser, isPhone 
 
   return (
     <ul className={`vpo ${isPhone ? 'vpo-phone' : ''}`} aria-label="People in the room">
-      {shown.map((p) => (
+      {shown.map((p, idx) => (
         <li key={p.key} className="vpo-person">
           <button
             type="button"

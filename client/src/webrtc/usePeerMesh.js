@@ -103,6 +103,21 @@ export function usePeerMesh(ctx) {
         ...(identityFieldsRef.current?.() || {})
     }), [peerIdRef, isHostRef, isMicMutedRef]);
 
+    const currentScreenTrackRef = useRef(null);
+
+    // Sync screen share track across all active peer connections when local user shares or stops
+    useEffect(() => {
+        const off = bus.onEvent('set-screen-track', (track) => {
+            currentScreenTrackRef.current = track;
+            for (const peer of peersRef.current.values()) {
+                if (peer.videoTransceiver?.sender) {
+                    peer.videoTransceiver.sender.replaceTrack(track).catch(() => {});
+                }
+            }
+        });
+        return off;
+    }, [bus, peersRef]);
+
     const getOrCreatePeerConnection = useCallback((targetPeerId, isInitiator) => {
         if (peersRef.current.has(targetPeerId)) return peersRef.current.get(targetPeerId);
 
@@ -114,6 +129,8 @@ export function usePeerMesh(ctx) {
             isConnected: false,
             candidateQueue: [],
             audioElement: null,
+            audioTransceiver: null,
+            videoTransceiver: null,
             isInitiator: Boolean(isInitiator), // the initiator drives ICE restarts (no offer glare)
             applyingRemote: false,             // remote description being applied: queue candidates
             recoveryTimer: null,
@@ -145,18 +162,45 @@ export function usePeerMesh(ctx) {
                 } else {
                     audioTransceiver.direction = 'sendrecv';
                 }
+                peerEntry.audioTransceiver = audioTransceiver;
                 if (localStreamRef.current) {
                     const audioTrack = micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
                     if (audioTrack && !isMicMutedRef.current && audioTransceiver?.sender) {
                         audioTransceiver.sender.replaceTrack(audioTrack).catch(() => { });
                     }
                 }
+
+                // Screen share video transceiver
+                let videoTransceiver = pc.getTransceivers?.().find((t) =>
+                    t.sender?.track?.kind === 'video' || t.receiver?.track?.kind === 'video') || null;
+                if (!videoTransceiver) {
+                    videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
+                } else {
+                    videoTransceiver.direction = 'sendrecv';
+                }
+                peerEntry.videoTransceiver = videoTransceiver;
+                if (currentScreenTrackRef.current && videoTransceiver?.sender) {
+                    videoTransceiver.sender.replaceTrack(currentScreenTrackRef.current).catch(() => {});
+                }
             }
         } catch (err) {
             logLocalDebug('TRANSCEIVER_INIT_ERR', err.message);
         }
 
-        attachRemoteAudio(pc, { isAudioBlockedRef, localMutedPeersRef, logLocalDebug, peerEntry, peerVolumesRef, targetPeerId });
+        attachRemoteAudio(pc, {
+            isAudioBlockedRef,
+            localMutedPeersRef,
+            logLocalDebug,
+            peerEntry,
+            peerVolumesRef,
+            targetPeerId,
+            onRemoteVideoStream: (peerId, stream, track) => {
+                bus.emitEvent('remote-screen-stream', { peerId, stream, track });
+            },
+            onRemoteVideoStreamEnded: (peerId) => {
+                bus.emitEvent('remote-screen-stream-ended', { peerId });
+            }
+        });
 
         pc.onicecandidate = (event) => {
             if (!event.candidate) return;
@@ -230,7 +274,7 @@ export function usePeerMesh(ctx) {
     getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
 
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, {
-        addSystemMessage, cleanupPeer, currentRoomRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef,
+        addSystemMessage, cleanupPeer, currentRoomRef, currentScreenTrackRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef,
         logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
     }), [peerIdRef, setHostPeerId, addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
 

@@ -11,35 +11,41 @@
 
 export const IMAGE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
 export const MAGIC_IMG1 = 0x494D4731;  // 'IMG1' in ASCII hex
+export const MAX_IMAGE_CHUNKS = 2048;   // 2048 * 60 KB = ~122 MB max
 
-export const ALLOWED_IMAGE_MIMES = new Set([
+export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
   'image/jpg',
   'image/webp',
-  'image/gif'
+  'image/gif',
+  'image/avif',
+  'image/bmp'
 ]);
 
-export const MAX_IMAGE_CHUNKS = 500; // ~30 MB (well within 15 MB limit)
-export const MAX_IMAGE_FILE_SIZE = 30 * 1024 * 1024;
+export function sanitizeImageMimeType(mime) {
+  if (typeof mime !== 'string') return 'image/png';
+  const clean = mime.toLowerCase().trim().split(';')[0];
+  return ALLOWED_IMAGE_MIME_TYPES.has(clean) ? clean : 'image/png';
+}
 
 /**
- * Sanitize download filename: strip path traversal, directory chars, and enforce safe image extension.
+ * Sanitizes download filename: strips directory traversal and enforces safe image extensions (.png, .jpg, .webp, .gif)
  */
-export function sanitizeImageFilename(name) {
-  if (typeof name !== 'string' || !name.trim()) return 'shared-image.png';
-  const clean = name.split(/[/\\]/).pop().replace(/\.\.+/g, '').trim();
-  const lastDot = clean.lastIndexOf('.');
-  if (lastDot > 0) {
-    const ext = clean.slice(lastDot + 1).toLowerCase();
-    const base = clean.slice(0, lastDot).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 50);
-    if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'webp' || ext === 'gif') {
-      return `${base || 'image'}.${ext}`;
-    }
-    return `${base || 'image'}.png`;
-  }
-  const base = clean.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 50);
-  return `${base || 'image'}.png`;
+export function safeImageDownloadName(name, mimeType) {
+  const mime = String(mimeType || '').toLowerCase();
+  const ext = mime.includes('jpeg') || mime.includes('jpg') ? '.jpg' :
+    mime.includes('webp') ? '.webp' :
+      mime.includes('gif') ? '.gif' :
+        mime.includes('avif') ? '.avif' : '.png';
+
+  const base = String(name || 'shared-image')
+    .replace(/\.[^/.]+$/, '') // remove incoming extension
+    .replace(/[^a-zA-Z0-9_\s-]/g, '') // remove path traversal / illegal characters
+    .trim()
+    .slice(0, 50) || 'shared-image';
+
+  return `${base}${ext}`;
 }
 
 /**
@@ -125,9 +131,9 @@ export class P2PImageSender {
     this.sender = options.sender || 'Peer';
     this.isHost = Boolean(options.isHost);
     this.caption = options.caption || '';
-    this.onProgress = options.onProgress || (() => {});
-    this.onComplete = options.onComplete || (() => {});
-    this.onError = options.onError || (() => {});
+    this.onProgress = options.onProgress || (() => { });
+    this.onComplete = options.onComplete || (() => { });
+    this.onError = options.onError || (() => { });
     this.totalChunks = Math.ceil(file.size / IMAGE_CHUNK_SIZE) || 1;
     this.currentChunkIndex = 0;
     this.isAborted = false;
@@ -161,7 +167,7 @@ export class P2PImageSender {
     for (const dc of channels) {
       try {
         dc.send(startMsg);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     // 2. Begin pumping binary chunks
@@ -215,7 +221,7 @@ export class P2PImageSender {
           if (dc.readyState === 'open') {
             dc.send(packet);
           }
-        } catch (e) {}
+        } catch (e) { }
       }
 
       const percent = Math.min(100, Math.round((this.currentChunkIndex / this.totalChunks) * 100));
@@ -254,35 +260,23 @@ export class P2PImageReceiver {
   handleStart(headerMsg) {
     if (!headerMsg || typeof headerMsg !== 'object') return;
     const { transferId, id, fileName, fileSize, mimeType, totalChunks, sender, isHost, caption, timestamp } = headerMsg;
-    if (!transferId || typeof transferId !== 'string') return;
+    if (typeof transferId !== 'string' || !transferId.trim() || transferId.length > 64) return;
+    if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_IMAGE_CHUNKS) return;
 
-    // Validate totalChunks to prevent RangeError / memory exhaustion crashes (M-01)
-    if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_IMAGE_CHUNKS) {
-      console.warn(`[P2PImageReceiver] Rejected transfer ${transferId}: invalid totalChunks ${totalChunks}`);
-      return;
-    }
-
-    if (fileSize && (typeof fileSize !== 'number' || fileSize < 0 || fileSize > MAX_IMAGE_FILE_SIZE)) {
-      console.warn(`[P2PImageReceiver] Rejected transfer ${transferId}: invalid fileSize ${fileSize}`);
-      return;
-    }
-
-    // Whitelist MIME type to safe raster image formats to prevent XSS (M-02)
-    const normalizedMime = (mimeType || '').toLowerCase().trim();
-    const safeMime = ALLOWED_IMAGE_MIMES.has(normalizedMime) ? normalizedMime : 'image/png';
-    const safeFileName = sanitizeImageFilename(fileName);
+    const safeFileSize = Number.isFinite(fileSize) && fileSize > 0 ? fileSize : 0;
+    const safeMime = sanitizeImageMimeType(mimeType);
 
     this.transfers.set(transferId, {
-      id: id || crypto.randomUUID(),
+      id: typeof id === 'string' && id ? id.slice(0, 64) : crypto.randomUUID(),
       transferId,
-      fileName: safeFileName,
-      fileSize: fileSize || 0,
+      fileName: typeof fileName === 'string' ? fileName.slice(0, 120) : 'shared-image.png',
+      fileSize: safeFileSize,
       mimeType: safeMime,
       totalChunks,
-      sender: sender || 'Peer',
+      sender: typeof sender === 'string' ? sender.slice(0, 64) : 'Peer',
       isHost: Boolean(isHost),
-      caption: caption || '',
-      timestamp: timestamp || Date.now(),
+      caption: typeof caption === 'string' ? caption.slice(0, 2000) : '',
+      timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
       chunks: new Array(totalChunks),
       receivedCount: 0,
       receivedBytes: 0,
@@ -298,9 +292,7 @@ export class P2PImageReceiver {
     const transfer = this.transfers.get(transferId);
     if (!transfer) return null;
 
-    // Validate chunk bounds
     if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= transfer.totalChunks) {
-      console.warn(`[P2PImageReceiver] Chunk index out of bounds: ${chunkIndex} (total: ${transfer.totalChunks})`);
       return null;
     }
 

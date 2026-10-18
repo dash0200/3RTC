@@ -1,16 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Icon } from '../icons';
 import { usePopover } from '../../hooks/usePopover';
 import { useReactionSet, openReactionsEditor } from '../../features/reactions/reactionSet';
 import { useLiveVoiceUsers } from '../../utils/speakingActivity';
 import { getAvatarColor } from '../../utils/sound';
-import { getInitials } from '../PeerVoiceRoster';
+import { getInitials, PeerAudioPopover } from '../PeerVoiceRoster';
 import AudioDevicePicker from '../AudioDevicePicker';
 import SoundboardTray from '../SoundboardTray';
+import { spatialAudio } from '../../features/audio/spatialAudio';
 
 /**
- * Desktop room controls (Figma "Dock"): you on the left, the call controls in the middle,
- * Leave on its own at the far right.
+ * Desktop room controls (Figma "Dock"): you and connected peers on the left,
+ * call controls in the middle, Leave on its own at the far right.
  */
 export default function DesktopDock({
   localUser, connectedPeers, isHost,
@@ -20,12 +21,15 @@ export default function DesktopDock({
   onSendReaction,
   soundboardSettings, activeSoundboardSfx, activeSfxCooldowns, onPlaySoundboardClip, onSoundboardVolumeChange, onToggleSoundboardMute,
   isMediaActive, onOpenAddVideo,
+  isScreenSharing = false, screenSharer = null, isScreenShareDismissed = false, onToggleScreenShare,
   activityMenu = [], onStartActivity,
   playbackLock, onTogglePlaybackLock,
-  onOpenNetworkHud, onOpenQrCode, onLeaveRoom
+  onOpenNetworkHud, onOpenQrCode, onLeaveRoom,
+  onSetPeerVolume, onToggleMutePeer
 }) {
   const isPtt = audioSettings?.inputMode === 'ptt';
-  const { localUser: me } = useLiveVoiceUsers(connectedPeers, localUser);
+  const { peers, localUser: me } = useLiveVoiceUsers(connectedPeers, localUser);
+  const [selectedPeer, setSelectedPeer] = useState(null);
   const quickReactions = useReactionSet();
   const devices = usePopover();
   const reactions = usePopover();
@@ -33,23 +37,82 @@ export default function DesktopDock({
   const games = usePopover();
   const more = usePopover();
 
+  // Phase 3: Spatial Co-Presence - compute stereo pan from visual roster positions
+  useEffect(() => {
+    if (!peers || peers.length === 0) return;
+    peers.forEach((peer, index) => {
+      const peerId = peer.peerId || peer.id;
+      if (peerId) {
+        const pan = spatialAudio.calculateRosterPan(index, peers.length);
+        spatialAudio.setPan(peerId, pan);
+      }
+    });
+  }, [peers]);
+
   const name = me?.username || 'You';
   const speaking = Boolean(me?.isSpeaking) && !isMicMuted;
   const status = isAudioBlocked ? 'Sound off' : isPtt ? (isPttActive ? 'Talking' : `Hold ${audioSettings?.pttKeyLabel || 'Space'} to talk`) : isMicMuted ? 'Mic off' : speaking ? 'Speaking' : 'Mic on';
   const micLabel = isAudioBlocked ? 'Mic blocked' : isPtt ? (isPttActive ? 'Talking' : `Hold ${audioSettings?.pttKeyLabel || 'Space'}`) : isMicMuted ? 'Mic off' : 'Mic on';
   const micOff = isMicMuted || isAudioBlocked;
-  const showGames = !isMediaActive && activityMenu.length > 0;
 
   return (
     <div className="dock">
-      <div className="dock-you">
-        <span className={`rd-av ${speaking ? 'is-speaking' : ''} ${micOff ? 'is-quiet' : ''}`} style={{ '--av': getAvatarColor(name) }} aria-hidden="true">
-          {getInitials(name)}
-        </span>
-        <div className="dock-you-text">
-          <span className="dock-you-name">{name} <span>(you{isHost ? ' · host' : ''})</span></span>
-          <span className={`dock-you-status ${micOff ? 'is-off' : speaking ? 'is-live' : ''}`}>{status}</span>
+      <div className="dock-people-group">
+        <div className="dock-you">
+          <span className={`rd-av ${speaking ? 'is-speaking' : ''} ${micOff ? 'is-quiet' : ''}`} style={{ '--av': getAvatarColor(name) }} aria-hidden="true">
+            {getInitials(name)}
+          </span>
+          <div className="dock-you-text">
+            <span className="dock-you-name">{name} <span>(you{isHost ? ' · host' : ''})</span></span>
+            <span className={`dock-you-status ${micOff ? 'is-off' : speaking ? 'is-live' : ''}`}>{status}</span>
+          </div>
         </div>
+
+        {/* Connected peers in dock: clean, prominent voice indicators outside video canvas */}
+        {peers && peers.length > 0 && (
+          <div className="dock-peers-strip" aria-label="People in room">
+            {peers.slice(0, 3).map((peer, idx) => {
+              const peerName = peer.username || 'Peer';
+              const isSpeaking = Boolean(peer.isSpeaking) && !peer.isMuted;
+              const isQuiet = Boolean(peer.isMuted);
+              const isSelected = selectedPeer?.peerId === (peer.peerId || peer.id);
+              return (
+                <div key={peer.peerId || peer.id} className="dock-peer-wrap">
+                  <button
+                    type="button"
+                    className={`dock-peer-av rd-av ${isSpeaking ? 'is-speaking' : ''} ${isQuiet ? 'is-quiet' : ''}`}
+                    style={{ '--av': getAvatarColor(peerName) }}
+                    title={`${peerName}${isSpeaking ? ' (speaking)' : isQuiet ? ' (muted)' : ''} · Click for volume`}
+                    aria-label={`${peerName}${isSpeaking ? ', speaking' : ''}${isQuiet ? ', muted' : ''}`}
+                    onClick={() => setSelectedPeer(isSelected ? null : peer)}
+                  >
+                    {getInitials(peerName)}
+                    {isQuiet && (
+                      <span className="dock-peer-muted-badge" title="Muted">
+                        <Icon name="micOff" size={9} strokeWidth={2.8} />
+                      </span>
+                    )}
+                  </button>
+                  {isSelected && (
+                    <div className="dock-pop dock-pop-peer">
+                      <PeerAudioPopover
+                        peer={peer}
+                        onClose={() => setSelectedPeer(null)}
+                        onSetVolume={onSetPeerVolume}
+                        onToggleMute={onToggleMutePeer}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {peers.length > 3 && (
+              <span className="dock-peers-more" title={`${peers.length - 3} more in room`}>
+                +{peers.length - 3}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="dock-controls" role="toolbar" aria-label="Call controls">
@@ -125,7 +188,42 @@ export default function DesktopDock({
           )}
         </div>
 
-        {showGames ? (
+        {/* Add video is always available on the dock */}
+        <button type="button" className="dock-btn" aria-label="Add a video" title="Add a video" onClick={onOpenAddVideo}>
+          <Icon name="videoAdd" />
+        </button>
+
+        {/* Screen share button */}
+        {typeof onToggleScreenShare === 'function' && (
+          <button
+            type="button"
+            className={`dock-btn ${isScreenSharing ? 'is-active is-danger' : (screenSharer && !isScreenShareDismissed) ? 'is-active is-presenting' : ''}`}
+            aria-label={
+              isScreenSharing
+                ? 'Stop sharing screen'
+                : screenSharer && isScreenShareDismissed
+                  ? `Watch ${screenSharer.username}'s screen`
+                  : screenSharer
+                    ? `Hide ${screenSharer.username}'s screen`
+                    : 'Share screen'
+            }
+            title={
+              isScreenSharing
+                ? 'Stop sharing screen'
+                : screenSharer && isScreenShareDismissed
+                  ? `Watch ${screenSharer.username}'s screen`
+                  : screenSharer
+                    ? `Hide ${screenSharer.username}'s screen`
+                    : 'Share screen'
+            }
+            onClick={onToggleScreenShare}
+          >
+            <Icon name={isScreenSharing ? 'screenShareOff' : 'screenShare'} />
+          </button>
+        )}
+
+        {/* Play together (Games) is always available if games are loaded */}
+        {activityMenu.length > 0 && (
           <div className="dock-anchor" ref={games.ref}>
             <button type="button" className={`dock-btn ${games.open ? 'is-active' : ''}`} aria-label="Games" title="Play together" aria-expanded={games.open} onClick={games.toggle}>
               <Icon name="games" />
@@ -142,10 +240,6 @@ export default function DesktopDock({
               </div>
             )}
           </div>
-        ) : (
-          <button type="button" className="dock-btn" aria-label="Add a video" title="Add a video" onClick={onOpenAddVideo}>
-            <Icon name="videoAdd" />
-          </button>
         )}
 
         <div className="dock-anchor" ref={more.ref}>
@@ -166,17 +260,6 @@ export default function DesktopDock({
               ) : playbackLock ? (
                 <p className="dock-menu-note"><Icon name="lock" size={18} />The host controls playback</p>
               ) : null}
-              {!showGames && activityMenu.length > 0 && (
-                <>
-                  <p className="dock-menu-label">Play together</p>
-                  {activityMenu.map((a) => (
-                    <button key={a.id} type="button" role="menuitem" className="dock-menu-item" disabled={Boolean(a.disabledReason) || a.isOpen} title={a.disabledReason || a.description}
-                      onClick={() => { more.close(); onStartActivity?.(a.id); }}>
-                      <span className="dock-menu-emoji" aria-hidden="true">{a.icon}</span>{a.name}
-                    </button>
-                  ))}
-                </>
-              )}
             </div>
           )}
         </div>

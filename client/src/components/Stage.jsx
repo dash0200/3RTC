@@ -10,6 +10,8 @@ import { PhoneEmptyMedia, PhoneStreamOffer } from './phone/PhoneMediaOverlays';
 import RejoinCard from './RejoinCard';
 import LinkPlayer from '../features/media/LinkPlayer';
 import { mediaKey } from '../features/media/sources';
+import AmbientCinemaGlow from './room/AmbientCinemaGlow';
+import ScreenShareStage from './room/ScreenShareStage';
 
 export default function Stage({
   rejoin = null,
@@ -83,12 +85,16 @@ export default function Stage({
   onOpenAddVideo,
   // Activities (features/activities): the open one is shown over the stage; the menu starts one
   activitySlot = null,
+  activityView = 'full',
   activityMenu = [],
-  onStartActivity
+  onStartActivity,
+  screenShare = null,
+  bus = null
 }) {
   const isPhone = layout === 'phone';
   const isPttMode = audioSettings?.inputMode === 'ptt';
-  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl || activeMedia);
+  const isScreenSharing = Boolean(screenShare?.isScreenShareActive);
+  const isMediaActive = Boolean(activeVideoId || localVideoFile || remoteLocalVideoMeta || streamVideoUrl || activeMedia || isScreenSharing);
 
   const handleSelectReaction = (emoji) => {
     if (typeof onSendReaction === 'function') {
@@ -141,6 +147,7 @@ export default function Stage({
 
   return (
     <section className={`stage-section ${isPhone ? 'stage-phone' : ''} ${isMediaActive ? 'is-watching' : 'is-idle'}`}>
+      <AmbientCinemaGlow activeVideoId={activeVideoId} isMediaActive={isMediaActive} localVideoFile={localVideoFile} streamVideoUrl={streamVideoUrl} />
       {/* Main Canvas Area (Drag-and-Drop Video Target & Stage Canvas) */}
       <div
         className={`stage-canvas yt-sync-wrapper ${isMediaActive ? 'has-video' : ''} ${isStageDragOver ? 'stage-drag-active' : ''} ${phoneOverlay ? 'phone-overlay-active' : ''}`}
@@ -175,7 +182,7 @@ export default function Stage({
 
               <h1 className="stage-title">3RTC Watch Party</h1>
               <p className="stage-subtitle">
-                Watch together online: create a room or enter a code to connect directly peer-to-peer (up to 6 people).
+                Watch together online: create a room or enter a code to connect directly peer-to-peer (up to 4 people).
                 Watch YouTube videos together.
               </p>
 
@@ -213,6 +220,21 @@ export default function Stage({
               <p className="build-label" title={BUILD.time ? `Built ${new Date(BUILD.time).toLocaleString()}${BUILD.branch ? ` from ${BUILD.branch}` : ''}` : undefined}>{BUILD_LABEL}</p>
             </div>
           </div>
+        ) : screenShare?.isScreenShareActive ? (
+          /* Case 2S: Live WebRTC Screen Share */
+          <ScreenShareStage
+            stream={screenShare.activeStream}
+            isLocal={screenShare.isSharingScreen}
+            presenterName={screenShare.screenSharer?.username || (screenShare.isSharingScreen ? (localUser?.username || username) : 'Peer')}
+            hasAudio={screenShare.hasAudio}
+            onStopSharing={screenShare.stopScreenShare}
+            onExit={screenShare.dismissScreenShare}
+            reactionFeed={reactionFeed}
+            onSendReaction={onSendReaction}
+            roomId={roomId}
+            bus={bus}
+            localUser={localUser}
+          />
         ) : activeMedia ? (
           /* Case 2C: a link source, in sync through features/media */
           <LinkPlayer
@@ -280,6 +302,7 @@ export default function Stage({
             onOpenQueue={onOpenQueue}
             onPlayLink={onPlayLink}
             onQueueLink={onQueueLink}
+            onStartScreenShare={screenShare?.startScreenShare}
           />
         )}
 
@@ -297,10 +320,10 @@ export default function Stage({
 
         {roomId && activitySlot}
 
-        {roomId && isMediaActive && !activitySlot && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
+        {roomId && !isMediaActive && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
           <SyncPill connectedPeers={connectedPeers} isHost={isHost} isPhone={isPhone} />
         )}
-        {roomId && isMediaActive && !activitySlot && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
+        {isPhone && roomId && (!activitySlot || activityView !== 'full') && !phoneOverlay && !(remoteLocalVideoMeta && !localVideoFile && !streamVideoUrl) && (
           <VideoPeopleOverlay
             connectedPeers={connectedPeers}
             localUser={localUser}
@@ -352,6 +375,8 @@ export default function Stage({
           isAudioBlocked={isAudioBlocked}
           onToggleMic={onToggleMic}
           onToggleBlockAudio={onToggleBlockAudio}
+          onSetPeerVolume={onSetPeerVolume}
+          onToggleMutePeer={onToggleMutePeer}
           audioSettings={audioSettings}
           onUpdateAudioSettings={onUpdateAudioSettings}
           onSelectOutput={onSelectOutput}
@@ -368,6 +393,10 @@ export default function Stage({
           onToggleSoundboardMute={onToggleSoundboardMute}
           isMediaActive={isMediaActive}
           onOpenAddVideo={onOpenAddVideo}
+          isScreenSharing={screenShare?.isSharingScreen}
+          screenSharer={screenShare?.screenSharer}
+          isScreenShareDismissed={screenShare?.isDismissed}
+          onToggleScreenShare={screenShare?.toggleScreenShare}
           activityMenu={activityMenu}
           onStartActivity={onStartActivity}
           playbackLock={playbackLock}

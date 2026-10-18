@@ -15,6 +15,7 @@ import ServerSettingsModal from './components/ServerSettingsModal';
 import AudioSettingsModal from './components/AudioSettingsModal';
 import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
 import QrCodeModal from './components/QrCodeModal';
+import PreJoinModal from './components/PreJoinModal';
 import { PhoneTopBar, PhoneActionBar } from './components/phone/PhoneChrome';
 import { AddVideoSheet, MoreSheet, SoundboardSheet } from './components/phone/PhoneSheets';
 import PhoneHome from './components/phone/PhoneHome';
@@ -47,6 +48,7 @@ import ActivityStage from './features/activities/ActivityStage';
 import { nextActivityView } from './features/activities/activityHost';
 import { useActivityLoad } from './features/activities/useActivityLoad';
 import ReactionsEditor from './features/reactions/ReactionsEditor';
+import { useScreenShare } from './features/screenshare/useScreenShare';
 import './App.css';
 import './phone.css';
 import './redesign.css';
@@ -57,9 +59,19 @@ import { saveLastRoom, readLastRoom, forgetLastRoom } from './utils/lastRoom';
 import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
 
-const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
-// Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
-const BACKUP_SIGNAL_URLS = ['wss://34.57.36.145.sslip.io:443'];
+export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
+export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
+export const LOCAL_SIGNAL_URL = 'ws://localhost:8080';
+
+// Default primary server: Oracle Cloud (orc.3rtc.me) with automatic multi-cloud failover to GCP
+export const DEFAULT_SIGNAL_URL = ORACLE_SIGNAL_URL;
+
+// Intelligent fallback pool: if orc.3rtc.me is not reachable, seamlessly fallback to GCP, then raw IP
+export const BACKUP_SIGNAL_URLS = [
+    GCP_SIGNAL_URL,
+    'wss://signal.3rtc.me',
+    'wss://34.57.36.145.sslip.io:443'
+];
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -79,8 +91,26 @@ const logLocalDebug = () => { };
 
 export default function App() {
     // ---- settings ----------------------------------------------------------------------------
-    const [signalUrl, setSignalUrl] = useState(() => (IS_LOCAL && localStorage.getItem('webrtc_signal_url')) || DEFAULT_SIGNAL_URL);
-    const fallbackUrls = signalUrl === DEFAULT_SIGNAL_URL ? BACKUP_SIGNAL_URLS : undefined;
+    const [signalUrl, setSignalUrl] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const serverParam = new URLSearchParams(window.location.search).get('s');
+            if (serverParam === 'gcp') return GCP_SIGNAL_URL;
+            if (serverParam === 'orc') return ORACLE_SIGNAL_URL;
+            if (serverParam === 'local') return LOCAL_SIGNAL_URL;
+        }
+        return (IS_LOCAL && localStorage.getItem('webrtc_signal_url')) || DEFAULT_SIGNAL_URL;
+    });
+
+    const fallbackUrls = useMemo(() => {
+        if (signalUrl === ORACLE_SIGNAL_URL) {
+            return [GCP_SIGNAL_URL, 'wss://signal.3rtc.me', 'wss://34.57.36.145.sslip.io:443'];
+        }
+        if (signalUrl === GCP_SIGNAL_URL) {
+            return [ORACLE_SIGNAL_URL, 'wss://signal.3rtc.me', 'wss://34.57.36.145.sslip.io:443'];
+        }
+        return signalUrl === DEFAULT_SIGNAL_URL ? BACKUP_SIGNAL_URLS : undefined;
+    }, [signalUrl]);
+
     // YouTube quick picks come from the signaling server's cache (built-in list until then)
     useEffect(() => {
         const urls = [signalUrl, ...(fallbackUrls || [])];
@@ -181,6 +211,13 @@ export default function App() {
     });
     const { roomId, isHost, peerCount, isP2PConnected, p2pStatusText } = mesh;
 
+    const localUser = useMemo(() => (roomId ? {
+        id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
+    } : null), [roomId, username, isHost, isMicMuted]);
+
+    const screenShare = useScreenShare(bus, { localUser });
+    const isScreenSharingActive = Boolean(screenShare.isScreenShareActive);
+
     // ---- features ----------------------------------------------------------------------------
     const hostControls = useHostControls({ room, isHost, peerMetadata });
     identityFieldsRef.current = hostControls.identityFields;
@@ -228,9 +265,9 @@ export default function App() {
         const memo = viewMemoRef.current;
         const justOpened = Boolean(activityKey) && activityKey !== memo.key;
         if (justOpened && joinedByTapRef.current) {
-            // Joined from its bubble: show it (a small window over a video on a computer)
+            // Joined from its bubble: show it (docked in sidebar over a video on a computer)
             joinedByTapRef.current = false;
-            setActivityView(!isPhone && isMediaActive ? 'window' : 'full');
+            setActivityView(!isPhone && isMediaActive ? 'sidebar' : 'full');
         } else {
             setActivityView((view) => nextActivityView({
                 view,
@@ -243,6 +280,28 @@ export default function App() {
         }
         viewMemoRef.current = { media: isMediaActive, key: activityKey };
     }, [isMediaActive, activityKey, isPhone]);
+
+    const [activityStatus, setActivityStatus] = useState({ attention: false, color: '', label: '' });
+
+    // When activityView transitions to 'sidebar' on desktop, ensure sidebar is open to the activity tab
+    const prevActivityViewRef = useRef(activityView);
+    useEffect(() => {
+        const prevView = prevActivityViewRef.current;
+        prevActivityViewRef.current = activityView;
+        if (prevView !== 'sidebar' && activityView === 'sidebar' && !isPhone) {
+            setIsChatOpen(true);
+            setSidebarTab('activity');
+        }
+    }, [activityView, isPhone]);
+
+    // When activity ends, return sidebar from activity tab back to chat
+    useEffect(() => {
+        if (!activityOn) {
+            if (sidebarTab === 'activity') {
+                setSidebarTab('chat');
+            }
+        }
+    }, [activityOn, sidebarTab]);
     const activityAside = activityOn && activityView !== 'full';
     const [activityChatSplit, setActivityChatSplit] = useState(() => {
         try { return localStorage.getItem('3rtc_activity_chat') === '1'; } catch { return false; }
@@ -305,7 +364,7 @@ export default function App() {
     });
 
     // Keep the screen on while watching together (phones would dim, lock and pause the stream)
-    useWakeLock(Boolean(roomId) && isMediaActive);
+    useWakeLock(Boolean(roomId) && (isMediaActive || isScreenSharingActive));
 
     // ---- room actions ------------------------------------------------------------------------
     const rememberName = (displayName) => {
@@ -315,11 +374,32 @@ export default function App() {
     };
     const handleConfirmCreate = (displayName) => {
         rememberName(displayName);
+        setSidebarTab('invite');
         mesh.createRoom();
     };
     const handleConfirmJoin = (pin, displayName) => {
         rememberName(displayName);
+        setSidebarTab('chat');
         mesh.joinRoom(pin);
+    };
+    // Pre-join Green Room check (UX-H01): preview microphone and audio devices before joining
+    const [preJoinConfig, setPreJoinConfig] = useState(null);
+    const handleInitiateCreate = (displayName) => {
+        setPreJoinConfig({ mode: 'create', name: displayName });
+    };
+    const handleInitiateJoin = (pin, displayName) => {
+        setPreJoinConfig({ mode: 'join', pin, name: displayName });
+    };
+    const handleConfirmPreJoin = ({ name: chosenName, micOn, pin }) => {
+        micOnAfterJoinRef.current = Boolean(micOn);
+        const mode = preJoinConfig?.mode;
+        const targetPin = pin || preJoinConfig?.pin;
+        setPreJoinConfig(null);
+        if (mode === 'create') {
+            handleConfirmCreate(chosenName);
+        } else {
+            handleConfirmJoin(targetPin, chosenName);
+        }
     };
     // Invite link (?room=12345): its own screen with one Join button; the mic choice is made there
     const [inviteDismissed, setInviteDismissed] = useState(false);
@@ -458,13 +538,16 @@ export default function App() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [peerMetadata, peerVoiceStates, peerVolumes, localMutedPeers, peerCount, isP2PConnected, hostPeerId]);
 
-    const localUser = useMemo(() => (roomId ? {
-        id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
-    } : null), [roomId, username, isHost, isMicMuted]);
+    // Auto-switch from invite tab to chat once a peer connects
+    useEffect(() => {
+        if (connectedPeers.length > 0 && sidebarTab === 'invite') {
+            setSidebarTab('chat');
+        }
+    }, [connectedPeers.length, sidebarTab]);
 
     // What components deeper down read with useRoom()
-    const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock }),
-        [room, roomId, isHost, username, connectedPeers, playbackLock]);
+    const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock, signalUrl }),
+        [room, roomId, isHost, username, connectedPeers, playbackLock, signalUrl]);
 
     // ---- layout ------------------------------------------------------------------------------
     // Chat while an activity is open: new messages pop up over it when the chat list isn't in view;
@@ -496,13 +579,19 @@ export default function App() {
             activity={activities.current} definition={activities.definition} onClose={activities.stop} selfId={peerIdRef.current} chat={activityChat}
             view={activityView} onViewChange={setActivityView} isPhone={isPhone} mediaActive={isMediaActive}
             loaded={activityLoad.loaded} onJoin={joinActivity} onLeave={activityLoad.leave}
+            onStatusChange={setActivityStatus}
         />
     ) : null;
+
+    const handleToggleChat = () => {
+        setIsChatOpen((prev) => !prev);
+    };
 
     // Stage and chat panel: shared by the desktop and phone layouts (same props, layout extras)
     const renderStage = (extra = {}) => (
         <Stage
             roomId={roomId}
+            activityView={activityView}
             isHost={isHost}
             playbackLock={playbackLock}
             onTogglePlaybackLock={hostControls.toggle}
@@ -510,9 +599,11 @@ export default function App() {
             isP2PConnected={isP2PConnected}
             p2pStatusText={p2pStatusText}
             rejoin={rejoin}
+            screenShare={screenShare}
+            bus={bus}
             onCopyRoom={handleCopyRoom}
             onLeaveRoom={handleLeaveRoom}
-            onToggleChat={() => setIsChatOpen((prev) => !prev)}
+            onToggleChat={handleToggleChat}
             isChatOpen={isChatOpen}
             unreadChatCount={chat.unreadChatCount}
             chatCount={chat.unreadChatCount}
@@ -575,10 +666,12 @@ export default function App() {
             {...extra}
         />
     );
-    const nowPlaying = playback.activeMedia
-        ? (playback.activeMedia.title || '')
-        : activeVideoId ? (activeVideoTitle || 'YouTube video')
-            : (localVideoFile?.name || remoteLocalVideoMeta?.fileName || remoteLocalVideoMeta?.name || '');
+    const nowPlaying = isScreenSharingActive
+        ? `${screenShare.screenSharer?.username || (screenShare.isSharingScreen ? 'Your' : 'Peer')}'s screen`
+        : playback.activeMedia
+            ? (playback.activeMedia.title || '')
+            : activeVideoId ? (activeVideoTitle || 'YouTube video')
+                : (localVideoFile?.name || remoteLocalVideoMeta?.fileName || remoteLocalVideoMeta?.name || '');
     const renderAddVideoSheet = () => (
         <AddVideoSheet
             isOpen={phoneSheet === 'add'}
@@ -612,6 +705,11 @@ export default function App() {
             username={username}
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
+            activity={activities.current}
+            activityDefinition={activities.definition}
+            activityView={activityView}
+            onSetActivityView={setActivityView}
+            activityStatus={activityStatus}
             isAudioBlocked={isAudioBlocked}
             onToggleBlockAudio={toggleBlockAudio}
             signalStatus={signalStatus}
@@ -675,6 +773,8 @@ export default function App() {
                         signalStatus={signalStatus}
                         onOpenNetworkHud={openNetworkHud}
                         playbackLock={playbackLock}
+                        signalUrl={signalUrl}
+                        onLeaveRoom={handleLeaveRoom}
                     />
                     {roomId ? (
                         <>
@@ -699,8 +799,8 @@ export default function App() {
                         <PhoneHome
                             username={username}
                             initialPin={initialJoinPin}
-                            onCreate={handleConfirmCreate}
-                            onJoin={handleConfirmJoin}
+                            onCreate={handleInitiateCreate}
+                            onJoin={handleInitiateJoin}
                             onOpenServerSettings={openServerSettings}
                             rejoin={rejoin}
                         />
@@ -724,6 +824,8 @@ export default function App() {
                         onTogglePlaybackLock={hostControls.toggle}
                         activityMenu={activityMenu}
                         onStartActivity={startOrJoinActivity}
+                        isScreenSharing={screenShare.isSharingScreen}
+                        onToggleScreenShare={screenShare.toggleScreenShare}
                     />
                     <SoundboardSheet
                         isOpen={phoneSheet === 'soundboard'}
@@ -742,8 +844,8 @@ export default function App() {
                 ) : (
                     <DesktopHome
                         username={username}
-                        onCreate={handleConfirmCreate}
-                        onJoin={handleConfirmJoin}
+                        onCreate={handleInitiateCreate}
+                        onJoin={handleInitiateJoin}
                         onOpenServerSettings={openServerSettings}
                         rejoin={rejoin}
                         isOnline={signalStatus.connected}
@@ -761,6 +863,23 @@ export default function App() {
                         onOpenQrCode={openQrCode}
                         playbackLock={playbackLock}
                         nowPlaying={nowPlaying}
+                        isChatOpen={isChatOpen}
+                        onToggleChat={handleToggleChat}
+                        isMediaActive={isMediaActive || isScreenSharingActive}
+                        onExitVideo={() => {
+                            if (screenShare.isSharingScreen) {
+                                screenShare.stopScreenShare();
+                            } else if (screenShare.isScreenShareActive) {
+                                screenShare.dismissScreenShare();
+                            }
+                            playback.exitVideo();
+                        }}
+                        onVoteSkip={queueFeature.voteSkip}
+                        skipVotes={skipVotes}
+                        connectedPeers={connectedPeers}
+                        isHost={isHost}
+                        username={username}
+                        activityStatus={activityStatus}
                     />
                     <div className="room-desktop-body">
                         <div className="app-main-pane">
@@ -772,9 +891,7 @@ export default function App() {
                                 })}
                             </main>
                         </div>
-                        {connectedPeers.length === 0
-                            ? <InvitePanel roomId={roomId} onShowQr={openQrCode} onCopied={() => showToast('Invite link copied')} />
-                            : renderChat()}
+                        {renderChat()}
                     </div>
                     {renderAddVideoSheet()}
                 </div>
@@ -833,6 +950,7 @@ export default function App() {
                 onClose={() => setShowQrModal(false)}
                 roomId={roomId}
                 username={username}
+                signalUrl={signalUrl}
             />
 
             <ReactionsEditor />
@@ -842,6 +960,17 @@ export default function App() {
                 isPlaying={isMediaActive || activityOn}
                 onStay={closeLeaveDialog}
                 onLeave={leaveRoomNow}
+            />
+            <PreJoinModal
+                isOpen={preJoinConfig !== null}
+                mode={preJoinConfig?.mode}
+                pin={preJoinConfig?.pin}
+                initialName={preJoinConfig?.name || username}
+                audioSettings={audioSettings}
+                onUpdateAudioSettings={handleUpdateAudioSettings}
+                onSelectOutput={selectOutputDevice}
+                onConfirm={handleConfirmPreJoin}
+                onCancel={() => setPreJoinConfig(null)}
             />
 
             {roomId && <NetworkBlockedBanner hint={mesh.networkHint} onDismiss={mesh.dismissNetworkHint} />}

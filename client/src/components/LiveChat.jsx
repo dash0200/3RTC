@@ -29,6 +29,7 @@ import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal from './ImageLightboxModal';
 import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 import { useBackLayer } from '../core/backStack';
+import InvitePanel from './room/InvitePanel';
 
 
 
@@ -113,6 +114,12 @@ export default function LiveChat({
   onSoundboardVolumeChange,
   onToggleSoundboardMute,
   onOpenQrCode,
+  // Activities (Ludo / Games docked into sidebar)
+  activity = null,
+  activityDefinition = null,
+  activityView = 'full',
+  onSetActivityView,
+  activityStatus = null,
   // Phone layout: shown in the page under the video (no floating sheet, header or resize)
   embedded = false
 }) {
@@ -393,12 +400,12 @@ export default function LiveChat({
   const hasVotedSkip = skipVotes.includes(username);
 
   const chatContainerRef = useRef(null);
-  const chatEndRef = useRef(null);
   const logsContainerRef = useRef(null);
-  const logsEndRef = useRef(null);
   const textareaRef = useRef(null);
 
-  const displayLogs = systemLogs.filter((log) => log.category !== 'debug');
+  const displayLogs = useMemo(() => {
+    return (systemLogs || []).filter((log) => log.category !== 'debug').slice(-15);
+  }, [systemLogs]);
   const prevMsgCountRef = useRef(messages.length);
   const prevLogsCountRef = useRef(displayLogs.length);
 
@@ -435,7 +442,8 @@ export default function LiveChat({
     if (!scroller || activeTab !== 'chat') return;
 
     const lastMsg = messages[messages.length - 1];
-    if (wasNearBottomRef.current || lastMsg?.isSelf) {
+    const isSelfMsg = lastMsg?.isSelf;
+    if (wasNearBottomRef.current || isSelfMsg) {
       scroller.scrollTop = scroller.scrollHeight;
       wasNearBottomRef.current = true;
       setShowScrollPill(false);
@@ -603,8 +611,20 @@ export default function LiveChat({
         </div>
         )}
 
-        {/* Tabs: Chat vs Queue vs Peers */}
+        {/* Tabs: Invite (if alone) vs Chat vs Queue vs Peers */}
         <div className="chat-nav-tabs" role="tablist" aria-label="Room panel">
+          {connectedPeers.length === 0 && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'invite'}
+              className={`chat-tab-btn ${activeTab === 'invite' ? 'active' : ''}`}
+              onClick={() => setActiveTab('invite')}
+            >
+              <span>Invite</span>
+            </button>
+          )}
+
           <button
             type="button"
             role="tab"
@@ -644,6 +664,48 @@ export default function LiveChat({
             <span>People</span>
             <span className="tab-count">{connectedPeers.length + 1}</span>
           </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'logs'}
+            className={`chat-tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('logs');
+              setUnreadLogsCount(0);
+            }}
+            title="Room activity and events log"
+          >
+            <span>Logs</span>
+            {activeTab !== 'logs' && unreadLogsCount > 0 ? (
+              <span className="tab-badge logs-badge" aria-label={`${unreadLogsCount} new logs`}>
+                {unreadLogsCount}
+              </span>
+            ) : displayLogs.length > 0 ? (
+              <span className="tab-count">{displayLogs.length}</span>
+            ) : null}
+          </button>
+
+          {activity && !embedded && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'activity'}
+              className={`chat-tab-btn chat-tab-activity ${activeTab === 'activity' ? 'active' : ''} ${activityStatus?.attention ? 'needs-you' : ''}`}
+              onClick={() => {
+                setActiveTab('activity');
+                if (activityView !== 'sidebar') {
+                  onSetActivityView?.('sidebar');
+                }
+              }}
+              title={activityDefinition ? `${activityDefinition.name} game` : 'Activity'}
+            >
+              <span>{activityDefinition?.icon || '🎲'} {activityDefinition?.name || 'Game'}</span>
+              {activityStatus?.attention && (
+                <span className="tab-badge activity-badge" style={activityStatus?.color ? { backgroundColor: activityStatus.color } : undefined} aria-label={activityStatus?.label || 'Your turn'}>•</span>
+              )}
+            </button>
+          )}
         </div>
 
         {isAudioBlocked && (
@@ -667,6 +729,39 @@ export default function LiveChat({
           </div>
         )}
 
+        {/* TAB: Docked Activity (Ludo / Games) */}
+        {!embedded && (
+          <div
+            id="activity-sidebar-portal"
+            className={`activity-sidebar-container ${activeTab === 'activity' ? 'is-active' : ''}`}
+            style={{ display: activeTab === 'activity' ? 'flex' : 'none' }}
+          >
+            {activeTab === 'activity' && activityView !== 'sidebar' && (
+              <div className="activity-sidebar-detached-placeholder">
+                <span className="detached-icon">{activityDefinition?.icon || '🎲'}</span>
+                <p className="detached-title">{activityDefinition?.name || 'Game'} is {activityView === 'bubble' ? 'minimised' : 'floating'}</p>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => onSetActivityView?.('sidebar')}
+                >
+                  Dock here in sidebar
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 0: Invite Tab (when host is alone in room) */}
+        {activeTab === 'invite' && (
+          <InvitePanel
+            roomId={roomId}
+            onShowQr={onOpenQrCode}
+            onCopied={() => {}}
+            isTab={true}
+          />
+        )}
+
         {/* TAB 1: Real Peer Chat */}
         {activeTab === 'chat' && (
           <>
@@ -687,9 +782,9 @@ export default function LiveChat({
                     const msgNameColor = msgAvatarBg.match(/#[0-9a-f]{6}/i)?.[0] || '#53bdeb';
                     // Consecutive messages from the same person within 5 min form one group:
                     // name, avatar and bubble tail only on the first one (like WhatsApp)
-                    const prev = messages[index - 1];
-                    const startsGroup = !prev || prev.sender !== msg.sender ||
-                      Math.abs((msg.timestamp || 0) - (prev.timestamp || 0)) > 5 * 60 * 1000;
+                    const prevMsg = index > 0 ? messages[index - 1] : null;
+                    const startsGroup = !prevMsg || prevMsg.sender !== msg.sender ||
+                      Math.abs((msg.timestamp || 0) - (prevMsg.timestamp || 0)) > 5 * 60 * 1000;
                     const emojiOnly = emojiOnlyIds.has(msg.id);
 
                     return (
@@ -705,64 +800,64 @@ export default function LiveChat({
                               <span className="cm-time">{timeStr}</span>
                             </div>
                           )}
-                              {/* Image Transfer in Progress */}
-                              {msg.imageTransfer && (
-                                <div className="chat-image-transfer-card">
-                                  <div className="transfer-header">
-                                    <span className="transfer-icon">🖼️</span>
-                                    <div className="transfer-details">
-                                      <span className="transfer-filename" title={msg.imageTransfer.fileName}>
-                                        {msg.imageTransfer.fileName}
-                                      </span>
-                                      <span className="transfer-status">
-                                        {msg.isSelf ? 'Sending' : 'Receiving'} • {msg.imageTransfer.percent || 0}% ({formatFileSize(msg.imageTransfer.fileSize)})
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="transfer-progress-track">
-                                    <div
-                                      className="transfer-progress-fill"
-                                      style={{ width: `${Math.max(4, msg.imageTransfer.percent || 0)}%` }}
-                                    />
-                                  </div>
+                          {/* Image Transfer in Progress */}
+                          {msg.imageTransfer && (
+                            <div className="chat-image-transfer-card">
+                              <div className="transfer-header">
+                                <span className="transfer-icon">🖼️</span>
+                                <div className="transfer-details">
+                                  <span className="transfer-filename" title={msg.imageTransfer.fileName}>
+                                    {msg.imageTransfer.fileName}
+                                  </span>
+                                  <span className="transfer-status">
+                                    {msg.isSelf ? 'Sending' : 'Receiving'} • {msg.imageTransfer.percent || 0}% ({formatFileSize(msg.imageTransfer.fileSize)})
+                                  </span>
                                 </div>
-                              )}
-
-                              {/* Completed Image Thumbnail */}
-                              {msg.image?.url && (
+                              </div>
+                              <div className="transfer-progress-track">
                                 <div
-                                  className="chat-image-card"
-                                  onClick={() => {
-                                    setLightboxImage({
-                                      url: msg.image.url,
-                                      name: msg.image.name,
-                                      size: msg.image.size,
-                                      sender: msg.sender,
-                                      timestamp: msg.timestamp,
-                                      caption: msg.text,
-                                      blob: msg.image.blob
-                                    });
-                                    setIsLightboxOpen(true);
-                                  }}
-                                  title="Click to view image in high resolution"
-                                >
-                                  <img
-                                    src={msg.image.url}
-                                    alt={msg.image.name || 'Shared Image'}
-                                    className="chat-image-thumb"
-                                    loading="lazy"
-                                  />
-                                  <div className="chat-image-hover-overlay">
-                                    <span className="chat-image-meta-pill">
-                                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-                                        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
-                                      </svg>
-                                      {formatFileSize(msg.image.size)}
-                                    </span>
-                                    <span className="chat-image-action-label">Preview</span>
-                                  </div>
-                                </div>
-                              )}
+                                  className="transfer-progress-fill"
+                                  style={{ width: `${Math.max(4, msg.imageTransfer.percent || 0)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Completed Image Thumbnail */}
+                          {msg.image?.url && (
+                            <div
+                              className="chat-image-card"
+                              onClick={() => {
+                                setLightboxImage({
+                                  url: msg.image.url,
+                                  name: msg.image.name,
+                                  size: msg.image.size,
+                                  sender: msg.sender,
+                                  timestamp: msg.timestamp,
+                                  caption: msg.text,
+                                  blob: msg.image.blob
+                                });
+                                setIsLightboxOpen(true);
+                              }}
+                              title="Click to view image in high resolution"
+                            >
+                              <img
+                                src={msg.image.url}
+                                alt={msg.image.name || 'Shared Image'}
+                                className="chat-image-thumb"
+                                loading="lazy"
+                              />
+                              <div className="chat-image-hover-overlay">
+                                <span className="chat-image-meta-pill">
+                                  <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+                                    <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+                                  </svg>
+                                  {formatFileSize(msg.image.size)}
+                                </span>
+                                <span className="chat-image-action-label">Preview</span>
+                              </div>
+                            </div>
+                          )}
 
                           {msg.text && <p className={`cm-text ${emojiOnly ? 'is-emoji' : ''}`}>{renderMessageText(msg.text, onSeekTo)}</p>}
                         </div>
@@ -1232,7 +1327,7 @@ export default function LiveChat({
             <div className="logs-header-bar">
               <span className="logs-count-label">
                 <span className="logs-count-dot"></span>
-                {displayLogs.length} event{displayLogs.length === 1 ? '' : 's'} recorded
+                {displayLogs.length} event{displayLogs.length === 1 ? '' : 's'} recorded (last 15)
               </span>
               <div className="logs-actions-group">
                 {typeof onTestSound === 'function' && (

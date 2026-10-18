@@ -79,18 +79,25 @@ export function useReactions({ room, isAudioBlockedRef, inRoom }) {
             isSelf: false,
             lane: typeof data.lane === 'number' ? Math.max(10, Math.min(90, data.lane)) : 20 + Math.random() * 60,
             combo,
-            peerKey: from
+            peerKey: from,
+            mediaTime: typeof data.mediaTime === 'number' ? data.mediaTime : undefined
         });
     });
 
     /** Returns the combo count (1 = first of a burst), or 0 when dropped by the rate limit. */
-    const sendReaction = useCallback((emoji) => {
+    const sendReaction = useCallback((emoji, mediaTime) => {
         if (!isSingleEmoji(emoji)) return 0;
         const now = performance.now();
         if (now - lastSentRef.current < SEND_GAP_MS) return 0;
         lastSentRef.current = now;
         const combo = nextCombo(myComboRef.current, emoji, now);
-        const item = { id: crypto.randomUUID(), emoji, lane: 20 + Math.random() * 60, combo };
+        const item = {
+            id: crypto.randomUUID(),
+            emoji,
+            lane: 20 + Math.random() * 60,
+            combo,
+            ...(typeof mediaTime === 'number' ? { mediaTime } : {})
+        };
         pop(combo, true);
         try {
             if (window.matchMedia('(hover: none)').matches) navigator.vibrate?.(8);

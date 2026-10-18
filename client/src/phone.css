@@ -99,6 +99,7 @@
   aspect-ratio: 16 / 9;
   height: auto;
   max-height: 45dvh;
+  min-height: 180px;
   background: #000;
 }
 
@@ -227,6 +228,11 @@
   flex-direction: column;
 }
 
+.phone-app .chat-section.embedded .chat-messages-container {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 .phone-app .chat-section.embedded .chat-nav-tabs {
   height: 46px;
   padding: 0;
@@ -279,7 +285,7 @@
   background: none;
   color: #cfcfcf;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   display: flex;
   flex-direction: column;
@@ -504,7 +510,7 @@
 }
 
 .phone-section-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.6px;
   color: #9a9a9a;
@@ -1065,6 +1071,18 @@
   max-height: 58dvh;
 }
 .phone-app .stage-phone .stage-canvas:has(.link-player) { padding: 0; }
+
+/* Screen share active on phone (features/screenshare/ScreenShareStage.jsx) */
+.phone-app .stage-section.stage-phone:has(.screen-share-stage) {
+  aspect-ratio: auto;
+  height: calc(100vw * 9 / 16);
+  min-height: 220px;
+  max-height: 60dvh;
+}
+.phone-app .stage-phone .stage-canvas:has(.screen-share-stage) {
+  padding: 0;
+  border-radius: 0;
+}
 
 /* The game as a bubble over the video (phones) */
 .phone-app .activity-bubble { width: 50px; height: 50px; }
