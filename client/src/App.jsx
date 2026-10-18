@@ -173,7 +173,7 @@ export default function App() {
     const room = useMemo(() => {
         const hostKnown = () => hostPeerIdRef.current !== undefined;
         const isPeerHost = (id) => (id === peerIdRef.current ? isHostRef.current
-            : hostKnown() ? id === hostPeerIdRef.current : Boolean(peerMetadataRef.current[id]?.isHost));
+            : Boolean(hostPeerIdRef.current && id === hostPeerIdRef.current));
         const connectedPeers = () => bus.connectedPeerIds().map((peerId) => ({ peerId, isHost: isPeerHost(peerId) }));
         return {
             bus,
@@ -182,7 +182,6 @@ export default function App() {
             isPeerHost,
             // The host among the other people here (null: we are the host, or the host isn't here)
             getHostPeerId: () => {
-                if (!hostKnown()) return Object.entries(peerMetadataRef.current).find(([, m]) => m?.isHost)?.[0] || null;
                 const id = hostPeerIdRef.current;
                 return id && id !== peerIdRef.current && peerMetadataRef.current[id] ? id : null;
             },
