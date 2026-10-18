@@ -59,9 +59,19 @@ import { saveLastRoom, readLastRoom, forgetLastRoom } from './utils/lastRoom';
 import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
 
-const DEFAULT_SIGNAL_URL = 'wss://signal.3rtc.me';
-// Same server under its raw address, used if signal.3rtc.me can't be reached (DNS, certificate)
-const BACKUP_SIGNAL_URLS = ['wss://34.57.36.145.sslip.io:443'];
+export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
+export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
+export const LOCAL_SIGNAL_URL = 'ws://localhost:8080';
+
+// Default primary server: Oracle Cloud (orc.3rtc.me) with automatic multi-cloud failover to GCP
+export const DEFAULT_SIGNAL_URL = ORACLE_SIGNAL_URL;
+
+// Intelligent fallback pool: if orc.3rtc.me is not reachable, seamlessly fallback to GCP, then raw IP
+export const BACKUP_SIGNAL_URLS = [
+    GCP_SIGNAL_URL,
+    'wss://signal.3rtc.me',
+    'wss://34.57.36.145.sslip.io:443'
+];
 const IS_LOCAL = typeof window !== 'undefined' && (
     window.location.hostname === 'localhost' ||
     window.location.hostname === '127.0.0.1' ||
@@ -81,8 +91,26 @@ const logLocalDebug = () => { };
 
 export default function App() {
     // ---- settings ----------------------------------------------------------------------------
-    const [signalUrl, setSignalUrl] = useState(() => (IS_LOCAL && localStorage.getItem('webrtc_signal_url')) || DEFAULT_SIGNAL_URL);
-    const fallbackUrls = signalUrl === DEFAULT_SIGNAL_URL ? BACKUP_SIGNAL_URLS : undefined;
+    const [signalUrl, setSignalUrl] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const serverParam = new URLSearchParams(window.location.search).get('s');
+            if (serverParam === 'gcp') return GCP_SIGNAL_URL;
+            if (serverParam === 'orc') return ORACLE_SIGNAL_URL;
+            if (serverParam === 'local') return LOCAL_SIGNAL_URL;
+        }
+        return (IS_LOCAL && localStorage.getItem('webrtc_signal_url')) || DEFAULT_SIGNAL_URL;
+    });
+
+    const fallbackUrls = useMemo(() => {
+        if (signalUrl === ORACLE_SIGNAL_URL) {
+            return [GCP_SIGNAL_URL, 'wss://signal.3rtc.me', 'wss://34.57.36.145.sslip.io:443'];
+        }
+        if (signalUrl === GCP_SIGNAL_URL) {
+            return [ORACLE_SIGNAL_URL, 'wss://signal.3rtc.me', 'wss://34.57.36.145.sslip.io:443'];
+        }
+        return signalUrl === DEFAULT_SIGNAL_URL ? BACKUP_SIGNAL_URLS : undefined;
+    }, [signalUrl]);
+
     // YouTube quick picks come from the signaling server's cache (built-in list until then)
     useEffect(() => {
         const urls = [signalUrl, ...(fallbackUrls || [])];
@@ -518,8 +546,8 @@ export default function App() {
     }, [connectedPeers.length, sidebarTab]);
 
     // What components deeper down read with useRoom()
-    const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock }),
-        [room, roomId, isHost, username, connectedPeers, playbackLock]);
+    const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock, signalUrl }),
+        [room, roomId, isHost, username, connectedPeers, playbackLock, signalUrl]);
 
     // ---- layout ------------------------------------------------------------------------------
     // Chat while an activity is open: new messages pop up over it when the chat list isn't in view;
@@ -745,6 +773,7 @@ export default function App() {
                         signalStatus={signalStatus}
                         onOpenNetworkHud={openNetworkHud}
                         playbackLock={playbackLock}
+                        signalUrl={signalUrl}
                         onLeaveRoom={handleLeaveRoom}
                     />
                     {roomId ? (
@@ -921,6 +950,7 @@ export default function App() {
                 onClose={() => setShowQrModal(false)}
                 roomId={roomId}
                 username={username}
+                signalUrl={signalUrl}
             />
 
             <ReactionsEditor />

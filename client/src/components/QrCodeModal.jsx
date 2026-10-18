@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { generateQrMatrix, drawQrToCanvas, getMobileJoinUrl } from '../utils/qrCode';
+import { generateQrMatrix, drawQrToCanvas, getMobileJoinUrl, getServerTag } from '../utils/qrCode';
 import { copyToClipboard } from '../utils/clipboard';
 
 export default function QrCodeModal({
   isOpen,
   onClose,
   roomId = '',
-  username = ''
+  username = '',
+  signalUrl = ''
 }) {
   const canvasRef = useRef(null);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -34,8 +35,8 @@ export default function QrCodeModal({
 
   // Compute final join URL
   const joinUrl = useMemo(() => {
-    return getMobileJoinUrl(roomId, customHost.trim() || null, username);
-  }, [roomId, customHost]);
+    return getMobileJoinUrl(roomId, customHost.trim() || null, username, getServerTag(signalUrl));
+  }, [roomId, customHost, username, signalUrl]);
 
   // Render QR Code onto canvas
   useEffect(() => {
