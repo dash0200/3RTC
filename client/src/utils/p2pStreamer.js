@@ -204,41 +204,27 @@ export class P2PStreamSender {
   }
 }
 
-export const MAX_STREAM_CHUNKS = 100000; // max ~1.6 GB with 16 KB chunks
-
 /**
  * P2P Stream Receiver: Assembles incoming binary chunks and exposes playback via Blob / MSE.
  */
 export class P2PStreamReceiver {
   constructor(header, options = {}) {
-    this.streamId = header.streamId;
-    this.fileName = typeof header.fileName === 'string' ? header.fileName.slice(0, 180) : 'video';
-    this.fileSize = Number.isFinite(header.fileSize) && header.fileSize > 0 ? header.fileSize : 0;
-    this.mimeType = sanitizeMediaMimeType(header.mimeType);
-    this.chunkSize = Number.isInteger(header.chunkSize) && header.chunkSize > 0 && header.chunkSize <= 1024 * 1024
+    this.streamId = header?.streamId;
+    this.fileName = typeof header?.fileName === 'string' ? header.fileName.slice(0, 180) : 'video';
+    this.fileSize = Number.isFinite(header?.fileSize) && header.fileSize > 0 ? header.fileSize : 0;
+    this.mimeType = sanitizeMediaMimeType(header?.mimeType);
+    this.chunkSize = Number.isInteger(header?.chunkSize) && header.chunkSize > 0 && header.chunkSize <= 1024 * 1024
       ? header.chunkSize
       : STREAM_CHUNK_SIZE;
     const computedChunks = this.fileSize > 0 ? Math.ceil(this.fileSize / this.chunkSize) : 0;
-    const rawChunks = Number.isInteger(header.totalChunks) && header.totalChunks > 0 ? header.totalChunks : computedChunks;
+    const rawChunks = Number.isInteger(header?.totalChunks) && header?.totalChunks > 0 ? header.totalChunks : computedChunks;
     this.totalChunks = Math.min(Math.max(1, rawChunks), MAX_STREAM_CHUNKS);
-    this.sender = typeof header.sender === 'string' ? header.sender.slice(0, 64) : 'Peer';
+    this.sender = typeof header?.sender === 'string' ? header.sender.slice(0, 64) : 'Peer';
 
     this.onReady = options.onReady || (() => { });
     this.onProgress = options.onProgress || (() => { });
     this.onComplete = options.onComplete || (() => { });
     this.onError = options.onError || (() => { });
-
-    const rawTotal = header?.totalChunks || (this.fileSize && this.chunkSize ? Math.ceil(this.fileSize / this.chunkSize) : 0);
-    if (!Number.isInteger(rawTotal) || rawTotal <= 0 || rawTotal > MAX_STREAM_CHUNKS) {
-      this.totalChunks = 0;
-      this.chunks = [];
-      this.isAborted = true;
-      this.onError(new Error(`Invalid totalChunks count: ${rawTotal}`));
-      return;
-    }
-
-    this.totalChunks = rawTotal;
-    this.sender = header?.sender || 'Peer';
 
     this.chunks = new Array(this.totalChunks);
     this.receivedBytes = 0;

@@ -12,6 +12,7 @@
 export const IMAGE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
 export const MAGIC_IMG1 = 0x494D4731;  // 'IMG1' in ASCII hex
 export const MAX_IMAGE_CHUNKS = 2048;   // 2048 * 60 KB = ~122 MB max
+export const MAX_IMAGE_FILE_SIZE = MAX_IMAGE_CHUNKS * IMAGE_CHUNK_SIZE;
 
 export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -22,6 +23,7 @@ export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/avif',
   'image/bmp'
 ]);
+export const ALLOWED_IMAGE_MIMES = ALLOWED_IMAGE_MIME_TYPES;
 
 export function sanitizeImageMimeType(mime) {
   if (typeof mime !== 'string') return 'image/png';
