@@ -23,6 +23,13 @@ const PORT = process.env.PORT || 8080;
 // (local development, phones on the same Wi-Fi)
 const HOST = process.env.HOST || undefined;
 
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(self), microphone=(self), display-capture=(self), geolocation=()'
+};
+
 const server = http.createServer((req, res) => {
   let reqPath = req.url.split('?')[0];
   if (reqPath === '/api/quick-picks') return serveQuickPicks(req, res);
@@ -32,7 +39,12 @@ const server = http.createServer((req, res) => {
   if (process.env.NODE_ENV === 'production') {
     const appUrl = (process.env.APP_URL || 'https://3rtc.me').replace(/\/$/, '');
     const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-    res.writeHead(302, { Location: `${appUrl}/${query}`, 'Cache-Control': 'no-cache', 'X-Robots-Tag': 'noindex' });
+    res.writeHead(302, {
+      ...SECURITY_HEADERS,
+      Location: `${appUrl}/${query}`,
+      'Cache-Control': 'no-cache',
+      'X-Robots-Tag': 'noindex'
+    });
     return res.end();
   }
   if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
@@ -44,7 +56,7 @@ const server = http.createServer((req, res) => {
     if (fs.existsSync(indexPath)) {
       safePath = indexPath;
     } else {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain' });
       return res.end('404 Not Found');
     }
   }
@@ -61,6 +73,7 @@ const server = http.createServer((req, res) => {
   };
 
   res.writeHead(200, {
+    ...SECURITY_HEADERS,
     'Content-Type': mimeTypes[ext] || 'application/octet-stream',
     'Cache-Control': 'no-cache'
   });

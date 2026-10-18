@@ -11,6 +11,42 @@
 
 export const IMAGE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
 export const MAGIC_IMG1 = 0x494D4731;  // 'IMG1' in ASCII hex
+export const MAX_IMAGE_CHUNKS = 2048;   // 2048 * 60 KB = ~122 MB max
+
+export const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/bmp'
+]);
+
+export function sanitizeImageMimeType(mime) {
+  if (typeof mime !== 'string') return 'image/png';
+  const clean = mime.toLowerCase().trim().split(';')[0];
+  return ALLOWED_IMAGE_MIME_TYPES.has(clean) ? clean : 'image/png';
+}
+
+/**
+ * Sanitizes download filename: strips directory traversal and enforces safe image extensions (.png, .jpg, .webp, .gif)
+ */
+export function safeImageDownloadName(name, mimeType) {
+  const mime = String(mimeType || '').toLowerCase();
+  const ext = mime.includes('jpeg') || mime.includes('jpg') ? '.jpg' :
+              mime.includes('webp') ? '.webp' :
+              mime.includes('gif') ? '.gif' :
+              mime.includes('avif') ? '.avif' : '.png';
+
+  const base = String(name || 'shared-image')
+    .replace(/\.[^/.]+$/, '') // remove incoming extension
+    .replace(/[^a-zA-Z0-9_\s-]/g, '') // remove path traversal / illegal characters
+    .trim()
+    .slice(0, 50) || 'shared-image';
+
+  return `${base}${ext}`;
+}
 
 /**
  * Human readable file size formatter
@@ -222,20 +258,25 @@ export class P2PImageReceiver {
   }
 
   handleStart(headerMsg) {
+    if (!headerMsg || typeof headerMsg !== 'object') return;
     const { transferId, id, fileName, fileSize, mimeType, totalChunks, sender, isHost, caption, timestamp } = headerMsg;
-    if (!transferId || !totalChunks) return;
+    if (typeof transferId !== 'string' || !transferId.trim() || transferId.length > 64) return;
+    if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_IMAGE_CHUNKS) return;
+
+    const safeFileSize = Number.isFinite(fileSize) && fileSize > 0 ? fileSize : 0;
+    const safeMime = sanitizeImageMimeType(mimeType);
 
     this.transfers.set(transferId, {
-      id: id || crypto.randomUUID(),
+      id: typeof id === 'string' && id ? id.slice(0, 64) : crypto.randomUUID(),
       transferId,
-      fileName: fileName || 'shared-image.png',
-      fileSize: fileSize || 0,
-      mimeType: mimeType || 'image/png',
+      fileName: typeof fileName === 'string' ? fileName.slice(0, 120) : 'shared-image.png',
+      fileSize: safeFileSize,
+      mimeType: safeMime,
       totalChunks,
-      sender: sender || 'Peer',
+      sender: typeof sender === 'string' ? sender.slice(0, 64) : 'Peer',
       isHost: Boolean(isHost),
-      caption: caption || '',
-      timestamp: timestamp || Date.now(),
+      caption: typeof caption === 'string' ? caption.slice(0, 2000) : '',
+      timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
       chunks: new Array(totalChunks),
       receivedCount: 0,
       receivedBytes: 0,
@@ -250,6 +291,10 @@ export class P2PImageReceiver {
     const { transferId, chunkIndex, totalChunks, data } = parsed;
     const transfer = this.transfers.get(transferId);
     if (!transfer) return null;
+
+    if (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= transfer.totalChunks) {
+      return null;
+    }
 
     if (!transfer.chunks[chunkIndex]) {
       transfer.chunks[chunkIndex] = data;

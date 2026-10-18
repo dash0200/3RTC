@@ -43,12 +43,16 @@ const NO_EMBED = [
 
 const fail = (message) => ({ ok: false, message });
 
+// Cloud metadata endpoints and link-local addresses that must never be probed via shared media links
+const BLOCKED_HOST_RE = /^(169\.254\.\d+\.\d+|metadata\.google\.internal|instance-data)$/i;
+
 function parseUrl(text) {
     let t = String(text || '').trim();
     if (!t) return null;
     if (!/^[a-z][a-z0-9+.-]*:/i.test(t) && /^[\w-]+(\.[\w-]+)+(\/|$)/.test(t)) t = `https://${t}`; // "vimeo.com/123"
     try {
         const u = new URL(t);
+        if (BLOCKED_HOST_RE.test(u.hostname)) return null;
         return u.protocol === 'https:' || u.protocol === 'http:' ? u : null;
     } catch {
         return null;

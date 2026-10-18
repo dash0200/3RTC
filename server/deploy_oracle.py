@@ -326,9 +326,15 @@ orc.3rtc.me:443, orc.3rtc.me:8443, ${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
     reverse_proxy 127.0.0.1:8080
 }}
 
-# HTTP status check & ACME challenge support on port 80
+# Automatically redirect all plain HTTP requests on port 80 to HTTPS while supporting health checks
 :80 {{
-    respond "3RTC WebRTC Signaling Server Ready at wss://orc.3rtc.me:443" 200
+    @health path /healthz /status
+    handle @health {{
+        respond "3RTC WebRTC Signaling Server Ready" 200
+    }}
+    handle {{
+        redir https://{{host}}{{uri}} permanent
+    }}
 }}
 EOF
 
@@ -342,27 +348,29 @@ echo "[Done] Oracle Cloud OS bootstrap finished successfully!"
 
 
 def build_update_command(server_files):
-    moves = " && ".join(f"sudo mv /tmp/{f.name} /opt/webrtc-server/{f.name}" for f in server_files)
+    moves = " && ".join(f"sudo mv \"$STAGING_DIR/{f.name}\" /opt/webrtc-server/{f.name}" for f in server_files)
     caddy_check = (
         "if [ ! -f /etc/caddy/Caddyfile ] || ! grep -q 'orc.3rtc.me' /etc/caddy/Caddyfile 2>/dev/null; then "
         "EXT_IP=$(curl -s -m 5 https://api.ipify.org || hostname -I | awk '{print $1}'); "
-        "printf '{\\n    admin off\\n}\\norc.3rtc.me:443, orc.3rtc.me:8443, %s.sslip.io:443, %s.sslip.io:8443 {\\n    reverse_proxy 127.0.0.1:8080\\n}\\n:80 {\\n    respond \"3RTC Ready\" 200\\n}\\n' \"$EXT_IP\" \"$EXT_IP\" | sudo tee /etc/caddy/Caddyfile >/dev/null && "
+        "printf '{\\n    admin off\\n}\\norc.3rtc.me:443, orc.3rtc.me:8443, %s.sslip.io:443, %s.sslip.io:8443 {\\n    reverse_proxy 127.0.0.1:8080\\n}\\n:80 {\\n    @health path /healthz /status\\n    handle @health {\\n        respond \"3RTC Ready\" 200\\n    }\\n    handle {\\n        redir https://{host}{uri} permanent\\n    }\\n}\\n' \"$EXT_IP\" \"$EXT_IP\" | sudo tee /etc/caddy/Caddyfile >/dev/null && "
         "sudo systemctl daemon-reload && sudo systemctl enable caddy && sudo systemctl restart caddy; fi"
     )
     return (
+        'STAGING_DIR="$HOME/staging_3rtc" && '
         "sudo mkdir -p /opt/webrtc-server && "
         f"{moves} && cd /opt/webrtc-server"
         " && (sudo npm install --omit=dev --no-audit --no-fund --silent || echo 'Dependencies unchanged')"
         f" && (id -u {SERVICE_USER} >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin {SERVICE_USER})"
         f" && sudo chown -R {SERVICE_USER}:{SERVICE_USER} /opt/webrtc-server"
         " && (sudo chmod 600 /opt/webrtc-server/.youtube-api-key 2>/dev/null || true)"
-        f" && sudo mv /tmp/{SERVICE_FILE} /etc/systemd/system/{SERVICE_FILE}"
+        f" && sudo mv \"$STAGING_DIR/{SERVICE_FILE}\" /etc/systemd/system/{SERVICE_FILE}"
         f" && sudo chown root:root /etc/systemd/system/{SERVICE_FILE}"
         " && sudo systemctl daemon-reload"
         " && sudo systemctl enable webrtc-signaling"
         " && sudo systemctl restart webrtc-signaling"
         f" && {caddy_check}"
         " && sudo systemctl restart caddy 2>/dev/null || true"
+        ' && rm -rf "$STAGING_DIR"'
     )
 
 
@@ -413,30 +421,102 @@ def wait_for_ready(external_ip):
     print("=" * 65 + "\n")
 
 
+def get_known_hosts_path():
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    return str(ssh_dir / "oracle_3rtc_known_hosts")
+
+
+def prepare_remote_staging(ssh_bin, user, host, key_path):
+    cmd = 'mkdir -p "$HOME/staging_3rtc" && chmod 700 "$HOME/staging_3rtc"'
+    execute_remote_ssh(ssh_bin, user, host, key_path, cmd)
+
+
+def get_existing_remote_youtube_key(ssh_bin, user, host, key_path):
+    cmd = [
+        ssh_bin,
+        "-i", str(key_path),
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={get_known_hosts_path()}",
+        "-o", "ConnectTimeout=10",
+        f"{user}@{host}",
+        "sudo cat /opt/webrtc-server/.youtube-api-key 2>/dev/null || true"
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        key = (res.stdout or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+
+    env_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    local_key_file = Path(__file__).resolve().parent / ".youtube-api-key"
+    if local_key_file.exists():
+        try:
+            fkey = local_key_file.read_text(encoding="utf-8").strip()
+            if fkey:
+                return fkey
+        except Exception:
+            pass
+    return None
+
+
 def configure_quick_picks(ssh_bin, user, host, key_path):
     print_step("YouTube Quick Picks Setup (Optional)")
     print("Quick picks can fetch trending and search videos using a YouTube Data API v3 key.")
     print("The key is stored securely in /opt/webrtc-server/.youtube-api-key.")
-    key = os.environ.get("YOUTUBE_API_KEY", "").strip()
-    if key:
-        print("Using YOUTUBE_API_KEY from current environment.")
+
+    existing_key = get_existing_remote_youtube_key(ssh_bin, user, host, key_path)
+    if existing_key:
+        print(f"\nExisting YouTube Data API Key: {existing_key}")
+        prompt = "Enter new YouTube Data API key (or press Enter to keep existing): "
     else:
-        key = getpass.getpass("Paste YouTube Data API key (hidden, or press Enter to skip): ").strip()
-    if not key:
-        print("Skipped. Built-in video presets remain active.")
-        return
+        print("\nExisting YouTube Data API Key: No API key")
+        prompt = "Enter YouTube Data API key (or press Enter to skip): "
+
+    new_key = input(prompt).strip()
+    if not new_key:
+        if existing_key:
+            print("[OK] Keeping existing YouTube Data API key.")
+            check_remote = subprocess.run([
+                ssh_bin, "-i", str(key_path),
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", f"UserKnownHostsFile={get_known_hosts_path()}",
+                "-o", "ConnectTimeout=10",
+                f"{user}@{host}",
+                "sudo test -f /opt/webrtc-server/.youtube-api-key && echo 'EXISTS' || true"
+            ], capture_output=True, text=True, check=False)
+            if "EXISTS" in (check_remote.stdout or ""):
+                return
+            key_to_upload = existing_key
+        else:
+            print("Skipped. Built-in video presets remain active.")
+            return
+    else:
+        key_to_upload = new_key
+        try:
+            local_key_file = Path(__file__).resolve().parent / ".youtube-api-key"
+            local_key_file.write_text(key_to_upload + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    prepare_remote_staging(ssh_bin, user, host, key_path)
 
     fd, local_path = tempfile.mkstemp(prefix="yt-key-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(key + "\n")
-        copy_remote_scp(find_scp(), user, host, key_path, [local_path], "/tmp/.youtube-api-key")
+            f.write(key_to_upload + "\n")
+        copy_remote_scp(find_scp(), user, host, key_path, [local_path], "staging_3rtc/.youtube-api-key")
     finally:
         os.remove(local_path)
 
     cmd = (
-        f"sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} /tmp/.youtube-api-key /opt/webrtc-server/.youtube-api-key"
-        " && rm -f /tmp/.youtube-api-key && sudo rm -f /opt/webrtc-server/quick-picks-cache.json"
+        'STAGING_DIR="$HOME/staging_3rtc" && '
+        f"sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} \"$STAGING_DIR/.youtube-api-key\" /opt/webrtc-server/.youtube-api-key"
+        ' && rm -f "$STAGING_DIR/.youtube-api-key" && sudo rm -f /opt/webrtc-server/quick-picks-cache.json'
         " && sudo systemctl restart webrtc-signaling"
     )
     execute_remote_ssh(ssh_bin, user, host, key_path, cmd)
@@ -447,8 +527,8 @@ def copy_remote_scp(scp_bin, user, host, key_path, local_files, remote_dest):
     cmd = [
         scp_bin,
         "-i", str(key_path),
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={get_known_hosts_path()}",
         "-q",
         *[str(f) for f in local_files],
         f"{user}@{host}:{remote_dest}"
@@ -460,8 +540,8 @@ def execute_remote_ssh(ssh_bin, user, host, key_path, command):
     cmd = [
         ssh_bin,
         "-i", str(key_path),
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={get_known_hosts_path()}",
         "-o", "ConnectTimeout=15",
         f"{user}@{host}",
         command
@@ -1035,8 +1115,8 @@ def launch_oci_vm_automated(script_dir, server_files, oci_bin, ssh_bin, scp_bin=
         check_res = subprocess.run([
             ssh_bin,
             "-i", str(priv_key),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", f"UserKnownHostsFile={get_known_hosts_path()}",
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
             f"ubuntu@{public_ip}",
@@ -1055,7 +1135,8 @@ def launch_oci_vm_automated(script_dir, server_files, oci_bin, ssh_bin, scp_bin=
     # 9. Upload application files via SCP
     print("\nUploading server application files...")
     all_files = [*server_files, script_dir / SERVICE_FILE]
-    copy_remote_scp(actual_scp, "ubuntu", public_ip, priv_key, all_files, "/tmp/")
+    prepare_remote_staging(ssh_bin, "ubuntu", public_ip, priv_key)
+    copy_remote_scp(actual_scp, "ubuntu", public_ip, priv_key, all_files, "staging_3rtc/")
 
     # 10. Install dependencies & start systemd service
     print("Installing npm dependencies & starting webrtc-signaling service...")
@@ -1094,9 +1175,10 @@ def deploy_via_ssh(script_dir, server_files, ssh_bin, scp_bin, cached_info=None)
         print(f"[ERROR] SSH private key not found at '{key_path}'. Exiting.")
         sys.exit(1)
 
-    print("Uploading latest server files to /tmp/...")
+    print("Uploading latest server files to staging directory...")
     all_files = [*server_files, script_dir / SERVICE_FILE]
-    copy_remote_scp(scp_bin, user, host, key_path, all_files, "/tmp/")
+    prepare_remote_staging(ssh_bin, user, host, key_path)
+    copy_remote_scp(scp_bin, user, host, key_path, all_files, "staging_3rtc/")
 
     print("Applying updates and restarting service...")
     execute_remote_ssh(ssh_bin, user, host, key_path, build_update_command(server_files))

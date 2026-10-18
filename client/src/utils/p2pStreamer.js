@@ -15,6 +15,19 @@ export const STREAM_CHUNK_SIZE = 16384;
 export const BUFFERED_AMOUNT_HIGH = 512 * 1024; // 512 KB backpressure threshold
 export const BUFFERED_AMOUNT_LOW = 128 * 1024;  // 128 KB resume threshold
 
+export const MAX_STREAM_CHUNKS = 500000; // ~30 GB at 60 KB chunks
+
+export const ALLOWED_MEDIA_MIME_TYPES = new Set([
+  'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime', 'video/x-matroska',
+  'audio/mp4', 'audio/webm', 'audio/ogg', 'audio/mpeg', 'audio/wav', 'audio/aac', 'audio/flac', 'audio/opus'
+]);
+
+export function sanitizeMediaMimeType(mime) {
+  if (typeof mime !== 'string') return 'video/mp4';
+  const clean = mime.toLowerCase().trim().split(';')[0];
+  return ALLOWED_MEDIA_MIME_TYPES.has(clean) ? clean : 'video/mp4';
+}
+
 export function getVideoMimeType(file) {
   if (file?.type) return file.type;
   const name = (file?.name || '').toLowerCase();
@@ -197,12 +210,16 @@ export class P2PStreamSender {
 export class P2PStreamReceiver {
   constructor(header, options = {}) {
     this.streamId = header.streamId;
-    this.fileName = header.fileName;
-    this.fileSize = header.fileSize;
-    this.mimeType = header.mimeType || 'video/mp4';
-    this.chunkSize = header.chunkSize || STREAM_CHUNK_SIZE;
-    this.totalChunks = header.totalChunks || Math.ceil(this.fileSize / this.chunkSize);
-    this.sender = header.sender || 'Peer';
+    this.fileName = typeof header.fileName === 'string' ? header.fileName.slice(0, 180) : 'video';
+    this.fileSize = Number.isFinite(header.fileSize) && header.fileSize > 0 ? header.fileSize : 0;
+    this.mimeType = sanitizeMediaMimeType(header.mimeType);
+    this.chunkSize = Number.isInteger(header.chunkSize) && header.chunkSize > 0 && header.chunkSize <= 1024 * 1024
+      ? header.chunkSize
+      : STREAM_CHUNK_SIZE;
+    const computedChunks = this.fileSize > 0 ? Math.ceil(this.fileSize / this.chunkSize) : 0;
+    const rawChunks = Number.isInteger(header.totalChunks) && header.totalChunks > 0 ? header.totalChunks : computedChunks;
+    this.totalChunks = Math.min(Math.max(1, rawChunks), MAX_STREAM_CHUNKS);
+    this.sender = typeof header.sender === 'string' ? header.sender.slice(0, 64) : 'Peer';
 
     this.onReady = options.onReady || (() => {});
     this.onProgress = options.onProgress || (() => {});
@@ -222,7 +239,7 @@ export class P2PStreamReceiver {
     this.lastProgressBytes = 0;
 
     // MSE support detection
-    this.useMSE = Boolean(window.MediaSource && MediaSource.isTypeSupported(this.mimeType));
+    this.useMSE = typeof window !== 'undefined' && Boolean(window.MediaSource && window.MediaSource.isTypeSupported?.(this.mimeType));
     this.mediaSource = null;
     this.sourceBuffer = null;
     this.mseQueue = [];
@@ -602,11 +619,13 @@ export class P2PRangeSender {
 export class P2PRangeReceiver {
   constructor(header, options = {}) {
     this.streamNo = header.streamNo >>> 0;
-    this.fileName = header.fileName || 'video';
-    this.fileSize = header.fileSize;
-    this.mimeType = header.mimeType || 'video/mp4';
-    this.blockSize = header.blockSize || RANGE_BLOCK_SIZE;
-    this.totalBlocks = Math.ceil(this.fileSize / this.blockSize);
+    this.fileName = typeof header.fileName === 'string' ? header.fileName.slice(0, 180) : 'video';
+    this.fileSize = Number.isFinite(header.fileSize) && header.fileSize > 0 ? header.fileSize : 0;
+    this.mimeType = sanitizeMediaMimeType(header.mimeType);
+    this.blockSize = Number.isInteger(header.blockSize) && header.blockSize > 0 && header.blockSize <= 1024 * 1024
+      ? header.blockSize
+      : RANGE_BLOCK_SIZE;
+    this.totalBlocks = this.fileSize > 0 ? Math.ceil(this.fileSize / this.blockSize) : 0;
     // Who we fetch from: the owner of the file, or a parent viewer that relays it
     this.ownerId = options.ownerId ?? null;
     this.sourceId = options.sourceId ?? this.ownerId;
