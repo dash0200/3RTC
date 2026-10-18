@@ -27,7 +27,7 @@ FREE_REGIONS = {
 
 FIREWALL_RULE_NAME = "allow-webrtc-signaling"
 FIREWALL_TAG = "webrtc-signaling-server"
-SIGNAL_DOMAIN = "signal.3rtc.me"  # the app connects to wss://signal.3rtc.me (A record -> VM IP)
+SIGNAL_DOMAIN = "gcp.3rtc.me"  # the app connects to wss://gcp.3rtc.me (A record -> VM IP)
 DEFAULT_INSTANCE_NAME = "webrtc-signaling-free"
 DEFAULT_PORT = "443"
 ALT_PORT = "8443"
@@ -377,9 +377,8 @@ cat <<EOF > /etc/caddy/Caddyfile
     admin off
 }}
 
-# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443. {SIGNAL_DOMAIN} needs a DNS A
-# record pointing at this VM's IP; until it has one, Caddy keeps retrying and the sslip.io name works.
-{SIGNAL_DOMAIN}:443, ${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
+# Automated Let's Encrypt TLS on standard HTTPS/WSS (443) and 8443 for gcp.3rtc.me, signal.3rtc.me, and sslip.io.
+{SIGNAL_DOMAIN}:443, {SIGNAL_DOMAIN}:8443, signal.3rtc.me:443, signal.3rtc.me:8443, ${{DOMAIN}}:443, ${{DOMAIN}}:8443 {{
     reverse_proxy 127.0.0.1:8080
 }}
 
