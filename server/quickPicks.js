@@ -356,12 +356,67 @@ export function picksFor(data, requested) {
   };
 }
 
-export function serveQuickPicks(req, res) {
+/**
+ * Validate request origin against allowed 3RTC domains and local development environments.
+ */
+export function isAllowedOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return false;
+  try {
+    const url = new URL(origin);
+    const host = url.hostname.toLowerCase();
+
+    // Allow localhost and loopback interfaces for local development
+    if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]') return true;
+
+    // In development, also allow LAN IP addresses for phone testing on local Wi-Fi
+    if (process.env.NODE_ENV !== 'production') {
+      if (/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(host)) return true;
+    }
+
+    // Allow official 3rtc.me domain and its subdomains
+    if (host === '3rtc.me' || host.endsWith('.3rtc.me')) return true;
+
+    // Allow Vercel preview/production deployments
+    if (host.endsWith('.vercel.app')) return true;
+
+    // Allow custom APP_URL if configured
+    if (process.env.APP_URL) {
+      try {
+        const appUrl = new URL(process.env.APP_URL);
+        if (appUrl.origin === url.origin) return true;
+      } catch {
+        // ignore malformed APP_URL
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function getCorsHeaders(req) {
+  const origin = req.headers?.origin;
   const headers = {
     'Content-Type': 'application/json; charset=UTF-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS'
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'X-Content-Type-Options': 'nosniff'
   };
+
+  if (!origin) {
+    // Direct server-to-server or test requests without Origin header
+    headers['Access-Control-Allow-Origin'] = '*';
+  } else if (isAllowedOrigin(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Vary'] = 'Origin';
+  }
+
+  return headers;
+}
+
+export function serveQuickPicks(req, res) {
+  const headers = getCorsHeaders(req);
   if (req.method === 'OPTIONS') {
     res.writeHead(204, headers);
     return res.end();
@@ -379,3 +434,4 @@ export function serveQuickPicks(req, res) {
   res.writeHead(200, { ...headers, 'Cache-Control': 'public, max-age=900' });
   res.end(JSON.stringify(picksFor(quickPicks, requested)));
 }
+

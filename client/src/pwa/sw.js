@@ -226,11 +226,36 @@ async function serveP2PStream(event, url) {
     }
   });
 
+const ALLOWED_STREAM_MIME_TYPES = new Set([
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+  'video/quicktime',
+  'video/x-matroska',
+  'audio/mp4',
+  'audio/webm',
+  'audio/ogg',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/aac',
+  'audio/flac',
+  'audio/opus'
+]);
+
+function sanitizeStreamMime(mime) {
+  if (typeof mime !== 'string') return 'video/mp4';
+  const clean = mime.toLowerCase().trim().split(';')[0];
+  return ALLOWED_STREAM_MIME_TYPES.has(clean) ? clean : 'video/mp4';
+}
+
+  const contentType = sanitizeStreamMime(meta.mimeType);
   const headers = {
-    'Content-Type': meta.mimeType || 'video/mp4',
+    'Content-Type': contentType,
     'Content-Length': String(end - start + 1),
     'Accept-Ranges': 'bytes',
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "sandbox; default-src 'none';"
   };
   if (match) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
   return new Response(body, { status: match ? 206 : 200, headers });
