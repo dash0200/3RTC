@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { log } from './log.js';
 import { createSeats, loadSecret, newEpoch, isValidPeerId } from './seats.js';
 import { isAllowedOrigin } from './quickPicks.js';
+import { createRateLimiter } from './rateLimit.js';
 
 // People per room. Everyone connects directly to everyone (mesh); 4 keeps voice light on each
 // person's upload, and local video files are passed along a relay tree instead of the owner
@@ -23,6 +24,10 @@ export const RATE_LIMIT = {
   maxMessagesPerSec: 60      // Max signaling messages per second per socket
 };
 
+export function isOriginAllowed(origin) {
+  return !origin || isAllowedOrigin(origin);
+}
+
 /** Accept signaling connections on `server` (an http.Server). Returns the WebSocketServer. */
 export function attachSignaling(server) {
   const wss = new WebSocketServer({
@@ -31,7 +36,7 @@ export function attachSignaling(server) {
     verifyClient: (info, callback) => {
       const origin = info.origin || info.req?.headers?.origin;
       // Allow non-browser clients (tests, curl, CLI) or verified 3RTC origins
-      if (!origin || isAllowedOrigin(origin)) {
+      if (isOriginAllowed(origin)) {
         return callback(true);
       }
       log('WARN', `Rejected WebSocket upgrade from unauthorized origin: ${origin}`);
@@ -40,21 +45,36 @@ export function attachSignaling(server) {
   });
 
   // Map<roomId, Map<peerId, WebSocket>>
+  /** @type {Map<string, Map<string, import('./types/protocol.d.ts').SignalingSocket>>} */
   const rooms = new Map();
   // Map<roomId, { epoch, hostPeerId }>: the room instance (see seats.js) and who is its host
+  /** @type {Map<string, import('./types/protocol.d.ts').RoomInfo>} */
   const roomInfo = new Map();
   const seats = createSeats(loadSecret({ dir: path.dirname(fileURLToPath(import.meta.url)) }));
+  const rateLimiter = createRateLimiter();
 
+  /**
+   * @param {string} roomId
+   * @param {string} epoch
+   * @param {string | null} hostPeerId
+   */
   function openRoom(roomId, epoch, hostPeerId) {
-    rooms.set(roomId, new Map());
+    /** @type {Map<string, import('./types/protocol.d.ts').SignalingSocket>} */
+    const room = new Map();
+    rooms.set(roomId, room);
     roomInfo.set(roomId, { epoch, hostPeerId });
-    return rooms.get(roomId);
+    return room;
   }
 
   /**
    * May `ws` sit as `peerId` in this room?
    * If claiming the host's seat, cryptographic seatToken verification is strictly required (H-03).
    * A seat held by another live socket also requires a seat token.
+   * @param {string} roomId
+   * @param {Map<string, import('./types/protocol.d.ts').SignalingSocket>} room
+   * @param {string} peerId
+   * @param {import('./types/protocol.d.ts').SignalingSocket} ws
+   * @param {string | undefined} [token]
    */
   function maySit(roomId, room, peerId, ws, token) {
     const info = roomInfo.get(roomId);
@@ -82,15 +102,25 @@ export function attachSignaling(server) {
     };
   }
 
+  /**
+   * @param {import('./types/protocol.d.ts').SignalingSocket} ws
+   * @param {any} data
+   */
   function safeSend(ws, data) {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data));
     }
   }
 
+  /**
+   * @param {string} roomId
+   * @param {string} excludePeerId
+   * @returns {{ peerId: string, ws: import('./types/protocol.d.ts').SignalingSocket }[]}
+   */
   function getOtherPeers(roomId, excludePeerId) {
     const room = rooms.get(roomId);
     if (!room) return [];
+    /** @type {{ peerId: string, ws: import('./types/protocol.d.ts').SignalingSocket }[]} */
     const peers = [];
     for (const [peerId, clientWs] of room.entries()) {
       if (peerId !== excludePeerId && clientWs.readyState === WebSocket.OPEN) {
@@ -100,6 +130,9 @@ export function attachSignaling(server) {
     return peers;
   }
 
+  /**
+   * @param {import('./types/protocol.d.ts').SignalingSocket} ws
+   */
   function leaveRoom(ws) {
     const { roomId, peerId } = ws;
     if (!roomId || !peerId) return;
@@ -133,14 +166,19 @@ export function attachSignaling(server) {
     ws.roomId = null;
   }
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', (rawWs, req) => {
+    /** @type {import('./types/protocol.d.ts').SignalingSocket} */
+    const ws = /** @type {any} */ (rawWs);
     ws.peerId = crypto.randomUUID();
     ws.roomId = null;
     ws.isAlive = true;
     ws.failedJoins = [];
     ws.msgTokens = RATE_LIMIT.maxMessagesPerSec;
     ws.lastTokenRefill = Date.now();
-    ws.ip = req?.headers?.['x-forwarded-for']?.split(',')[0]?.trim() || req?.socket?.remoteAddress || 'unknown';
+    const forwardedHeader = req?.headers?.['x-forwarded-for'];
+    const forwarded = Array.isArray(forwardedHeader) ? forwardedHeader[0] : forwardedHeader;
+    ws.ip = forwarded?.split(',')[0]?.trim() || req?.socket?.remoteAddress || 'unknown';
+    ws.clientIp = ws.ip;
 
     log('CONN', `New client connected, assigned peerId: ${ws.peerId} from ${ws.ip}`);
 
@@ -149,7 +187,10 @@ export function attachSignaling(server) {
     });
 
     ws.on('message', (rawData) => {
-      if (rawData && rawData.length > MAX_SIGNAL_PAYLOAD_BYTES) {
+      const rawLen = Array.isArray(rawData)
+        ? rawData.reduce((acc, c) => acc + c.length, 0)
+        : (rawData ? (/** @type {any} */ (rawData).byteLength ?? /** @type {any} */ (rawData).length ?? 0) : 0);
+      if (rawLen > MAX_SIGNAL_PAYLOAD_BYTES) {
         safeSend(ws, { type: 'error', message: 'Payload exceeds maximum allowed size' });
         return;
       }
@@ -205,7 +246,8 @@ export function attachSignaling(server) {
             if (previous && previous !== ws) previous.roomId = null; // its close won't remove us
             room.set(peerId, ws);
             ws.roomId = resumeRoomId;
-            roomInfo.get(resumeRoomId).hostPeerId = peerId;
+            const currentInfo = roomInfo.get(resumeRoomId);
+            if (currentInfo) currentInfo.hostPeerId = peerId;
 
             const otherPeers = getOtherPeers(resumeRoomId, peerId);
             log('RESUME', `Peer ${peerId} resumed room "${resumeRoomId}" (Total: ${room.size})`);
@@ -342,6 +384,7 @@ export function attachSignaling(server) {
 
           ws.failedJoins = [];
           const room = rooms.get(roomId);
+          if (!room) return;
           const info = roomInfo.get(roomId);
           const isHostSeat = Boolean(info?.hostPeerId && peerId === info.hostPeerId);
           const hasValidSeatToken = Boolean(
@@ -412,14 +455,15 @@ export function attachSignaling(server) {
         case 'answer':
         case 'ice-candidate':
         case 'candidate': {
-          if (!ws.roomId) {
+          const currentRoomId = ws.roomId;
+          if (!currentRoomId) {
             safeSend(ws, { type: 'error', message: 'You must join a room before swapping signals' });
             return;
           }
 
           const normalizedType = type === 'candidate' ? 'ice-candidate' : type;
           const targetId = data.targetId || data.target;
-          const room = rooms.get(ws.roomId);
+          const room = rooms.get(currentRoomId);
 
           if (!room) {
             safeSend(ws, { type: 'error', message: 'Room not found' });
@@ -449,7 +493,7 @@ export function attachSignaling(server) {
           }
 
           // Automatic 1-to-1 routing if targetId is omitted
-          const otherPeers = getOtherPeers(ws.roomId, ws.peerId);
+          const otherPeers = getOtherPeers(currentRoomId, ws.peerId);
           if (otherPeers.length === 1) {
             safeSend(otherPeers[0].ws, outgoingPayload);
             log('SIGNAL', `${normalizedType.toUpperCase()} from ${ws.peerId} -> ${otherPeers[0].peerId} (auto-relay)`);
@@ -494,7 +538,9 @@ export function attachSignaling(server) {
   // Periodic heartbeat to clean up broken sockets and stale rate limit entries
   const heartbeatInterval = setInterval(() => {
     rateLimiter.cleanUp();
-    wss.clients.forEach((ws) => {
+    wss.clients.forEach((rawWs) => {
+      /** @type {import('./types/protocol.d.ts').SignalingSocket} */
+      const ws = /** @type {any} */ (rawWs);
       if (!ws.isAlive) {
         log('WARN', `Terminating inactive peer: ${ws.peerId}`);
         leaveRoom(ws);
