@@ -1,0 +1,258 @@
+/**
+ * Connection to the signaling server: connects, keeps the socket alive, reconnects automatically,
+ * and on reconnect resumes the room (host) or rejoins it (guest) and recovers broken P2P links.
+ * Incoming messages go to the latest `handleSignalingMessage`.
+ */
+import { useEffect, useRef, type MutableRefObject } from 'react';
+import type { IncomingSignalingMessage, OutgoingSignalingMessage } from '../types';
+
+export interface SignalStatus {
+  connected: boolean;
+  label: string;
+  activeUrl?: string;
+}
+
+export interface RoomTokens {
+  roomId: string | null;
+  seat: string | null;
+  host: string | null;
+}
+
+export interface PeerMeshEntry {
+  pc?: RTCPeerConnection | null;
+  scheduleRecovery?: (delayMs: number) => void;
+  [key: string]: unknown;
+}
+
+export interface SignalingConnectionContext {
+  signalUrl: string;
+  fallbackUrls?: string[];
+  wsRef: MutableRefObject<WebSocket | null>;
+  pendingSignalsRef: MutableRefObject<OutgoingSignalingMessage[]>;
+  currentRoomRef: MutableRefObject<string | null>;
+  roomTokensRef: MutableRefObject<RoomTokens>;
+  peerIdRef: MutableRefObject<string | null>;
+  isHostRef: MutableRefObject<boolean>;
+  peersRef: MutableRefObject<Map<string, PeerMeshEntry>>;
+  setSignalStatus: (status: SignalStatus) => void;
+  showToast: (text: string) => void;
+  addSystemMessage: (text: string) => void;
+  handleSignalingMessage: (msg: IncomingSignalingMessage) => void;
+}
+
+export function useSignalingConnection(ctx: SignalingConnectionContext): void {
+  const {
+    addSystemMessage,
+    currentRoomRef,
+    fallbackUrls = [],
+    handleSignalingMessage,
+    isHostRef,
+    peerIdRef,
+    peersRef,
+    pendingSignalsRef,
+    roomTokensRef,
+    setSignalStatus,
+    showToast,
+    signalUrl,
+    wsRef
+  } = ctx;
+
+  const fallbackKey = fallbackUrls.join(' ');
+  const handleSignalingMessageRef = useRef<(msg: IncomingSignalingMessage) => void>(handleSignalingMessage);
+
+  useEffect(() => {
+    handleSignalingMessageRef.current = handleSignalingMessage;
+  });
+
+  useEffect(() => {
+    let isCancelled = false;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
+
+    const safeCloseSocket = (socket: WebSocket | null) => {
+      if (!socket) return;
+      try {
+        if (socket.readyState === WebSocket.CONNECTING) {
+          socket.onopen = () => {
+            try {
+              socket.close(1000, 'Replaced or unmounted');
+            } catch {
+              // ignore
+            }
+          };
+          socket.onerror = () => {};
+          socket.onclose = () => {};
+        } else if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, 'Replaced or unmounted');
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    if (wsRef.current) {
+      safeCloseSocket(wsRef.current);
+      wsRef.current = null;
+    }
+
+    const urls = [signalUrl, ...fallbackKey.split(' ').filter((u) => u && u !== signalUrl)];
+    let urlIndex = 0;
+    const isLocalServer = signalUrl.includes('localhost') || signalUrl.includes('127.0.0.1');
+
+    const getServerLabel = (url?: string) => {
+      if (!url) return 'Cloud';
+      if (url.includes('orc.3rtc.me')) return 'Oracle Cloud';
+      if (url.includes('gcp.3rtc.me')) return 'Google Cloud';
+      if (url.includes('localhost') || url.includes('127.0.0.1')) return 'Local';
+      return 'Cloud';
+    };
+
+    const connect = () => {
+      if (isCancelled) return;
+      let hasOpened = false;
+
+      setSignalStatus({ connected: false, label: 'Connecting...' });
+
+      const activeUrl = urls[urlIndex] || signalUrl;
+      const activeLabel = getServerLabel(activeUrl);
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(activeUrl);
+        wsRef.current = ws;
+      } catch {
+        if (isCancelled) return;
+        setSignalStatus({ connected: false, label: 'Connection Failed' });
+        showToast('Failed to connect to the server');
+        return;
+      }
+
+      ws.onopen = () => {
+        hasOpened = true;
+        if (isCancelled) {
+          safeCloseSocket(ws);
+          return;
+        }
+
+        setSignalStatus({ connected: true, label: `${activeLabel} Connected`, activeUrl });
+        showToast(`Connected to ${activeLabel} signaling`);
+        if (urlIndex > 0) {
+          addSystemMessage(`🔄 Connected to backup signaling server (${activeLabel}).`);
+        }
+
+        if (currentRoomRef.current) {
+          const activeRoom = currentRoomRef.current;
+          addSystemMessage(`🔄 Reconnected to signaling. Resuming room ${activeRoom}...`);
+          const tokens =
+            roomTokensRef?.current?.roomId === String(activeRoom) ? roomTokensRef.current : { host: null, seat: null };
+          if (isHostRef.current) {
+            ws.send(
+              JSON.stringify({
+                type: 'create-room',
+                roomId: activeRoom,
+                peerId: peerIdRef.current,
+                ...(tokens.host ? { hostToken: tokens.host } : {}),
+                ...(tokens.seat ? { seatToken: tokens.seat } : {})
+              })
+            );
+          } else {
+            ws.send(
+              JSON.stringify({
+                type: 'join',
+                roomId: activeRoom,
+                peerId: peerIdRef.current,
+                rejoin: true,
+                ...(tokens.seat ? { seatToken: tokens.seat } : {})
+              })
+            );
+          }
+        }
+
+        while (pendingSignalsRef.current.length > 0) {
+          const data = pendingSignalsRef.current.shift();
+          if (data) ws.send(JSON.stringify(data));
+        }
+
+        for (const entry of peersRef.current.values()) {
+          if (
+            entry.pc &&
+            entry.pc.connectionState !== 'connected' &&
+            entry.pc.connectionState !== 'new' &&
+            entry.pc.connectionState !== 'connecting'
+          ) {
+            entry.scheduleRecovery?.(1000);
+          }
+        }
+
+        clearInterval(pingInterval!);
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            } catch {
+              // ignore
+            }
+          }
+        }, 25000);
+      };
+
+      ws.onmessage = (event) => {
+        if (isCancelled) return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'pong') return;
+          handleSignalingMessageRef.current?.(msg);
+        } catch {
+          // ignore invalid json
+        }
+      };
+
+      ws.onclose = (event) => {
+        if (pingInterval) clearInterval(pingInterval);
+        if (isCancelled) return;
+
+        if (event.code === 1000) {
+          setSignalStatus({ connected: false, label: 'Disconnected' });
+          return;
+        }
+
+        setSignalStatus({ connected: false, label: 'Reconnecting...' });
+
+        if (isLocalServer && !hasOpened) {
+          showToast(
+            'Local server not reachable on port 8080. Start "node server.js" or switch to Oracle/GCP Cloud Server.'
+          );
+        }
+
+        if (!hasOpened && urls.length > 1) {
+          urlIndex = (urlIndex + 1) % urls.length;
+        }
+
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        reconnectTimeout = setTimeout(() => {
+          if (!isCancelled) {
+            connect();
+          }
+        }, 2500);
+      };
+
+      ws.onerror = () => {
+        if (isCancelled) return;
+        setSignalStatus({ connected: false, label: 'Signaling Error' });
+      };
+    };
+
+    connect();
+
+    return () => {
+      isCancelled = true;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (pingInterval) clearInterval(pingInterval);
+      if (wsRef.current) {
+        safeCloseSocket(wsRef.current);
+        wsRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signalUrl, fallbackKey, showToast, addSystemMessage]);
+}

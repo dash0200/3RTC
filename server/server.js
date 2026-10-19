@@ -18,7 +18,7 @@ const candidateDirs = [
 ];
 const clientDir = candidateDirs.find(d => fs.existsSync(d) && fs.existsSync(path.join(d, 'index.html'))) || candidateDirs[0];
 
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT) || 8080;
 // Production: 127.0.0.1, so only Caddy (TLS, on the same VM) can reach it. Default: every interface
 // (local development, phones on the same Wi-Fi)
 const HOST = process.env.HOST || undefined;
@@ -32,14 +32,15 @@ const SECURITY_HEADERS = {
 
 const server = http.createServer((req, res) => {
   try {
-    let reqPath = req.url.split('?')[0];
+    const rawUrl = req.url || '/';
+    let reqPath = rawUrl.split('?')[0];
     if (reqPath === '/api/quick-picks') return serveQuickPicks(req, res);
 
     // In production the website is 3rtc.me (Vercel); this server only does signaling. Browser visits
     // (signal.3rtc.me, the sslip.io address, old invite links) go to the app, keeping ?room=…
     if (process.env.NODE_ENV === 'production') {
       const appUrl = (process.env.APP_URL || 'https://3rtc.me').replace(/\/$/, '');
-      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      const query = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
       res.writeHead(302, {
         ...SECURITY_HEADERS,
         Location: `${appUrl}/${query}`,
@@ -79,7 +80,11 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-cache'
     });
     fs.createReadStream(safePath).pipe(res);
-  });
+  } catch (err) {
+    res.writeHead(500, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain' });
+    res.end('500 Internal Server Error');
+  }
+});
 
 attachSignaling(server);
 startQuickPicks();
