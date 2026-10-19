@@ -11,11 +11,18 @@ export type BusEventName =
   | 'media-changed'
   | (string & {});
 
-export interface SendableChannel {
-  readyState?: string;
-  send: (data: string | ArrayBufferView | ArrayBuffer) => void;
-  bufferedAmount?: number;
-}
+export type SendableChannel =
+  | RTCDataChannel
+  | {
+      readyState?: string;
+      send: {
+        (data: string): void;
+        (data: Blob): void;
+        (data: ArrayBuffer): void;
+        (data: ArrayBufferView<ArrayBuffer>): void;
+      };
+      bufferedAmount?: number;
+    };
 
 export interface RoomBus {
   broadcast: (
@@ -29,8 +36,8 @@ export interface RoomBus {
     payload?: Record<string, unknown>,
     opts?: { bulk?: boolean }
   ) => boolean;
-  sendBinary: (peerId: string, buffer: ArrayBufferView | ArrayBuffer) => boolean;
-  broadcastBinary: (buffer: ArrayBufferView | ArrayBuffer) => number;
+  sendBinary: (peerId: string, buffer: ArrayBufferView<ArrayBuffer> | ArrayBuffer) => boolean;
+  broadcastBinary: (buffer: ArrayBufferView<ArrayBuffer> | ArrayBuffer) => number;
   on: <T = unknown>(
     type: string,
     handler: (payload: T, fromPeerId: string) => void

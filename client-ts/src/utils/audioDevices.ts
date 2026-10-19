@@ -32,7 +32,7 @@ export const canPickOutput = (): boolean => {
   try {
     return (
       typeof HTMLMediaElement !== 'undefined' &&
-      typeof (HTMLMediaElement.prototype as any).setSinkId === 'function'
+      typeof HTMLMediaElement.prototype.setSinkId === 'function'
     );
   } catch {
     return false;
@@ -42,7 +42,7 @@ export const canPickOutput = (): boolean => {
 /** Firefox lists speakers only after the person picks one in its own prompt. */
 export const needsOutputPrompt = (): boolean =>
   typeof navigator !== 'undefined' &&
-  typeof (navigator.mediaDevices as any)?.selectAudioOutput === 'function';
+  typeof navigator.mediaDevices?.selectAudioOutput === 'function';
 
 /** (pure, for tests) enumerateDevices() result -> lists for the pickers */
 export function devicesToLists(devices: MediaDeviceInfo[]): AudioDeviceLists {
@@ -137,14 +137,19 @@ export async function revealDeviceLabels(): Promise<boolean> {
 /** Firefox: let the person choose a speaker in the browser's prompt. Returns its id, or null. */
 export async function promptForOutput(): Promise<string | null> {
   try {
-    const device = await (navigator.mediaDevices as any).selectAudioOutput();
+    const device = await navigator.mediaDevices?.selectAudioOutput?.();
     return device?.deviceId || null;
   } catch {
     return null;
   }
 }
 
-async function applyTo(target: any, id: string): Promise<boolean> {
+type SinkTarget =
+  | HTMLMediaElement
+  | AudioContext
+  | { setSinkId?(sinkId: string): Promise<void>; sinkId?: string };
+
+async function applyTo(target: SinkTarget | null | undefined, id: string): Promise<boolean> {
   if (!target || typeof target.setSinkId !== 'function') return true;
   if ((target.sinkId || DEFAULT) === id) return true;
   try {
@@ -167,7 +172,7 @@ const mediaIn = (node: Node): HTMLMediaElement[] => {
   if (!(node instanceof Element)) return [];
   if (node.tagName === 'AUDIO' || node.tagName === 'VIDEO') return [node as HTMLMediaElement];
   return node.querySelector?.('audio, video')
-    ? ([...node.querySelectorAll('audio, video')] as HTMLMediaElement[])
+    ? Array.from(node.querySelectorAll<HTMLMediaElement>('audio, video'))
     : [];
 };
 
@@ -176,9 +181,9 @@ function watchNewMedia(): void {
   observer = new MutationObserver((records) => {
     if (outputId === DEFAULT) return;
     for (const r of records) {
-      for (const node of r.addedNodes) {
+      Array.from(r.addedNodes).forEach((node) => {
         for (const el of mediaIn(node)) applyTo(el, outputId);
-      }
+      });
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -190,8 +195,8 @@ export async function setOutputDevice(id: string = DEFAULT): Promise<boolean> {
   if (!canPickOutput()) return outputId === DEFAULT;
   watchNewMedia();
   const results = await Promise.all([
-    ...[...document.querySelectorAll('audio, video')].map((el) => applyTo(el, outputId)),
-    ...[...contexts].map((ctx) =>
+    ...Array.from(document.querySelectorAll<HTMLMediaElement>('audio, video')).map((el) => applyTo(el, outputId)),
+    ...Array.from(contexts).map((ctx) =>
       ctx.state === 'closed' ? (contexts.delete(ctx), true) : applyTo(ctx, outputId)
     )
   ]);

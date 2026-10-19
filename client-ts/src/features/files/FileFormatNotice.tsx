@@ -10,18 +10,20 @@ import { canExtract } from './extractSubtitles';
 const pct = (p?: number) => `${Math.round((p || 0) * 100)}%`;
 
 export interface FileFormatNoticeInfo {
-    fileName?: string;
-    format?: FileFormat;
-    check?: CheckPlayableResult;
+    fileName?: string | null;
+    format?: FileFormat | null;
+    check?: CheckPlayableResult | null;
     problems?: Array<{ name: string; device?: string; verdict: string }>;
-    job?: { error?: string; label?: string; asked?: boolean; progress?: number; track?: number };
+    job?: { error?: string; label?: string; asked?: boolean; progress?: number; track?: number } | null;
     isOwner?: boolean;
     sharedBy?: string;
-    transcodeAudio?: () => void;
+    transcodeAudio?: (trackNumber?: number) => void | Promise<void>;
     transcodedAudioUrl?: string | null;
-    audioJob?: { error?: string; done?: boolean; stage?: string; progress?: number };
+    audioJob?: { error?: string | null; done?: boolean; stage?: string; progress?: number; trackNumber?: number } | null;
     cancelTranscode?: () => void;
+    clearTranscodedAudio?: () => void;
     pickSubtitle?: (trackNumber: number) => void;
+    pendingSubtitle?: unknown;
 }
 
 export interface FileFormatNoticeProps {

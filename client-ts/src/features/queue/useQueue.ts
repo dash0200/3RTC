@@ -45,16 +45,18 @@ export interface UseQueueReturn {
 }
 
 // A queue item from someone else: a YouTube video or a link source (checked), else dropped
-const cleanItem = (item: any): QueueItem | null => {
-  if (!item || typeof item.id !== 'string') return null;
-  if (item.media) {
-    const media = normalizeMedia(item.media);
-    return media ? { ...item, media, videoId: undefined } : null;
+const cleanItem = (item: unknown): QueueItem | null => {
+  if (!item || typeof item !== 'object') return null;
+  const raw = item as Record<string, unknown>;
+  if (typeof raw.id !== 'string') return null;
+  if (raw.media) {
+    const media = normalizeMedia(raw.media as import('../../types').MediaItem);
+    return media ? { ...(raw as unknown as QueueItem), media, videoId: undefined } : null;
   }
-  return typeof item.videoId === 'string' ? item : null;
+  return typeof raw.videoId === 'string' ? (raw as unknown as QueueItem) : null;
 };
 
-const cleanQueue = (list: any[]): QueueItem[] => list.map(cleanItem).filter(Boolean) as QueueItem[];
+const cleanQueue = (list: unknown[]): QueueItem[] => list.map(cleanItem).filter((i): i is QueueItem => i !== null);
 
 export function useQueue({
   room,
@@ -103,10 +105,10 @@ export function useQueue({
   usePeerMessageOn<{
     action: string;
     sender?: string;
-    item?: any;
+    item?: unknown;
     itemId?: string;
-    queue?: any[];
-    remainingQueue?: any[];
+    queue?: unknown[];
+    remainingQueue?: unknown[];
     nextVideoId?: string;
     nextTitle?: string;
     skipVotes?: string[];

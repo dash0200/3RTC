@@ -47,13 +47,16 @@ export function useRoom(): RoomContextValue {
 
 /** Run `handler(msg, fromPeerId)` for every message of `type` while mounted. */
 export function usePeerMessageOn<T = unknown>(
-  bus: RoomBus,
+  bus: RoomBus | null | undefined,
   type: string,
   handler: (msg: T, fromPeerId: string) => void
 ): void {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;
-  useEffect(() => bus.on<T>(type, (msg, from) => handlerRef.current(msg, from)), [bus, type]);
+  useEffect(() => {
+    if (!bus) return;
+    return bus.on<T>(type, (msg, from) => handlerRef.current(msg, from));
+  }, [bus, type]);
 }
 
 export function usePeerMessage<T = unknown>(

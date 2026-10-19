@@ -4,17 +4,18 @@ import { Icon as LineIcon } from '../icons';
 import { getAvatarColor } from '../../utils/sound';
 import { getInitials } from '../PeerVoiceRoster';
 import { getMobileJoinUrl, getServerTag } from '../../utils/qrCode';
+import type { NetworkStatsSummary } from '../../hooks/useNetworkStats';
 
 export interface PhonePerson {
   key: string;
   name: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface PhoneTopBarProps {
   roomId?: string | null;
   onCopyRoom?: (url: string) => void;
-  networkStats?: any;
+  networkStats?: Partial<NetworkStatsSummary> | null;
   isP2PConnected?: boolean;
   signalStatus?: { connected?: boolean; label?: string };
   onOpenNetworkHud?: () => void;
@@ -90,7 +91,7 @@ export function PhoneTopBar({
       </button>
       <button type="button" className="phone-people" onClick={onOpenPeople} aria-label={`${people.length} ${people.length === 1 ? 'person' : 'people'} in the room`}>
         {shown.map((p, i) => (
-          <span key={p.key} className="rd-av" style={{ ['--av' as any]: getAvatarColor(p.name), zIndex: 3 - i }} aria-hidden="true">{getInitials(p.name)}</span>
+          <span key={p.key} className="rd-av" style={{ ['--av']: getAvatarColor(p.name), zIndex: 3 - i } as React.CSSProperties} aria-hidden="true">{getInitials(p.name)}</span>
         ))}
         {extra > 0 && <span className="rd-av phone-people-more" style={{ zIndex: 0 }} aria-hidden="true">+{extra}</span>}
       </button>

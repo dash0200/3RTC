@@ -1,5 +1,7 @@
 import { useRef } from 'react';
 import FileFormatNotice from '../../features/files/FileFormatNotice';
+import type { RemoteLocalVideoMeta, StreamProgress } from '../../features/playback/usePlayback';
+import type { UseFileFormatReturn } from '../../features/files/useFileFormat';
 
 function formatSize(bytes?: number): string {
   if (!bytes) return '';
@@ -31,12 +33,12 @@ export function PhoneEmptyMedia({ onAddVideo }: PhoneEmptyMediaProps) {
 }
 
 export interface PhoneStreamOfferProps {
-  meta?: any;
-  streamProgress?: any;
+  meta?: RemoteLocalVideoMeta | null;
+  streamProgress?: StreamProgress | null;
   onRequestStream?: () => void;
   onCancelStream?: () => void;
   onPickFile?: (file: File) => void;
-  fileFormat?: any;
+  fileFormat?: UseFileFormatReturn | null;
 }
 
 /**
@@ -67,7 +69,7 @@ export function PhoneStreamOffer({
         <div className="phone-offer-text">
           <span className="phone-offer-kicker">{sender} is playing</span>
           <span className="phone-offer-name" title={meta?.fileName}>{meta?.fileName || 'a video'}</span>
-          {meta?.fileSize > 0 && <span className="phone-offer-size">{formatSize(meta.fileSize)}</span>}
+          {Boolean(meta?.fileSize && meta.fileSize > 0) && <span className="phone-offer-size">{formatSize(meta!.fileSize)}</span>}
         </div>
       </div>
       {fileFormat && <FileFormatNotice info={fileFormat} hasSubtitles compact />}

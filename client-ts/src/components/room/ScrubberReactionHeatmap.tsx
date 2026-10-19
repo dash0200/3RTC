@@ -25,6 +25,10 @@ interface ReactionCluster {
   emojis: string[];
 }
 
+function isReactionFeed(target: unknown): target is ReactionFeed {
+  return typeof target === 'object' && target !== null && 'subscribe' in target && typeof (target as { subscribe: unknown }).subscribe === 'function';
+}
+
 /**
  * Synchronized Reaction Heatmap on Scrubber (Phase 3 Innovation - Alphabet Benchmark):
  * Visualizes shared laughter, surprise, and crowd reactions along the media timeline.
@@ -42,12 +46,11 @@ export default function ScrubberReactionHeatmap({
 
   // Subscribe to reaction feed if reactions is a feed object or feed prop is provided
   useEffect(() => {
-    const targetFeed: ReactionFeed | null =
-      reactions && typeof (reactions as any).subscribe === 'function'
-        ? (reactions as ReactionFeed)
-        : feed && typeof (feed as any).subscribe === 'function'
-        ? (feed as ReactionFeed)
-        : null;
+    const targetFeed: ReactionFeed | null = isReactionFeed(reactions)
+      ? reactions
+      : isReactionFeed(feed)
+      ? feed
+      : null;
 
     if (!targetFeed) return;
 

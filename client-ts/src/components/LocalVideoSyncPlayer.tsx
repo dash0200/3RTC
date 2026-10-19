@@ -7,9 +7,24 @@ import ScrubberReactionHeatmap from './room/ScrubberReactionHeatmap';
 import { languageName, subtitleTrackLabel } from '../features/files/formats';
 import { canExtract, isPgsTrack } from '../features/files/extractSubtitles';
 import { createPgsRenderer } from '../features/subtitles/pgsRenderer';
+import type { PgsRenderer } from 'libbitsub';
+import type { UseFileFormatReturn } from '../features/files/useFileFormat';
+import type { PlaybackSyncState } from '../features/playback/drift';
+import type { PlayerAction } from '../features/media/LinkPlayer';
+import type { RemoteLocalVideoMeta, StreamProgress } from '../features/playback/usePlayback';
+import type { ReactionFeed } from '../features/reactions/reactionFeed';
+import type { SubtitleTrackData } from '../utils/subtitleParser';
+
+interface PendingRoomPlaybackState {
+  playing: boolean;
+  time: number;
+  at: number;
+  sender?: string;
+}
 
 // Whole-file download (no on-demand streaming in this browser): rough time left
-const wholeFileEta = (p: any) => {
+const wholeFileEta = (p: Partial<StreamProgress> | null | undefined) => {
+  if (!p) return '';
   const left = (p.totalBytes || 0) - (p.receivedBytes || 0);
   const speed = (p.speedMBs || 0) * 1024 * 1024;
   if (!(left > 0) || !(speed > 0)) return '';
@@ -38,23 +53,23 @@ function formatFileSize(bytes: number) {
 
 export interface LocalVideoSyncPlayerProps {
   initialFile?: File | null;
-  remoteMeta?: any;
+  remoteMeta?: RemoteLocalVideoMeta | null;
   onFileSelect?: (file: File) => void;
   onClose: () => void;
-  onBroadcastAction?: (action: string, payload?: any) => void;
-  remoteAction?: any;
+  onBroadcastAction?: (action: string, payload?: Record<string, unknown>) => void;
+  remoteAction?: PlayerAction | null;
   isP2PConnected?: boolean;
-  onRegisterStateGetter?: (getter: (() => any) | null) => void;
-  streamProgress?: any;
+  onRegisterStateGetter?: (getter: (() => PlaybackSyncState | null | undefined) | null) => void;
+  streamProgress?: StreamProgress | null;
   streamVideoUrl?: string | null;
   onRequestP2PStream?: () => void;
   onCancelP2PStream?: () => void;
   isHost?: boolean;
-  reactionFeed?: any;
+  reactionFeed?: ReactionFeed | null;
   onSendReaction?: (emoji: string, currentTime?: number) => void;
   roomId?: string | number | null;
   isPttSpaceActive?: boolean;
-  fileFormat?: any;
+  fileFormat?: UseFileFormatReturn | null;
 }
 
 export default function LocalVideoSyncPlayer({
@@ -107,7 +122,7 @@ export default function LocalVideoSyncPlayer({
   const [panelsHidden, setPanelsHidden] = useState<boolean>(false);
 
   // Feature 1.5: Drag & Drop Subtitles (.SRT / .VTT), Timing Offset & Appearance
-  const [subtitles, setSubtitles] = useState<any>(null); // { fileName, cues, vttUrl, vttString, rawText, trackNumber }
+  const [subtitles, setSubtitles] = useState<(SubtitleTrackData & { trackNumber?: number; isPgs?: boolean }) | null>(null); // { fileName, cues, vttUrl, vttString, rawText, trackNumber }
   const [subtitlesVisible, setSubtitlesVisible] = useState<boolean>(true); // Local toggle: hide & show for individual peer (NOT synced)
   const [dragOverlayType, setDragOverlayType] = useState<string>('video'); // 'video' | 'subtitle'
   const [subtitleDelay, setSubtitleDelay] = useState<number>(0); // in seconds (+ = delay later, - = earlier)
@@ -124,9 +139,9 @@ export default function LocalVideoSyncPlayer({
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [playbackRate, setPlaybackRate] = useState<number>(1);
   const [delayToast, setDelayToast] = useState<string | null>(null);
-  const toastTimeoutRef = useRef<any>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | number | null>(null);
   const subtitleSettingsRef = useRef<HTMLDivElement | null>(null);
-  const pgsRendererRef = useRef<any>(null);
+  const pgsRendererRef = useRef<PgsRenderer | null>(null);
   const settingsRef = useRef<HTMLDivElement | null>(null);
   const scrubberTrackRef = useRef<HTMLDivElement | null>(null);
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -155,7 +170,7 @@ export default function LocalVideoSyncPlayer({
     return () => window.removeEventListener('resize', updateMaxHeight);
   }, [showSubtitleSettings, showAudioSettings, isFullscreen]);
 
-  const videoRef = useRef<any>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const transcodedAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Phase 3: Intelligent Dialogue Ducking (reduces volume by ~18 dB when peers speak)
@@ -196,7 +211,7 @@ export default function LocalVideoSyncPlayer({
   const isHoveringTopRef = useRef<boolean>(false);
   const isHoveringBottomRef = useRef<boolean>(false);
   const isHoveringReactionRef = useRef<boolean>(false);
-  const hidePanelsTimerRef = useRef<any>(null);
+  const hidePanelsTimerRef = useRef<ReturnType<typeof setTimeout> | number | null>(null);
   const isRemoteActionRef = useRef<boolean>(false);
   // Video events caused by applying a peer's command: only those are skipped, so pausing right
   // after someone else pressed play is still sent to the room
@@ -209,11 +224,11 @@ export default function LocalVideoSyncPlayer({
   };
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const subtitleFileInputRef = useRef<HTMLInputElement | null>(null);
-  const idleTimeoutRef = useRef<any>(null);
+  const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | number | null>(null);
   const fileRef = useRef<File | null>(file);
   fileRef.current = file;
   // What the room was doing before our video could play (joined mid-film), applied once it can
-  const pendingRoomStateRef = useRef<any>(null);
+  const pendingRoomStateRef = useRef<PendingRoomPlaybackState | null>(null);
 
   // 1. Create or revoke object URL when local file changes
   useEffect(() => {
@@ -256,7 +271,7 @@ export default function LocalVideoSyncPlayer({
       try { pgsRendererRef.current.dispose(); } catch (e) { }
       pgsRendererRef.current = null;
     }
-    setSubtitles((prev: any) => {
+    setSubtitles((prev) => {
       if (prev?.vttUrl) {
         try { URL.revokeObjectURL(prev.vttUrl); } catch (e) { }
       }
@@ -439,7 +454,7 @@ export default function LocalVideoSyncPlayer({
   }, [onRegisterStateGetter, remoteMeta, subtitles]);
 
   const playerMountedAtRef = useRef(Date.now());
-  const lastProcessedActionRef = useRef(null);
+  const lastProcessedActionRef = useRef<PlayerAction | null>(null);
 
   // 3. Handle incoming remote sync actions from peers
   useEffect(() => {
@@ -450,7 +465,7 @@ export default function LocalVideoSyncPlayer({
     const { action, currentTime, sender } = remoteAction;
 
     if (action === 'close') {
-      const actionTime = remoteAction.at || remoteAction.timestamp || 0;
+      const actionTime = Number(remoteAction.at || remoteAction.timestamp || 0);
       if (actionTime && actionTime < playerMountedAtRef.current) return;
       if (!actionTime && Date.now() - playerMountedAtRef.current < 1000) return;
       clearCurrentSubtitlesAndAudio();
@@ -465,9 +480,11 @@ export default function LocalVideoSyncPlayer({
 
     // Handle remote subtitle file sharing
     if (action === 'subtitle-share' || remoteAction.subAction === 'share') {
-      if (remoteAction.vttString) {
+      const vttString = typeof remoteAction.vttString === 'string' ? remoteAction.vttString : '';
+      const subFileName = typeof remoteAction.fileName === 'string' ? remoteAction.fileName : 'synced-subtitles.vtt';
+      if (vttString) {
         try {
-          const parsed = parseSubtitleString(remoteAction.vttString, remoteAction.fileName || 'synced-subtitles.vtt');
+          const parsed = parseSubtitleString(vttString, subFileName);
           if (subtitles?.vttUrl) {
             try { URL.revokeObjectURL(subtitles.vttUrl); } catch (e) { }
           }
@@ -481,9 +498,10 @@ export default function LocalVideoSyncPlayer({
     }
 
     // If initial sync state carried subtitle info
-    if (remoteAction.subtitleInfo?.vttString && !subtitles) {
+    const subInfo = remoteAction.subtitleInfo as { vttString?: string; fileName?: string } | undefined;
+    if (subInfo?.vttString && !subtitles) {
       try {
-        const parsed = parseSubtitleString(remoteAction.subtitleInfo.vttString, remoteAction.subtitleInfo.fileName || 'synced-subtitles.vtt');
+        const parsed = parseSubtitleString(subInfo.vttString, subInfo.fileName || 'synced-subtitles.vtt');
         setSubtitles(parsed);
       } catch (e) { }
     }
@@ -493,9 +511,10 @@ export default function LocalVideoSyncPlayer({
       // No video yet (the stream starts in a moment): do it once it's there
       if (action === 'play' || action === 'pause' || action === 'seek') {
         const prev = pendingRoomStateRef.current;
+        const curTimeNum = typeof currentTime === 'number' ? currentTime : (prev?.time || 0);
         pendingRoomStateRef.current = {
           playing: action === 'seek' ? Boolean(prev?.playing) : action === 'play',
-          time: typeof currentTime === 'number' ? currentTime : (prev?.time || 0),
+          time: curTimeNum,
           at: Date.now(),
           sender
         };
@@ -553,12 +572,12 @@ export default function LocalVideoSyncPlayer({
 
   // 4. File drag and drop handlers
   /** Show these subtitles here and send them to the room. */
-  const shareSubtitles = (parsed: any) => {
+  const shareSubtitles = (parsed: SubtitleTrackData & { trackNumber?: number; isPgs?: boolean }) => {
     if (pgsRendererRef.current) {
-      try { pgsRendererRef.current.dispose(); } catch (e) { }
+      try { pgsRendererRef.current.dispose?.(); } catch (e) { }
       pgsRendererRef.current = null;
     }
-    setSubtitles((prev: any) => {
+    setSubtitles((prev) => {
       if (prev?.vttUrl) {
         try { URL.revokeObjectURL(prev.vttUrl); } catch (e) { }
       }
@@ -606,7 +625,8 @@ export default function LocalVideoSyncPlayer({
     }
     const vid = videoRef.current;
     if (vid?.audioTracks && vid.audioTracks.length > 0) {
-      return Array.from(vid.audioTracks as any[]).map((t: any, i: number) => ({
+      return Array.from(vid.audioTracks).map((t, i: number) => ({
+        number: i + 1,
         codec: t.kind || 'audio',
         label: t.label || `Audio Track ${i + 1}`,
         language: t.language || 'und',
@@ -618,7 +638,7 @@ export default function LocalVideoSyncPlayer({
 
   const hasMultipleAudio = availableAudioTracks.length > 1;
 
-  const getAudioTrackLabel = useCallback((track: any, index: number) => {
+  const getAudioTrackLabel = useCallback((track: { language?: string; name?: string; label?: string; codec?: string } | null | undefined, index: number) => {
     if (!track) return `Audio Track ${index + 1}`;
     const lang = languageName(track.language);
     const name = track.name && track.name !== lang ? track.name : '';
@@ -677,9 +697,10 @@ export default function LocalVideoSyncPlayer({
       try {
         await fileFormat.transcodeAudio(trackNum);
         setDelayToast(`🎧 Audio: ${trackName} (Active)`);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Failed to switch audio track:', err);
-        setDelayToast(`⚠️ Could not switch audio track: ${err?.message || 'Error'}`);
+        const msg = err instanceof Error ? err.message : 'Error';
+        setDelayToast(`⚠️ Could not switch audio track: ${msg}`);
       }
     }
   }, [availableAudioTracks, getAudioTrackLabel, fileFormat, isMuted, volume, duckingFactor]);
@@ -687,7 +708,8 @@ export default function LocalVideoSyncPlayer({
   // Keep selectedAudioTrack in sync when fileFormat.audioJob completes or changes track
   useEffect(() => {
     if (fileFormat?.audioJob?.trackNumber !== undefined) {
-      const idx = availableAudioTracks.findIndex((t: any) => t.number === fileFormat.audioJob.trackNumber);
+      const targetNum = fileFormat.audioJob.trackNumber;
+      const idx = availableAudioTracks.findIndex((t) => t.number === targetNum);
       if (idx >= 0 && idx !== selectedAudioTrack) {
         setSelectedAudioTrack(idx);
       }
@@ -740,12 +762,12 @@ export default function LocalVideoSyncPlayer({
   }, [selectedAudioTrack, objectUrl, streamVideoUrl]);
 
   // Load and initialize in-browser WebAssembly PGS subtitle rendering (libbitsub)
-  const handleLoadPgsSubtitles = useCallback(async (supBytes: any, fileName: string, trackNumber?: number) => {
+  const handleLoadPgsSubtitles = useCallback(async (supBytes: Uint8Array | ArrayBuffer, fileName: string, trackNumber?: number) => {
     const vid = videoRef.current;
     if (!vid || !supBytes) return;
 
     if (pgsRendererRef.current) {
-      try { pgsRendererRef.current.dispose(); } catch (e) { }
+      try { pgsRendererRef.current.dispose?.(); } catch (e) { }
       pgsRendererRef.current = null;
     }
     if (subtitles?.vttUrl) {
@@ -769,16 +791,17 @@ export default function LocalVideoSyncPlayer({
       if (subtitleDelay !== 0) {
         renderer.timeOffset = subtitleDelay;
       }
-      if ((renderer as any).canvas) {
-        (renderer as any).canvas.style.display = subtitlesVisible ? 'block' : 'none';
-      }
+      renderer.setDisplaySettings({ opacity: subtitlesVisible ? 1 : 0 });
 
       pgsRendererRef.current = renderer;
       setSubtitles({
         fileName: fileName || 'Blu-ray Subtitles',
         isPgs: true,
         trackNumber,
-        cues: []
+        cues: [],
+        vttUrl: null,
+        vttString: '',
+        rawText: ''
       });
       setSubtitlesVisible(true);
       setSyncStatus(`Blu-ray subtitles active: ${fileName || 'BD-PGS'}`);
@@ -798,13 +821,13 @@ export default function LocalVideoSyncPlayer({
     }
     if (pendingSubtitle.vttString) {
       if (pgsRendererRef.current) {
-        try { pgsRendererRef.current.dispose(); } catch (e) { }
+        try { pgsRendererRef.current.dispose?.(); } catch (e) { }
         pgsRendererRef.current = null;
       }
       try {
-        const parsed: any = parseSubtitleString(pendingSubtitle.vttString, pendingSubtitle.fileName);
+        const parsed = parseSubtitleString(pendingSubtitle.vttString, pendingSubtitle.fileName);
         if (pendingSubtitle.trackNumber !== undefined) {
-          parsed.trackNumber = pendingSubtitle.trackNumber;
+          (parsed as SubtitleTrackData & { trackNumber?: number }).trackNumber = pendingSubtitle.trackNumber;
         }
         shareSubtitles(parsed);
       } catch (err) {
@@ -817,9 +840,6 @@ export default function LocalVideoSyncPlayer({
   // Sync PGS subtitles visibility
   useEffect(() => {
     if (pgsRendererRef.current) {
-      if ((pgsRendererRef.current as any).canvas) {
-        (pgsRendererRef.current as any).canvas.style.display = subtitlesVisible ? 'block' : 'none';
-      }
       try {
         pgsRendererRef.current.setDisplaySettings({ opacity: subtitlesVisible ? 1 : 0 });
       } catch (e) { }
@@ -1059,10 +1079,10 @@ export default function LocalVideoSyncPlayer({
     setSyncStatus(`Speed: ${rate}x`);
   };
 
-  const calculateLocalSeekTime = (e: any): number => {
+  const calculateLocalSeekTime = (e: React.MouseEvent | React.TouchEvent | MouseEvent | TouchEvent): number => {
     if (!scrubberTrackRef.current || !durationSec || durationSec <= 0) return 0;
     const rect = scrubberTrackRef.current.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientX = 'touches' in e && e.touches[0] ? e.touches[0].clientX : (e as MouseEvent).clientX;
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     return ratio * durationSec;
   };
@@ -1173,20 +1193,19 @@ export default function LocalVideoSyncPlayer({
   };
 
   const toggleFullscreen = () => {
-    const container = playerContainerRef.current || document.querySelector('.local-fullstage-player');
+    const container = playerContainerRef.current || (document.querySelector('.local-fullstage-player') as HTMLElement | null);
     if (!container) return;
-    const doc = document as any;
-    if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
       if (container.requestFullscreen) {
         container.requestFullscreen().catch(() => { });
-      } else if ((container as any).webkitRequestFullscreen) {
-        (container as any).webkitRequestFullscreen();
+      } else if (container.webkitRequestFullscreen) {
+        container.webkitRequestFullscreen().catch(() => { });
       }
     } else {
-      if (doc.exitFullscreen) {
-        doc.exitFullscreen().catch(() => { });
-      } else if (doc.webkitExitFullscreen) {
-        doc.webkitExitFullscreen();
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => { });
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen().catch(() => { });
       }
     }
   };
@@ -1221,12 +1240,11 @@ export default function LocalVideoSyncPlayer({
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const doc = document as any;
       const isNowFullscreen = Boolean(
-        doc.fullscreenElement ||
-        doc.webkitFullscreenElement ||
-        doc.mozFullScreenElement ||
-        doc.msFullscreenElement
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
       );
       setIsFullscreen(isNowFullscreen);
       if (!isNowFullscreen) {
@@ -1471,26 +1489,28 @@ export default function LocalVideoSyncPlayer({
   const mediaSessionRef = useRef<{ seekDelta?: (delta: number) => void }>({});
   mediaSessionRef.current = { seekDelta: handleSeekDelta };
   useEffect(() => {
-    const ms = typeof navigator !== 'undefined' ? (navigator as any).mediaSession : null;
+    const ms = typeof navigator !== 'undefined' ? navigator.mediaSession : null;
     const vid = videoRef.current;
     if (!ms || !vid || !activeVideoSrc) return undefined;
     try {
-      ms.metadata = new (window as any).MediaMetadata({
-        title: activeFileName.replace(/\.[a-z0-9]{2,4}$/i, ''),
-        artist: '3RTC · watching together',
-        artwork: [
-          { src: '/icons/pwa-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/pwa-512.png', sizes: '512x512', type: 'image/png' }
-        ]
-      });
+      if (typeof MediaMetadata !== 'undefined') {
+        ms.metadata = new MediaMetadata({
+          title: activeFileName.replace(/\.[a-z0-9]{2,4}$/i, ''),
+          artist: '3RTC · watching together',
+          artwork: [
+            { src: '/icons/pwa-192.png', sizes: '192x192', type: 'image/png' },
+            { src: '/icons/pwa-512.png', sizes: '512x512', type: 'image/png' }
+          ]
+        });
+      }
     } catch { }
-    const actions: Record<string, ((details?: any) => void) | null> = {
+    const actions: Record<string, ((details?: MediaSessionActionDetails) => void) | null> = {
       play: () => { vid.play().catch(() => { }); },
       pause: () => vid.pause(),
-      seekbackward: (d: any) => mediaSessionRef.current.seekDelta?.(-(d?.seekOffset || 10)),
-      seekforward: (d: any) => mediaSessionRef.current.seekDelta?.(d?.seekOffset || 10),
+      seekbackward: (d) => mediaSessionRef.current.seekDelta?.(-(d?.seekOffset || 10)),
+      seekforward: (d) => mediaSessionRef.current.seekDelta?.(d?.seekOffset || 10),
       // the 'seeked' event that follows broadcasts the new position
-      seekto: (d: any) => {
+      seekto: (d) => {
         if (typeof d?.seekTime === 'number') vid.currentTime = d.seekTime;
       }
     };
@@ -1503,7 +1523,7 @@ export default function LocalVideoSyncPlayer({
       if (now - lastPosition < 1000 || !Number.isFinite(vid.duration) || vid.duration <= 0) return;
       lastPosition = now;
       try {
-        ms.setPositionState({ duration: vid.duration, position: Math.min(vid.currentTime, vid.duration), playbackRate: vid.playbackRate || 1 });
+        ms.setPositionState?.({ duration: vid.duration, position: Math.min(vid.currentTime, vid.duration), playbackRate: vid.playbackRate || 1 });
       } catch { }
     };
     const onPlayState = () => {
@@ -1555,7 +1575,7 @@ export default function LocalVideoSyncPlayer({
               <div className="rd-offer-text">
                 <p className="rd-offer-who">{sender} is playing</p>
                 <h2 className="rd-offer-name" title={remoteMeta.fileName}>{remoteMeta.fileName}</h2>
-                {remoteMeta.fileSize > 0 && <p className="rd-offer-size">{formatFileSize(remoteMeta.fileSize)}</p>}
+                {(remoteMeta.fileSize ?? 0) > 0 && <p className="rd-offer-size">{formatFileSize(remoteMeta.fileSize!)}</p>}
               </div>
             </div>
 
@@ -1625,7 +1645,7 @@ export default function LocalVideoSyncPlayer({
     <div
       ref={playerContainerRef}
       className={`local-fullstage-player ${isPlaying ? 'is-playing' : 'is-paused'} ${isFullscreen ? 'is-fullscreen' : ''} ${isCursorIdle && isFullscreen ? 'hide-cursor' : ''} ${panelsHidden ? 'panels-hidden' : ''} ${(!showBottomBar || panelsHidden) && isFullscreen ? 'controls-hidden' : ''}`}
-      style={{ ['--rd-progress' as any]: `${progressPercent}%` }}
+      style={{ ['--rd-progress']: `${progressPercent}%` } as React.CSSProperties}
       onMouseMove={handleMouseMove}
       onDragOver={handleDragOver}
       onDragLeave={() => setIsDragOver(false)}
@@ -1661,7 +1681,7 @@ export default function LocalVideoSyncPlayer({
         {isStreamed ? (
           <div
             className="local-file-info-pill is-streamed"
-            title={`${activeFileName}${streamProgress ? ` · ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s${streamProgress.fromPeersPercent > 0 ? ` · ${streamProgress.fromPeersPercent}% from viewers` : ''}` : ''}`}
+            title={`${activeFileName}${streamProgress ? ` · ${(streamProgress.speedMBs || 0).toFixed(1)} MB/s${(streamProgress.fromPeersPercent ?? 0) > 0 ? ` · ${streamProgress.fromPeersPercent}% from viewers` : ''}` : ''}`}
           >
             <span className="rd-stream-label">
               {!streamProgress || streamProgress.isCompleted
@@ -2127,7 +2147,7 @@ export default function LocalVideoSyncPlayer({
                           </button>
 
                           {/* Available Subtitle Tracks from Video */}
-                          {availableSubtitles.map((t: any) => {
+                          {availableSubtitles.map((t) => {
                             const isPgs = isPgsTrack(t);
                             const extractable = canExtract(t);
                             const isExtracting = fileFormat?.job?.track === t.number;
@@ -2153,9 +2173,9 @@ export default function LocalVideoSyncPlayer({
                                   </div>
                                   {isExtracting ? (
                                     <span className="sub-track-extracting">
-                                      {fileFormat.job.asked && !fileFormat.job.progress
+                                      {fileFormat?.job?.asked && !fileFormat.job.progress
                                         ? 'Requesting subtitles…'
-                                        : `Extracting ${Math.round((fileFormat.job.progress || 0) * 100)}%`}
+                                        : `Extracting ${Math.round((fileFormat?.job?.progress || 0) * 100)}%`}
                                     </span>
                                   ) : !extractable ? (
                                     <span className="sub-track-codec">Picture subtitle (not supported)</span>
@@ -2436,7 +2456,7 @@ export default function LocalVideoSyncPlayer({
                       <div className="audio-track-list">
                         {availableAudioTracks.map((track, idx) => {
                           const isSelected = selectedAudioTrack === idx;
-                          const isConverting = fileFormat?.audioJob && fileFormat.audioJob.trackNumber === track.number && !fileFormat.audioJob.done && !fileFormat.audioJob.error;
+                          const isConverting = Boolean(fileFormat?.audioJob && fileFormat.audioJob.trackNumber === track.number && !fileFormat.audioJob.done && !fileFormat.audioJob.error);
                           return (
                             <button
                               key={idx}
@@ -2450,7 +2470,7 @@ export default function LocalVideoSyncPlayer({
                                 <span className="audio-track-name">{getAudioTrackLabel(track, idx)}</span>
                                 {isConverting ? (
                                   <span className="sub-track-extracting">
-                                    {fileFormat.audioJob.stage || `Converting ${Math.round((fileFormat.audioJob.progress || 0) * 100)}%`}
+                                    {fileFormat?.audioJob?.stage || `Converting ${Math.round((fileFormat?.audioJob?.progress || 0) * 100)}%`}
                                   </span>
                                 ) : track.codec ? (
                                   <span className="audio-track-codec">{track.codec.toUpperCase()}</span>
@@ -2522,7 +2542,7 @@ export default function LocalVideoSyncPlayer({
                       <div className="audio-track-list">
                         {availableAudioTracks.map((track, idx) => {
                           const isSelected = selectedAudioTrack === idx;
-                          const isConverting = fileFormat?.audioJob && fileFormat.audioJob.trackNumber === track.number && !fileFormat.audioJob.done && !fileFormat.audioJob.error;
+                          const isConverting = Boolean(fileFormat?.audioJob && fileFormat.audioJob.trackNumber === track.number && !fileFormat.audioJob.done && !fileFormat.audioJob.error);
                           return (
                             <button
                               key={idx}
@@ -2536,7 +2556,7 @@ export default function LocalVideoSyncPlayer({
                                 <span className="audio-track-name">{getAudioTrackLabel(track, idx)}</span>
                                 {isConverting && (
                                   <span className="sub-track-extracting" style={{ marginLeft: 6 }}>
-                                    {Math.round((fileFormat.audioJob.progress || 0) * 100)}%
+                                    {Math.round((fileFormat?.audioJob?.progress || 0) * 100)}%
                                   </span>
                                 )}
                               </div>

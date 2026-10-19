@@ -13,6 +13,7 @@ import type { RoomBus, MediaItem, QueueItem } from '../../types';
 import { usePeerMessageOn } from '../../core/RoomContext';
 import { normalizeMedia } from '../media/sources';
 import type { PlaybackSyncState } from './drift';
+import type { PlayerAction } from '../media/LinkPlayer';
 
 export interface UseMediaSyncPlayback {
   syncStateGetterRef: { current: (() => PlaybackSyncState | null | undefined) | null };
@@ -28,7 +29,7 @@ export interface UseMediaSyncPlayback {
   setActiveMedia: (media: MediaItem | null) => void;
   setActiveVideoId: (id: string | null) => void;
   setActiveVideoTitle: (title: string) => void;
-  setRemoteAction: (action: Record<string, unknown>) => void;
+  setRemoteAction: (action: PlayerAction | null) => void;
 }
 
 export interface UseMediaSyncQueue {

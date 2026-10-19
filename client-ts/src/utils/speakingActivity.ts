@@ -106,15 +106,19 @@ export function useSpeakingActivity(): SpeakingSnapshot {
  * The room's peers and local user with live `isSpeaking` / `audioLevel` filled in.
  * Use in the components that draw speaking rings or level meters.
  */
-export function useLiveVoiceUsers(
-  connectedPeers: ConnectedPeer[] | null | undefined,
-  localUser: (ConnectedPeer & { isSelf?: boolean }) | null | undefined
+export function useLiveVoiceUsers<
+  P extends { id?: string; peerId?: string | null } = ConnectedPeer,
+  U extends { username: string } = ConnectedPeer
+>(
+  connectedPeers: P[] | null | undefined,
+  localUser: U | null | undefined
 ) {
   const activity = useSpeakingActivity();
   return useMemo(
     () => ({
       peers: (connectedPeers || []).map((peer) => {
-        const act = activity.peers[peer.peerId || peer.id] || SILENT;
+        const id = (('peerId' in peer && peer.peerId) || ('id' in peer && peer.id) || '') as string;
+        const act = (id && activity.peers[id]) || SILENT;
         return { ...peer, isSpeaking: act.isSpeaking, audioLevel: act.level };
       }),
       localUser: localUser

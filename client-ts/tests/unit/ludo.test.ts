@@ -32,7 +32,6 @@ const meta = (by: string, extra = {}): LudoMeta => ({
   selfId: 'h',
   hostId: 'h',
   present: PRESENT,
-  settings: {},
   ...extra
 });
 
@@ -96,7 +95,7 @@ describe('ludo: lobby', () => {
     rolls(1);
     s = act(s, 'h', { kind: 'start' });
     assert.equal(s.phase, 'playing');
-    assert.deepEqual(s.tokens.red, [-1, -1, -1, -1]);
+    assert.deepEqual(s.tokens?.red, [-1, -1, -1, -1]);
     assert.ok(s.turn === 'red' || s.turn === 'green');
   });
 });

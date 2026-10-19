@@ -6,6 +6,7 @@ import { micPipeline } from '../utils/micPipeline';
 import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage } from '../types';
 import type { RoomTokens } from '../hooks/useSignalingConnection';
+import type { PeerEntryRecord } from './peerEntry';
 
 export interface SignalingContext {
   setRoomId: (id: string | null) => void;
@@ -16,8 +17,8 @@ export interface SignalingContext {
   addSystemMessage: (text: string) => void;
   showToast: (text: string) => void;
   username: string;
-  peersRef: { current: Map<string, any> };
-  getOrCreatePeerConnection: (peerId: string, isInitiator: boolean) => any;
+  peersRef: { current: Map<string, PeerEntryRecord> };
+  getOrCreatePeerConnection: (peerId: string, isInitiator: boolean) => PeerEntryRecord | undefined;
   cleanupPeer: (peerId: string) => void;
   currentRoomRef: { current: string | null };
   currentScreenTrackRef?: { current: MediaStreamTrack | null };
@@ -31,7 +32,7 @@ export interface SignalingContext {
 }
 
 export async function processSignalingMessage(
-  msg: IncomingSignalingMessage & Record<string, any>,
+  msg: IncomingSignalingMessage,
   ctx: SignalingContext
 ): Promise<void> {
   const {
@@ -63,10 +64,10 @@ export async function processSignalingMessage(
   ) {
     roomTokensRef.current = {
       roomId: String(msg.roomId),
-      seat: msg.seatToken || null,
-      host: msg.hostToken || null
+      seat: typeof msg.seatToken === 'string' ? msg.seatToken : null,
+      host: typeof msg.hostToken === 'string' ? msg.hostToken : null
     };
-    setHostPeerId?.('hostPeerId' in msg ? msg.hostPeerId ?? null : undefined);
+    setHostPeerId?.('hostPeerId' in msg && typeof msg.hostPeerId === 'string' ? msg.hostPeerId : null);
   }
 
   switch (msg.type) {
@@ -158,13 +159,14 @@ export async function processSignalingMessage(
         } else if (
           existing &&
           existing.isInitiator &&
-          existing.pc.signalingState === 'have-local-offer'
+          existing.pc?.signalingState === 'have-local-offer'
         ) {
           logLocalDebug('OFFER_GLARE_IGNORED', `From: ${senderId}`);
           break;
         }
         const peerEntry = getOrCreatePeerConnection(senderId, false);
-        const pc: RTCPeerConnection = peerEntry.pc;
+        const pc = peerEntry?.pc;
+        if (!peerEntry || !pc) break;
 
         const offerAudioSdp = extractAudioSdp(msg.offer?.sdp);
         logLocalDebug('OFFER_RECEIVED', `From: ${senderId} | Offer SDP: ${offerAudioSdp}`);
@@ -207,12 +209,15 @@ export async function processSignalingMessage(
           }
         }
 
-        while (peerEntry.candidateQueue.length > 0) {
-          const cand = peerEntry.candidateQueue.shift();
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(cand));
-          } catch {
-            // ignore candidate error
+        const candidateQueue = peerEntry.candidateQueue || (peerEntry.candidateQueue = []);
+        while (candidateQueue.length > 0) {
+          const cand = candidateQueue.shift();
+          if (cand) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } catch {
+              // ignore candidate error
+            }
           }
         }
 
@@ -242,8 +247,9 @@ export async function processSignalingMessage(
             sdp: tunedAnswer.sdp
           }
         });
-      } catch (err: any) {
-        logLocalDebug('OFFER_HANDLE_ERR', err.message);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logLocalDebug('OFFER_HANDLE_ERR', msg);
       }
       break;
     }
@@ -296,17 +302,21 @@ export async function processSignalingMessage(
             `From: ${senderId} | Answer SDP: ${answerAudioSdp} | Host Transceivers: ${tInfo}`
           );
 
-          while (peerEntry.candidateQueue.length > 0) {
-            const cand = peerEntry.candidateQueue.shift();
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(cand));
-            } catch {
-              // ignore
+          const candidateQueue = peerEntry.candidateQueue || (peerEntry.candidateQueue = []);
+          while (candidateQueue.length > 0) {
+            const cand = candidateQueue.shift();
+            if (cand) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch {
+                // ignore
+              }
             }
           }
         }
-      } catch (err: any) {
-        logLocalDebug('ANSWER_HANDLE_ERR', err.message);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logLocalDebug('ANSWER_HANDLE_ERR', msg);
       }
       break;
     }
@@ -315,7 +325,7 @@ export async function processSignalingMessage(
       const senderId = msg.from;
       const peerEntry = peersRef.current.get(senderId);
       if (peerEntry && msg.candidate) {
-        const pc: RTCPeerConnection = peerEntry.pc;
+        const pc = peerEntry.pc;
         if (
           pc &&
           pc.remoteDescription &&
@@ -328,6 +338,7 @@ export async function processSignalingMessage(
             // ignore
           }
         } else {
+          if (!peerEntry.candidateQueue) peerEntry.candidateQueue = [];
           peerEntry.candidateQueue.push(msg.candidate);
         }
       }

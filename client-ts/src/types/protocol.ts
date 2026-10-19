@@ -98,6 +98,7 @@ export interface JoinedMessage extends BaseSignalingMessage {
   peers: string[];
   hostPeerId: string;
   seatToken: string;
+  hostToken?: string;
 }
 
 export interface HostUpdateMessage extends BaseSignalingMessage {
@@ -147,6 +148,7 @@ export interface SignalingErrorMessage extends BaseSignalingMessage {
   type: 'error';
   message: string;
   code?: SignalingErrorCode;
+  roomId?: string;
 }
 
 export type OutgoingSignalingMessage =

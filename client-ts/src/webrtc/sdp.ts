@@ -85,7 +85,7 @@ export function tuneAudioSender(pc?: RTCPeerConnection | null): void {
       if (params && params.encodings && params.encodings.length > 0) {
         params.encodings[0].maxBitrate = voiceBitrate;
         params.encodings[0].priority = 'high';
-        (params.encodings[0] as any).networkPriority = 'high';
+        params.encodings[0].networkPriority = 'high';
         audioSender.setParameters(params).catch(() => {});
       }
     }

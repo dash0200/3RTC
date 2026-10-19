@@ -14,19 +14,36 @@ import type { MediaItem } from '../types';
 import AmbientCinemaGlow from './room/AmbientCinemaGlow';
 import ScreenShareStage from './room/ScreenShareStage';
 
+import type { ConnectedPeer, SelfInfo, RoomBus } from '../types/room';
+import type { PlayerAction } from '../features/media/LinkPlayer';
+import type { QueueItem } from '../features/queue/useQueue';
+import type { AudioSettings } from '../utils/audioSettings';
+import type { SoundboardSettings, SoundboardClip } from '../utils/soundboard';
+import type { UseScreenShareReturn } from '../features/screenshare/useScreenShare';
+import type { ReactionFeed } from '../features/reactions/reactionFeed';
+import type { PlaybackSyncState } from '../features/playback/drift';
+import type { RemoteLocalVideoMeta, StreamProgress } from '../features/playback/usePlayback';
+import type { UseFileFormatReturn } from '../features/files/useFileFormat';
+import type { NetworkStatsSummary } from '../hooks/useNetworkStats';
+
+import type { ActiveSoundboardSfx } from '../features/soundboard/useSoundboard';
+import type { ActivityMenuItem } from '../features/activities/useActivities';
+import type { ActivityViewKind } from '../features/activities/activityHost';
+
 export interface StageProps {
   rejoin?: RejoinInfo | null;
   roomId?: string | null;
   isHost?: boolean;
   peerCount?: number;
   isP2PConnected?: boolean;
-  connectedPeers?: any[];
-  localUser?: any;
+  connectedPeers?: ConnectedPeer[];
+  localUser?: SelfInfo | null;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
   onToggleMutePeer?: (peerId: string) => void;
   onOpenCreate?: () => void;
   onOpenJoin?: () => void;
   onLeaveRoom?: () => void;
+  onCopyRoom?: () => void;
   activeVideoId?: string | null;
   activeMedia?: MediaItem | null;  // a link source (Vimeo, Twitch, a video file...): features/media
   onPlayLink?: (media: MediaItem) => void;
@@ -34,46 +51,46 @@ export interface StageProps {
   onExitVideo?: () => void;
   onVideoChange?: (id: string | null, title?: string) => void;
   localVideoFile?: File | null;
-  remoteLocalVideoMeta?: any;
-  fileFormat?: any;
+  remoteLocalVideoMeta?: RemoteLocalVideoMeta | null;
+  fileFormat?: UseFileFormatReturn | null;
   onLocalFileSelect?: (file: File) => void;
   onCloseLocalVideo?: () => void;
-  onBroadcastAction?: (action: string, payload?: any) => void;
-  remoteAction?: any;
+  onBroadcastAction?: (action: string, payload?: Record<string, unknown>) => void;
+  remoteAction?: PlayerAction | null;
   playbackLock?: boolean;
   onTogglePlaybackLock?: () => void;
-  onRegisterStateGetter?: (fn: (() => any) | null) => void;
+  onRegisterStateGetter?: (fn: (() => PlaybackSyncState | null | undefined) | null) => void;
   isMicMuted?: boolean;
   isAudioBlocked?: boolean;
   onToggleMic?: () => void;
   onToggleBlockAudio?: () => void;
-  queue?: any[];
-  onAddToQueue?: (item: any) => void;
+  queue?: QueueItem[];
+  onAddToQueue?: (item: { videoId?: string; media?: MediaItem | null; title?: string }, options?: { autoplay?: boolean }) => void;
   onPlayNextInQueue?: (options?: { auto?: boolean }) => void;
   onVoteSkip?: () => void;
-  skipVotes?: any[];
+  skipVotes?: string[];
   onOpenQueue?: () => void;
   activeVideoTitle?: string;
   username?: string;
-  reactionFeed?: any;
+  reactionFeed?: ReactionFeed | null;
   onSendReaction?: (emoji: string, time?: number) => void;
   // Feature 1.4: WebRTC Direct Video Streaming
-  streamProgress?: any;
+  streamProgress?: StreamProgress | null;
   streamVideoUrl?: string | null;
   onRequestP2PStream?: () => void;
   onCancelP2PStream?: () => void;
-  audioSettings?: any;
+  audioSettings?: AudioSettings | null;
   onOpenAudioSettings?: () => void;
   isPttActive?: boolean;
   onPttPressStart?: () => void;
   onPttPressEnd?: () => void;
-  onUpdateAudioSettings?: (patch: any) => void;
+  onUpdateAudioSettings?: (patch: Partial<AudioSettings>) => void;
   onSelectOutput?: (deviceId: string) => Promise<boolean>;
   // Feature 2.3: Synchronized Soundboard (Mini SFX Tray)
-  soundboardSettings?: any;
-  activeSoundboardSfx?: any;
+  soundboardSettings?: SoundboardSettings | null;
+  activeSoundboardSfx?: ActiveSoundboardSfx | null;
   activeSfxCooldowns?: Record<string, number>;
-  onPlaySoundboardClip?: (clipId: string) => void;
+  onPlaySoundboardClip?: (clip: string | SoundboardClip) => void;
   onSoundboardVolumeChange?: (volume: number) => void;
   onToggleSoundboardMute?: () => void;
   // Feature 4.1: Real-Time P2P Network HUD
@@ -86,11 +103,14 @@ export interface StageProps {
   onOpenAddVideo?: () => void;
   // Activities (features/activities): the open one is shown over the stage; the menu starts one
   activitySlot?: React.ReactNode;
-  activityView?: 'full' | 'peek';
-  activityMenu?: any[];
+  activityView?: ActivityViewKind;
+  activityMenu?: ActivityMenuItem[];
   onStartActivity?: (id: string) => void;
-  screenShare?: any;
-  bus?: any;
+  screenShare?: UseScreenShareReturn | null;
+  bus?: RoomBus | null;
+  onToggleChat?: () => void;
+  isChatOpen?: boolean;
+  networkStats?: NetworkStatsSummary;
 }
 
 export default function Stage({

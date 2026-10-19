@@ -28,7 +28,7 @@ class MicPipeline {
   private ctx: AudioContext | null = null;
   private destination: MediaStreamAudioDestinationNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
-  private rnnoise: any = null;
+  private rnnoise: RnnoiseWorkletNode | null = null;
   private stream: MediaStream | null = null;
   public isolationActive: boolean = false;
   private rnnoisePromise: Promise<ArrayBuffer> | null = null;

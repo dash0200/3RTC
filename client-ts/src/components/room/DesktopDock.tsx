@@ -4,40 +4,45 @@ import { usePopover } from '../../hooks/usePopover';
 import { useReactionSet, openReactionsEditor } from '../../features/reactions/reactionSet';
 import { useLiveVoiceUsers } from '../../utils/speakingActivity';
 import { getAvatarColor } from '../../utils/sound';
-import { getInitials, PeerAudioPopover } from '../PeerVoiceRoster';
+import { getInitials, PeerAudioPopover, type VoicePeer } from '../PeerVoiceRoster';
 import AudioDevicePicker from '../AudioDevicePicker';
 import SoundboardTray from '../SoundboardTray';
 import { spatialAudio } from '../../features/audio/spatialAudio';
+import type { ConnectedPeer, SelfInfo } from '../../types';
+import type { AudioSettings } from '../../utils/audioSettings';
+import type { SoundboardSettings, SoundboardClip } from '../../utils/soundboard';
+import type { ActiveSoundboardSfx } from '../../features/soundboard/useSoundboard';
+import type { ActivityMenuItem } from '../../features/activities/useActivities';
 
 export interface DesktopDockProps {
-  localUser?: any;
-  connectedPeers?: any[];
+  localUser?: (SelfInfo & { isMuted?: boolean; isSpeaking?: boolean }) | null;
+  connectedPeers?: ConnectedPeer[];
   isHost?: boolean;
   isMicMuted?: boolean;
   isAudioBlocked?: boolean;
   onToggleMic?: () => void;
   onToggleBlockAudio?: () => void;
-  audioSettings?: any;
-  onUpdateAudioSettings?: (patch: any) => void;
+  audioSettings?: AudioSettings | null;
+  onUpdateAudioSettings?: (patch: Partial<AudioSettings>) => void;
   onSelectOutput?: (deviceId: string) => Promise<boolean>;
   onOpenAudioSettings?: () => void;
   isPttActive?: boolean;
   onPttPressStart?: () => void;
   onPttPressEnd?: () => void;
   onSendReaction?: (emoji: string) => void;
-  soundboardSettings?: any;
-  activeSoundboardSfx?: any;
+  soundboardSettings?: SoundboardSettings | null;
+  activeSoundboardSfx?: ActiveSoundboardSfx | null;
   activeSfxCooldowns?: Record<string, number>;
-  onPlaySoundboardClip?: (clipId: string) => void;
+  onPlaySoundboardClip?: (clip: string | SoundboardClip) => void;
   onSoundboardVolumeChange?: (vol: number) => void;
   onToggleSoundboardMute?: () => void;
   isMediaActive?: boolean;
   onOpenAddVideo?: () => void;
   isScreenSharing?: boolean;
-  screenSharer?: any;
+  screenSharer?: { peerId?: string | null; username?: string } | null;
   isScreenShareDismissed?: boolean;
   onToggleScreenShare?: () => void;
-  activityMenu?: any[];
+  activityMenu?: ActivityMenuItem[];
   onStartActivity?: (id: string) => void;
   playbackLock?: boolean;
   onTogglePlaybackLock?: () => void;
@@ -92,7 +97,7 @@ export default function DesktopDock({
 }: DesktopDockProps) {
   const isPtt = audioSettings?.inputMode === 'ptt';
   const { peers, localUser: me } = useLiveVoiceUsers(connectedPeers, localUser);
-  const [selectedPeer, setSelectedPeer] = useState<any>(null);
+  const [selectedPeer, setSelectedPeer] = useState<VoicePeer | null>(null);
   const quickReactions = useReactionSet();
   const devices = usePopover();
   const reactions = usePopover();
@@ -103,7 +108,7 @@ export default function DesktopDock({
   // Phase 3: Spatial Co-Presence - compute stereo pan from visual roster positions
   useEffect(() => {
     if (!peers || peers.length === 0) return;
-    peers.forEach((peer: any, index: number) => {
+    peers.forEach((peer, index: number) => {
       const peerId = peer.peerId || peer.id;
       if (peerId) {
         const pan = spatialAudio.calculateRosterPan(index, peers.length);
@@ -122,7 +127,7 @@ export default function DesktopDock({
     <div className="dock">
       <div className="dock-people-group">
         <div className="dock-you">
-          <span className={`rd-av ${speaking ? 'is-speaking' : ''} ${micOff ? 'is-quiet' : ''}`} style={{ ['--av' as any]: getAvatarColor(name) }} aria-hidden="true">
+          <span className={`rd-av ${speaking ? 'is-speaking' : ''} ${micOff ? 'is-quiet' : ''}`} style={{ ['--av']: getAvatarColor(name) } as React.CSSProperties} aria-hidden="true">
             {getInitials(name)}
           </span>
           <div className="dock-you-text">
@@ -134,7 +139,7 @@ export default function DesktopDock({
         {/* Connected peers in dock: clean, prominent voice indicators outside video canvas */}
         {peers && peers.length > 0 && (
           <div className="dock-peers-strip" aria-label="People in room">
-            {peers.slice(0, 3).map((peer: any) => {
+            {peers.slice(0, 3).map((peer) => {
               const peerName = peer.username || 'Peer';
               const isSpeaking = Boolean(peer.isSpeaking) && !peer.isMuted;
               const isQuiet = Boolean(peer.isMuted);
@@ -144,7 +149,7 @@ export default function DesktopDock({
                   <button
                     type="button"
                     className={`dock-peer-av rd-av ${isSpeaking ? 'is-speaking' : ''} ${isQuiet ? 'is-quiet' : ''}`}
-                    style={{ ['--av' as any]: getAvatarColor(peerName) }}
+                    style={{ ['--av']: getAvatarColor(peerName) } as React.CSSProperties}
                     title={`${peerName}${isSpeaking ? ' (speaking)' : isQuiet ? ' (muted)' : ''} · Click for volume`}
                     aria-label={`${peerName}${isSpeaking ? ', speaking' : ''}${isQuiet ? ', muted' : ''}`}
                     onClick={() => setSelectedPeer(isSelected ? null : peer)}
@@ -200,7 +205,7 @@ export default function DesktopDock({
               <AudioDevicePicker
                 compact
                 audioSettings={audioSettings}
-                onUpdateAudioSettings={onUpdateAudioSettings}
+                onUpdateAudioSettings={onUpdateAudioSettings ? (settings) => onUpdateAudioSettings(settings) : undefined}
                 onSelectOutput={onSelectOutput ? (id) => { void onSelectOutput(id); } : undefined}
                 isMicLive={!isMicMuted}
               />
@@ -250,7 +255,7 @@ export default function DesktopDock({
                 onToggleMute={onToggleSoundboardMute}
                 activeSfx={activeSoundboardSfx}
                 activeCooldowns={activeSfxCooldowns}
-                onPlayClip={(clip) => onPlaySoundboardClip?.(typeof clip === 'string' ? clip : clip?.id)}
+                onPlayClip={(clip) => onPlaySoundboardClip?.(clip)}
                 onClose={sounds.close}
               />
             </div>
@@ -300,7 +305,7 @@ export default function DesktopDock({
             {games.open && (
               <div className="dock-pop dock-menu" role="menu" aria-label="Play together">
                 <p className="dock-menu-label">Play together</p>
-                {activityMenu.map((a: any) => (
+                {activityMenu.map((a) => (
                   <button key={a.id} type="button" role="menuitem" className="dock-menu-item" disabled={Boolean(a.disabledReason) || a.isOpen} title={a.disabledReason || a.description}
                     onClick={() => { games.close(); onStartActivity?.(a.id); }}>
                     <span className="dock-menu-emoji" aria-hidden="true">{a.icon}</span>{a.name}

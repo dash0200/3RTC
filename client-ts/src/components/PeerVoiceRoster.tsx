@@ -2,9 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { getAvatarColor } from '../utils/sound';
 import { useLiveVoiceUsers } from '../utils/speakingActivity';
 import { BUILD, BUILD_LABEL, compareBuilds } from '../version';
+import type { AudioSettings } from '../utils/audioSettings';
 
 export interface VoicePeer {
-  peerId: string;
+  peerId?: string | null;
+  id?: string;
   username: string;
   isSelf?: boolean;
   isSpeaking?: boolean;
@@ -15,7 +17,6 @@ export interface VoicePeer {
   isHost?: boolean;
   build?: string | null;
   avatarIndex?: number;
-  [key: string]: any;
 }
 
 /** Which version of 3RTC a peer runs; flags an older one (they should reload). */
@@ -170,11 +171,11 @@ export function PeerAudioPopover({
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
-    onSetVolume?.(peer.peerId, val);
+    if (peer.peerId) onSetVolume?.(peer.peerId, val);
   };
 
   const handlePreset = (presetVal: number) => {
-    onSetVolume?.(peer.peerId, presetVal);
+    if (peer.peerId) onSetVolume?.(peer.peerId, presetVal);
   };
 
   return (
@@ -263,7 +264,7 @@ export function PeerAudioPopover({
         <button
           type="button"
           className={`popover-mute-btn ${isLocalMuted ? 'is-muted' : ''}`}
-          onClick={() => onToggleMute?.(peer.peerId)}
+          onClick={() => { if (peer.peerId) onToggleMute?.(peer.peerId); }}
         >
           {isLocalMuted ? (
             <>
@@ -301,7 +302,7 @@ export interface PeerVoiceRosterProps {
   onSetPeerVolume?: (peerId: string, val: number) => void;
   onToggleMutePeer?: (peerId: string) => void;
   onToggleMic?: () => void;
-  audioSettings?: { inputMode?: string; pttKeyLabel?: string; [key: string]: any } | null;
+  audioSettings?: { inputMode?: string; pttKeyLabel?: string; [key: string]: unknown } | null;
   onOpenAudioSettings?: () => void;
   isPttActive?: boolean;
 }
@@ -320,7 +321,7 @@ export default function PeerVoiceRoster({
   isPttActive = false
 }: PeerVoiceRosterProps) {
   // Live speaking rings / meters
-  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp as any, localUserProp as any);
+  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
   const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null);
 
   const isPttMode = audioSettings?.inputMode === 'ptt';
@@ -346,7 +347,7 @@ export default function PeerVoiceRoster({
           <PeerVoiceBadge
             peer={{ ...peer, avatarIndex: idx + 1 }}
             isSelected={selectedPeerId === peer.peerId}
-            onClick={() => setSelectedPeerId((prev) => (prev === peer.peerId ? null : peer.peerId))}
+            onClick={() => setSelectedPeerId((prev) => (prev === peer.peerId ? null : (peer.peerId || null)))}
           />
 
           {/* Individual Volume Popover */}
@@ -371,10 +372,10 @@ export interface PeerVoicePanelProps {
   onToggleMutePeer?: (peerId: string) => void;
   onToggleMic?: () => void;
   onToggleBlockAudio?: () => void;
-  roomId?: string | number;
+  roomId?: string | number | null;
   onCopyRoom?: (roomId: string) => void;
-  audioSettings?: { inputMode?: string; pttKeyLabel?: string; [key: string]: any } | null;
-  onUpdateAudioSettings?: (settings: any) => void;
+  audioSettings?: AudioSettings | { inputMode?: string; pttKeyLabel?: string; [key: string]: unknown } | null;
+  onUpdateAudioSettings?: (settings: Partial<AudioSettings>) => void;
   onOpenAudioSettings?: () => void;
   isPttActive?: boolean;
   onPttPressStart?: (e: React.SyntheticEvent) => void;
@@ -399,7 +400,7 @@ export function PeerVoicePanel({
   onPttPressEnd
 }: PeerVoicePanelProps) {
   // Live speaking rings / meters
-  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp as any, localUserProp as any);
+  const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
   const isPttMode = audioSettings?.inputMode === 'ptt';
 
   return (
@@ -531,9 +532,10 @@ export function PeerVoicePanel({
         ) : (
           connectedPeers.map((peer) => {
             const volumePercent = Math.round((peer.volume !== undefined ? peer.volume : 1.0) * 100);
+            const targetId = peer.peerId || peer.id || '';
             return (
               <div
-                key={peer.peerId}
+                key={targetId}
                 className={`voice-user-card peer-card ${peer.isSpeaking ? 'speaking-active' : ''} ${peer.isLocalMuted ? 'is-local-muted' : ''}`}
               >
                 <div className="card-top-row">
@@ -565,7 +567,7 @@ export function PeerVoicePanel({
                   <button
                     type="button"
                     className={`card-mute-toggle-btn ${peer.isLocalMuted ? 'muted' : ''}`}
-                    onClick={() => onToggleMutePeer?.(peer.peerId)}
+                    onClick={() => { if (targetId) onToggleMutePeer?.(targetId); }}
                     title={peer.isLocalMuted ? 'Unmute this peer for me' : 'Mute this peer for me'}
                   >
                     {peer.isLocalMuted ? 'Unmute' : 'Mute'}
@@ -599,7 +601,7 @@ export function PeerVoicePanel({
                     max="2"
                     step="0.05"
                     value={peer.isLocalMuted ? 0 : (peer.volume !== undefined ? peer.volume : 1.0)}
-                    onChange={(e) => onSetPeerVolume?.(peer.peerId, parseFloat(e.target.value))}
+                    onChange={(e) => { if (targetId) onSetPeerVolume?.(targetId, parseFloat(e.target.value)); }}
                     className={`peer-volume-slider ${volumePercent > 100 ? 'is-boosted' : ''}`}
                   />
 
@@ -614,7 +616,7 @@ export function PeerVoicePanel({
                         key={chip.label}
                         type="button"
                         className={`chip-preset ${!peer.isLocalMuted && Math.abs((peer.volume || 1.0) - chip.val) < 0.04 ? 'active' : ''}`}
-                        onClick={() => onSetPeerVolume?.(peer.peerId, chip.val)}
+                        onClick={() => { if (targetId) onSetPeerVolume?.(targetId, chip.val); }}
                       >
                         {chip.label}
                       </button>

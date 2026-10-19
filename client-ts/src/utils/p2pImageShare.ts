@@ -334,27 +334,32 @@ export interface ReceiverCallbacks {
 export class P2PImageReceiver {
   public transfers = new Map<string, InboundImageTransfer>();
 
-  handleStart(headerMsg: any): void {
+  handleStart(headerMsg: Record<string, unknown> | null | undefined): void {
     if (!headerMsg || typeof headerMsg !== 'object') return;
-    const { transferId, id, fileName, fileSize, mimeType, totalChunks, sender, isHost, caption, timestamp } = headerMsg;
-    if (typeof transferId !== 'string' || !transferId.trim() || transferId.length > 64) return;
+    const transferId = typeof headerMsg.transferId === 'string' ? headerMsg.transferId : '';
+    if (!transferId.trim() || transferId.length > 64) return;
+
+    const totalChunks = typeof headerMsg.totalChunks === 'number' ? headerMsg.totalChunks : 0;
     if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_IMAGE_CHUNKS) return;
 
-    const safeFileSize = Number.isFinite(fileSize) && fileSize > 0 ? fileSize : 0;
-    const safeMime = sanitizeImageMimeType(mimeType);
+    const rawFileSize = typeof headerMsg.fileSize === 'number' ? headerMsg.fileSize : 0;
+    const safeFileSize = Number.isFinite(rawFileSize) && rawFileSize > 0 ? rawFileSize : 0;
+    const safeMime = sanitizeImageMimeType(typeof headerMsg.mimeType === 'string' ? headerMsg.mimeType : undefined);
+    const rawTimestamp = typeof headerMsg.timestamp === 'number' ? headerMsg.timestamp : Date.now();
+    const safeTimestamp = Number.isFinite(rawTimestamp) ? rawTimestamp : Date.now();
 
     this.transfers.set(transferId, {
-      id: typeof id === 'string' && id ? id.slice(0, 64) : crypto.randomUUID(),
+      id: typeof headerMsg.id === 'string' && headerMsg.id ? headerMsg.id.slice(0, 64) : crypto.randomUUID(),
       transferId,
-      fileName: typeof fileName === 'string' ? fileName.slice(0, 120) : 'shared-image.png',
+      fileName: typeof headerMsg.fileName === 'string' ? headerMsg.fileName.slice(0, 120) : 'shared-image.png',
       fileSize: safeFileSize,
       mimeType: safeMime,
       totalChunks,
-      sender: typeof sender === 'string' ? sender.slice(0, 64) : 'Peer',
-      isHost: Boolean(isHost),
-      caption: typeof caption === 'string' ? caption.slice(0, 2000) : '',
-      timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
-      chunks: new Array(totalChunks),
+      sender: typeof headerMsg.sender === 'string' ? headerMsg.sender.slice(0, 64) : 'Peer',
+      isHost: Boolean(headerMsg.isHost),
+      caption: typeof headerMsg.caption === 'string' ? headerMsg.caption.slice(0, 2000) : '',
+      timestamp: safeTimestamp,
+      chunks: new Array<ArrayBuffer>(totalChunks),
       receivedCount: 0,
       receivedBytes: 0,
       createdAt: Date.now()

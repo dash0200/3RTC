@@ -23,6 +23,8 @@ import { BUILD } from '../version';
 import { useSignalingConnection, type SignalStatus, type RoomTokens } from '../hooks/useSignalingConnection';
 import { candidateType, type NetworkHint } from './networkHint';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage, RoomBus } from '../types';
+import type { PeerEntryRecord } from './peerEntry';
+import type { PeerMetadataRecord } from './peerMessages';
 
 const WAITING_TEXT = 'Waiting for peer to enter 5-digit code...';
 
@@ -32,7 +34,7 @@ export interface PeerMeshVoiceContext {
   peerVolumesRef: MutableRefObject<Record<string, number>>;
   localStreamRef: MutableRefObject<MediaStream | null>;
   isMicMutedRef: MutableRefObject<boolean>;
-  setPeerVoiceStates: (updater: (prev: Record<string, any>) => Record<string, any>) => void;
+  setPeerVoiceStates: (updater: (prev: Record<string, { isMuted: boolean }>) => Record<string, { isMuted: boolean }>) => void;
 }
 
 export interface PeerMeshNoticesContext {
@@ -42,15 +44,15 @@ export interface PeerMeshNoticesContext {
 
 export interface PeerMeshContext {
   bus: RoomBus;
-  peersRef: MutableRefObject<Map<string, any>>;
+  peersRef: MutableRefObject<Map<string, PeerEntryRecord>>;
   peerIdRef: MutableRefObject<string | null>;
   isHostRef: MutableRefObject<boolean>;
   hostPeerIdRef: MutableRefObject<string | null | undefined>;
   setHostPeerId?: (hostPeerId: string | null | undefined) => void;
   setPeerMetadata: (
     updater:
-      | Record<string, any>
-      | ((prev: Record<string, any>) => Record<string, any>)
+      | Record<string, PeerMetadataRecord>
+      | ((prev: Record<string, PeerMetadataRecord>) => Record<string, PeerMetadataRecord>)
   ) => void;
   username: string;
   notices: PeerMeshNoticesContext;
@@ -119,7 +121,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   const roomTokensRef = useRef<RoomTokens>({ roomId: null, seat: null, host: null });
   currentRoomRef.current = roomId;
   isHostRef.current = isHost;
-  const getOrCreatePeerConnectionRef = useRef<((peerId: string, isInitiator: boolean) => any) | null>(null);
+  const getOrCreatePeerConnectionRef = useRef<((peerId: string, isInitiator: boolean) => PeerEntryRecord | undefined) | null>(null);
   const identityFieldsRef = useRef(identityFields);
   identityFieldsRef.current = identityFields;
   const usernameRef = useRef(username);
@@ -203,7 +205,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
       if (peersRef.current.has(targetPeerId)) return peersRef.current.get(targetPeerId);
 
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-      const peerEntry: Record<string, any> = {
+      const peerEntry: PeerEntryRecord = {
         pc,
         dataChannel: null,
         bulkChannel: null,
@@ -232,8 +234,9 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         });
         bulk.binaryType = 'arraybuffer';
         peerEntry.bulkChannel = bulk;
-      } catch (err: any) {
-        logLocalDebug('BULK_CHANNEL_ERR', err.message);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logLocalDebug('BULK_CHANNEL_ERR', msg);
       }
 
       // Voice transceivers
@@ -274,8 +277,9 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
             videoTransceiver.sender.replaceTrack(currentScreenTrackRef.current).catch(() => {});
           }
         }
-      } catch (err: any) {
-        logLocalDebug('TRANSCEIVER_INIT_ERR', err.message);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logLocalDebug('TRANSCEIVER_INIT_ERR', msg);
       }
 
       attachRemoteAudio(pc, {
@@ -409,9 +413,10 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
                 });
               });
             })
-            .catch((err: any) =>
-              logLocalDebug('OFFER_ERR', `Target: ${targetPeerId} error: ${err.message}`)
-            );
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              logLocalDebug('OFFER_ERR', `Target: ${targetPeerId} error: ${msg}`);
+            });
         } catch {
           // ignore
         }
@@ -445,7 +450,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
 
   const handleSignalingMessage = useCallback(
     (msg: IncomingSignalingMessage) =>
-      processSignalingMessage(msg as any, {
+      processSignalingMessage(msg, {
         addSystemMessage,
         cleanupPeer,
         currentRoomRef,

@@ -117,8 +117,9 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
       const source = ctx.createMediaStreamSource(new MediaStream([track]));
       source.connect(analyser);
       localSourceNodeRef.current = source;
-    } catch (err: any) {
-      logLocalDebug('ANALYSER_CONNECT_ERR', err?.message);
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logLocalDebug('ANALYSER_CONNECT_ERR', errMessage);
     }
   }, [logLocalDebug]);
 
@@ -176,7 +177,7 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
         }
 
         try {
-          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
           if (AudioContextClass) {
             if (!window.__webrtcAudioCtx) {
               window.__webrtcAudioCtx = new AudioContextClass();
@@ -330,9 +331,10 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
       connectLocalMeter(sendTrack);
 
       await Promise.all([...peersRef.current.values()].map((peer) => replacePeerAudioTrack(peer.pc, sendTrack, logLocalDebug)));
-    } catch (err: any) {
-      logLocalDebug('AUDIO_SETTINGS_UPDATE_ERR', err?.message);
-      showToast('⚠️ Could not update audio settings: ' + (err?.message || ''));
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      logLocalDebug('AUDIO_SETTINGS_UPDATE_ERR', errMessage);
+      showToast('⚠️ Could not update audio settings: ' + errMessage);
     } finally {
       isAudioUpdatingRef.current = false;
     }

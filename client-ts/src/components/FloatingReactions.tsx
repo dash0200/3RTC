@@ -38,7 +38,7 @@ interface LiveEntry {
 interface ComboEntry {
   el: HTMLDivElement;
   countEl: HTMLSpanElement | null;
-  timer: any;
+  timer: ReturnType<typeof setTimeout> | number | undefined;
   emoji: string;
 }
 
@@ -136,25 +136,26 @@ function runReactionLayer(layer: HTMLElement, feed: ReactionFeed): () => void {
       el.innerHTML = '<span class="combo-emoji"></span><span class="combo-count"></span>';
       el.querySelector('.combo-emoji')!.textContent = item.emoji;
       layer.appendChild(el);
-      c = { el, countEl: el.querySelector('.combo-count'), emoji: item.emoji, timer: null };
+      c = { el, countEl: el.querySelector('.combo-count'), emoji: item.emoji, timer: undefined };
       combos.set(item.peerKey, c);
     }
-    c.el.style.left = `${Math.max(18, Math.min(82, item.lane))}%`;
-    if (c.countEl) c.countEl.textContent = `×${item.combo}`;
+    const combo = c;
+    combo.el.style.left = `${Math.max(18, Math.min(82, item.lane))}%`;
+    if (combo.countEl) combo.countEl.textContent = `×${item.combo}`;
     if (!calm) {
       const grow = Math.min(1 + item.combo * 0.015, 1.35);
-      c.el.animate([
+      combo.el.animate([
         { transform: `translate3d(-50%,0,0) scale(${grow * 1.25})` },
         { transform: `translate3d(-50%,0,0) scale(${grow})` }
       ], { duration: 220, easing: 'cubic-bezier(.2,1.4,.4,1)', fill: 'forwards' });
     }
-    clearTimeout(c.timer);
-    c.el.classList.remove('is-fading');
-    c.timer = setTimeout(() => {
-      c.el.classList.add('is-fading');
-      c.timer = setTimeout(() => {
-        c.el.remove();
-        if (combos.get(item.peerKey) === c) combos.delete(item.peerKey);
+    clearTimeout(combo.timer);
+    combo.el.classList.remove('is-fading');
+    combo.timer = setTimeout(() => {
+      combo.el.classList.add('is-fading');
+      combo.timer = setTimeout(() => {
+        combo.el.remove();
+        if (combos.get(item.peerKey) === combo) combos.delete(item.peerKey);
       }, 400);
     }, 1300);
   };

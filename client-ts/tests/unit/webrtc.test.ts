@@ -18,11 +18,11 @@ describe('TypeScript networkHint', () => {
   });
 
   it('parses candidate type from object or raw string', () => {
-    assert.equal(candidateType({ type: 'srflx' } as any), 'srflx');
+    assert.equal(candidateType({ type: 'srflx' }), 'srflx');
     assert.equal(
       candidateType({
         candidate: 'candidate:1 1 udp 2122260223 192.168.1.2 54321 typ host generation 0'
-      } as any),
+      }),
       'host'
     );
     assert.equal(candidateType(null), '');

@@ -4,18 +4,36 @@ import { createRoomBus } from '../../src/core/roomBus.ts';
 import { pickAuthority } from '../../src/core/sharedState.ts';
 import { addressWithRoom } from '../../src/core/backStack.ts';
 
-const createChannel = (readyState = 'open') => ({
-  readyState,
-  sent: [] as Array<Record<string, unknown>>,
-  send(t: string | ArrayBufferView | ArrayBuffer) {
+interface MockChannel {
+  readyState: string;
+  sent: Array<Record<string, unknown>>;
+  send: {
+    (data: string): void;
+    (data: Blob): void;
+    (data: ArrayBuffer): void;
+    (data: ArrayBufferView<ArrayBuffer>): void;
+  };
+  bufferedAmount?: number;
+}
+
+const createChannel = (readyState = 'open'): MockChannel => {
+  const sent: Array<Record<string, unknown>> = [];
+  const sendFn = ((t: string | Blob | ArrayBuffer | ArrayBufferView) => {
     if (typeof t === 'string') {
-      this.sent.push(JSON.parse(t) as Record<string, unknown>);
+      sent.push(JSON.parse(t) as Record<string, unknown>);
     }
-  }
-});
+  }) as MockChannel['send'];
+
+  return {
+    readyState,
+    sent,
+    send: sendFn,
+    bufferedAmount: 0
+  };
+};
 
 function setupBus() {
-  const peers = new Map([
+  const peers = new Map<string, { dataChannel: MockChannel | null; bulkChannel: MockChannel | null }>([
     ['p1', { dataChannel: createChannel('open'), bulkChannel: createChannel('open') }],
     ['p2', { dataChannel: createChannel('open'), bulkChannel: createChannel('connecting') }],
     ['p3', { dataChannel: createChannel('closed'), bulkChannel: null }]
@@ -33,13 +51,17 @@ describe('TypeScript roomBus', () => {
     const count = bus.broadcast('reaction', { emoji: '🔥' });
     assert.equal(count, 2);
 
-    const msg = (peers.get('p1')!.dataChannel as any).sent[0];
+    const ch1 = peers.get('p1')!.dataChannel;
+    assert.ok(ch1);
+    const msg = ch1.sent[0];
     assert.equal(msg.type, 'reaction');
     assert.equal(msg.emoji, '🔥');
     assert.equal(msg.sender, 'Me');
     assert.equal(typeof msg.timestamp, 'number');
 
-    assert.equal((peers.get('p3')!.dataChannel as any).sent.length, 0);
+    const ch3 = peers.get('p3')!.dataChannel;
+    assert.ok(ch3);
+    assert.equal(ch3.sent.length, 0);
   });
 
   it('delivers messages via dispatch to registered on handlers', () => {

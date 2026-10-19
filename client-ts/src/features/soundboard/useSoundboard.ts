@@ -7,7 +7,9 @@ import {
   soundboard,
   loadSoundboardSettings,
   saveSoundboardSettings,
-  type SoundboardSettings
+  SOUNDBOARD_CLIPS,
+  type SoundboardSettings,
+  type SoundboardClip
 } from '../../utils/soundboard';
 import type { Room } from '../../types';
 import { usePeerMessageOn } from '../../core/RoomContext';
@@ -43,7 +45,7 @@ export interface UseSoundboardReturn {
   soundboardSettings: SoundboardSettings;
   activeSoundboardSfx: ActiveSoundboardSfx | null;
   activeSfxCooldowns: Record<string, never>;
-  playClip: (clip: SoundboardClipPlayable) => void;
+  playClip: (clip: string | SoundboardClip) => void;
   setVolume: (volume: number) => void;
   toggleMute: () => void;
 }
@@ -107,23 +109,27 @@ export function useSoundboard({
   });
 
   const playClip = useCallback(
-    (clip: SoundboardClipPlayable) => {
-      if (!clip?.id) return;
+    (clip: string | SoundboardClip) => {
+      const clipObj: SoundboardClip | { id: string; name?: string; emoji?: string } =
+        typeof clip === 'string'
+          ? (SOUNDBOARD_CLIPS.find((c) => c.id === clip) || { id: clip, name: clip, emoji: '🎵' })
+          : clip;
+      if (!clipObj?.id) return;
       const now = Date.now();
       if (now - lastLocalRef.current < LOCAL_MIN_GAP_MS) return;
       lastLocalRef.current = now;
-      playLocally(clip.id);
+      playLocally(clipObj.id);
       showBanner({
-        soundId: clip.id,
-        soundName: clip.name || clip.id,
-        emoji: clip.emoji || '🎵',
+        soundId: clipObj.id,
+        soundName: clipObj.name || clipObj.id,
+        emoji: clipObj.emoji || '🎵',
         sender: room.getSelf().username,
         timestamp: now
       });
       bus.broadcast('soundboard-sfx', {
-        soundId: clip.id,
-        soundName: clip.name,
-        emoji: clip.emoji,
+        soundId: clipObj.id,
+        soundName: clipObj.name,
+        emoji: clipObj.emoji,
         timestamp: now
       });
     },

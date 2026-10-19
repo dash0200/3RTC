@@ -1,13 +1,14 @@
-import { SOUNDBOARD_CLIPS } from '../utils/soundboard';
+import { SOUNDBOARD_CLIPS, type SoundboardClip } from '../utils/soundboard';
+import type { ActiveSoundboardSfx } from '../features/soundboard/useSoundboard';
 
 export interface SoundboardTrayProps {
-  onPlayClip?: (clip: any) => void;
+  onPlayClip?: (clip: SoundboardClip | string) => void;
   volume?: number;
   isMuted?: boolean;
   onVolumeChange?: (vol: number) => void;
   onToggleMute?: () => void;
-  activeSfx?: { soundId?: string; [key: string]: any } | null;
-  activeCooldowns?: Record<string, any>;
+  activeSfx?: ActiveSoundboardSfx | { soundId?: string; [key: string]: unknown } | null;
+  activeCooldowns?: Record<string, number>;
   variant?: 'floating' | 'embedded';
   onClose?: () => void;
 }

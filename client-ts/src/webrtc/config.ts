@@ -27,9 +27,9 @@ export function getIceServers(): RTCIceServer[] {
     }
     if (
       typeof import.meta !== 'undefined' &&
-      (import.meta as any).env?.VITE_ICE_SERVERS
+      import.meta.env?.VITE_ICE_SERVERS
     ) {
-      const parsed = JSON.parse((import.meta as any).env.VITE_ICE_SERVERS);
+      const parsed = JSON.parse(import.meta.env.VITE_ICE_SERVERS);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     }
   } catch {

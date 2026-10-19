@@ -13,11 +13,22 @@ import ImageLightboxModal, { type LightboxImage } from './ImageLightboxModal';
 import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
 import { useBackLayer } from '../core/backStack';
 import InvitePanel from './room/InvitePanel';
+import type { QueueItem } from '../features/queue/useQueue';
+import type { SystemLogEntry } from '../features/notices/useNotices';
+import type { AudioSettings } from '../utils/audioSettings';
+import type { SoundboardSettings, SoundboardClip } from '../utils/soundboard';
+import type { ActiveSoundboardSfx } from '../features/soundboard/useSoundboard';
+import type { ActivityInfo } from '../features/activities/activityState';
+import type { ActivityDefinition } from '../features/activities/registry';
+import type { ActivityStatus, ActivityViewKind } from '../features/activities/activityHost';
+import type { ChatMessage } from '../features/chat/useChat';
+import type { MediaItem, ConnectedPeer, SelfInfo } from '../types';
+import type { QuickPickVideo } from '../utils/quickPicks';
 
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
 const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f]|[0-9#*]\ufe0f?\u20e3|\s)+$/u;
-const GRAPHEMES = typeof Intl !== 'undefined' && (Intl as any).Segmenter
-  ? new (Intl as any).Segmenter(undefined, { granularity: 'grapheme' })
+const GRAPHEMES = typeof Intl !== 'undefined' && 'Segmenter' in Intl
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
   : null;
 
 function isEmojiOnly(text: string): boolean {
@@ -81,13 +92,13 @@ export interface LiveChatMessage {
     fileSize: number;
     percent?: number;
   };
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface LiveChatProps {
   onSeekTo?: (seconds: number) => void;
-  messages?: LiveChatMessage[];
-  systemLogs?: any[];
+  messages?: ChatMessage[];
+  systemLogs?: SystemLogEntry[];
   onSendMessage: (text: string) => void;
   onSendImage?: (file: File, caption?: string) => void;
   onClearLogs?: () => void;
@@ -98,13 +109,13 @@ export interface LiveChatProps {
   onClose: () => void;
   isAudioBlocked?: boolean;
   onToggleBlockAudio?: () => void;
-  queue?: any[];
+  queue?: QueueItem[];
   activeVideoId?: string | null;
-  activeMedia?: any; // a link source playing (features/media)
+  activeMedia?: MediaItem | null; // a link source playing (features/media)
   activeVideoTitle?: string;
-  onAddToQueue?: (item: any, options?: any) => void;
+  onAddToQueue?: (item: Partial<QueueItem> & { videoId?: string; title?: string; media?: MediaItem }, options?: { autoplay?: boolean }) => void;
   onRemoveFromQueue?: (id: string) => void;
-  onReorderQueue?: (updatedQueue: any[]) => void;
+  onReorderQueue?: (updatedQueue: QueueItem[]) => void;
   onClearQueue?: () => void;
   onPlayQueueItem?: (id: string) => void;
   onPlayNextInQueue?: () => void;
@@ -114,31 +125,31 @@ export interface LiveChatProps {
   activeTab?: string;
   onTabChange?: (tab: string) => void;
   onSendReaction?: (emoji: string) => void;
-  connectedPeers?: any[];
-  localUser?: any;
+  connectedPeers?: ConnectedPeer[];
+  localUser?: (SelfInfo & { isMuted?: boolean; isSpeaking?: boolean }) | null;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
   onToggleMutePeer?: (peerId: string) => void;
   onToggleMic?: () => void;
-  roomId?: string;
+  roomId?: string | null;
   onCopyRoom?: () => void;
-  audioSettings?: any;
-  onUpdateAudioSettings?: (patch: any) => void;
+  audioSettings?: AudioSettings | null;
+  onUpdateAudioSettings?: (patch: Partial<AudioSettings>) => void;
   onOpenAudioSettings?: () => void;
   isPttActive?: boolean;
   onPttPressStart?: () => void;
   onPttPressEnd?: () => void;
-  soundboardSettings?: any;
-  activeSoundboardSfx?: any;
-  activeSfxCooldowns?: Record<string, any>;
-  onPlaySoundboardClip?: (clipId: string) => void;
+  soundboardSettings?: SoundboardSettings | null;
+  activeSoundboardSfx?: ActiveSoundboardSfx | null;
+  activeSfxCooldowns?: Record<string, number>;
+  onPlaySoundboardClip?: (clip: string | SoundboardClip) => void;
   onSoundboardVolumeChange?: (volume: number) => void;
   onToggleSoundboardMute?: () => void;
   onOpenQrCode?: () => void;
-  activity?: any;
-  activityDefinition?: any;
-  activityView?: string;
-  onSetActivityView?: (view: string) => void;
-  activityStatus?: any;
+  activity?: ActivityInfo | null;
+  activityDefinition?: ActivityDefinition | null;
+  activityView?: ActivityViewKind;
+  onSetActivityView?: (view: ActivityViewKind) => void;
+  activityStatus?: ActivityStatus | null;
   embedded?: boolean;
 }
 
@@ -858,7 +869,7 @@ export default function LiveChat({
                     return (
                       <div key={msg.id} className={`cm-row ${startsGroup ? 'group-start' : ''} ${msg.isSelf ? 'is-self' : ''}`}>
                         {startsGroup
-                          ? <div className="rd-av cm-av" style={{ ['--av' as any]: msgAvatarBg }} aria-hidden="true">{msgInitial}</div>
+                          ? <div className="rd-av cm-av" style={{ ['--av']: msgAvatarBg } as React.CSSProperties} aria-hidden="true">{msgInitial}</div>
                           : <div className="cm-av-spacer" />}
                         <div className="cm-body">
                           {startsGroup && (
@@ -1245,8 +1256,8 @@ export default function LiveChat({
             <QuickPicksModal
               isOpen={showQuickPicks}
               onClose={() => setShowQuickPicks(false)}
-              onQueue={(v: any) => onAddToQueue?.({ videoId: v.id, title: v.title }, { autoplay: false })}
-              queuedIds={queue.map((item) => item.videoId)}
+              onQueue={(v: QuickPickVideo) => onAddToQueue?.({ videoId: v.id, title: v.title }, { autoplay: false })}
+              queuedIds={queue.map((item) => item.videoId).filter((id): id is string => Boolean(id))}
             />
 
             {/* Add Video to Queue Form */}

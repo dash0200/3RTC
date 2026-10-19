@@ -1,12 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createReactionFeed } from '../../src/features/reactions/reactionFeed';
+import { createReactionFeed, type ReactionFeedItem } from '../../src/features/reactions/reactionFeed';
 import { keyForIndex, DEFAULT_REACTIONS } from '../../src/features/reactions/reactionSet';
 
 describe('reactionFeed', () => {
   it('delivers emitted reactions to subscribers without error', () => {
     const feed = createReactionFeed();
-    const received: any[] = [];
+    const received: ReactionFeedItem[] = [];
     const unsub = feed.subscribe((item) => {
       received.push(item);
     });

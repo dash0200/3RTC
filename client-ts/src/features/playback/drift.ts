@@ -17,6 +17,8 @@ export interface PlaybackSyncState {
   isPlaying: boolean;
   isBuffering?: boolean;
   live?: boolean;
+  subtitleInfo?: { fileName: string; vttString: string } | null;
+  [key: string]: unknown;
 }
 
 export interface DriftHeartbeat {

@@ -103,15 +103,15 @@ export default function DesktopHome({
             <div className="dh-preview-video">
               <span className="dh-pill"><span className="dh-dot is-live" aria-hidden="true" />In sync · 4 watching</span>
               <div className="dh-people" aria-hidden="true">
-                <span className="dh-av is-speaking" style={{ ['--av' as any]: '#6aa8ff' }}>P</span>
-                <span className="dh-av" style={{ ['--av' as any]: '#f5b544' }}>A</span>
-                <span className="dh-av" style={{ ['--av' as any]: '#c79bff' }}>M</span>
-                <span className="dh-av" style={{ ['--av' as any]: '#f4f4f6' }}>D</span>
+                <span className="dh-av is-speaking" style={{ ['--av']: '#6aa8ff' } as React.CSSProperties}>P</span>
+                <span className="dh-av" style={{ ['--av']: '#f5b544' } as React.CSSProperties}>A</span>
+                <span className="dh-av" style={{ ['--av']: '#c79bff' } as React.CSSProperties}>M</span>
+                <span className="dh-av" style={{ ['--av']: '#f4f4f6' } as React.CSSProperties}>D</span>
               </div>
               <svg className="dh-preview-play" width="56" height="56" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor" /></svg>
             </div>
             <div className="dh-preview-chat">
-              <span className="dh-av dh-av-sm" style={{ ['--av' as any]: '#f5b544' }} aria-hidden="true">A</span>
+              <span className="dh-av dh-av-sm" style={{ ['--av']: '#f5b544' } as React.CSSProperties} aria-hidden="true">A</span>
               <p><strong>Arjun</strong> wait, rewind 10s — I missed that</p>
             </div>
           </section>

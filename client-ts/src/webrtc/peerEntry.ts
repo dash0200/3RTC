@@ -7,11 +7,27 @@ export interface PeerEntryRecord {
   pc?: RTCPeerConnection | null;
   dataChannel?: RTCDataChannel | null;
   bulkChannel?: RTCDataChannel | null;
+  isConnected?: boolean;
+  candidateQueue?: RTCIceCandidateInit[];
   audioElement?: HTMLAudioElement | null;
+  audioTransceiver?: RTCRtpTransceiver | null;
+  videoTransceiver?: RTCRtpTransceiver | null;
+  isInitiator?: boolean;
+  applyingRemote?: boolean;
+  recoveryTimer?: ReturnType<typeof setTimeout> | number | null;
+  restartAttempts?: number;
+  brokenSince?: number;
+  wasInterrupted?: boolean;
+  signalingGone?: boolean;
+  rebuilt?: boolean;
   webAudioSource?: MediaStreamAudioSourceNode | null;
   webAudioGain?: GainNode | null;
   analyserNode?: AnalyserNode | null;
-  recoveryTimer?: ReturnType<typeof setTimeout> | null;
+  byeReceived?: boolean;
+  reconnecting?: boolean;
+  failedCount?: number;
+  iceFailedAt?: number;
+  localCandidateTypes?: Set<string>;
   [key: string]: unknown;
 }
 
@@ -97,7 +113,7 @@ export function replacePeerAudioTrack(
   pc?: RTCPeerConnection | null,
   track?: MediaStreamTrack | null,
   log: (tag: string, detail: string) => void = () => {}
-): Promise<any> {
+): Promise<void> {
   if (!pc || pc.connectionState === 'closed') return Promise.resolve();
   const promises: Promise<unknown>[] = [];
   const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
@@ -130,5 +146,5 @@ export function replacePeerAudioTrack(
     }
   }
 
-  return Promise.all(promises);
+  return Promise.all(promises).then(() => {});
 }

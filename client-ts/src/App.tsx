@@ -58,7 +58,12 @@ import LeaveRoomDialog from './components/LeaveRoomDialog';
 import { saveLastRoom, readLastRoom, forgetLastRoom, type SavedLastRoom } from './utils/lastRoom';
 import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
-import type { PeerVoiceEntry } from './types';
+import type { PeerVoiceEntry, RoomSettings } from './types';
+import type { PeerEntryRecord } from './webrtc/peerEntry';
+import type { PeerMetadataRecord } from './webrtc/peerMessages';
+import type { ActivityMenuItem } from './features/activities/useActivities';
+import type { StageProps } from './components/Stage';
+import type { LiveChatProps } from './components/LiveChat';
 
 export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
 export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
@@ -129,7 +134,7 @@ export default function App() {
   const { showToast, addSystemMessage } = notices;
   useNewVersionNotice(showToast);
   const peerIdRef = useRef<string>(crypto.randomUUID());
-  const peersRef = useRef<Map<string, any>>(new Map()); // peerId -> peer entry (webrtc/usePeerMesh.js)
+  const peersRef = useRef<Map<string, PeerEntryRecord>>(new Map()); // peerId -> peer entry (webrtc/usePeerMesh.js)
   const isHostRef = useRef<boolean>(false);
   // Who the host is, as the signaling server says (it knows who made the room). Peers' own claims
   // are not trusted. undefined: an older server that doesn't say (then the peers' claims are used)
@@ -141,8 +146,8 @@ export default function App() {
   }, []);
   const usernameRef = useRef<string>(username);
   usernameRef.current = username;
-  const [peerMetadata, setPeerMetadata] = useState<Record<string, any>>({}); // { [peerId]: { username, isHost, isMuted } }
-  const peerMetadataRef = useRef<Record<string, any>>(peerMetadata);
+  const [peerMetadata, setPeerMetadata] = useState<Record<string, PeerMetadataRecord>>({}); // { [peerId]: { username, isHost, isMuted } }
+  const peerMetadataRef = useRef<Record<string, PeerMetadataRecord>>(peerMetadata);
   peerMetadataRef.current = peerMetadata;
 
   // Keep each peer's stored host flag in line with the server (the host may come back with a new id)
@@ -150,7 +155,7 @@ export default function App() {
     if (hostPeerId === undefined) return;
     setPeerMetadata((prev) => {
       let changed = false;
-      const next: Record<string, any> = {};
+      const next: Record<string, PeerMetadataRecord> = {};
       for (const [id, meta] of Object.entries(prev)) {
         const isHostNow = id === hostPeerId;
         changed = changed || Boolean(meta?.isHost) !== isHostNow;
@@ -160,8 +165,8 @@ export default function App() {
     });
   }, [hostPeerId]);
 
-  const roomSettingsRef = useRef<() => any>(() => ({}));
-  const identityFieldsRef = useRef<() => any>(() => ({}));
+  const roomSettingsRef = useRef<() => RoomSettings>(() => ({}));
+  const identityFieldsRef = useRef<() => Record<string, unknown>>(() => ({}));
 
   const busRef = useRef<RoomBus | null>(null);
   if (!busRef.current) {
@@ -187,7 +192,7 @@ export default function App() {
         const id = hostPeerIdRef.current;
         return id && id !== peerIdRef.current && peerMetadataRef.current[id] ? id : null;
       },
-      peerName: (id: string) => peerMetadataRef.current[id]?.username || null,
+      peerName: (id: string) => peerMetadataRef.current[id]?.username || '',
       // The app's stable id (same after a reload or rejoin; the peer id isn't)
       clientIdOf: (id: string) => (id === peerIdRef.current ? getClientId() : peerMetadataRef.current[id]?.clientId || null),
       // Message format version of a peer's app (1 = from before versions were sent)
@@ -249,7 +254,7 @@ export default function App() {
     activityLoad.load();
   }, [activityLoad]);
 
-  const activityMenu = useMemo(() => activities.menu.map((a: any) => (a.isOpen && !activityLoad.loaded
+  const activityMenu = useMemo(() => activities.menu.map((a: ActivityMenuItem) => (a.isOpen && !activityLoad.loaded
     ? { ...a, isOpen: false, description: `On now: tap to join` } : a)), [activities.menu, activityLoad.loaded]);
   const startOrJoinActivity = useCallback((id: string) => {
     if (activities.current?.id === id && !activityLoad.loaded) joinActivity();
@@ -333,7 +338,7 @@ export default function App() {
   // Resume the shared AudioContext on any user interaction
   useEffect(() => {
     const resumeAudioCtx = () => {
-      if ((window as any).__webrtcAudioCtx?.state === 'suspended') (window as any).__webrtcAudioCtx.resume().catch(() => { });
+      if (window.__webrtcAudioCtx?.state === 'suspended') window.__webrtcAudioCtx.resume().catch(() => { });
     };
     const events = ['click', 'keydown', 'touchstart'];
     events.forEach((e) => window.addEventListener(e, resumeAudioCtx));
@@ -511,13 +516,13 @@ export default function App() {
     for (const [peerId, entry] of peersRef.current.entries()) {
       if (!entry.isConnected && entry.dataChannel?.readyState !== 'open') continue;
       const meta = peerMetadata[peerId] || {};
-      const voiceState = peerVoiceStates[meta.username] || {};
+      const voiceMuted = meta.username ? peerVoiceStates[meta.username]?.isMuted : undefined;
       list.push({
         id: peerId,
         peerId,
         username: meta.username || `Peer ${peerId.slice(0, 4)}`,
         isHost: hostPeerId !== undefined ? peerId === hostPeerId : Boolean(meta.isHost),
-        isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceState.isMuted !== undefined ? voiceState.isMuted : true),
+        isMuted: meta.isMuted !== undefined ? meta.isMuted : (voiceMuted !== undefined ? voiceMuted : true),
         volume: peerVolumes[peerId] !== undefined ? peerVolumes[peerId] : 1.0,
         isLocalMuted: Boolean(localMutedPeers[peerId]),
         build: meta.build || null
@@ -580,7 +585,7 @@ export default function App() {
     setIsChatOpen((prev) => !prev);
   };
 
-  const renderStage = (extra: any = {}) => (
+  const renderStage = (extra: Partial<StageProps> = {}) => (
     <Stage
       roomId={roomId}
       activityView={activityView}
@@ -682,7 +687,7 @@ export default function App() {
     />
   );
 
-  const renderChat = (extra: any = {}) => (
+  const renderChat = (extra: Partial<LiveChatProps> = {}) => (
     <LiveChat
       onSeekTo={isMediaActive ? playback.seekEveryone : undefined}
       messages={chat.messages}

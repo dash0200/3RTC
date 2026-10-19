@@ -39,13 +39,13 @@ export async function createHtml5Adapter(
   video.preload = 'auto';
   container.appendChild(video);
 
-  let hls: any = null;
+  let hls: InstanceType<typeof import('hls.js')['default']> | null = null;
   const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
   if (media.provider === 'hls' && !nativeHls) {
     const { default: Hls } = await import('hls.js');
     if (!Hls.isSupported()) throw new Error('This browser can\'t play HLS streams');
     hls = new Hls({ enableWorker: true });
-    hls.on(Hls.Events.ERROR, (_e: unknown, data: any) => {
+    hls.on(Hls.Events.ERROR, (_e: unknown, data: { fatal?: boolean; type?: string }) => {
       if (data?.fatal) {
         emit({
           type: 'error',
