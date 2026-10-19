@@ -21,7 +21,12 @@ import {
   P2PRangeReceiver,
   RANGE_BLOCK_SIZE
 } from '../../src/utils/p2pStreamer.ts';
-import { getNetworkHealthGrade, parseCandidateConnectionType } from '../../src/utils/networkMonitor.ts';
+import {
+  getNetworkHealthGrade,
+  parseCandidateConnectionType,
+  extractPeerConnectionStats
+} from '../../src/utils/networkMonitor.ts';
+import { devicesToLists, matchDevice } from '../../src/utils/audioDevices.ts';
 
 describe('TypeScript youtubeId', () => {
   it('extracts 11-char IDs from links and bare IDs', () => {
@@ -67,20 +72,28 @@ describe('TypeScript lastRoom', () => {
     // Mock localStorage
     const store = new Map<string, string>();
     const originalLocalStorage = globalThis.localStorage;
-    (globalThis as any).localStorage = {
+    const mockStorage: Storage = {
       getItem: (k: string) => store.get(k) || null,
       setItem: (k: string, v: string) => store.set(k, v),
-      removeItem: (k: string) => store.delete(k)
+      removeItem: (k: string) => store.delete(k),
+      clear: () => store.clear(),
+      key: (i: number) => Array.from(store.keys())[i] || null,
+      length: store.size
     };
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: mockStorage,
+      configurable: true,
+      writable: true
+    });
 
     try {
       const now = Date.now();
       saveLastRoom('12345', true, 'secret-host-token');
       const rec = readLastRoom(now);
       assert.ok(rec);
-      assert.equal(rec.roomId, '12345');
-      assert.equal(rec.wasHost, true);
-      assert.equal(rec.hostToken, 'secret-host-token');
+      assert.equal(rec!.roomId, '12345');
+      assert.equal(rec!.wasHost, true);
+      assert.equal(rec!.hostToken, 'secret-host-token');
 
       // Stale room > 30 mins
       const staleRec = readLastRoom(now + LAST_ROOM_FRESH_MS + 1000);
@@ -89,7 +102,11 @@ describe('TypeScript lastRoom', () => {
       forgetLastRoom();
       assert.equal(readLastRoom(now), null);
     } finally {
-      (globalThis as any).localStorage = originalLocalStorage;
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: originalLocalStorage,
+        configurable: true,
+        writable: true
+      });
     }
   });
 });
@@ -172,10 +189,10 @@ describe('TypeScript p2pImageShare', () => {
     const parsed = parseImagePacket(packet);
 
     assert.ok(parsed);
-    assert.equal(parsed.transferId, 'transfer-1');
-    assert.equal(parsed.chunkIndex, 2);
-    assert.equal(parsed.totalChunks, 10);
-    assert.deepEqual(new Uint8Array(parsed.data), new Uint8Array([1, 2, 3, 4, 5]));
+    assert.equal(parsed!.transferId, 'transfer-1');
+    assert.equal(parsed!.chunkIndex, 2);
+    assert.equal(parsed!.totalChunks, 10);
+    assert.deepEqual(new Uint8Array(parsed!.data), new Uint8Array([1, 2, 3, 4, 5]));
   });
 
   it('P2PImageReceiver guards against abnormal chunk counts', () => {
@@ -220,5 +237,80 @@ describe('TypeScript networkMonitor', () => {
     assert.equal(parseCandidateConnectionType('relay', 'host'), 'Relay (TURN)');
     assert.equal(parseCandidateConnectionType('host', 'host'), 'Direct LAN (Host)');
     assert.equal(parseCandidateConnectionType('srflx', 'srflx'), 'Direct P2P (STUN)');
+  });
+
+  it('extracts peer connection stats from WebRTC stats report', async () => {
+    const mockReport = new Map<string, Record<string, unknown>>([
+      [
+        'local-1',
+        { id: 'local-1', type: 'local-candidate', candidateType: 'srflx', protocol: 'udp', address: '1.2.3.4', port: 5000 }
+      ],
+      [
+        'remote-1',
+        { id: 'remote-1', type: 'remote-candidate', candidateType: 'srflx', protocol: 'udp', address: '5.6.7.8', port: 6000 }
+      ],
+      [
+        'pair-1',
+        {
+          id: 'pair-1',
+          type: 'candidate-pair',
+          state: 'succeeded',
+          localCandidateId: 'local-1',
+          remoteCandidateId: 'remote-1',
+          currentRoundTripTime: 0.042,
+          bytesReceived: 10240,
+          bytesSent: 20480
+        }
+      ],
+      [
+        'audio-in-1',
+        { id: 'audio-in-1', type: 'inbound-rtp', kind: 'audio', packetsReceived: 100, packetsLost: 2, jitter: 0.005 }
+      ]
+    ]);
+
+    const mockPc = {
+      getStats: async () => mockReport as unknown as RTCStatsReport
+    } as unknown as RTCPeerConnection;
+
+    const stats = await extractPeerConnectionStats(mockPc);
+    assert.ok(stats);
+    assert.equal(stats!.rttMs, 42);
+    assert.equal(stats!.connectionType, 'Direct P2P (STUN)');
+    assert.equal(stats!.protocol, 'UDP');
+    assert.equal(stats!.totalBytesReceived, 10240);
+    assert.equal(stats!.totalBytesSent, 20480);
+    assert.equal(stats!.packetLossPercent, 2);
+    assert.equal(stats!.jitterMs, 5);
+  });
+});
+
+describe('TypeScript audioDevices', () => {
+  it('converts enumerateDevices list into input and output options', () => {
+    const mockDevices: MediaDeviceInfo[] = [
+      { deviceId: 'mic-1', kind: 'audioinput', label: 'USB Mic', groupId: '', toJSON: () => ({}) },
+      { deviceId: 'speaker-1', kind: 'audiooutput', label: 'Headphones', groupId: '', toJSON: () => ({}) },
+      { deviceId: 'default', kind: 'audiooutput', label: 'Default - Headphones', groupId: '', toJSON: () => ({}) },
+      { deviceId: 'communications', kind: 'audiooutput', label: 'Communications', groupId: '', toJSON: () => ({}) }
+    ];
+
+    const lists = devicesToLists(mockDevices);
+    assert.equal(lists.labelsHidden, false);
+    assert.ok(lists.inputs.some((d) => d.id === 'mic-1' && d.label === 'USB Mic'));
+    assert.ok(lists.outputs.some((d) => d.id === '' && d.label === 'Default - Headphones'));
+    assert.ok(lists.outputs.some((d) => d.id === 'speaker-1' && d.label === 'Headphones'));
+    // Communications device is filtered out
+    assert.ok(!lists.outputs.some((d) => d.id === 'communications'));
+  });
+
+  it('matches devices by id or fallback label', () => {
+    const list = [
+      { id: '', label: 'System default' },
+      { id: 'dev-1', label: 'Studio Mic' }
+    ];
+
+    assert.equal(matchDevice(list, 'dev-1', 'Studio Mic'), 'dev-1');
+    assert.equal(matchDevice(list, 'dev-old', 'Studio Mic'), 'dev-1');
+    assert.equal(matchDevice(list, 'dev-old', 'Unknown'), '');
+    assert.equal(matchDevice(list, ''), '');
   });
 });

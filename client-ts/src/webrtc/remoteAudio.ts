@@ -53,7 +53,7 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
       audioEl = document.createElement('audio');
       audioEl.id = `remote-audio-${targetPeerId}`;
       audioEl.autoplay = true;
-      (audioEl as any).playsInline = true;
+      audioEl.playsInline = true;
       audioEl.style.position = 'fixed';
       audioEl.style.left = '-9999px';
       audioEl.style.top = '-9999px';
@@ -126,8 +126,9 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
           'WEBAUDIO_ANALYSER_ROUTED',
           `Peer: ${targetPeerId} -> Web Audio analyser connected (ctx: ${audioCtx.state})`
         );
-      } catch (err: any) {
-        logLocalDebug('WEBAUDIO_ERR', `AudioContext route error: ${err.message}`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        logLocalDebug('WEBAUDIO_ERR', `AudioContext route error: ${message}`);
       }
     };
 
@@ -143,10 +144,11 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
           .then(() => {
             logLocalDebug('PLAY_ON_UNMUTE_OK', `Peer: ${targetPeerId} audio is actively playing!`);
           })
-          .catch((err: any) => {
+          .catch((err: unknown) => {
+            const errStr = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
             logLocalDebug(
               'PLAY_ON_UNMUTE_ERR',
-              `Peer: ${targetPeerId} - ${err.name}: ${err.message}`
+              `Peer: ${targetPeerId} - ${errStr}`
             );
           });
         connectWebAudioPipeline(freshStream);
@@ -166,10 +168,11 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
             `Peer: ${targetPeerId} audio element playing (paused: ${audioEl!.paused})`
           );
         })
-        .catch((err: any) => {
+        .catch((err: unknown) => {
+          const errStr = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
           logLocalDebug(
             'INITIAL_PLAY_BLOCKED',
-            `Peer: ${targetPeerId} Autoplay blocked (${err.name}): ${err.message}`
+            `Peer: ${targetPeerId} Autoplay blocked: ${errStr}`
           );
           const resumeOnInteraction = () => {
             if (window.__webrtcAudioCtx && window.__webrtcAudioCtx.state === 'suspended') {
@@ -184,10 +187,11 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
                     `Peer: ${targetPeerId} audio playback resumed on user gesture!`
                   );
                 })
-                .catch((e: any) => {
+                .catch((e: unknown) => {
+                  const eStr = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
                   logLocalDebug(
                     'RESUME_PLAY_ERR',
-                    `Peer: ${targetPeerId} resume failed: ${e.name} - ${e.message}`
+                    `Peer: ${targetPeerId} resume failed: ${eStr}`
                   );
                 });
             }

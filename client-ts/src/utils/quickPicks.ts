@@ -130,25 +130,32 @@ function chosenRegion(): string {
 const VIDEO_ID = /^[\w-]{11}$/;
 
 /** Server data is checked before use: a broken or odd response never replaces a working list. */
-function sanitize(data: any): QuickPickCategory[] | null {
-  if (!data || !Array.isArray(data.categories)) return null;
-  const categories: QuickPickCategory[] = data.categories
+function sanitize(data: unknown): QuickPickCategory[] | null {
+  if (!data || typeof data !== 'object' || !('categories' in data)) return null;
+  const rawCategories = (data as { categories: unknown }).categories;
+  if (!Array.isArray(rawCategories)) return null;
+  const categories: QuickPickCategory[] = rawCategories
     .slice(0, 40)
-    .map((c: any) => ({
-      id: String(c?.id || '').slice(0, 40),
-      group: String(c?.group || 'Picks').slice(0, 30),
-      name: String(c?.name || '').slice(0, 60),
-      videos: (Array.isArray(c?.videos) ? c.videos : [])
-        .filter((v: any) => VIDEO_ID.test(String(v?.id || '')))
-        .slice(0, 25)
-        .map((v: any) => ({
-          id: v.id,
-          title: String(v.title || 'YouTube video').slice(0, 200),
-          channel: String(v.channel || '').slice(0, 100),
-          ...(v.live === true ? { live: true } : {}),
-          ...(Number.isFinite(v.seconds) && v.seconds > 0 ? { seconds: Math.round(v.seconds) } : {})
-        }))
-    }))
+    .map((c: unknown) => {
+      const cat = (c && typeof c === 'object') ? (c as Record<string, unknown>) : {};
+      const rawVideos = Array.isArray(cat.videos) ? cat.videos : [];
+      return {
+        id: String(cat.id || '').slice(0, 40),
+        group: String(cat.group || 'Picks').slice(0, 30),
+        name: String(cat.name || '').slice(0, 60),
+        videos: rawVideos
+          .map((v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {}))
+          .filter((v) => VIDEO_ID.test(String(v.id || '')))
+          .slice(0, 25)
+          .map((v) => ({
+            id: String(v.id),
+            title: String(v.title || 'YouTube video').slice(0, 200),
+            channel: String(v.channel || '').slice(0, 100),
+            ...(v.live === true ? { live: true } : {}),
+            ...(typeof v.seconds === 'number' && Number.isFinite(v.seconds) && v.seconds > 0 ? { seconds: Math.round(v.seconds) } : {})
+          }))
+      };
+    })
     .filter((c: QuickPickCategory) => c.id && c.name && c.videos.length > 0);
   return categories.length > 0 ? categories : null;
 }

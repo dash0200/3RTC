@@ -61,7 +61,7 @@ function useMicTestLevel(deviceId: string, active: boolean) {
         });
         if (stopped) return;
         setError('');
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
         ctx = new AudioCtx();
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
@@ -91,7 +91,7 @@ function useMicTestLevel(deviceId: string, active: boolean) {
 }
 
 export interface AudioDevicePickerProps {
-  audioSettings: AudioSettings;
+  audioSettings?: AudioSettings | null;
   onUpdateAudioSettings?: (settings: AudioSettings) => void;
   onSelectOutput?: (id: string, label?: string) => unknown;
   isMicLive?: boolean;
@@ -145,12 +145,14 @@ export default function AudioDevicePicker({
 
   const labelOf = (list: AudioDeviceInfo[], id: string) =>
     id ? list.find((d) => d.id === id)?.label || '' : '';
-  const chooseInput = (id: string) =>
+  const chooseInput = (id: string) => {
+    if (!audioSettings) return;
     onUpdateAudioSettings?.({
       ...audioSettings,
       inputDeviceId: id,
       inputDeviceLabel: labelOf(devices.inputs, id)
     });
+  };
   const chooseOutput = (id: string) => onSelectOutput?.(id, labelOf(devices.outputs, id));
   const promptOutput = async () => {
     const id = await promptForOutput();

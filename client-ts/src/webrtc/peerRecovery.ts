@@ -42,7 +42,7 @@ export interface PeerRecoveryContext {
   updateP2PStatus: () => void;
   setNetworkHint?: (hint: NetworkHint | null) => void;
   getOrCreatePeerConnectionRef: {
-    current: ((peerId: string, isInitiator: boolean) => PeerRecoveryEntry | null) | null;
+    current: ((peerId: string, isInitiator: boolean) => PeerRecoveryEntry | null | undefined) | null;
   };
 }
 
@@ -89,8 +89,9 @@ export function attachPeerRecovery(
         offer: tunedOffer,
         iceRestart: true
       });
-    } catch (err: any) {
-      logLocalDebug('ICE_RESTART_ERR', `Peer ${targetPeerId}: ${err.message}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logLocalDebug('ICE_RESTART_ERR', `Peer ${targetPeerId}: ${msg}`);
     }
   };
 

@@ -82,6 +82,29 @@ export interface PeerConnectionStatsData {
 /**
  * Reads low-level WebRTC metrics from RTCPeerConnection.getStats()
  */
+interface RTCStatsReportItem {
+  id: string;
+  type: string;
+  state?: string;
+  nominated?: boolean;
+  selected?: boolean;
+  bytesReceived?: number;
+  bytesSent?: number;
+  kind?: string;
+  packetsReceived?: number;
+  packetsLost?: number;
+  jitter?: number;
+  selectedCandidatePairId?: string;
+  localCandidateId?: string;
+  remoteCandidateId?: string;
+  currentRoundTripTime?: number;
+  candidateType?: string;
+  protocol?: string;
+  ip?: string;
+  address?: string;
+  port?: number;
+}
+
 export async function extractPeerConnectionStats(
   pc: RTCPeerConnection | null | undefined,
   prevStats: Partial<PeerConnectionStatsData> | null = null
@@ -90,53 +113,72 @@ export async function extractPeerConnectionStats(
 
   try {
     const statsReport = await pc.getStats();
-    let activePair: any = null;
-    let localCandidate: any = null;
-    let remoteCandidate: any = null;
+    let activePair: RTCStatsReportItem | null = null;
+    let localCandidate: RTCStatsReportItem | null = null;
+    let remoteCandidate: RTCStatsReportItem | null = null;
 
     let packetsReceived = 0;
     let packetsLost = 0;
     let jitterSec = 0;
+    let audioBytesReceived = 0;
+    let audioBytesSent = 0;
 
     let totalBytesSent = 0;
     let totalBytesReceived = 0;
 
-    const candidateMap = new Map<string, any>();
+    const candidateMap = new Map<string, RTCStatsReportItem>();
 
-    statsReport.forEach((report: any) => {
-      if (report.type === 'local-candidate' || report.type === 'remote-candidate') {
-        candidateMap.set(report.id, report);
-      }
-
-      if (report.type === 'candidate-pair') {
-        if (report.state === 'succeeded' || report.nominated === true || report.selected) {
-          activePair = report;
-        } else if (!activePair && report.bytesReceived > 0) {
-          activePair = report;
-        }
-      }
-
-      if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-        packetsReceived += report.packetsReceived || 0;
-        packetsLost += report.packetsLost || 0;
-        if (report.jitter !== undefined) jitterSec = report.jitter;
-      }
-
-      if (report.type === 'transport') {
-        if (report.bytesSent) totalBytesSent = report.bytesSent;
-        if (report.bytesReceived) totalBytesReceived = report.bytesReceived;
-        if (report.selectedCandidatePairId && candidateMap.has(report.selectedCandidatePairId)) {
-          activePair = candidateMap.get(report.selectedCandidatePairId);
-        }
-      }
+    const reports: RTCStatsReportItem[] = [];
+    statsReport.forEach((rawReport: unknown) => {
+      reports.push(rawReport as RTCStatsReportItem);
     });
 
+    for (const item of reports) {
+      if (
+        item.type === 'local-candidate' ||
+        item.type === 'remote-candidate' ||
+        item.type === 'candidate-pair'
+      ) {
+        candidateMap.set(item.id, item);
+      }
+
+      if (item.type === 'candidate-pair') {
+        if (item.state === 'succeeded' || item.nominated === true || item.selected) {
+          activePair = item;
+        } else if (!activePair && (item.bytesReceived ?? 0) > 0) {
+          activePair = item;
+        }
+      }
+
+      if (item.type === 'inbound-rtp' && item.kind === 'audio') {
+        packetsReceived += item.packetsReceived || 0;
+        packetsLost += item.packetsLost || 0;
+        if (item.jitter !== undefined) jitterSec = item.jitter;
+        audioBytesReceived += item.bytesReceived || 0;
+      }
+
+      if (item.type === 'outbound-rtp' && item.kind === 'audio') {
+        audioBytesSent += item.bytesSent || 0;
+      }
+
+      if (item.type === 'transport') {
+        if (item.bytesSent) totalBytesSent = item.bytesSent;
+        if (item.bytesReceived) totalBytesReceived = item.bytesReceived;
+        if (item.selectedCandidatePairId && candidateMap.has(item.selectedCandidatePairId)) {
+          activePair = candidateMap.get(item.selectedCandidatePairId) || null;
+        }
+      }
+    }
+
     if (activePair) {
-      if (activePair.localCandidateId) localCandidate = candidateMap.get(activePair.localCandidateId);
-      if (activePair.remoteCandidateId) remoteCandidate = candidateMap.get(activePair.remoteCandidateId);
+      if (activePair.localCandidateId) localCandidate = candidateMap.get(activePair.localCandidateId) || null;
+      if (activePair.remoteCandidateId) remoteCandidate = candidateMap.get(activePair.remoteCandidateId) || null;
       if (activePair.bytesSent) totalBytesSent = activePair.bytesSent;
       if (activePair.bytesReceived) totalBytesReceived = activePair.bytesReceived;
     }
+
+    if (!totalBytesReceived && audioBytesReceived) totalBytesReceived = audioBytesReceived;
+    if (!totalBytesSent && audioBytesSent) totalBytesSent = audioBytesSent;
 
     // Round trip time in ms
     let rttMs: number | null = null;
@@ -202,11 +244,11 @@ export async function extractPeerConnectionStats(
 export interface DiagnosticSummary {
   overallConnectionType?: string;
   avgPingMs?: number | null;
-  minPingMs?: number;
-  maxPingMs?: number;
-  totalDownloadKBps?: number;
-  totalUploadKBps?: number;
-  syncDriftMs?: number;
+  minPingMs?: number | null;
+  maxPingMs?: number | null;
+  totalDownloadKBps?: number | null;
+  totalUploadKBps?: number | null;
+  syncDriftMs?: number | null;
 }
 
 export interface DiagnosticPeerRecord {
@@ -225,7 +267,7 @@ export interface DiagnosticPeerRecord {
     localIp?: string;
     remoteType?: string;
     remoteIp?: string;
-  };
+  } | null;
 }
 
 export interface DiagnosticReportOptions {

@@ -27,10 +27,18 @@
 
 import type { BusEventName, RoomBus, SelfInfo } from '../types';
 
-export interface SendableChannel {
-  readyState?: string;
-  send: (data: string | ArrayBufferView | ArrayBuffer) => void;
-}
+export type SendableChannel =
+  | RTCDataChannel
+  | {
+      readyState?: string;
+      send: {
+        (data: string): void;
+        (data: Blob): void;
+        (data: ArrayBuffer): void;
+        (data: ArrayBufferView<ArrayBuffer>): void;
+      };
+      bufferedAmount?: number;
+    };
 
 export interface PeerChannelEntry {
   dataChannel?: SendableChannel | null;
@@ -48,8 +56,10 @@ export interface CreateRoomBusOptions {
 }
 
 export type MessageHandler<T = unknown> = (payload: T, fromPeerId: string) => void;
+export type AnyMessageHandler = (payload: unknown, fromPeerId: string) => void;
 export type BinaryHandler = (buffer: ArrayBuffer, fromPeerId: string) => boolean | void;
 export type EventHandler<T = unknown> = (value: T) => void;
+export type AnyEventHandler = (value: unknown) => void;
 
 const isOpen = (channel: SendableChannel | null | undefined): boolean =>
   channel?.readyState === 'open';
@@ -62,9 +72,9 @@ export function createRoomBus({
   channelOf: (peerId: string, opts?: { bulk?: boolean }) => SendableChannel | null;
   hasHandler: (type: string) => boolean;
 } {
-  const handlers = new Map<string, Set<MessageHandler<any>>>(); // type -> Set<handler>
+  const handlers = new Map<string, Set<AnyMessageHandler>>(); // type -> Set<handler>
   const binaryHandlers = new Set<BinaryHandler>(); // (arrayBuffer, fromPeerId) => boolean
-  const eventHandlers = new Map<string, Set<EventHandler<any>>>(); // event name -> Set<handler>
+  const eventHandlers = new Map<string, Set<AnyEventHandler>>(); // event name -> Set<handler>
 
   const channelOf = (
     peerId: string,
@@ -115,11 +125,15 @@ export function createRoomBus({
     },
 
     /** Send binary data to one peer's bulk channel (or main channel if open). */
-    sendBinary(peerId: string, buffer: ArrayBufferView | ArrayBuffer): boolean {
+    sendBinary(peerId: string, buffer: ArrayBufferView<ArrayBuffer> | ArrayBuffer): boolean {
       const channel = channelOf(peerId, { bulk: true });
       if (!channel) return false;
       try {
-        channel.send(buffer);
+        if (ArrayBuffer.isView(buffer)) {
+          channel.send(buffer);
+        } else {
+          channel.send(buffer);
+        }
         return true;
       } catch {
         return false;
@@ -127,13 +141,17 @@ export function createRoomBus({
     },
 
     /** Broadcast binary data to all peers with an open bulk channel. */
-    broadcastBinary(buffer: ArrayBufferView | ArrayBuffer): number {
+    broadcastBinary(buffer: ArrayBufferView<ArrayBuffer> | ArrayBuffer): number {
       let sent = 0;
       for (const peerId of getPeers().keys()) {
         const channel = channelOf(peerId, { bulk: true });
         if (channel) {
           try {
-            channel.send(buffer);
+            if (ArrayBuffer.isView(buffer)) {
+              channel.send(buffer);
+            } else {
+              channel.send(buffer);
+            }
             sent += 1;
           } catch {
             // ignore failure on single peer
@@ -162,9 +180,10 @@ export function createRoomBus({
     /** Receive messages of `type`. Returns an unsubscribe function. */
     on<T = unknown>(type: string, handler: (payload: T, fromPeerId: string) => void): () => void {
       if (!handlers.has(type)) handlers.set(type, new Set());
-      handlers.get(type)!.add(handler as MessageHandler<any>);
+      const genericHandler = handler as unknown as AnyMessageHandler;
+      handlers.get(type)!.add(genericHandler);
       return () => {
-        handlers.get(type)?.delete(handler as MessageHandler<any>);
+        handlers.get(type)?.delete(genericHandler);
       };
     },
 
@@ -179,9 +198,10 @@ export function createRoomBus({
     /** Local app events (see the list at the top). Returns an unsubscribe function. */
     onEvent<T = unknown>(event: BusEventName, handler: (value: T) => void): () => void {
       if (!eventHandlers.has(event)) eventHandlers.set(event, new Set());
-      eventHandlers.get(event)!.add(handler as EventHandler<any>);
+      const genericHandler = handler as unknown as AnyEventHandler;
+      eventHandlers.get(event)!.add(genericHandler);
       return () => {
-        eventHandlers.get(event)?.delete(handler as EventHandler<any>);
+        eventHandlers.get(event)?.delete(genericHandler);
       };
     },
 

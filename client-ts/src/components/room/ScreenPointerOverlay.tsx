@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { usePeerMessageOn } from '../../core/RoomContext';
 import { getAvatarColor, sound } from '../../utils/sound';
 
+import type { RoomBus, SelfInfo } from '../../types';
+
 export interface VideoBounds {
   left: number;
   top: number;
@@ -32,16 +34,34 @@ export interface ScreenPing {
   username?: string;
   color: string;
   peerId?: string;
+  [key: string]: unknown;
+}
+
+export interface PointerMessagePayload {
+  peerId?: string;
+  x: number;
+  y: number;
+  username?: string;
+  active?: boolean;
+}
+
+export interface PingMessagePayload {
+  id: string;
+  x: number;
+  y: number;
+  username?: string;
+  color?: string;
+  peerId?: string;
 }
 
 export interface ScreenPointerOverlayProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   containerRef: React.RefObject<HTMLDivElement | null>;
-  bus: any;
-  localUser?: {
-    peerId?: string;
+  bus?: RoomBus | null;
+  localUser?: SelfInfo | {
+    peerId?: string | null;
     username?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   } | null;
   isLaserActive?: boolean;
 }
@@ -143,10 +163,10 @@ export default function ScreenPointerOverlay({
   }, []);
 
   // Listen for incoming remote pointer movements
-  usePeerMessageOn(bus, 'screen-pointer', (data: any, fromPeerId?: string) => {
+  usePeerMessageOn<PointerMessagePayload>(bus, 'screen-pointer', (data, fromPeerId) => {
     if (!data) return;
     const peerId = data.peerId || fromPeerId;
-    if (peerId === localUser?.peerId) return;
+    if (!peerId || peerId === localUser?.peerId) return;
 
     if (data.active === false) {
       setRemotePointers((prev) => {
@@ -183,7 +203,7 @@ export default function ScreenPointerOverlay({
   }, []);
 
   // Listen for incoming remote click pings
-  usePeerMessageOn(bus, 'screen-ping', (data: any) => {
+  usePeerMessageOn<PingMessagePayload>(bus, 'screen-ping', (data) => {
     if (!data) return;
     triggerPing({
       ...data,
@@ -265,7 +285,7 @@ export default function ScreenPointerOverlay({
       id: pingId,
       x: normX,
       y: normY,
-      peerId: localUser?.peerId,
+      peerId: localUser?.peerId || undefined,
       username: selfName,
       color: getAvatarColor(selfName)
     };
@@ -292,8 +312,8 @@ export default function ScreenPointerOverlay({
               className="screen-pointer-marker is-self"
               style={{
                 transform: `translate3d(${bounds.left + localPointer.x * bounds.width}px, ${bounds.top + localPointer.y * bounds.height}px, 0)`,
-                ['--pointer-color' as any]: localPointer.color
-              }}
+                ['--pointer-color']: localPointer.color
+              } as React.CSSProperties}
             >
               <svg
                 className="screen-cursor-arrow-svg"
@@ -321,8 +341,8 @@ export default function ScreenPointerOverlay({
               className="screen-pointer-marker"
               style={{
                 transform: `translate3d(${bounds.left + p.x * bounds.width}px, ${bounds.top + p.y * bounds.height}px, 0)`,
-                ['--pointer-color' as any]: p.color
-              }}
+                ['--pointer-color']: p.color
+              } as React.CSSProperties}
             >
               <svg
                 className="screen-cursor-arrow-svg"
@@ -351,8 +371,8 @@ export default function ScreenPointerOverlay({
               style={{
                 left: `${bounds.left + ping.x * bounds.width}px`,
                 top: `${bounds.top + ping.y * bounds.height}px`,
-                ['--ping-color' as any]: ping.color
-              }}
+                ['--ping-color']: ping.color
+              } as React.CSSProperties}
             >
               <span className="droplet-ring ring-1" />
               <span className="droplet-ring ring-2" />

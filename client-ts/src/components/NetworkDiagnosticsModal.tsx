@@ -49,8 +49,8 @@ export default function NetworkDiagnosticsModal({
     const report = generateDiagnosticReport({
       roomId: roomId || undefined,
       username,
-      summary: networkStats as any,
-      peers: peersStats as any
+      summary: networkStats,
+      peers: peersStats
     });
     const success = await copyToClipboard(report);
     if (success) {

@@ -30,7 +30,7 @@ const saveSpot = (spot: BubbleSpot) => {
 
 /** The element the bubble is drawn in: the page, or what is full screen now. */
 function useLayer(): Element | null {
-    const get = () => (typeof document === 'undefined' ? null : (document.fullscreenElement || (document as any).webkitFullscreenElement || document.body));
+    const get = () => (typeof document === 'undefined' ? null : (document.fullscreenElement || document.webkitFullscreenElement || document.body));
     const [layer, setLayer] = useState<Element | null>(get);
     useEffect(() => {
         const update = () => setLayer(get());

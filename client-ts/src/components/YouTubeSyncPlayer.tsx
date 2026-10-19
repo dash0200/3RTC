@@ -49,25 +49,30 @@ function nextPlayablePreset(videoId: string): QuickPickVideo | null {
   return null;
 }
 
+import type { PlayerAction } from '../features/media/LinkPlayer';
+import type { QueueItem } from '../features/queue/useQueue';
+import type { MediaItem } from '../types';
+import type { PlaybackSyncState } from '../features/playback/drift';
+
 export interface YouTubeSyncPlayerProps {
   videoId?: string | null;
   activeVideoTitle?: string;
   onVideoChange: (videoId: string | null, title?: string) => void;
-  onBroadcastAction: (action: string, payload?: any) => void;
-  remoteAction?: any;
+  onBroadcastAction: (action: string, payload?: Record<string, unknown>) => void;
+  remoteAction?: PlayerAction | null;
   isP2PConnected?: boolean;
-  onRegisterStateGetter?: (getter: (() => any) | null) => void;
+  onRegisterStateGetter?: (getter: (() => PlaybackSyncState | null | undefined) | null) => void;
   onLocalFileSelect?: (file: File) => void;
-  queue?: any[];
-  onAddToQueue?: (item: any, options?: { autoplay?: boolean }) => void;
+  queue?: QueueItem[];
+  onAddToQueue?: (item: { videoId?: string; media?: MediaItem | null; title?: string }, options?: { autoplay?: boolean }) => void;
   onPlayNextInQueue?: (options?: { auto?: boolean }) => void;
   onVoteSkip?: () => void;
   skipVotes?: string[];
   peerCount?: number;
   username?: string;
   onOpenQueue?: () => void;
-  onPlayLink?: (media: any) => void;
-  onQueueLink?: (media: any) => void;
+  onPlayLink?: (media: MediaItem) => void;
+  onQueueLink?: (media: MediaItem) => void;
   onStartScreenShare?: () => void;
 }
 
@@ -102,7 +107,7 @@ export default function YouTubeSyncPlayer({
   const [isDropOver, setIsDropOver] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
   const [showTopControls, setShowTopControls] = useState(true);
-  const idleTimerRef = useRef<any>(null);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleStageActivity = () => {
     setShowTopControls(true);
@@ -118,7 +123,7 @@ export default function YouTubeSyncPlayer({
     };
   }, []);
 
-  const playerRef = useRef<any>(null);
+  const playerRef = useRef<YTPlayerTarget | null>(null);
   const fullstageRef = useRef<HTMLDivElement | null>(null);
   const iframeContainerRef = useRef<HTMLDivElement | null>(null);
   const localFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -144,7 +149,7 @@ export default function YouTubeSyncPlayer({
 
   // 1. Load YouTube Iframe API script if not present
   useEffect(() => {
-    if (!(window as any).YT) {
+    if (!window.YT) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
       const firstScriptTag = document.getElementsByTagName('script')[0];
@@ -163,6 +168,7 @@ export default function YouTubeSyncPlayer({
         const curTime = playerRef.current?.getCurrentTime?.() || 0;
         const state = playerRef.current?.getPlayerState?.();
         return {
+          mediaType: 'youtube' as const,
           videoId: currentVideoIdRef.current,
           currentTime: curTime,
           isPlaying: state === 1,
@@ -190,10 +196,10 @@ export default function YouTubeSyncPlayer({
       return;
     }
 
-    let checkInterval: any = null;
+    let checkInterval: ReturnType<typeof setInterval> | undefined;
 
     const initPlayer = () => {
-      const YT = (window as any).YT;
+      const YT = window.YT;
       if (!YT || !YT.Player) return false;
       const container = iframeContainerRef.current || document.querySelector('.yt-stage-canvas-viewport');
       if (!container) return false;
@@ -228,7 +234,7 @@ export default function YouTubeSyncPlayer({
             origin: window.location.origin
           },
           events: {
-            onReady: (e: any) => {
+            onReady: (e: { target: YTPlayerTarget }) => {
               setPlayerReady(true);
               setSyncStatus('Synced with peers');
               try {
@@ -246,7 +252,7 @@ export default function YouTubeSyncPlayer({
               } catch { }
             },
             onStateChange: handlePlayerStateChange,
-            onError: (e: any) => handlePlayerErrorRef.current?.(e.data, playerVideoId)
+            onError: (e: { data: number }) => handlePlayerErrorRef.current?.(e.data, playerVideoId)
           }
         });
         return true;
@@ -257,14 +263,14 @@ export default function YouTubeSyncPlayer({
 
     if (!initPlayer()) {
       checkInterval = setInterval(() => {
-        if (initPlayer()) {
+        if (initPlayer() && checkInterval !== undefined) {
           clearInterval(checkInterval);
         }
       }, 200);
     }
 
     return () => {
-      if (checkInterval) clearInterval(checkInterval);
+      if (checkInterval !== undefined) clearInterval(checkInterval);
     };
   }, [videoId]);
 
@@ -286,7 +292,7 @@ export default function YouTubeSyncPlayer({
   }, []);
 
   // 4. Handle local player state changes and broadcast to peers
-  const handlePlayerStateChange = (event: any) => {
+  const handlePlayerStateChange = (event: { data: number }) => {
     if (!playerRef.current) return;
     const state = event.data;
 
@@ -312,7 +318,7 @@ export default function YouTubeSyncPlayer({
       setCurrentTimeSec(curTime);
     }
 
-    const YT = (window as any).YT;
+    const YT = window.YT;
     if (YT) {
       if (state === YT.PlayerState.PLAYING && lastStateRef.current !== YT.PlayerState.PLAYING) {
         setSyncStatus('Playing (Synced)');
@@ -378,7 +384,9 @@ export default function YouTubeSyncPlayer({
   useEffect(() => {
     if (!remoteAction) return;
     const { action, currentTime, newVideoId, videoId: actionVideoId } = remoteAction;
-    const targetVideoId = newVideoId || actionVideoId;
+    const targetVideoId: string | undefined =
+      typeof newVideoId === 'string' ? newVideoId :
+      typeof actionVideoId === 'string' ? actionVideoId : undefined;
 
     if (action === 'close' || action === 'unload') {
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
@@ -401,7 +409,7 @@ export default function YouTubeSyncPlayer({
     if (!playerRef.current) return;
 
     isRemoteActionRef.current = true;
-    const YTS = (window as any).YT?.PlayerState || { UNSTARTED: -1, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
+    const YTS = window.YT?.PlayerState || { UNSTARTED: -1, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED: 5 };
     if (action === 'load') expectEcho([YTS.UNSTARTED, YTS.BUFFERING, YTS.PLAYING, YTS.CUED, YTS.PAUSED], 3000, YTS.PLAYING);
     else if (action === 'play') expectEcho([YTS.PLAYING, YTS.BUFFERING], 1500, YTS.PLAYING);
     else if (action === 'pause') expectEcho([YTS.PAUSED, YTS.BUFFERING], 1500, YTS.PAUSED);
@@ -676,7 +684,7 @@ export default function YouTubeSyncPlayer({
           }}
           onShuffle={handleSelectPreset}
           onQueue={typeof onAddToQueue === 'function' ? (v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false }) : undefined}
-          queuedIds={queue.map((item) => item.videoId)}
+          queuedIds={queue.map((item) => item.videoId).filter((id): id is string => Boolean(id))}
           queueCount={queue.length}
           onPlayQueue={typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined}
         />

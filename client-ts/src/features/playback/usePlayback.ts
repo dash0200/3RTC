@@ -15,10 +15,11 @@
 import { useState, useRef, useCallback, useEffect, type RefObject } from 'react';
 import type { RoomBus, MediaItem } from '../../types';
 import { fetchYouTubeTitle } from '../media/resolveLink';
+import { normalizeMedia, fallbackTitle } from '../media/sources';
 import { detectOnDemandStreaming, canChecksum, type P2PStreamSender, type P2PRangeSender } from '../../utils/p2pStreamer';
 import { usePeerMessageOn } from '../../core/RoomContext';
-import { normalizeMedia, fallbackTitle } from '../media/sources';
 import type { PlaybackSyncState } from './drift';
+import type { PlayerAction } from '../media/LinkPlayer';
 
 const isPhoneLikeDevice = (): boolean => {
   try {
@@ -51,6 +52,7 @@ export interface StreamProgress {
   isReady: boolean;
   isCompleted?: boolean;
   wholeFile?: boolean;
+  fromPeersPercent?: number;
 }
 
 export interface RemoteLocalVideoMeta {
@@ -117,7 +119,7 @@ export interface UsePlaybackReturn {
   activeVideoTitle: string;
   localVideoFile: File | null;
   remoteLocalVideoMeta: RemoteLocalVideoMeta | null;
-  remoteAction: Record<string, unknown> | null;
+  remoteAction: PlayerAction | null;
   streamProgress: StreamProgress | null;
   streamVideoUrl: string | null;
   isMediaActive: boolean;
@@ -127,7 +129,7 @@ export interface UsePlaybackReturn {
   setActiveVideoTitle: (title: string) => void;
   setLocalVideoFile: (file: File | null) => void;
   setRemoteLocalVideoMeta: (meta: RemoteLocalVideoMeta | null) => void;
-  setRemoteAction: (action: Record<string, unknown> | null) => void;
+  setRemoteAction: (action: PlayerAction | null) => void;
   setStreamProgress: React.Dispatch<React.SetStateAction<StreamProgress | null>>;
   setStreamVideoUrl: (url: string | null) => void;
   setActiveMedia: (media: MediaItem | null) => void;
@@ -163,7 +165,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
   const [activeVideoTitle, setActiveVideoTitle] = useState('');
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
   const [remoteLocalVideoMeta, setRemoteLocalVideoMeta] = useState<RemoteLocalVideoMeta | null>(null);
-  const [remoteAction, setRemoteAction] = useState<Record<string, unknown> | null>(null);
+  const [remoteAction, setRemoteAction] = useState<PlayerAction | null>(null);
   const [streamProgress, setStreamProgress] = useState<StreamProgress | null>(null);
   const [streamVideoUrl, setStreamVideoUrl] = useState<string | null>(null);
   const [activeMedia, setActiveMediaState] = useState<MediaItem | null>(null); // a link source, see features/media
@@ -238,7 +240,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       setActiveVideoId(null);
       setActiveVideoTitle('');
       mediaChanged();
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       room.log(`🎬 ${who} exited the video`);
       room.notify(`${who} exited the video`);
       return;
@@ -261,7 +263,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
     } else if (data.action === 'seek') {
       room.log(`⏩ ${who} seeked to ${clock(data.currentTime)}`);
     }
-    setRemoteAction(data as Record<string, unknown>);
+    setRemoteAction(data as PlayerAction);
   });
 
   usePeerMessageOn<{
@@ -285,7 +287,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       setActiveMedia(null);
       setRemoteLocalVideoMeta({ fileName: data.fileName || '', fileSize: data.fileSize, sender: who });
       mediaChanged();
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       room.log(`📁 ${who} loaded local video: "${data.fileName}"`);
       room.notify(`${who} loaded: ${data.fileName}`);
     } else if (data.action === 'close') {
@@ -293,15 +295,15 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       setLocalVideoFile(null);
       setRemoteLocalVideoMeta(null);
       mediaChanged();
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       room.log(`📁 ${who} exited the local video`);
       room.notify(`${who} exited local video`);
     } else if (data.action === 'subtitle-share') {
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       room.log(`💬 ${who} shared subtitles: "${data.fileName || 'captions'}"`);
       room.notify(`Subtitles loaded from ${who}`);
     } else {
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       if (data.action === 'play') room.log(`▶️ ${who} played local video`);
       else if (data.action === 'pause') room.log(`⏸️ ${who} paused local video`);
       else if (data.action === 'seek') room.log(`⏩ ${who} seeked to ${clock(data.currentTime)}`);
@@ -329,7 +331,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       stopReceiving();
       setActiveMedia(media);
       mediaChanged();
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       const title = media.title || fallbackTitle(media);
       room.log(`🎬 ${who} opened: "${title}"`);
       room.notify(`${who} opened ${title}`);
@@ -339,7 +341,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       if (!activeMediaRef.current) return;
       setActiveMedia(null);
       mediaChanged();
-      setRemoteAction(data as Record<string, unknown>);
+      setRemoteAction(data as PlayerAction);
       room.log(`🎬 ${who} exited the video`);
       room.notify(`${who} exited the video`);
       return;
@@ -348,7 +350,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
     if (data.action === 'play') room.log(`▶️ ${who} played the video`);
     else if (data.action === 'pause') room.log(`⏸️ ${who} paused the video`);
     else if (data.action === 'seek') room.log(`⏩ ${who} seeked to ${clock(data.currentTime)}`);
-    setRemoteAction(data as Record<string, unknown>);
+    setRemoteAction(data as PlayerAction);
   });
 
   // ---- local changes ----------------------------------------------------------------------

@@ -25,7 +25,7 @@ const SHELL_URL = '/';
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 /** @type {ServiceWorkerGlobalScope} */
-const sw = /** @type {any} */ (self);
+const sw = /** @type {ServiceWorkerGlobalScope} */ (/** @type {unknown} */ (self));
 
 sw.addEventListener('install', (event) => {
   event.waitUntil(

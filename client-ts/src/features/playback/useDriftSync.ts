@@ -18,6 +18,7 @@ import { useEffect, useRef } from 'react';
 import type { RoomBus } from '../../types';
 import { usePeerMessageOn } from '../../core/RoomContext';
 import { driftCorrection, playingKey, HEARTBEAT_MS, type PlaybackSyncState, type DriftHeartbeat } from './drift';
+import type { PlayerAction } from '../media/LinkPlayer';
 
 const BACKOFF_COUNT = 3; // this many corrections...
 const BACKOFF_WINDOW_MS = 60000; // ...within a minute: stop for a while
@@ -26,7 +27,7 @@ const BACKOFF_MS = 120000;
 export interface UseDriftSyncPlayback {
   syncStateGetterRef: { current: (() => PlaybackSyncState | null | undefined) | null };
   lastChangeAtRef: { current: number };
-  setRemoteAction: (action: Record<string, unknown>) => void;
+  setRemoteAction: (action: PlayerAction | null) => void;
 }
 
 export interface UseDriftSyncProps {

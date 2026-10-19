@@ -14,10 +14,11 @@
  * (otherwise a provider's autoplay could restart a video the room just paused).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createAdapter, type PlayerAdapter } from './adapters';
+import { createAdapter, type PlayerAdapter, type PlayerEmitEvent } from './adapters';
 import { PROVIDERS, fallbackTitle } from './sources';
 import PasteLinkForm, { type PasteLinkFormProps } from './PasteLinkForm';
 import type { MediaItem } from '../../types';
+import type { PlaybackSyncState } from '../playback/drift';
 
 const fmt = (s = 0): string => {
     const t = Math.max(0, Math.floor(s));
@@ -27,11 +28,22 @@ const fmt = (s = 0): string => {
     return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 };
 
+export interface PlayerAction {
+    action: string;
+    currentTime?: number;
+    initial?: boolean;
+    sender?: string;
+    drift?: boolean;
+    newVideoId?: string;
+    videoId?: string;
+    [key: string]: unknown;
+}
+
 export interface LinkPlayerProps {
     media: MediaItem;
-    remoteAction?: any;
-    onBroadcastAction?: (action: string, payload?: any) => void;
-    onRegisterStateGetter?: (getter: () => any) => void;
+    remoteAction?: PlayerAction | null;
+    onBroadcastAction?: (action: string, payload?: Record<string, unknown>) => void;
+    onRegisterStateGetter?: (getter: (() => PlaybackSyncState | null | undefined) | null) => void;
     onExit?: () => void;
     onEnded?: () => void;
     onVoteSkip?: () => void;
@@ -57,7 +69,7 @@ export default function LinkPlayer({
     const containerRef = useRef<HTMLDivElement | null>(null);
     const adapterRef = useRef<PlayerAdapter | null>(null);
     const readyRef = useRef<boolean>(false);
-    const pendingRef = useRef<any>({ action: 'play', currentTime: 0, initial: true }); // applied once ready
+    const pendingRef = useRef<PlayerAction | null>({ action: 'play', currentTime: 0, initial: true }); // applied once ready
     const expectRef = useRef<{ play: number; pause: number; seek: number }>({ play: 0, pause: 0, seek: 0 });
     // Last known position (for people asking what we're watching, and the auto re-sync)
     const cacheRef = useRef<{ time: number; at: number; playing: boolean; buffering: boolean }>({ time: 0, at: Date.now(), playing: false, buffering: false });
@@ -66,7 +78,7 @@ export default function LinkPlayer({
     const [status, setStatus] = useState<string>('Loading…');
     const [error, setError] = useState<string>('');
     const [blocked, setBlocked] = useState<boolean>(false);
-    const [isLive, setIsLive] = useState<boolean>(Boolean((media as any).live));
+    const [isLive, setIsLive] = useState<boolean>(Boolean('live' in media && media.live));
     const canSeek = !isLive && PROVIDERS[media.provider]?.canSeek !== false;
     const canSeekRef = useRef<boolean>(canSeek);
     canSeekRef.current = canSeek;
@@ -98,16 +110,18 @@ export default function LinkPlayer({
         try {
             await a.play();
             setBlocked(false);
-        } catch (err: any) {
+        } catch (err: unknown) {
             // Autoplay rule: this browser wants a tap first
-            if (err?.name === 'NotAllowedError' || /interact|gesture|allowed/i.test(String(err?.message))) setBlocked(true);
+            const errName = err instanceof Error ? err.name : '';
+            const errMessage = err instanceof Error ? err.message : String(err);
+            if (errName === 'NotAllowedError' || /interact|gesture|allowed/i.test(errMessage)) setBlocked(true);
         }
     }, []);
 
     /** Do what the room did. A newer command cancels an older one still in progress (players answer
      *  asynchronously, so a "play" could otherwise finish after a later "pause"). */
     const applyGenRef = useRef<number>(0);
-    const apply = useCallback(async (act: any) => {
+    const apply = useCallback(async (act: PlayerAction) => {
         const a = adapterRef.current;
         if (!a) return;
         const gen = ++applyGenRef.current;
@@ -148,9 +162,9 @@ export default function LinkPlayer({
     // Create the player for this link (a new link mounts a new LinkPlayer: see Stage)
     useEffect(() => {
         let alive = true;
-        const emit = (e: any) => {
+        const emit = (e: PlayerEmitEvent) => {
             if (!alive) return;
-            const send = (action: string, extra: any = {}) => broadcastRef.current?.(action, extra);
+            const send = (action: string, extra: Record<string, unknown> = {}) => broadcastRef.current?.(action, extra);
             switch (e.type) {
                 case 'ready': {
                     readyRef.current = true;

@@ -36,12 +36,20 @@ export interface PeerMessageHandlerContext {
   targetPeerId: string;
 }
 
+export interface RawPeerMessage {
+  type?: string;
+  isHost?: boolean;
+  sender?: string;
+  username?: string;
+  [key: string]: unknown;
+}
+
 /**
  * What a peer's message says about who sent it is checked here, once for every feature: `isHost`
  * comes from the signaling server (who made the room), not the sender; names are cleaned.
  */
 export function normalizeSender(
-  data: Record<string, any>,
+  data: RawPeerMessage,
   fromPeerId: string,
   hostPeerIdRef?: { current: string | null | undefined }
 ): void {
@@ -49,11 +57,11 @@ export function normalizeSender(
     const hostId = hostPeerIdRef?.current;
     data.isHost = Boolean(hostId && fromPeerId === hostId);
   }
-  if ('sender' in data) {
+  if (typeof data.sender === 'string') {
     data.sender = cleanName(data.sender) || undefined;
   }
   if (data.type === 'peer-identity' || data.type === 'peer-voice-status') {
-    if ('username' in data) {
+    if (typeof data.username === 'string') {
       data.username = cleanName(data.username) || undefined;
     }
   }
@@ -78,10 +86,23 @@ export function createPeerMessageHandler(
     targetPeerId
   } = ctx;
 
-  const handleCore = (data: Record<string, any>): boolean => {
+interface PeerIncomingData {
+  type: string;
+  username?: string;
+  isHost?: boolean;
+  isMuted?: boolean;
+  sender?: string;
+  proto?: number;
+  build?: string;
+  clientId?: string;
+  isReply?: boolean;
+  [key: string]: unknown;
+}
+
+  const handleCore = (data: PeerIncomingData): boolean => {
     if (data.type === 'peer-bye') {
       if (isStillCurrent()) {
-        (peerEntry as any).byeReceived = true;
+        peerEntry.byeReceived = true;
         cleanupPeer(targetPeerId);
         setPeerCount(peersRef.current.size + 1);
       }
@@ -91,10 +112,10 @@ export function createPeerMessageHandler(
       setPeerMetadata((prev) => ({
         ...prev,
         [targetPeerId]: {
-          username: data.username || `User_${targetPeerId.slice(0, 4)}`,
+          username: typeof data.username === 'string' && data.username ? data.username : `User_${targetPeerId.slice(0, 4)}`,
           isHost: Boolean(data.isHost),
           isMuted: Boolean(data.isMuted),
-          ...(data.proto ? { proto: data.proto } : {}),
+          ...(typeof data.proto === 'number' ? { proto: data.proto } : {}),
           ...(typeof data.build === 'string' ? { build: data.build.slice(0, 20) } : {}),
           ...(typeof data.clientId === 'string' ? { clientId: data.clientId.slice(0, 64) } : {})
         }
@@ -107,17 +128,18 @@ export function createPeerMessageHandler(
         }
       }
     } else if (data.type === 'peer-voice-status') {
+      const senderKey = typeof data.sender === 'string' && data.sender ? data.sender : targetPeerId;
       setPeerVoiceStates((prev) => ({
         ...prev,
-        [data.sender]: { isMuted: data.isMuted }
+        [senderKey]: { isMuted: Boolean(data.isMuted) }
       }));
       setPeerMetadata((prev) => ({
         ...prev,
         [targetPeerId]: {
           ...(prev[targetPeerId] || {}),
           username:
-            data.sender || prev[targetPeerId]?.username || `User_${targetPeerId.slice(0, 4)}`,
-          isMuted: data.isMuted
+            typeof data.sender === 'string' && data.sender ? data.sender : prev[targetPeerId]?.username || `User_${targetPeerId.slice(0, 4)}`,
+          isMuted: Boolean(data.isMuted)
         }
       }));
       if (!data.isMuted) {
@@ -147,14 +169,17 @@ export function createPeerMessageHandler(
       return;
     }
 
-    let data: any;
+    let data: unknown;
     try {
       data = JSON.parse(event.data);
     } catch {
       return;
     }
-    if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
-    normalizeSender(data, targetPeerId, hostPeerIdRef);
-    if (handleCore(data)) bus.dispatch(data, targetPeerId);
+    if (!data || typeof data !== 'object' || !('type' in data) || typeof (data as { type: unknown }).type !== 'string') {
+      return;
+    }
+    const messageData = data as Record<string, unknown> & { type: string };
+    normalizeSender(messageData, targetPeerId, hostPeerIdRef);
+    if (handleCore(messageData)) bus.dispatch(messageData, targetPeerId);
   };
 }

@@ -4,10 +4,11 @@ import { getAvatarColor } from '../../utils/sound';
 import { getInitials, PeerAudioPopover } from '../PeerVoiceRoster';
 import { Icon } from '../icons';
 import { spatialAudio } from '../../features/audio/spatialAudio';
+import type { ConnectedPeer, SelfInfo } from '../../types';
 
 export interface VideoPeopleOverlayProps {
-  connectedPeers?: any[];
-  localUser?: any;
+  connectedPeers?: ConnectedPeer[];
+  localUser?: (ConnectedPeer & { isSelf?: boolean }) | SelfInfo | null;
   isPhone?: boolean;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
   onToggleMutePeer?: (peerId: string) => void;
@@ -19,7 +20,7 @@ interface PersonItem {
   initialsFrom?: string;
   speaking: boolean;
   muted: boolean;
-  peer?: any;
+  peer?: ConnectedPeer;
 }
 
 /**
@@ -41,7 +42,7 @@ export default function VideoPeopleOverlay({
   // Phase 3: Spatial Co-Presence - compute stereo pan from visual screen position
   useEffect(() => {
     if (!peers || peers.length === 0) return;
-    peers.forEach((peer: any, index: number) => {
+    peers.forEach((peer, index: number) => {
       const peerId = peer.peerId || peer.id;
       if (peerId) {
         const pan = spatialAudio.calculateRosterPan(index, peers.length);
@@ -51,7 +52,7 @@ export default function VideoPeopleOverlay({
   }, [peers]);
 
   const people: PersonItem[] = [
-    ...peers.map((p: any) => ({
+    ...peers.map((p) => ({
       key: p.peerId || p.id,
       name: p.username || 'Friend',
       speaking: Boolean(p.isSpeaking) && !p.isMuted,
@@ -62,8 +63,8 @@ export default function VideoPeopleOverlay({
       key: 'me',
       name: 'You',
       initialsFrom: me.username,
-      speaking: Boolean(me.isSpeaking) && !me.isMuted,
-      muted: Boolean(me.isMuted)
+      speaking: Boolean(me.isSpeaking) && !('isMuted' in me && Boolean(me.isMuted)),
+      muted: Boolean('isMuted' in me && Boolean(me.isMuted))
     }] : [])
   ];
 
@@ -77,7 +78,7 @@ export default function VideoPeopleOverlay({
           <button
             type="button"
             className={`rd-av vpo-av ${p.speaking ? 'is-speaking' : ''} ${p.muted ? 'is-quiet' : ''}`}
-            style={{ ['--av' as any]: getAvatarColor(p.initialsFrom || p.name) }}
+            style={{ ['--av' as string]: getAvatarColor(p.initialsFrom || p.name) } as React.CSSProperties}
             disabled={!p.peer || isPhone}
             aria-label={`${p.name}${p.speaking ? ', talking' : ''}${p.muted ? ', mic off' : ''}`}
             onClick={() => setSelected((s) => (s?.key === p.key ? null : p))}

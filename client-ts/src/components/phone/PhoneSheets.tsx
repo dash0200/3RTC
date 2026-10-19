@@ -3,6 +3,12 @@ import SoundboardTray from '../SoundboardTray';
 import { resolvePastedLink } from '../../features/media/resolveLink';
 import { groupQuickPicks, isVideoUnavailable, useQuickPicks, youtubeThumb } from '../../utils/quickPicks';
 import TrendingRegionSelect from '../TrendingRegionSelect';
+import type { MediaItem } from '../../types';
+import type { AudioSettings } from '../../utils/audioSettings';
+import type { NetworkStatsSummary } from '../../hooks/useNetworkStats';
+import type { ActivityMenuItem } from '../../features/activities/useActivities';
+import type { SoundboardSettings, SoundboardClip } from '../../utils/soundboard';
+import type { ActiveSoundboardSfx } from '../../features/soundboard/useSoundboard';
 
 export interface BottomSheetProps {
   isOpen: boolean;
@@ -56,8 +62,8 @@ export interface AddVideoSheetProps {
   isMediaActive?: boolean;
   onLoadYouTube?: (videoId: string, title?: string) => void;
   onQueueYouTube?: (videoId: string, title?: string) => void;
-  onLoadLink?: (media: any) => void;
-  onQueueLink?: (media: any) => void;
+  onLoadLink?: (media: MediaItem) => void;
+  onQueueLink?: (media: MediaItem) => void;
   onQueuePick?: (id: string, title?: string) => void;
   queuedIds?: string[];
   onPlayQueue?: () => void;
@@ -114,7 +120,7 @@ export function AddVideoSheet({
     let cancelled = false;
     (async () => {
       try {
-        const perm = await (navigator as any).permissions?.query({ name: 'clipboard-read' });
+        const perm = await navigator.permissions?.query({ name: 'clipboard-read' as PermissionName });
         if (cancelled) return;
         setClipAllowed(perm?.state !== 'denied' && Boolean(navigator.clipboard?.readText));
         if (perm?.state === 'granted') await readClipboard();
@@ -341,12 +347,12 @@ const MoreIcon = {
 export interface MoreSheetProps {
   isOpen: boolean;
   onClose?: () => void;
-  audioSettings?: any;
-  onUpdateAudioSettings?: (patch: any) => void;
+  audioSettings?: AudioSettings | null;
+  onUpdateAudioSettings?: (patch: Partial<AudioSettings>) => void;
   onOpenAudioSettings?: () => void;
   onOpenSoundboard?: () => void;
   onOpenNetworkHud?: () => void;
-  networkStats?: any;
+  networkStats?: Partial<NetworkStatsSummary> | null;
   onOpenQrCode?: () => void;
   roomId?: string | null;
   onOpenServerSettings?: () => void;
@@ -354,7 +360,7 @@ export interface MoreSheetProps {
   isHost?: boolean;
   playbackLock?: boolean;
   onTogglePlaybackLock?: () => void;
-  activityMenu?: any[];
+  activityMenu?: ActivityMenuItem[];
   onStartActivity?: (id: string) => void;
   isScreenSharing?: boolean;
   onToggleScreenShare?: () => void;
@@ -505,10 +511,10 @@ export function MoreSheet({
 export interface SoundboardSheetProps {
   isOpen: boolean;
   onClose?: () => void;
-  soundboardSettings?: any;
-  activeSoundboardSfx?: any;
-  activeSfxCooldowns?: Record<string, any>;
-  onPlaySoundboardClip?: (clip: any) => void;
+  soundboardSettings?: SoundboardSettings | null;
+  activeSoundboardSfx?: ActiveSoundboardSfx | null;
+  activeSfxCooldowns?: Record<string, number>;
+  onPlaySoundboardClip?: (clip: SoundboardClip | string) => void;
   onSoundboardVolumeChange?: (volume: number) => void;
   onToggleSoundboardMute?: () => void;
 }

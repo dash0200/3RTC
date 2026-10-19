@@ -13,7 +13,7 @@
  * bubble, tagged "Join <game>"; tapping it loads the game (useActivityLoad.js). "Leave" on the bar
  * unloads it again; "End" closes it for everyone.
  */
-import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type LazyExoticComponent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import ChatPeek, { type ChatPeekMessage } from './ChatPeek';
 import ActivityBubble from './ActivityBubble';
@@ -178,17 +178,17 @@ function useStageFullscreen(ref: React.RefObject<HTMLElement | null>): [boolean,
             document.removeEventListener('fullscreenchange', update);
             // Leaving full screen when the activity closes
             const fs = document.fullscreenElement;
-            if (fs && ref.current && fs.contains(ref.current)) (document as any).exitFullscreen?.().catch(() => { });
+            if (fs && ref.current && fs.contains(ref.current)) document.exitFullscreen?.().catch(() => { });
         };
     }, [ref]);
     const toggle = () => {
-        if (document.fullscreenElement) (document as any).exitFullscreen?.().catch(() => { });
-        else (fullscreenTarget(ref.current) as any)?.requestFullscreen?.().catch(() => { });
+        if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { });
+        else fullscreenTarget(ref.current)?.requestFullscreen?.().catch(() => { });
     };
     return [isFull, toggle];
 }
 
-const lazyCache = new Map<string, any>();
+const lazyCache = new Map<string, LazyExoticComponent<ComponentType<{ activityId: string }>>>();
 const lazyFor = (definition: ActivityDefinition) => {
     if (!lazyCache.has(definition.id)) lazyCache.set(definition.id, lazy(definition.load));
     return lazyCache.get(definition.id);
@@ -230,14 +230,13 @@ export interface ActivityData {
     type?: string;
     startedBy?: string;
     startedByName?: string;
-    [key: string]: any;
 }
 
 export interface ActivityDefinition {
     id: string;
     name: string;
     icon: ReactNode;
-    load: () => Promise<{ default: ComponentType<any> }>;
+    load: () => Promise<{ default: ComponentType<{ activityId: string }> }>;
 }
 
 export interface ActivityChatProps {
@@ -449,7 +448,7 @@ export default function ActivityStage({
                 <ActivityErrorBoundary key={definition.id}>
                     <Suspense fallback={<div className="activity-message">Loading {definition.name}…</div>}>
                         <ActivityHostProvider onStatus={onStatus}>
-                            <ActivityComponent activityId={definition.id} />
+                            {ActivityComponent ? <ActivityComponent activityId={definition.id} /> : null}
                         </ActivityHostProvider>
                     </Suspense>
                 </ActivityErrorBoundary>

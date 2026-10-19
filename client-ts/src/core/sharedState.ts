@@ -55,13 +55,16 @@ import type {
   SharedStoreOptions
 } from '../types';
 
-export interface SharedStoreInstance<S, A> extends SharedStore<S, A> {
+export interface StoreLifecycle {
   key: string;
   reset: () => void;
   destroy: () => void;
+  release: () => void;
 }
 
-const stores = new WeakMap<RoomBus, Map<string, SharedStoreInstance<any, any>>>(); // bus -> Map<key, store>
+export interface SharedStoreInstance<S, A> extends SharedStore<S, A>, StoreLifecycle {}
+
+const stores = new WeakMap<RoomBus, Map<string, StoreLifecycle>>(); // bus -> Map<key, store>
 const live = new WeakMap<RoomBus, Map<string, number>>(); // bus -> Map<key, number of live stores>
 
 const countLive = (bus: RoomBus, key: string, delta: number) => {
@@ -277,7 +280,7 @@ export function getSharedStore<S, A>(
   if (!map.has(key)) {
     map.set(key, createSharedStore<S, A>(bus, room, key, options));
   }
-  return map.get(key) as SharedStoreInstance<S, A>;
+  return map.get(key) as unknown as SharedStoreInstance<S, A>;
 }
 
 /**

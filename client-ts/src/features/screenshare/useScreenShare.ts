@@ -136,8 +136,8 @@ export function useScreenShare(
       videoTrack.onended = () => {
         stopScreenShare();
       };
-    } catch (err: any) {
-      if (err.name !== 'NotAllowedError') {
+    } catch (err: unknown) {
+      if (!(err instanceof Error) || err.name !== 'NotAllowedError') {
         console.error('[ScreenShare] Error starting screen share:', err);
         throw err;
       }

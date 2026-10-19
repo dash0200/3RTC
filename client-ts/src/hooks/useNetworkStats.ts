@@ -284,11 +284,16 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
     showToast('Ping probe sent to mesh peers');
   }, [peersRef, showToast]);
 
+  interface NetPingPayload {
+    pingId?: string;
+    sendTime?: number;
+  }
+
   // Ping probes over the data channel: answer theirs, time ours
-  usePeerMessageOn(bus, 'net-ping', (data: any, from: string) => {
+  usePeerMessageOn<NetPingPayload>(bus, 'net-ping', (data, from) => {
     bus.send(from, 'net-pong', { pingId: data?.pingId, sendTime: data?.sendTime });
   });
-  usePeerMessageOn(bus, 'net-pong', (data: any, from: string) => {
+  usePeerMessageOn<NetPingPayload>(bus, 'net-pong', (data, from) => {
     recordPeerPing(from, Math.max(1, Math.round(performance.now() - (data?.sendTime || 0))));
   });
 

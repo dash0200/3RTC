@@ -21,6 +21,6 @@ export async function createAdapter(
     case 'hls':
       return (await import('./html5')).createHtml5Adapter(container, media, emit);
     default:
-      throw new Error(`No player for ${(media as any).provider}`);
+      throw new Error(`No player for ${(media as { provider: string }).provider}`);
   }
 }

@@ -8,15 +8,14 @@ import { useEffect } from 'react';
 
 export function useWakeLock(active: boolean): void {
   useEffect(() => {
-    const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
-    if (!active || !nav?.wakeLock?.request) return undefined;
-    let lock: any = null;
+    if (!active || typeof navigator === 'undefined' || !navigator.wakeLock?.request) return undefined;
+    let lock: WakeLockSentinel | null = null;
     let cancelled = false;
 
     const acquire = async (): Promise<void> => {
       if (cancelled || lock || document.visibilityState !== 'visible') return;
       try {
-        const sentinel = await nav.wakeLock.request('screen');
+        const sentinel = await navigator.wakeLock!.request('screen');
         if (cancelled) {
           sentinel.release().catch(() => { });
           return;

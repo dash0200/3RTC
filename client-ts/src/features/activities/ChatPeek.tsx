@@ -11,8 +11,8 @@ const MAX_SHOWN = 3;
 export interface ChatPeekMessage {
     id: string | number;
     text?: string;
-    image?: any;
-    imageTransfer?: any;
+    image?: { url?: string } | boolean | string | null;
+    imageTransfer?: { fileName?: string } | boolean | null;
     isSelf?: boolean;
     sender?: string;
 }

@@ -37,9 +37,16 @@ export function blockedNetworkHint(localCandidateTypes: string[] = []): NetworkH
   };
 }
 
+export type CandidateInput =
+  | RTCIceCandidate
+  | RTCIceCandidateInit
+  | { type?: string; candidate?: string }
+  | null
+  | undefined;
+
 /** Candidate type from an RTCIceCandidate ('host' | 'srflx' | 'prflx' | 'relay'), or ''. */
-export function candidateType(candidate?: RTCIceCandidate | null): string {
+export function candidateType(candidate?: CandidateInput): string {
   if (!candidate) return '';
-  if (candidate.type) return candidate.type;
+  if ('type' in candidate && typeof candidate.type === 'string' && candidate.type) return candidate.type;
   return /\btyp (\w+)/.exec(candidate.candidate || '')?.[1] || '';
 }

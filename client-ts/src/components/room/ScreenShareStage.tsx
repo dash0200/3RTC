@@ -10,8 +10,8 @@ export interface ScreenShareStageProps {
   onStopSharing?: () => void;
   onExit?: () => void;
   roomId?: string | null;
-  bus?: any;
-  localUser?: any;
+  bus?: import('../../types').RoomBus | null;
+  localUser?: import('../../types').SelfInfo | null;
 }
 
 /**
@@ -43,7 +43,7 @@ export default function ScreenShareStage({
   const [isLaserActive, setIsLaserActive] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [showPreview, setShowPreview] = useState(false);
-  const hideTimeoutRef = useRef<any>(null);
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Attach stream to HTML5 video element (only if viewer or presenter enabled preview)
   useEffect(() => {
@@ -87,26 +87,26 @@ export default function ScreenShareStage({
 
     const isCurrentlyFullscreen = Boolean(
       document.fullscreenElement ||
-      (document as any).webkitFullscreenElement ||
-      (vid as any)?.webkitDisplayingFullscreen
+      document.webkitFullscreenElement ||
+      vid?.webkitDisplayingFullscreen
     );
 
     if (!isCurrentlyFullscreen) {
       if (container.requestFullscreen) {
         container.requestFullscreen().catch(() => {});
-      } else if ((container as any).webkitRequestFullscreen) {
-        (container as any).webkitRequestFullscreen().catch(() => {});
-      } else if (vid && (vid as any).webkitEnterFullscreen) {
+      } else if (container.webkitRequestFullscreen) {
+        container.webkitRequestFullscreen().catch(() => {});
+      } else if (vid && vid.webkitEnterFullscreen) {
         // iPhone Safari full-screen video fallback
-        (vid as any).webkitEnterFullscreen();
+        vid.webkitEnterFullscreen();
       }
     } else {
       if (document.exitFullscreen) {
         document.exitFullscreen().catch(() => {});
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen().catch(() => {});
-      } else if (vid && (vid as any).webkitExitFullscreen) {
-        (vid as any).webkitExitFullscreen();
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen().catch(() => {});
+      } else if (vid && vid.webkitExitFullscreen) {
+        vid.webkitExitFullscreen();
       }
     }
   }, []);
@@ -116,8 +116,8 @@ export default function ScreenShareStage({
       const vid = videoRef.current;
       setIsFullscreen(Boolean(
         document.fullscreenElement ||
-        (document as any).webkitFullscreenElement ||
-        (vid as any)?.webkitDisplayingFullscreen
+        document.webkitFullscreenElement ||
+        vid?.webkitDisplayingFullscreen
       ));
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);

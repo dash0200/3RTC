@@ -3,12 +3,15 @@ import { MAX_ROOM_SIZE } from '../webrtc/config';
 import { copyToClipboard } from '../utils/clipboard';
 import { Logo } from './Logo';
 import { Icon } from './icons';
+import type { ConnectedPeer } from '../types';
+import type { NetworkStatsSummary } from '../hooks/useNetworkStats';
+import type { ActivityStatus } from '../features/activities/activityHost';
 
 export interface HeaderProps {
   roomId?: string | null;
   onCopyRoom?: (code: string) => void;
   isP2PConnected?: boolean;
-  networkStats?: any;
+  networkStats?: Partial<NetworkStatsSummary> | null;
   peerCount?: number;
   onOpenNetworkHud?: () => void;
   onOpenQrCode?: () => void;
@@ -21,10 +24,10 @@ export interface HeaderProps {
   onExitVideo?: (() => void) | null;
   onVoteSkip?: (() => void) | null;
   skipVotes?: string[];
-  connectedPeers?: any[];
+  connectedPeers?: ConnectedPeer[];
   isHost?: boolean;
   username?: string;
-  activityStatus?: any;
+  activityStatus?: ActivityStatus | null;
 }
 
 /**
@@ -61,7 +64,7 @@ export default function Header({
     ? (isWeak ? { tone: 'weak', text: 'Weak connection' } : { tone: 'ok', text: 'Connected' })
     : alone ? { tone: 'idle', text: 'Waiting for friends' } : { tone: 'weak', text: 'Connecting…' };
 
-  const hostPeer = isHost ? null : connectedPeers.find((p: any) => p.isHost);
+  const hostPeer = isHost ? null : connectedPeers.find((p) => p.isHost);
   const totalParticipants = connectedPeers.length + 1;
   const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
   const hasVotedSkip = skipVotes.includes(username);

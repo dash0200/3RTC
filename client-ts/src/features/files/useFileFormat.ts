@@ -97,7 +97,7 @@ export interface UseFileFormatReturn {
   pickSubtitle: (trackNumber: number) => void;
   audioJob: AudioTranscodeJob | null;
   transcodedAudioUrl: string | null;
-  transcodeAudio: (trackNumber: number) => Promise<void>;
+  transcodeAudio: (trackNumber?: number) => Promise<void>;
   cancelTranscode: () => void;
   clearTranscodedAudio: () => void;
 }
@@ -344,7 +344,7 @@ export function useFileFormat({ room, playback }: UseFileFormatProps): UseFileFo
   );
 
   const transcodeAudio = useCallback(
-    async (trackNumber: number) => {
+    async (trackNumber: number = 1) => {
       if (!fileRef.current) return;
       if (transcodeAbortRef.current) {
         transcodeAbortRef.current.abort();
