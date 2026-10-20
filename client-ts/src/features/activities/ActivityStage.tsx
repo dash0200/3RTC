@@ -293,6 +293,39 @@ export default function ActivityStage({
 
     const shown = view === 'sidebar' && !isPhone ? 'sidebar' : view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
     const isBigger = bigger && shown === 'full' && !isFull && !isPhone;
+
+    // Full size with a mouse: like the video player, the bar floats over the game and tucks
+    // away, so the game gets the whole stage. It comes back when the pointer nears the top
+    // (or the keyboard reaches it), and shows for a few seconds when the game opens full size.
+    const canHover = useMemo(() => {
+        try {
+            return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+        } catch {
+            return false;
+        }
+    }, []);
+    const overlayBar = shown === 'full' && !isPhone && canHover;
+    // shown again whenever the view changes (tagged with the view it belongs to)
+    const [bar, setBar] = useState({ view: shown, shown: true });
+    const barShown = bar.view === shown ? bar.shown : true;
+    const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showBarFor = useCallback((ms: number) => {
+        setBar({ view: shown, shown: true });
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => setBar({ view: shown, shown: false }), ms);
+    }, [shown]);
+    useEffect(() => {
+        if (!overlayBar) return undefined;
+        hideTimer.current = setTimeout(() => setBar({ view: shown, shown: false }), 3000);
+        return () => {
+            if (hideTimer.current) clearTimeout(hideTimer.current);
+        };
+    }, [overlayBar, shown]);
+    const onStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (!overlayBar || e.pointerType !== 'mouse') return;
+        const top = rootRef.current?.getBoundingClientRect().top ?? 0;
+        if (e.clientY - top < 72) showBarFor(1500);
+    };
     useEffect(() => {
         if (!isBigger) return undefined;
         const onKey = (e: KeyboardEvent) => {
@@ -372,13 +405,15 @@ export default function ActivityStage({
 
     const content = (
         <div
-            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${isBigger ? 'is-bigger' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
+            onPointerMove={onStagePointerMove}
+            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${isBigger ? 'is-bigger' : ''} ${overlayBar ? 'has-overlay-bar' : ''} ${overlayBar && !barShown ? 'bar-tucked' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
             role="region"
             aria-label={definition.name}
             aria-hidden={shown === 'bubble' ? true : undefined}
             ref={rootRef}
             style={shown === 'window' ? { width: box.width, right: box.right, bottom: box.bottom, ...(status.color ? ({ '--bubble-ring': status.color } as React.CSSProperties) : {}) } : undefined}
         >
+            {overlayBar && <span className="activity-bar-handle" aria-hidden="true" />}
             {shown === 'window' && (
                 <span className="activity-resize" onPointerDown={(e) => startDrag(e, 'resize')} title="Drag to resize" aria-hidden="true" />
             )}
