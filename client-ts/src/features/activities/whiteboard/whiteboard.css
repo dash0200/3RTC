@@ -1,0 +1,88 @@
+/* Whiteboard (features/activities/whiteboard). Loaded with it, not with the app. */
+.wb {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 10px 12px 8px;
+  gap: 8px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+}
+.wb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: none;
+  padding-bottom: 2px;
+}
+.wb-toolbar::-webkit-scrollbar { display: none; }
+.wb-group { display: flex; gap: 3px; align-items: center; padding: 3px; border-radius: 12px; background: var(--bg-surface); border: 1px solid var(--rd-line, #2a2a33); flex: none; }
+.wb-btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.wb-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.wb-btn.is-on { background: var(--text-primary); color: var(--rd-bg, #0a0a0d); }
+.wb-btn:disabled { opacity: 0.35; cursor: default; }
+.wb-size span { display: block; border-radius: 50%; background: currentColor; }
+.wb-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.25); cursor: pointer; padding: 0; margin: 0 2px; }
+.wb-swatch.is-on { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.wb-text-btn { border: 1px solid var(--border-active); background: transparent; color: var(--text-primary); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.wb-text-btn.is-danger { border-color: var(--rd-danger-line, #5a1e2a); background: var(--rd-danger-bg, #3a1520); color: var(--rd-danger-text, #ff8a9c); }
+
+.wb-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.wb-board { position: relative; border-radius: 10px; overflow: hidden; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); flex: none; }
+.wb-canvas { position: absolute; inset: 0; display: block; }
+.wb-over { touch-action: none; cursor: crosshair; }
+.wb-over.wb-tool-text { cursor: text; }
+.wb-over.wb-tool-eraser { cursor: none; }
+.wb-empty { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; font-size: 14px; color: #8a8a93; }
+.wb-cursor { position: absolute; pointer-events: none; display: flex; align-items: flex-start; gap: 2px; transition: left 0.08s linear, top 0.08s linear; z-index: 3; }
+.wb-cursor svg { fill: #6aa0ff; stroke: #fff; stroke-width: 1; }
+.wb-cursor span { margin-top: 12px; font-size: 11px; padding: 1px 6px; border-radius: 6px; background: #6aa0ff; color: #fff; white-space: nowrap; }
+.wb-text-input {
+  position: absolute;
+  z-index: 4;
+  min-width: 120px;
+  margin: 0;
+  padding: 0;
+  border: 1px dashed rgba(106, 160, 255, 0.9);
+  background: rgba(106, 160, 255, 0.06);
+  font-family: 'Figtree Variable', system-ui, sans-serif;
+  font-weight: 600;
+  line-height: 1.25;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+}
+.wb-foot { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); flex: none; }
+.wb-full { color: var(--rd-warn, #f5b544); }
+
+@media (max-width: 760px) {
+  .wb { padding: 8px; gap: 6px; }
+  .wb-btn { width: 34px; height: 34px; }
+}
+.stage-activity.is-window .wb,
+.stage-activity.is-sidebar .wb { padding: 6px; gap: 6px; }
+.stage-activity.is-window .wb-btn,
+.stage-activity.is-sidebar .wb-btn { width: 30px; height: 30px; }
+.stage-activity.is-window .wb-swatch,
+.stage-activity.is-sidebar .wb-swatch { width: 20px; height: 20px; }
+.stage-activity.is-window .wb-foot { display: none; }
+/* small spaces: one scrolling row instead of several */
+.stage-activity.is-window .wb-toolbar,
+.stage-activity.is-sidebar .wb-toolbar { flex-wrap: nowrap; }
+/* the sidebar's height follows content: give the board a shape there */
+.stage-activity.is-sidebar .wb-stage,
+.stage-activity.is-window .wb-stage { flex: none; aspect-ratio: 16 / 10; width: 100%; }
