@@ -204,3 +204,10 @@
   .ty-token { transition: none; }
   .ty-die.is-rolling, .ty-card { animation: none; }
 }
+
+/* Full size on a computer: the board takes all the height it can get */
+@media (min-width: 761px) {
+  .stage-activity.is-full .ty { padding: 6px 12px; gap: 14px; }
+  .stage-activity.is-full .ty-board-wrap { width: min(100cqh - 12px, 100cqw - 316px); }
+  .stage-activity.is-full .ty-panel { flex-basis: 300px; }
+}

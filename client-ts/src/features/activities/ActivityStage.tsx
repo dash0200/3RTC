@@ -282,6 +282,8 @@ export default function ActivityStage({
     const ActivityComponent = useMemo(() => (definition ? lazyFor(definition) : null), [definition]);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [isFull, toggleFull] = useStageFullscreen(rootRef);
+    // "Bigger": the game covers the whole app window (not the screen, like Full screen does)
+    const [bigger, setBigger] = useState(false);
     const [status, setStatus] = useState<ActivityStatus>({ attention: false, color: '', label: '' });
     const onStatus = useCallback((next: ActivityStatus) => setStatus((prev) => {
         if (prev.attention === next.attention && prev.color === next.color && prev.label === next.label) return prev;
@@ -290,6 +292,15 @@ export default function ActivityStage({
     }), [onStatusChange]);
 
     const shown = view === 'sidebar' && !isPhone ? 'sidebar' : view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
+    const isBigger = bigger && shown === 'full' && !isFull && !isPhone;
+    useEffect(() => {
+        if (!isBigger) return undefined;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setBigger(false);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [isBigger]);
     const { box, startDrag } = useFloatingBox(rootRef, shown === 'window');
     const setView = (v: ActivityViewKind) => onViewChange?.(v);
 
@@ -361,7 +372,7 @@ export default function ActivityStage({
 
     const content = (
         <div
-            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
+            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${isBigger ? 'is-bigger' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
             role="region"
             aria-label={definition.name}
             aria-hidden={shown === 'bubble' ? true : undefined}
@@ -425,6 +436,12 @@ export default function ActivityStage({
                     <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
                         aria-pressed={chat.splitView} title={chat.splitView ? 'Bigger board (hide chat messages)' : 'Show chat messages below the game'}>
                         💬<span className="activity-btn-text"> Chat</span>{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
+                    </button>
+                )}
+                {shown === 'full' && !isPhone && !isFull && (
+                    <button type="button" className={`activity-bar-btn activity-bigger-btn ${isBigger ? 'is-on' : ''}`} onClick={() => setBigger((b) => !b)}
+                        title={isBigger ? 'Back to the normal size (Esc)' : 'Make the game fill the whole window'} aria-pressed={isBigger}>
+                        {isBigger ? '⤡ Smaller' : '⤢ Bigger'}
                     </button>
                 )}
                 {canFullscreen() && shown === 'full' && !isPhone && (
