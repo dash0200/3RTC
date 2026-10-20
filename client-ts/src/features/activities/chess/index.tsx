@@ -339,6 +339,28 @@ function MoveList({ state }: { state: ChessState }): JSX.Element | null {
   );
 }
 
+// ---- Board turned around (this device only) ------------------------------------------------
+
+const FLIP_KEY = '3rtc_chess_flip';
+let flipMemory = false; // when storage isn't available
+const readFlip = (): boolean => {
+  try {
+    const saved = localStorage.getItem(FLIP_KEY);
+    if (saved !== null) return saved === '1';
+  } catch {
+    /* no storage: the in-memory value */
+  }
+  return flipMemory;
+};
+const saveFlip = (value: boolean): void => {
+  flipMemory = value;
+  try {
+    localStorage.setItem(FLIP_KEY, value ? '1' : '0');
+  } catch {
+    /* kept in memory for this session */
+  }
+};
+
 // ---- The game ----------------------------------------------------------------------------
 
 export interface ChessProps {
@@ -363,7 +385,15 @@ export default function Chess({ activityId }: ChessProps): JSX.Element {
     Boolean(state.seats[c] && !state.seats[c]?.bot && !present.has(state.seats[c]!.id));
 
   // Black plays from the top of the board; spectators can turn it around
-  const [flipView, setFlipView] = useState(false);
+  // The game remounts when it moves between views (sidebar, window, full), so the turn of the
+  // board is kept outside it: the same after a view change or a reload
+  const [flipView, setFlipViewState] = useState(readFlip);
+  const setFlipView = (update: (v: boolean) => boolean): void =>
+    setFlipViewState((v) => {
+      const next = update(v);
+      saveFlip(next);
+      return next;
+    });
   const flipped = myColor ? (myColor === 'b') !== flipView : flipView;
   // "Resign?" asks once; any move or the game ending takes the question away
   const [resignAsked, setResignAsked] = useState(-1);
