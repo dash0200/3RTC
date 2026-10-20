@@ -1,0 +1,206 @@
+/* Tycoon (features/activities/tycoon). Loaded with the game, not with the app. */
+.ty {
+  display: flex;
+  gap: 16px;
+  padding: 14px;
+  min-height: 0;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  container-type: size;
+}
+.ty-muted { color: var(--text-muted); font-size: 13px; margin: 0; }
+.ty-tag { margin-left: 6px; font-size: 10.5px; padding: 1px 6px; border-radius: 6px; background: var(--bg-hover); color: var(--text-secondary); white-space: nowrap; }
+.ty-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ty-btn {
+  border: 1px solid var(--border-active);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-radius: 10px;
+  padding: 7px 13px;
+  min-height: 36px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ty-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.ty-btn:disabled { opacity: 0.45; cursor: default; }
+.ty-btn-sm { min-height: 30px; padding: 4px 10px; font-size: 12.5px; font-weight: 500; }
+.ty-btn-go { background: #22a35a; border-color: #22a35a; color: #fff; }
+.ty-btn-go:hover:not(:disabled) { background: #1c8c4d; }
+.ty-btn-big { font-size: 15.5px; padding: 9px 18px; }
+.ty-btn-danger { background: var(--rd-danger-bg, #3a1520); border-color: var(--rd-danger-line, #5a1e2a); color: var(--rd-danger-text, #ff8a9c); }
+
+/* ---- board ---- */
+.ty-board-wrap { position: relative; flex: none; width: min(100cqh - 28px, 100cqw - 360px); aspect-ratio: 1; }
+.ty-board { width: 100%; height: 100%; display: block; border-radius: 14px; box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5); user-select: none; -webkit-user-select: none; }
+.ty-space { cursor: pointer; }
+.ty-space:hover > rect:first-child { fill: #ffd34d33; }
+.ty-token { transition: transform 0.14s ease-out; pointer-events: none; }
+.ty-token.is-turn { filter: drop-shadow(0 0 6px rgba(255, 211, 77, 0.95)); }
+.ty-die.is-rolling { animation: ty-roll 0.5s ease-out; transform-box: fill-box; transform-origin: center; }
+@keyframes ty-roll {
+  0% { transform: rotate(0) scale(0.7); }
+  60% { transform: rotate(300deg) scale(1.12); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+/* the card just drawn, over the board */
+.ty-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(70%, 340px);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 3px solid #23252d;
+  background: #fffaf0;
+  color: #23252d;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  animation: ty-card-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+.ty-card-s { border-color: #ff7a1a; }
+.ty-card-t { border-color: #3aa0a5; }
+.ty-card-head { display: flex; align-items: center; gap: 10px; font-weight: 900; letter-spacing: 0.08em; font-size: 15px; }
+.ty-card-s .ty-card-head { color: #d9620c; }
+.ty-card-t .ty-card-head { color: #2c7f84; }
+.ty-card-text { font-size: 17px; line-height: 1.35; font-weight: 600; }
+.ty-card-who { font-size: 12px; color: #6b6e78; }
+@keyframes ty-card-in {
+  from { transform: translate(-50%, -40%) rotate(-8deg) scale(0.6); opacity: 0; }
+  to { transform: translate(-50%, -50%); opacity: 1; }
+}
+
+/* ---- panel ---- */
+.ty-panel {
+  flex: 0 0 330px;
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+}
+.ty-turn { padding: 12px; border-radius: 14px; background: var(--bg-surface); border: 1px solid var(--rd-line, #2a2a33); border-left: 5px solid var(--turn); }
+.ty-status { margin: 0; font-size: 15px; line-height: 1.4; font-weight: 600; }
+.ty-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ty-offer { padding: 10px 12px; border-radius: 12px; background: rgba(34, 163, 90, 0.12); border: 1px solid rgba(34, 163, 90, 0.5); font-size: 13.5px; line-height: 1.4; display: flex; flex-direction: column; gap: 8px; }
+.ty-standings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.ty-standing { display: flex; align-items: center; gap: 9px; padding: 6px 10px; border-radius: 11px; background: var(--bg-surface); border: 1px solid transparent; }
+.ty-standing.is-turn { border-color: var(--pc); box-shadow: inset 4px 0 0 var(--pc); }
+.ty-standing.is-out { opacity: 0.5; }
+.ty-standing.is-winner { border-color: #f2cb05; }
+.ty-standing-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ty-standing-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ty-standing-sub { font-size: 11.5px; color: var(--text-muted); }
+.ty-cash { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; color: #7be7a8; }
+.ty-section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.ty-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ty-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-active);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ty-chip.is-on { background: color-mix(in srgb, var(--chip) 35%, transparent); border-color: var(--chip); }
+.ty-chip.is-mortgaged { opacity: 0.6; text-decoration: line-through; }
+.ty-chip-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--chip); flex: none; }
+.ty-log { list-style: none; margin: 0; padding: 8px 10px; border-radius: 12px; background: var(--bg-surface); display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-secondary); }
+.ty-log li:first-child { color: var(--text-primary); }
+.ty-end { align-self: flex-start; }
+
+/* ---- dialogs ---- */
+.ty-modal { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; background: rgba(10, 10, 13, 0.6); padding: 12px; }
+.ty-deed, .ty-trade {
+  width: min(360px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  border-radius: 16px;
+  background: #fffaf0;
+  color: #23252d;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+.ty-deed { display: flex; flex-direction: column; }
+.ty-deed-head { display: flex; flex-direction: column; align-items: center; padding: 14px 12px; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+.ty-deed-kicker { font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; opacity: 0.9; }
+.ty-deed-name { font-size: 21px; font-weight: 900; }
+.ty-deed-table { width: calc(100% - 28px); margin: 10px 14px 0; border-collapse: collapse; font-size: 13.5px; }
+.ty-deed-table td { padding: 4px 0; border-bottom: 1px dashed #d8d2c4; }
+.ty-deed-table td:last-child { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ty-deed-table tr.is-now td { color: #1c8c4d; }
+.ty-deed-sep td { border-bottom: 0; padding-top: 8px; color: #6b6e78; }
+.ty-deed-text { margin: 12px 16px 0; font-size: 14px; line-height: 1.45; }
+.ty-deed-meta { display: flex; justify-content: space-between; margin: 10px 14px 0; font-size: 12.5px; color: #6b6e78; }
+.ty-deed-owner { margin: 8px 14px 0; font-size: 13.5px; }
+.ty-deed-actions { display: flex; flex-direction: column; gap: 6px; margin: 12px 14px 0; }
+.ty-deed .ty-btn, .ty-trade .ty-btn { background: #fff; color: #23252d; border-color: #d8d2c4; }
+.ty-deed .ty-btn-go, .ty-trade .ty-btn-go { background: #22a35a; border-color: #22a35a; color: #fff; }
+.ty-deed-close { margin: 12px 14px 14px; }
+.ty-trade { padding: 16px; display: flex; flex-direction: column; gap: 12px; width: min(560px, 100%); }
+.ty-trade h4 { margin: 0; font-size: 18px; }
+.ty-trade-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.ty-trade-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6b6e78; margin-bottom: 6px; }
+.ty-trade .ty-chip { background: #fff; color: #23252d; border-color: #d8d2c4; }
+.ty-trade .ty-muted { color: #8b8e98; }
+.ty-field { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 8px; }
+.ty-field select, .ty-field input, .ty-rule select { flex: 1; min-height: 32px; border-radius: 8px; border: 1px solid #d8d2c4; padding: 0 8px; font: inherit; background: #fff; color: #23252d; min-width: 0; }
+
+/* ---- lobby ---- */
+.ty-lobby { align-items: center; justify-content: center; overflow-y: auto; }
+.ty-lobby-card { width: min(520px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 18px; border-radius: 16px; background: var(--bg-surface); border: 1px solid var(--rd-line, #2a2a33); }
+.ty-lobby-head { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.ty-lobby-logo { width: 220px; height: auto; }
+.ty-players { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ty-player-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 10px; background: var(--bg-hover); }
+.ty-player-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.ty-token-pick { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.ty-token-btn { border: 2px solid transparent; border-radius: 50%; background: none; padding: 2px; cursor: pointer; }
+.ty-token-btn.is-on { border-color: var(--text-primary); }
+.ty-token-btn:disabled { cursor: default; }
+.ty-rules { display: flex; flex-direction: column; gap: 8px; }
+.ty-rules-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.ty-rule { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text-secondary); }
+.ty-rule input { accent-color: var(--accent-red); width: 16px; height: 16px; flex: none; }
+.ty-start { width: 100%; }
+
+/* ---- smaller places: board on top, panel below ---- */
+@media (max-width: 760px) {
+  .ty { container-type: normal; flex-direction: column; align-items: stretch; padding: 8px; gap: 10px; overflow-y: auto; justify-content: flex-start; }
+  .ty-board-wrap { width: min(100%, calc(72dvh - 120px)); align-self: center; }
+  .ty-panel { flex: none; max-height: none; overflow: visible; }
+  .ty-trade-cols { grid-template-columns: 1fr; }
+  .ty-card-text { font-size: 15px; }
+}
+.stage-activity.is-window .ty,
+.stage-activity.is-sidebar .ty { container-type: normal; flex-direction: column; align-items: stretch; padding: 8px; gap: 8px; overflow-y: auto; justify-content: flex-start; }
+.stage-activity.is-window .ty-board-wrap,
+.stage-activity.is-sidebar .ty-board-wrap { width: 100%; }
+.stage-activity.is-window .ty-panel,
+.stage-activity.is-sidebar .ty-panel { flex: none; max-height: none; overflow: visible; }
+.stage-activity.is-window .ty-log,
+.stage-activity.is-window .ty-standings,
+.stage-activity.is-window .ty-section-title,
+.stage-activity.is-window .ty-chips,
+.stage-activity.is-window .ty-end { display: none; }
+.stage-activity.is-window .ty-card-text { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) {
+  .ty-token { transition: none; }
+  .ty-die.is-rolling, .ty-card { animation: none; }
+}
