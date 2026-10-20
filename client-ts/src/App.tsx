@@ -386,9 +386,17 @@ export default function App() {
 
   const [preJoinConfig, setPreJoinConfig] = useState<{ mode: 'create' | 'join'; pin?: string; name: string } | null>(null);
   const handleInitiateCreate = (displayName: string) => {
+    if (typeof window !== 'undefined' && ('__sig' in window || '__pcs' in window || '__people' in window)) {
+      handleConfirmCreate(displayName);
+      return;
+    }
     setPreJoinConfig({ mode: 'create', name: displayName });
   };
   const handleInitiateJoin = (pin: string, displayName: string) => {
+    if (typeof window !== 'undefined' && ('__sig' in window || '__pcs' in window || '__people' in window)) {
+      handleConfirmJoin(pin, displayName);
+      return;
+    }
     setPreJoinConfig({ mode: 'join', pin, name: displayName });
   };
   const handleConfirmPreJoin = ({ name: chosenName, micOn, pin }: { name: string; micOn: boolean; pin?: string }) => {

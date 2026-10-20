@@ -100,6 +100,7 @@ export interface UseFileFormatReturn {
   transcodeAudio: (trackNumber?: number) => Promise<void>;
   cancelTranscode: () => void;
   clearTranscodedAudio: () => void;
+  clearPendingSubtitle?: () => void;
 }
 
 export function useFileFormat({ room, playback }: UseFileFormatProps): UseFileFormatReturn {
@@ -394,6 +395,10 @@ export function useFileFormat({ room, playback }: UseFileFormatProps): UseFileFo
     setTranscodedAudioUrl(null);
   }, []);
 
+  const clearPendingSubtitle = useCallback(() => {
+    setPendingSubtitle(null);
+  }, []);
+
   const check = useMemo(() => (format ? checkPlayable(format) : null), [format]);
   const problems = useMemo(() => (isOwner ? Object.values(reports).filter((r) => isProblem(r)) : []), [isOwner, reports]);
 
@@ -411,6 +416,7 @@ export function useFileFormat({ room, playback }: UseFileFormatProps): UseFileFo
     transcodedAudioUrl,
     transcodeAudio,
     cancelTranscode,
-    clearTranscodedAudio
+    clearTranscodedAudio,
+    clearPendingSubtitle
   };
 }

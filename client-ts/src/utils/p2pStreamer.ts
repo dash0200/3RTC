@@ -477,10 +477,10 @@ export async function detectOnDemandStreaming(): Promise<boolean> {
     channel.port1.onmessage = (event) => {
       clearTimeout(timer);
       channel.port1.close();
-      resolve(Boolean(event.data?.ok));
+      resolve(Boolean(event.data?.p2pStreaming));
     };
     try {
-      controller.postMessage({ type: 'p2p-ping' }, [channel.port2]);
+      controller.postMessage({ type: 'p2p-stream-ping' }, [channel.port2]);
     } catch {
       clearTimeout(timer);
       resolve(false);
