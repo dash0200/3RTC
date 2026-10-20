@@ -40,6 +40,11 @@
  *   { type: 'room-state-request', key }          "send me your state if you have one"
  *   { type: 'room-state-gone', key }             "I don't have this store"
  *
+ * Secrets (cards in hand): with `redact(state, peerId)` in the options, every copy of the state a
+ * peer is sent is made for that peer, so it never receives what it shouldn't see. Only the
+ * authority holds everything; if the authority changes, the new one has only its own redacted
+ * copy, and the game has to rebuild what's missing (players report their own hands again).
+ *
  * The reducer must be deterministic and must not mutate its input. State must be plain JSON.
  */
 
@@ -79,7 +84,7 @@ export function createSharedStore<S, A>(
   bus: RoomBus,
   room: Room,
   key: string,
-  { initial, reducer }: SharedStoreOptions<S, A>
+  { initial, reducer, redact }: SharedStoreOptions<S, A>
 ): SharedStoreInstance<S, A> {
   let state = initial;
   let version = 0;
@@ -139,6 +144,26 @@ export function createSharedStore<S, A>(
     notify();
   };
 
+  // With `redact`, each peer gets its own copy (and never another peer's secrets)
+  const copyFor = (peerId: string): S => {
+    if (!redact) return state;
+    try {
+      return redact(state, peerId);
+    } catch {
+      return initial; // a broken redact must never leak the full state
+    }
+  };
+  const sendStateTo = (peerId: string) => {
+    bus.send(peerId, 'room-state', { key, v: version, state: copyFor(peerId) });
+  };
+  const sendState = () => {
+    if (!redact) {
+      bus.broadcast('room-state', { key, v: version, state });
+      return;
+    }
+    for (const peerId of bus.connectedPeerIds()) sendStateTo(peerId);
+  };
+
   const apply = (action: A, by: string) => {
     let next: S;
     try {
@@ -159,7 +184,7 @@ export function createSharedStore<S, A>(
     initialCatchUp = false;
     clearTimeout(catchUpTimer);
     set(next, version + 1);
-    bus.broadcast('room-state', { key, v: version, state });
+    sendState();
   };
 
   const offs = [
@@ -193,7 +218,7 @@ export function createSharedStore<S, A>(
       if (msg.key !== key) return;
       addMember(fromPeerId);
       if (version === 0) return;
-      bus.send(fromPeerId, 'room-state', { key, v: version, state });
+      sendStateTo(fromPeerId);
     }),
 
     bus.on<RoomStateGoneMessage>('room-state-gone', (msg, fromPeerId) => {
@@ -204,7 +229,7 @@ export function createSharedStore<S, A>(
 
     // Everyone who has a state sends it to a peer whose channel opens, not only the authority
     bus.onEvent<string>('peer-open', (peerId) => {
-      if (version > 0) bus.send(peerId, 'room-state', { key, v: version, state });
+      if (version > 0) sendStateTo(peerId);
       refreshPresence();
     }),
 

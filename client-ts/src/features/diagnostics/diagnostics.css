@@ -1,0 +1,90 @@
+/* Stream doctor (features/diagnostics), inside the Network HUD */
+.stream-doctor {
+  margin: 0 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text-primary, #f4f4f6);
+  font-size: 13.5px;
+}
+.sd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 16px; }
+.sd-title { font-weight: 700; font-size: 15px; letter-spacing: 0.01em; }
+.sd-muted { color: var(--text-muted, #85858f); font-size: 12.5px; line-height: 1.45; margin: 4px 0 0; }
+.sd-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+.sd-card-title { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-secondary, #a9a9b5); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.sd-chip { text-transform: none; letter-spacing: 0; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); color: var(--text-primary, #f4f4f6); }
+
+.sd-rows { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
+.sd-row { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dashed rgba(255, 255, 255, 0.06); padding: 3px 0; min-width: 0; }
+.sd-row dt { color: var(--text-secondary, #a9a9b5); }
+.sd-row dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.sd-row.is-warn dd { color: var(--rd-warn, #f5b544); }
+
+.sd-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sd-select {
+  flex: 1;
+  min-width: 140px;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+  font: inherit;
+}
+.sd-progress { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--text-secondary, #a9a9b5); font-size: 12.5px; }
+.sd-progress-track { flex: 0 0 40%; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.sd-progress-fill { height: 100%; background: var(--rd-focus, #6aa0ff); transition: width 0.4s ease; }
+.sd-error { margin: 10px 0 0; color: var(--rd-danger-text, #ff8a9c); }
+
+.sd-results { display: flex; flex-direction: column; gap: 12px; }
+.sd-headline { padding: 12px 14px; border-radius: 12px; font-weight: 700; font-size: 14.5px; line-height: 1.35; }
+.sd-headline.is-bad { background: rgba(229, 20, 61, 0.14); border: 1px solid rgba(229, 20, 61, 0.45); color: #ffb3c0; }
+.sd-headline.is-warn { background: rgba(245, 181, 68, 0.12); border: 1px solid rgba(245, 181, 68, 0.4); color: #ffd58f; }
+.sd-headline.is-ok, .sd-headline.is-info { background: rgba(54, 211, 153, 0.1); border: 1px solid rgba(54, 211, 153, 0.35); color: #9ff0cf; }
+
+.sd-numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sd-numbers > div { background: rgba(255, 255, 255, 0.035); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sd-numbers span { font-size: 11.5px; color: var(--text-secondary, #a9a9b5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sd-numbers strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.sd-numbers em { font-style: normal; font-size: 11.5px; color: var(--text-muted, #85858f); }
+
+.sd-bars-block { display: flex; flex-direction: column; gap: 6px; }
+.sd-sub { font-size: 11.5px; color: var(--text-secondary, #a9a9b5); margin-top: 2px; }
+.sd-bars { display: flex; flex-direction: column; gap: 5px; }
+.sd-bar-row { display: grid; grid-template-columns: 132px 1fr 76px; align-items: center; gap: 10px; font-size: 12.5px; }
+.sd-bar-label { color: var(--text-secondary, #a9a9b5); }
+.sd-bar-track { position: relative; height: 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.06); }
+.sd-bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: linear-gradient(90deg, #4f8cff, #6aa0ff); }
+.sd-bar-need { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--rd-warn, #f5b544); }
+.sd-bar-value { text-align: right; font-variant-numeric: tabular-nums; }
+
+.sd-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sd-finding { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); }
+.sd-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 6px; height: fit-content; white-space: nowrap; }
+.sd-finding.is-bad .sd-badge { background: rgba(229, 20, 61, 0.2); color: #ff8a9c; }
+.sd-finding.is-warn .sd-badge { background: rgba(245, 181, 68, 0.18); color: #f5b544; }
+.sd-finding.is-info .sd-badge { background: rgba(106, 160, 255, 0.16); color: #9fc0ff; }
+.sd-finding.is-ok .sd-badge { background: rgba(54, 211, 153, 0.16); color: #7be7bf; }
+.sd-finding-title { font-weight: 600; line-height: 1.35; }
+.sd-finding-detail { color: var(--text-secondary, #a9a9b5); margin-top: 3px; line-height: 1.45; font-size: 12.8px; }
+.sd-finding-fix { margin-top: 5px; font-size: 12.8px; color: #9fc0ff; }
+
+.sd-details summary { cursor: pointer; color: var(--text-secondary, #a9a9b5); font-size: 12.5px; padding: 4px 0; }
+.sd-table-wrap { overflow-x: auto; margin-top: 6px; }
+.sd-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sd-table th, .sd-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+.sd-table th { color: var(--text-muted, #85858f); font-weight: 600; }
+.sd-copy { align-self: flex-start; }
+
+@media (max-width: 640px) {
+  .stream-doctor { margin: 0 12px 12px; }
+  .sd-rows { grid-template-columns: 1fr; }
+  .sd-numbers { grid-template-columns: repeat(2, 1fr); }
+  .sd-bar-row { grid-template-columns: 96px 1fr 64px; gap: 8px; font-size: 12px; }
+}
