@@ -59,6 +59,11 @@ state is dropped on that device) while **End** closes it for everyone. So:
    ```
 
    Rules for the reducer: no side effects, don't mutate `state`, plain JSON in and out.
+   **Secret information** (cards in hand): pass `redact: (state, peerId) => copyForThatPeer` along with
+   `initial` and `reducer`. Every copy of the state sent to a peer goes through it, so a player's app
+   never receives the others' cards. Only the authority holds everything; if it changes mid-game the
+   new one has only its own copy, so the game must rebuild the rest (see `activities/lastcard/rules.ts`:
+   players send their hands back, the rest is dealt again).
    `meta.present` (who is connected) and `meta.hostId` let it handle people who left.
    Randomness (dice, shuffles) is fine inside the reducer: only the authority runs it and
    everyone receives the result.

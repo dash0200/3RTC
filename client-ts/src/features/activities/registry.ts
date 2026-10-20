@@ -40,6 +40,22 @@ const SHIPPED: ActivityDefinition[] = [
     description: 'Two players (or play the computer), everyone else watches',
     minPeople: 1,
     load: () => import('./chess/index')
+  },
+  {
+    id: 'lastcard',
+    name: 'Last Card',
+    icon: '🃏',
+    description: 'Match colours and symbols, 2–10 players (or the computer)',
+    minPeople: 1,
+    load: () => import('./lastcard/index')
+  },
+  {
+    id: 'whiteboard',
+    name: 'Whiteboard',
+    icon: '🖍️',
+    description: 'Draw and write together, live',
+    minPeople: 1,
+    load: () => import('./whiteboard/index')
   }
 ];
 
