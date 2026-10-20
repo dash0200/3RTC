@@ -1,26 +1,29 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Privacy – 3RTC</title>
-<meta name="description" content="What 3RTC shares and with whom: no accounts, no ads, no analytics. Video, voice and chat go directly between devices.">
-<link rel="canonical" href="https://3rtc.me/privacy">
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="3RTC">
-<meta property="og:url" content="https://3rtc.me/privacy">
-<meta property="og:title" content="Privacy – 3RTC">
-<meta property="og:description" content="What 3RTC shares and with whom: no accounts, no ads, no analytics. Video, voice and chat go directly between devices.">
-<meta property="og:image" content="https://3rtc.me/og-image.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://3rtc.me/og-image.png">
-<meta name="theme-color" content="#0b0b0e">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<link rel="stylesheet" href="/site.css">
-<script type="application/ld+json">{
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Privacy – 3RTC</title>
+    <meta name="description"
+        content="What 3RTC shares and with whom: no accounts, no ads, no analytics. Video, voice and chat go directly between devices.">
+    <link rel="canonical" href="https://3rtc.me/privacy">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="3RTC">
+    <meta property="og:url" content="https://3rtc.me/privacy">
+    <meta property="og:title" content="Privacy – 3RTC">
+    <meta property="og:description"
+        content="What 3RTC shares and with whom: no accounts, no ads, no analytics. Video, voice and chat go directly between devices.">
+    <meta property="og:image" content="https://3rtc.me/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://3rtc.me/og-image.png">
+    <meta name="theme-color" content="#0b0b0e">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+    <link rel="stylesheet" href="/site.css">
+    <script type="application/ld+json">{
  "@context": "https://schema.org",
  "@graph": [
   {
@@ -43,41 +46,96 @@
  ]
 }</script>
 </head>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-L0R5KZLP9B"></script>
+<script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+
+    gtag('config', 'G-L0R5KZLP9B');
+</script>
+
 <body>
-<header class="site-header"><div class="wrap">
-<a class="logo" href="/"><img src="/favicon.svg" alt="" width="30" height="30">3RTC</a>
-<nav class="site-nav" aria-label="Site"><a href="/about">About</a><a href="/youtube-watch-party">YouTube</a><a href="/watch-movies-together">Movies</a><a href="/play-ludo-online">Ludo</a><a class="btn btn-sm" href="/">Open app</a></nav>
-</div></header>
-<main class="wrap">
-<p class="eyebrow">Privacy</p>
-<h1>Privacy at 3RTC</h1>
-<p class="lede">3RTC has no accounts, no ads and no analytics. Your video, voice, chat and images travel directly between the devices in your room. Here is exactly what is shared, and with whom.</p>
+    <header class="site-header">
+        <div class="wrap">
+            <a class="logo" href="/"><img src="/favicon.svg" alt="" width="30" height="30">3RTC</a>
+            <nav class="site-nav" aria-label="Site"><a href="/about">About</a><a
+                    href="/youtube-watch-party">YouTube</a><a href="/watch-movies-together">Movies</a><a
+                    href="/play-ludo-online">Ludo</a><a class="btn btn-sm" href="/">Open app</a></nav>
+        </div>
+    </header>
+    <main class="wrap">
+        <p class="eyebrow">Privacy</p>
+        <h1>Privacy at 3RTC</h1>
+        <p class="lede">3RTC has no accounts, no ads and no analytics. Your video, voice, chat and images travel
+            directly between the devices in your room. Here is exactly what is shared, and with whom.</p>
 
-<h2>What goes directly between devices</h2>
-<p>Video streams, voice, chat messages, images, reactions and playback sync are sent straight from one device to the others in your room over WebRTC, which encrypts everything in transit. None of it passes through or is stored on 3RTC’s servers.</p>
+        <h2>What goes directly between devices</h2>
+        <p>Video streams, voice, chat messages, images, reactions and playback sync are sent straight from one device to
+            the others in your room over WebRTC, which encrypts everything in transit. None of it passes through or is
+            stored on 3RTC’s servers.</p>
 
-<h2>What the connection server sees</h2>
-<p>To introduce devices to each other, 3RTC runs a small connection (signaling) server. It handles your room code, the display name you choose, a random session ID and the network details your browser needs to connect (which include IP addresses). It keeps this only while your room is open, and its logs record room codes and session IDs, not names or messages.</p>
+        <h2>What the connection server sees</h2>
+        <p>To introduce devices to each other, 3RTC runs a small connection (signaling) server. It handles your room
+            code, the display name you choose, a random session ID and the network details your browser needs to connect
+            (which include IP addresses). It keeps this only while your room is open, and its logs record room codes and
+            session IDs, not names or messages.</p>
 
-<h2>Other services involved</h2>
-<table>
-<tr><th>Service</th><th>Why</th><th>What it receives</th></tr>
-<tr><td>Google STUN servers</td><td>Helps devices find a direct route to each other</td><td>Your IP address</td></tr>
-<tr><td>YouTube</td><td>Plays YouTube videos inside the room</td><td>What YouTube normally receives when you watch an embedded video, under Google’s privacy policy</td></tr>
-<tr><td>noembed.com</td><td>Looks up a YouTube video’s title</td><td>The video link</td></tr>
-<tr><td>Google Fonts</td><td>Loads the app’s fonts</td><td>Your IP address and browser details</td></tr>
-<tr><td>Vercel</td><td>Hosts the website</td><td>Standard web request information</td></tr>
-</table>
+        <h2>Other services involved</h2>
+        <table>
+            <tr>
+                <th>Service</th>
+                <th>Why</th>
+                <th>What it receives</th>
+            </tr>
+            <tr>
+                <td>Google STUN servers</td>
+                <td>Helps devices find a direct route to each other</td>
+                <td>Your IP address</td>
+            </tr>
+            <tr>
+                <td>YouTube</td>
+                <td>Plays YouTube videos inside the room</td>
+                <td>What YouTube normally receives when you watch an embedded video, under Google’s privacy policy</td>
+            </tr>
+            <tr>
+                <td>noembed.com</td>
+                <td>Looks up a YouTube video’s title</td>
+                <td>The video link</td>
+            </tr>
+            <tr>
+                <td>Google Fonts</td>
+                <td>Loads the app’s fonts</td>
+                <td>Your IP address and browser details</td>
+            </tr>
+            <tr>
+                <td>Vercel</td>
+                <td>Hosts the website</td>
+                <td>Standard web request information</td>
+            </tr>
+        </table>
 
-<h2>The people in your room</h2>
-<p>Because devices connect directly, people in the same room can see each other’s IP addresses, as with any peer-to-peer app. Only share your room code with people you trust.</p>
+        <h2>The people in your room</h2>
+        <p>Because devices connect directly, people in the same room can see each other’s IP addresses, as with any
+            peer-to-peer app. Only share your room code with people you trust.</p>
 
-<h2>What is stored on your device</h2>
-<p>Your browser keeps your display name and settings (audio, volume, layout) in local storage so you don’t have to set them again, and the installed app caches its own files so it opens quickly. 3RTC sets no tracking cookies. Clearing your browser data removes all of this.</p>
-</main>
-<footer class="site-footer"><div class="wrap">
-<nav aria-label="Footer"><a href="/">Open 3RTC</a><a href="/about">About & FAQ</a><a href="/youtube-watch-party">YouTube watch party</a><a href="/watch-movies-together">Watch movies together</a><a href="/watch-videos-together">Watch your own videos together</a><a href="/watch-links-together">Twitch, Vimeo & video links</a><a href="/play-ludo-online">Play Ludo online</a><a href="/netflix-watch-party">Netflix watch party?</a><a href="/watch2gether-alternative">Watch2Gether alternative</a><a href="/privacy">Privacy</a></nav>
-<p>3RTC · watch videos together, peer to peer</p>
-</div></footer>
+        <h2>What is stored on your device</h2>
+        <p>Your browser keeps your display name and settings (audio, volume, layout) in local storage so you don’t have
+            to set them again, and the installed app caches its own files so it opens quickly. 3RTC sets no tracking
+            cookies. Clearing your browser data removes all of this.</p>
+    </main>
+    <footer class="site-footer">
+        <div class="wrap">
+            <nav aria-label="Footer"><a href="/">Open 3RTC</a><a href="/about">About & FAQ</a><a
+                    href="/youtube-watch-party">YouTube watch party</a><a href="/watch-movies-together">Watch movies
+                    together</a><a href="/watch-videos-together">Watch your own videos together</a><a
+                    href="/watch-links-together">Twitch, Vimeo & video links</a><a href="/play-ludo-online">Play Ludo
+                    online</a><a href="/netflix-watch-party">Netflix watch party?</a><a
+                    href="/watch2gether-alternative">Watch2Gether alternative</a><a href="/privacy">Privacy</a></nav>
+            <p>3RTC · watch videos together, peer to peer</p>
+        </div>
+    </footer>
 </body>
+
 </html>
