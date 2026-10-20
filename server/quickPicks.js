@@ -82,6 +82,11 @@ const YOUTUBE_API_BASE = process.env.YOUTUBE_API_BASE || 'https://www.googleapis
 let quickPicks = null;
 let quickPicksTimer = null;
 const unavailableCharts = new Set(); // `${region}:${categoryId}`: charts YouTube doesn't publish for that country
+const preSerializedCache = new Map();
+
+export function invalidateQuickPicksCache() {
+  preSerializedCache.clear();
+}
 
 function readYouTubeApiKey() {
   if (process.env.YOUTUBE_API_KEY) return process.env.YOUTUBE_API_KEY.trim();
@@ -96,7 +101,7 @@ async function youtubeApi(endpoint, params, key) {
   const url = new URL(`${YOUTUBE_API_BASE}/${endpoint}`);
   for (const [k, v] of Object.entries({ ...params, key })) url.searchParams.set(k, String(v));
   const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-  const body = await res.json().catch(() => ({}));
+  const body = /** @type {any} */ (await res.json().catch(() => ({})));
   if (!res.ok) {
     const reason = body?.error?.errors?.[0]?.reason || body?.error?.message || res.status;
     throw new Error(`YouTube ${endpoint} failed: ${reason}`);
@@ -167,9 +172,9 @@ const DETAILS = { part: 'snippet,status,contentDetails,player', maxWidth: 480 };
 
 /** One country's trending chart for a category (1 unit; 50: room to drop Shorts): the videos that play there, in order. */
 async function fetchChart(category, region, key) {
-  const chart = await youtubeApi('videos', {
+  const chart = /** @type {any} */ (await youtubeApi('videos', {
     ...DETAILS, chart: 'mostPopular', videoCategoryId: category.chart, regionCode: region, maxResults: 50
-  }, key);
+  }, key));
   return (chart.items || []).filter((v) => isGoodPick(v, [region]));
 }
 
@@ -199,19 +204,19 @@ async function fetchCategory(category, key, previousVideos, rotation) {
   // search: 100 units whatever the count, so ask for 50 (room to drop Shorts). YouTube filters
   // to videos that can play outside youtube.com.
   const query = category.queries[rotation % category.queries.length];
-  const search = await youtubeApi('search', {
+  const search = /** @type {any} */ (await youtubeApi('search', {
     part: 'id', type: 'video', q: query, maxResults: 50, safeSearch: 'moderate',
     videoEmbeddable: 'true', videoSyndicated: 'true', ...(category.region ? { regionCode: category.region } : {}),
     ...(category.order ? { order: category.order } : {}),
     ...(category.recentDays ? { publishedAfter: new Date(Date.now() - category.recentDays * 86400000).toISOString() } : {})
-  }, key);
+  }, key));
   const newIds = (search.items || []).map((item) => item.id?.videoId).filter(Boolean);
   // Details for the new results and a re-check of the saved ones: 1 unit per 50 ids
   const ids = [...new Set([...newIds, ...previousVideos.map((v) => v.id)])];
   if (ids.length === 0) return [];
   const byId = new Map();
   for (let i = 0; i < ids.length; i += 50) {
-    const videos = await youtubeApi('videos', { ...details, id: ids.slice(i, i + 50).join(',') }, key);
+    const videos = /** @type {any} */ (await youtubeApi('videos', { ...details, id: ids.slice(i, i + 50).join(',') }, key));
     for (const v of videos.items || []) byId.set(v.id, v);
   }
   return ids.map((id) => byId.get(id)).filter((v) => v && isGoodPick(v))
@@ -225,12 +230,14 @@ async function refreshQuickPicks() {
     return false;
   }
   const rotation = { ...(quickPicks?.rotation || {}) };
+  /** @type {any[]} */
   const categories = [];
+  /** @type {Record<string, any[]>} */
   const trending = Object.fromEntries([...QUICK_PICKS_REGIONS, GLOBAL_REGION].map((r) => [r, []]));
   let refreshed = 0;
   let quotaHit = false;
-  const noteError = (err) => {
-    if (/quota/i.test(err.message)) quotaHit = true; // no point spending more calls today
+  const noteError = (/** @type {any} */ err) => {
+    if (/quota/i.test(err?.message || '')) quotaHit = true; // no point spending more calls today
   };
 
   // Trending: every country's chart for each category, and the worldwide mix of them
@@ -240,7 +247,7 @@ async function refreshQuickPicks() {
       if (!quotaHit && !unavailableCharts.has(`${region}:${category.id}`)) {
         try {
           charts[region] = await fetchChart(category, region, key);
-        } catch (err) {
+        } catch (/** @type {any} */ err) {
           log('WARN', `Quick picks: ${category.id} ${region}: ${err.message}`);
           noteError(err);
           if (/chartNotFound|notFound|invalid/i.test(err.message)) unavailableCharts.add(`${region}:${category.id}`);
@@ -273,7 +280,7 @@ async function refreshQuickPicks() {
           refreshed += 1;
           continue;
         }
-      } catch (err) {
+      } catch (/** @type {any} */ err) {
         log('WARN', `Quick picks: ${category.id}: ${err.message}`);
         noteError(err);
       }
@@ -287,7 +294,7 @@ async function refreshQuickPicks() {
   invalidateQuickPicksCache();
   try {
     fs.writeFileSync(QUICK_PICKS_CACHE_FILE, JSON.stringify(quickPicks));
-  } catch (err) {
+  } catch (/** @type {any} */ err) {
     log('WARN', `Quick picks: could not save cache: ${err.message}`);
   }
   log('INFO', `Quick picks refreshed: ${categories.map((c) => `${c.id}=${c.videos.length}`).join(' ')}; trending rows ${Object.entries(trending).map(([r, list]) => `${r}=${list.length}`).join(' ')}`);
@@ -300,7 +307,7 @@ function scheduleQuickPicks(delayMs) {
     let ok = false;
     try {
       ok = await refreshQuickPicks();
-    } catch (err) {
+    } catch (/** @type {any} */ err) {
       log('WARN', `Quick picks refresh failed: ${err.message}`);
     }
     scheduleQuickPicks(ok ? QUICK_PICKS_REFRESH_MS : QUICK_PICKS_RETRY_MS);
@@ -402,7 +409,8 @@ export function getCorsHeaders(req) {
     'Content-Type': 'application/json; charset=UTF-8',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'X-Content-Type-Options': 'nosniff'
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN'
   };
 
   if (!origin) {

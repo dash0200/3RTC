@@ -27,6 +27,7 @@ export const newEpoch = () => crypto.randomBytes(8).toString('hex');
 /**
  * The server's signing secret: SIGNAL_SECRET, else (production) a file next to the server made on
  * first start (kept across restarts and updates), else a new random one for this process.
+ * @param {{ env?: NodeJS.ProcessEnv, dir?: string }} [options]
  */
 export function loadSecret({ env = process.env, dir } = {}) {
     if (env.SIGNAL_SECRET) return env.SIGNAL_SECRET;
