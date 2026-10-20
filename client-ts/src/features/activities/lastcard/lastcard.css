@@ -223,3 +223,11 @@
 @media (prefers-reduced-motion: reduce) {
   .lc-top, .lc-call-btn.is-urgent, .lc-catch-btn { animation: none; }
 }
+
+/* Full size on a computer: cards grow with the space (the table is sized from it) */
+@media (min-width: 761px) {
+  .stage-activity.is-full .lc { container-type: size; --lc-card-w: clamp(60px, min(9cqw, 16.5cqh), 150px); padding: 10px 16px; }
+  .stage-activity.is-full .lc-opp { padding: 7px 12px; }
+  .stage-activity.is-full .lc-status { font-size: 16px; }
+  .stage-activity.is-full .lc-dir { font-size: clamp(30px, 5cqh, 52px); }
+}

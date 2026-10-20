@@ -86,3 +86,13 @@
 /* the sidebar's height follows content: give the board a shape there */
 .stage-activity.is-sidebar .wb-stage,
 .stage-activity.is-window .wb-stage { flex: none; aspect-ratio: 16 / 10; width: 100%; }
+
+/* Full size on a computer: tools in a column on the left, so the board gets the full height */
+@media (min-width: 761px) {
+  .stage-activity.is-full .wb { flex-direction: row; padding: 6px 10px; gap: 10px; position: relative; }
+  .stage-activity.is-full .wb-toolbar { flex-direction: column; flex-wrap: nowrap; width: 88px; overflow-x: hidden; overflow-y: auto; align-items: stretch; padding-bottom: 0; }
+  .stage-activity.is-full .wb-group { flex-wrap: wrap; justify-content: center; }
+  .stage-activity.is-full .wb-text-btn { white-space: normal; width: 100%; }
+  .stage-activity.is-full .wb-stage { min-width: 0; }
+  .stage-activity.is-full .wb-foot { position: absolute; left: 112px; bottom: 12px; pointer-events: none; z-index: 2; }
+}

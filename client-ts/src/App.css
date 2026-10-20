@@ -10984,6 +10984,13 @@ video::cue {
   background: var(--bg-primary);
 }
 
+/* "Bigger": the game covers the whole app window */
+.stage-activity.is-bigger {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+}
+
 .activity-bar {
   display: flex;
   align-items: center;
