@@ -317,7 +317,10 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
   // ---- pointer ----
   const toBoard = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
     const r = overRef.current!.getBoundingClientRect();
-    return { x: (e.clientX - r.left) / fit.scale, y: (e.clientY - r.top) / fit.scale };
+    // past the edge counts as the edge: a stroke that leaves the board runs along it
+    const x = (e.clientX - r.left) / fit.scale;
+    const y = (e.clientY - r.top) / fit.scale;
+    return { x: Math.max(0, Math.min(BOARD_W, x)), y: Math.max(0, Math.min(BOARD_H, y)) };
   };
   const sent = useRef(0); // numbers of my live stroke already sent
   const liveTimer = useRef<ReturnType<typeof setInterval> | null>(null);
