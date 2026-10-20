@@ -129,7 +129,10 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     if (lastEpoch.current === index.epoch) return;
     const old = lastEpoch.current;
     lastEpoch.current = index.epoch;
-    setChunks({});
+    // Old chunks aren't wiped here: the new board's chunks have already reported in by now
+    // (children's effects run first), and wiping would lose them until they change. Entries
+    // from the old board are left out by their epoch, and drop out as the new ones replace them.
+    setChunks((prev) => Object.fromEntries(Object.entries(prev).filter(([, c]) => c.epoch === index.epoch)));
     undoRef.current = [];
     redoRef.current = [];
     releaseSharedStores(room.bus, (k) => k.startsWith(`${baseKey}:${old}:`));
