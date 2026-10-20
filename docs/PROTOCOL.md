@@ -95,6 +95,34 @@ viewer is used only if it matches the owner's SHA-256 for it; a viewer that sent
 asked again. An older owner ignores `swarm` (relay tree as before); older viewers never send it, so
 they keep using the tree, which only contains viewers like them.
 
+### Whiteboard (`features/activities/whiteboard`)
+Finished strokes are shared state (`act:whiteboard` and its chunks `act:whiteboard:<epoch>:<n>`).
+While drawing, two messages that are not state:
+| type | fields |
+|---|---|
+| `wb-live` | `e` (board epoch), `id, k, c, w`, `from` (how many numbers were sent before) and `pts` (the new ones), `name`; or `{ e, id, done: true }` when the stroke ends |
+| `wb-cursor` | `x, y, name` (board units, at most ~12 a second), or `gone: true` |
+
+### Cards in hand (Last Card)
+Shared stores can pass `redact(state, peerId)` (core/sharedState.ts): every copy of the state sent to
+a peer is made for that peer, so in Last Card each app receives its own hand and nobody else's. No new
+message types.
+
+### Stream doctor (`features/diagnostics/speedTest.ts`)
+A test between two apps from the Network HUD. Every app answers; older apps ignore these types, and
+no test data is sent to a peer before it answered `diag-hello`.
+| type | direction | fields |
+|---|---|---|
+| `diag-hello` / `diag-hello-ok` | tester → peer → tester | `v, nonce`; the reply adds `device` (browser, cores, network hints) and `live` (that app's streaming numbers) |
+| `diag-ping` / `diag-pong` | either | `t, n`: round trip on the control channel |
+| `diag-burst` | tester → peer | `id, high, low, ms`: send test frames to me for `ms`, keeping the bulk channel's buffer between `low` and `high` bytes |
+| `diag-burst-end` | peer → tester | `id, sender` (frames, time waiting on the buffer, drain time), `link` (its getStats view), or `error` |
+| `diag-recv-end` / `diag-recv-result` | tester → peer → tester | after the tester sent frames: `id, frames`; the reply has `meter` (what arrived, gaps, speed) and `link` |
+| `diag-stats` / `diag-stats-ok` | tester → peer → tester | `id`; the reply has `link, live, device` |
+
+Test frames (bulk channel, binary): 16 KB, starting with `DGN1`, then the test id and a sequence
+number (uint32, big-endian).
+
 ### Local file format (`features/files/useFileFormat.js`)
 | type | direction | fields |
 |---|---|---|
