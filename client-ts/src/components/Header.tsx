@@ -112,7 +112,7 @@ export default function Header({
           {typeof onVoteSkip === 'function' && totalParticipants > 1 && (
             <button
               type="button"
-              className={`rh-action-btn rh-skip-btn ${hasVotedSkip ? 'is-voted' : ''}`}
+              className={`rh-action-btn rh-skip-btn vote-skip-btn ${hasVotedSkip ? 'is-voted' : ''}`}
               onClick={onVoteSkip}
               title={hasVotedSkip ? 'You voted to skip (click to unvote)' : `Vote to skip (${skipVotes.length}/${requiredVotes} needed)`}
             >
@@ -142,7 +142,7 @@ export default function Header({
       <button type="button" className={`rh-invite ${alone ? 'is-primary' : ''}`} onClick={onOpenQrCode}>
         {alone && <Icon name="userPlus" size={17} strokeWidth={2.2} />}
         {alone ? 'Invite friends' : 'Invite'}
-        {!alone && <span className="rh-count">{peerCount} / {MAX_ROOM_SIZE}</span>}
+        {!alone && <span className="rh-count">{peerCount} / {Math.max(MAX_ROOM_SIZE, peerCount)}</span>}
       </button>
       {onToggleChat && (
         <button

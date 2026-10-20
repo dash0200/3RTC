@@ -24,7 +24,7 @@ export interface DesktopDockProps {
   onToggleBlockAudio?: () => void;
   audioSettings?: AudioSettings | null;
   onUpdateAudioSettings?: (patch: Partial<AudioSettings>) => void;
-  onSelectOutput?: (deviceId: string) => Promise<boolean>;
+  onSelectOutput?: (deviceId: string, label?: string) => Promise<boolean>;
   onOpenAudioSettings?: () => void;
   isPttActive?: boolean;
   onPttPressStart?: () => void;
@@ -206,7 +206,7 @@ export default function DesktopDock({
                 compact
                 audioSettings={audioSettings}
                 onUpdateAudioSettings={onUpdateAudioSettings ? (settings) => onUpdateAudioSettings(settings) : undefined}
-                onSelectOutput={onSelectOutput ? (id) => { void onSelectOutput(id); } : undefined}
+                onSelectOutput={onSelectOutput ? (id, label) => { void onSelectOutput(id, label); } : undefined}
                 isMicLive={!isMicMuted}
               />
               <button type="button" className="dock-pop-link" onClick={() => { devices.close(); onOpenAudioSettings?.(); }}>Voice settings &amp; mic test…</button>

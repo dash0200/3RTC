@@ -285,6 +285,9 @@ export default function LocalVideoSyncPlayer({
     if (typeof fileFormat?.clearTranscodedAudio === 'function') {
       fileFormat.clearTranscodedAudio();
     }
+    if (typeof fileFormat?.clearPendingSubtitle === 'function') {
+      fileFormat.clearPendingSubtitle();
+    }
   }, [fileFormat]);
 
   // Cleanup PGS WASM renderer on player unmount
@@ -297,12 +300,15 @@ export default function LocalVideoSyncPlayer({
     };
   }, []);
 
+  const clearCurrentSubtitlesAndAudioRef = useRef(clearCurrentSubtitlesAndAudio);
+  clearCurrentSubtitlesAndAudioRef.current = clearCurrentSubtitlesAndAudio;
+
   useEffect(() => {
     if (lastActiveVideoKeyRef.current !== activeVideoKey) {
       lastActiveVideoKeyRef.current = activeVideoKey;
-      clearCurrentSubtitlesAndAudio();
+      clearCurrentSubtitlesAndAudioRef.current();
     }
-  }, [activeVideoKey, clearCurrentSubtitlesAndAudio]);
+  }, [activeVideoKey]);
 
   // If initialFile changes from parent
   useEffect(() => {
@@ -568,7 +574,7 @@ export default function LocalVideoSyncPlayer({
         isRemoteActionRef.current = false;
       }, 600);
     }
-  }, [remoteAction, onClose, clearCurrentSubtitlesAndAudio, subtitles?.vttUrl]);
+  }, [remoteAction, onClose]);
 
   // 4. File drag and drop handlers
   /** Show these subtitles here and send them to the room. */
@@ -813,10 +819,15 @@ export default function LocalVideoSyncPlayer({
 
   // Subtitles read out of the video file (picked here or by someone in the room): use and share them
   const pendingSubtitle = fileFormat?.pendingSubtitle;
+  const handleLoadPgsSubtitlesRef = useRef(handleLoadPgsSubtitles);
+  handleLoadPgsSubtitlesRef.current = handleLoadPgsSubtitles;
+  const handledPendingSubtitleIdRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (!pendingSubtitle) return;
+    if (!pendingSubtitle || pendingSubtitle.id === handledPendingSubtitleIdRef.current) return;
+    handledPendingSubtitleIdRef.current = pendingSubtitle.id;
     if (pendingSubtitle.isPgs && pendingSubtitle.supBytes) {
-      handleLoadPgsSubtitles(pendingSubtitle.supBytes, pendingSubtitle.fileName, pendingSubtitle.trackNumber);
+      handleLoadPgsSubtitlesRef.current(pendingSubtitle.supBytes, pendingSubtitle.fileName, pendingSubtitle.trackNumber);
       return;
     }
     if (pendingSubtitle.vttString) {
@@ -835,7 +846,7 @@ export default function LocalVideoSyncPlayer({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingSubtitle?.id, handleLoadPgsSubtitles]);
+  }, [pendingSubtitle?.id]);
 
   // Sync PGS subtitles visibility
   useEffect(() => {
@@ -878,8 +889,12 @@ export default function LocalVideoSyncPlayer({
       try { pgsRendererRef.current.dispose(); } catch (e) { }
       pgsRendererRef.current = null;
     }
+    handledPendingSubtitleIdRef.current = null;
     setSubtitles(null);
     setSyncStatus('Subtitles turned off');
+    if (typeof fileFormat?.clearPendingSubtitle === 'function') {
+      fileFormat.clearPendingSubtitle();
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -1733,7 +1748,7 @@ export default function LocalVideoSyncPlayer({
                 setSubtitleTab('style');
                 setShowSubtitleSettings(true);
               }}
-              title="Subtitle Appearance (Font Size, Color, Background) & Timing Offset"
+              title="Subtitle Style & Timing (Font Size, Color, Background)"
             >
               🎨 Style & Timing
             </button>
@@ -2052,13 +2067,13 @@ export default function LocalVideoSyncPlayer({
                   setShowSettings(false);
                   setShowSubtitleSettings((prev) => {
                     const next = !prev;
-                    if (next && !subtitles) {
+                    if (next) {
                       setSubtitleTab('tracks');
                     }
                     return next;
                   });
                 }}
-                title="Subtitle Tracks & Appearance Settings"
+                title="Subtitle Appearance & Timing Settings"
               >
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" className="sub-settings-gear-icon">
                   <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z" />
@@ -2083,6 +2098,16 @@ export default function LocalVideoSyncPlayer({
                     </svg>
                     <span>Subtitles & Captions</span>
                   </div>
+                  {subtitles && (
+                    <button
+                      type="button"
+                      className="sub-mini-btn remove"
+                      onClick={handleRemoveSubtitles}
+                      title="Remove subtitles"
+                    >
+                      ✕
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="sub-close-btn"
@@ -2193,20 +2218,22 @@ export default function LocalVideoSyncPlayer({
                         <div className="sub-section-header">
                           <span className="sub-section-title">EXTERNAL FILE (.SRT / .VTT)</span>
                         </div>
-                        {subtitles && subtitles.trackNumber === undefined ? (
+                        {subtitles ? (
                           <div className="sub-file-meta-row">
-                            <span className="sub-file-name" title={subtitles.fileName}>
-                              📄 {subtitles.fileName}
+                            <span className="sub-file-name" title={subtitles.fileName || `Track ${subtitles.trackNumber}`}>
+                              📄 {subtitles.fileName || `Track ${subtitles.trackNumber}`}
                             </span>
                             <div style={{ display: 'flex', gap: '4px' }}>
-                              <button
-                                type="button"
-                                className="sub-mini-btn"
-                                onClick={() => subtitleFileInputRef.current?.click()}
-                                title="Replace subtitle file"
-                              >
-                                Replace
-                              </button>
+                              {subtitles.trackNumber === undefined && (
+                                <button
+                                  type="button"
+                                  className="sub-mini-btn"
+                                  onClick={() => subtitleFileInputRef.current?.click()}
+                                  title="Replace subtitle file"
+                                >
+                                  Replace
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="sub-mini-btn remove"

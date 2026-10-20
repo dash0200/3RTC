@@ -84,7 +84,7 @@ export default function InviteScreen({
         </div>
 
         <div className="invite-actions">
-          <button type="submit" className="rd-btn rd-btn-primary rd-btn-xl">Join room</button>
+          <button type="submit" className="rd-btn rd-btn-primary rd-btn-xl" aria-label="Join Room">Join room</button>
           <button type="button" className="rd-btn rd-btn-ghost" onClick={onDismiss}>Start my own room instead</button>
         </div>
       </form>

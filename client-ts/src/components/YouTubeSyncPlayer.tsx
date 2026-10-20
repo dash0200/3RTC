@@ -78,6 +78,7 @@ export interface YouTubeSyncPlayerProps {
 
 export default function YouTubeSyncPlayer({
   videoId,
+  activeVideoTitle,
   onVideoChange,
   onBroadcastAction,
   remoteAction,
@@ -96,9 +97,9 @@ export default function YouTubeSyncPlayer({
 }: YouTubeSyncPlayerProps) {
   const [urlInput, setUrlInput] = useState('');
   const [playerReady, setPlayerReady] = useState(false);
-  const [, setSyncStatus] = useState('Ready');
+  const [syncStatus, setSyncStatus] = useState('Ready');
   const [inputError, setInputError] = useState('');
-  const [, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [, setCurrentTimeSec] = useState(0);
   const [, setDurationSec] = useState(0);
   const [, setVolume] = useState(100);
@@ -590,6 +591,15 @@ export default function YouTubeSyncPlayer({
         {/* Video Viewport occupying full space */}
         <div className="yt-stage-canvas-viewport" ref={iframeContainerRef}>
           <div id="yt-iframe-placeholder"></div>
+          {activeVideoTitle && (
+            <span className="yt-active-title" style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }} title={activeVideoTitle}>
+              {activeVideoTitle}
+            </span>
+          )}
+          <div className={`yt-sync-pill ${isPlaying ? 'playing' : 'paused'}`} style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}>
+            <span className="yt-sync-dot"></span>
+            <span>{syncStatus}</span>
+          </div>
         </div>
       </div>
     );
