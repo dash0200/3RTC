@@ -32,6 +32,14 @@ const SHIPPED: ActivityDefinition[] = [
     description: '2–4 players (or play the computer), everyone else watches',
     minPeople: 1,
     load: () => import('./ludo/index')
+  },
+  {
+    id: 'chess',
+    name: 'Chess',
+    icon: '♟️',
+    description: 'Two players (or play the computer), everyone else watches',
+    minPeople: 1,
+    load: () => import('./chess/index')
   }
 ];
 
