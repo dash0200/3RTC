@@ -4,7 +4,7 @@
  * webrtc/*, and the shared plumbing in core/* (see docs/ARCHITECTURE.md).
  */
 import { getClientId } from './utils/clientId';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import Stage from './components/Stage';
 import LiveChat from './components/LiveChat';
@@ -30,6 +30,7 @@ import { PROTOCOL_VERSION } from './webrtc/config';
 import { usePeerMesh } from './webrtc/usePeerMesh';
 import { useVoiceChat } from './hooks/useVoiceChat';
 import { useNetworkStats } from './hooks/useNetworkStats';
+import { useDiagResponder } from './features/diagnostics';
 import { useWakeLock } from './hooks/useWakeLock';
 import { useIsPhone } from './hooks/useIsPhone';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -64,6 +65,9 @@ import type { PeerMetadataRecord } from './webrtc/peerMessages';
 import type { ActivityMenuItem } from './features/activities/useActivities';
 import type { StageProps } from './components/Stage';
 import type { LiveChatProps } from './components/LiveChat';
+
+// Loaded when the Network HUD opens
+const StreamDoctor = lazy(() => import('./features/diagnostics/StreamDoctor'));
 
 export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
 export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
@@ -316,6 +320,7 @@ export default function App() {
   const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
   const soundboard = useSoundboard({ room, isAudioBlockedRef });
   const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast });
+  useDiagResponder(bus, peersRef);
 
   // ---- screens and dialogs -----------------------------------------------------------------
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -945,7 +950,11 @@ export default function App() {
           roomId={roomId}
           username={username}
           onTriggerPing={handleTriggerPing}
-        />
+        >
+          <Suspense fallback={null}>
+            <StreamDoctor bus={bus} peersRef={peersRef} peerNames={peerMetadata} selfName={username} />
+          </Suspense>
+        </NetworkDiagnosticsModal>
         <QrCodeModal
           isOpen={showQrModal}
           onClose={() => setShowQrModal(false)}
