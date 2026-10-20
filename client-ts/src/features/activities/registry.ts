@@ -56,6 +56,14 @@ const SHIPPED: ActivityDefinition[] = [
     description: 'Draw and write together, live',
     minPeople: 1,
     load: () => import('./whiteboard/index')
+  },
+  {
+    id: 'tycoon',
+    name: 'Tycoon',
+    icon: '🏙️',
+    description: 'Buy, build and bargain across India, 2–6 players (or the computer)',
+    minPeople: 1,
+    load: () => import('./tycoon/index')
   }
 ];
 
