@@ -22,7 +22,9 @@ describe('whiteboard strokes', () => {
     assert.ok(cleanStroke(pen('a', [0, 0, 10, 10])));
     assert.equal(cleanStroke(pen('a', [0, 0, 10])), null); // odd number of values
     assert.equal(cleanStroke(pen('a', [0, 0, 10, 10], { c: 'red' })), null);
-    assert.equal(cleanStroke(pen('a', [0, 0, 99999, 10])), null);
+    // a stroke that went off the board is kept, with its points at the edge
+    assert.deepEqual(cleanStroke(pen('a', [100, 100, 99999, -50]))?.p, [100, 100, 1600, 0]);
+    assert.equal(cleanStroke(pen('a', [0, 0, NaN, 10])), null);
     assert.equal(cleanStroke({ ...pen('a', [0, 0, 5, 5, 9, 9]), k: 'rect' }), null); // shapes have two points
     assert.equal(cleanStroke({ ...pen('a', [5, 5]), k: 'text', t: '  ' }), null);
     assert.deepEqual(cleanStroke({ ...pen('a', [5.4, 5.6]), k: 'text', t: 'hi' })?.p, [5, 6]);
