@@ -576,6 +576,9 @@ export default function App() {
     } : undefined
   };
 
+  // "Your turn" only while a game is open and loaded on this device
+  const shownActivityStatus = roomId && activities.current && activityLoad.loaded ? activityStatus : null;
+
   const activitySlot = roomId && activities.current ? (
     <ActivityStage
       activity={activities.current}
@@ -717,7 +720,7 @@ export default function App() {
       activityDefinition={activities.definition}
       activityView={activityView}
       onSetActivityView={setActivityView}
-      activityStatus={activityStatus}
+      activityStatus={shownActivityStatus}
       isAudioBlocked={isAudioBlocked}
       onToggleBlockAudio={toggleBlockAudio}
       queue={queue}
@@ -885,7 +888,7 @@ export default function App() {
               connectedPeers={connectedPeers}
               isHost={isHost}
               username={username}
-              activityStatus={activityStatus}
+              activityStatus={shownActivityStatus}
             />
             <div className="room-desktop-body">
               <div className="app-main-pane">
