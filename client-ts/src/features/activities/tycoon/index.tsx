@@ -289,7 +289,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
   const [trading, setTrading] = useState(false);
   const [confirmBankrupt, setConfirmBankrupt] = useState(-1);
 
-  const incoming = s.trade && s.trade.to === me ? s.trade : null;
+  const incoming = s.phase === 'playing' && s.trade && s.trade.to === me ? s.trade : null;
   const outgoing = s.trade && s.trade.from === me ? s.trade : null;
   const debtTotal = s.debt ? s.debt.payees.reduce((n, p) => n + p.amount, 0) : 0;
 

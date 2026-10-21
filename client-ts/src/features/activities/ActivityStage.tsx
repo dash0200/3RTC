@@ -285,11 +285,18 @@ export default function ActivityStage({
     // "Bigger": the game covers the whole app window (not the screen, like Full screen does)
     const [bigger, setBigger] = useState(false);
     const [status, setStatus] = useState<ActivityStatus>({ attention: false, color: '', label: '' });
-    const onStatus = useCallback((next: ActivityStatus) => setStatus((prev) => {
-        if (prev.attention === next.attention && prev.color === next.color && prev.label === next.label) return prev;
+    // Passed up right away (not from inside a state update): when the game closes, its last
+    // "nothing needs you" still reaches the app even though this component is going away
+    const lastStatus = useRef<ActivityStatus>({ attention: false, color: '', label: '' });
+    const onStatus = useCallback((next: ActivityStatus) => {
+        const prev = lastStatus.current;
+        if (prev.attention === next.attention && prev.color === next.color && prev.label === next.label) return;
+        lastStatus.current = next;
+        setStatus(next);
         onStatusChange?.(next);
-        return next;
-    }), [onStatusChange]);
+    }, [onStatusChange]);
+    // Gone (ended, or closed here): nothing to call attention to
+    useEffect(() => () => onStatusChange?.({ attention: false, color: '', label: '' }), [onStatusChange]);
 
     const shown = view === 'sidebar' && !isPhone ? 'sidebar' : view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
     const isBigger = bigger && shown === 'full' && !isFull && !isPhone;
