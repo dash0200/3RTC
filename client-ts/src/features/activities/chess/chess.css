@@ -254,3 +254,16 @@
   .stage-activity.is-full .chess-board-box { padding: 6px 8px 2px 2px; }
   .stage-activity.is-full .chess-panel { flex-basis: 260px; }
 }
+
+/* The last move: an arrow on the board and a line in the panel */
+.chess-arrow { pointer-events: none; animation: chess-arrow-in 0.35s ease-out; }
+.chess-arrow path, .chess-arrow circle { fill: rgba(232, 151, 23, 0.82); stroke: rgba(232, 151, 23, 0.82); }
+.chess-arrow path:first-of-type { fill: none; }
+.chess-arrow circle { stroke: none; }
+@keyframes chess-arrow-in { from { opacity: 0; } to { opacity: 1; } }
+.chess-last { margin: 0; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--bg-surface); font-size: 13.5px; line-height: 1.35; }
+.chess-last > span { display: flex; flex-direction: column; min-width: 0; }
+.chess-last-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+.chess-last-icon { width: 30px; height: 30px; flex: none; border-radius: 7px; background: var(--chess-light); padding: 1px; box-sizing: border-box; }
+.stage-activity.is-window .chess-last { padding: 5px 8px; font-size: 12.5px; }
+@media (prefers-reduced-motion: reduce) { .chess-arrow { animation: none; } }

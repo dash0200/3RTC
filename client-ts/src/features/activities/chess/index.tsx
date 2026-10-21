@@ -41,6 +41,7 @@ import {
   type PromotionPiece
 } from './engine';
 import { Piece, PieceIcon } from './pieces';
+import type { PlayedMove } from './rules';
 import './chess.css';
 
 const BOT_DELAY_MS = 700;
@@ -92,6 +93,59 @@ function lastMoveSlides(state: ChessState): Map<number, number> {
     slides.set(kingSide ? last.from + 1 : last.from - 1, kingSide ? last.from + 3 : last.from - 4);
   }
   return slides;
+}
+
+const PIECE_NAMES: Record<string, string> = { K: 'King', Q: 'Queen', R: 'Rook', B: 'Bishop', N: 'Knight' };
+const sqName = (sq: number): string => `${FILES[sq & 7]}${8 - (sq >> 3)}`;
+
+/** The last move as words: "White Knight g1 → f3, takes, check" */
+export function describeMove(m: PlayedMove, color: ChessColor | null): { piece: string; text: string } {
+  const side = color === 'w' ? 'White' : color === 'b' ? 'Black' : '';
+  if (m.san.startsWith('O-O')) {
+    return { piece: 'k', text: `${side} castled ${m.san.startsWith('O-O-O') ? 'queenside' : 'kingside'} (King ${sqName(m.from)} → ${sqName(m.to)})` };
+  }
+  const letter = /^[KQRBN]/.test(m.san) ? m.san[0] : 'P';
+  const name = letter === 'P' ? 'Pawn' : PIECE_NAMES[letter];
+  const extra = [
+    m.san.includes('x') ? 'takes' : '',
+    m.promo ? `becomes a ${PIECE_NAMES[m.promo.toUpperCase()]}` : '',
+    m.san.endsWith('#') ? 'checkmate' : m.san.endsWith('+') ? 'check' : ''
+  ].filter(Boolean);
+  return { piece: letter.toLowerCase(), text: `${side} ${name} ${sqName(m.from)} → ${sqName(m.to)}${extra.length ? `, ${extra.join(', ')}` : ''}` };
+}
+
+/** An arrow along the last move's path (an L for knights) */
+function LastMoveArrow({ move, flipped }: { move: PlayedMove; flipped: boolean }): JSX.Element {
+  const c = (sq: number) => {
+    const { x, y } = squareXY(sq, flipped);
+    return { x: x + SQ / 2, y: y + SQ / 2 };
+  };
+  const a = c(move.from);
+  const b = c(move.to);
+  const df = Math.abs((move.to & 7) - (move.from & 7));
+  const dr = Math.abs((move.to >> 3) - (move.from >> 3));
+  const knight = (df === 1 && dr === 2) || (df === 2 && dr === 1);
+  // a knight goes the long way first, then turns
+  const points = knight ? [a, Math.abs(b.x - a.x) > Math.abs(b.y - a.y) ? { x: b.x, y: a.y } : { x: a.x, y: b.y }, b] : [a, b];
+  const end = points[points.length - 1];
+  const prev = points[points.length - 2];
+  const ang = Math.atan2(end.y - prev.y, end.x - prev.x);
+  const head = 34;
+  // stop the line where the head starts
+  const tip = { x: end.x - Math.cos(ang) * 8, y: end.y - Math.sin(ang) * 8 };
+  const base = { x: tip.x - Math.cos(ang) * head, y: tip.y - Math.sin(ang) * head };
+  const start = { x: points[0].x + Math.cos(Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x)) * 18, y: points[0].y + Math.sin(Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x)) * 18 };
+  const line = [start, ...points.slice(1, -1), base].map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const wing = (side: 1 | -1) => ({ x: base.x + Math.cos(ang + (side * Math.PI) / 2) * 20, y: base.y + Math.sin(ang + (side * Math.PI) / 2) * 20 });
+  const w1 = wing(1);
+  const w2 = wing(-1);
+  return (
+    <g className="chess-arrow" aria-hidden="true">
+      <circle cx={a.x} cy={a.y} r={10} />
+      <path d={line} fill="none" strokeWidth={15} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={`M${tip.x} ${tip.y}L${w1.x} ${w1.y}L${w2.x} ${w2.y}Z`} strokeWidth={4} strokeLinejoin="round" />
+    </g>
+  );
 }
 
 function Board({ state, flipped, canMove, onMove }: BoardProps): JSX.Element {
@@ -261,6 +315,7 @@ function Board({ state, flipped, canMove, onMove }: BoardProps): JSX.Element {
         ))}
         <g>{hints}</g>
         <g>{pieces}</g>
+        {last && <LastMoveArrow key={`${state.moves.length}:${lastKey}`} move={last} flipped={flipped} />}
         {drag?.moved && pos.board[drag.from] !== '.' && (
           <g className="chess-piece is-dragging">
             <Piece
@@ -474,6 +529,11 @@ export default function Chess({ activityId }: ChessProps): JSX.Element {
     return `${check}${nameOf(turn)} to move.`;
   };
 
+  // The last move in words (the piece that moved is the one now on its square)
+  const lastPlayed = state.moves[state.moves.length - 1] || null;
+  const lastMoveColor = lastPlayed ? colorOf(state.pos.board[lastPlayed.to]) : null;
+  const lastMove = lastPlayed ? describeMove(lastPlayed, lastMoveColor) : null;
+
   // Seats shown in board order: top player first
   const topColor: ChessColor = flipped ? 'w' : 'b';
   const seatOrder: ChessColor[] = [topColor, topColor === 'w' ? 'b' : 'w'];
@@ -492,6 +552,15 @@ export default function Chess({ activityId }: ChessProps): JSX.Element {
         <p className="chess-status" data-testid="chess-status" aria-live="polite">
           {status()}
         </p>
+        {lastMove && (
+          <p className="chess-last" data-testid="chess-last">
+            <PieceIcon type={lastMove.piece} color={lastMoveColor ?? 'w'} className="chess-last-icon" />
+            <span>
+              <span className="chess-last-label">Last move</span>
+              {lastMove.text}
+            </span>
+          </p>
+        )}
 
         <ul className="chess-seats">
           {seatOrder.map((color) => {
