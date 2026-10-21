@@ -307,7 +307,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
       <div className="ty ty-lobby">
         <div className="ty-lobby-card">
           <div className="ty-lobby-head">
-            <svg viewBox="0 0 200 70" className="ty-lobby-logo" aria-hidden="true">
+            <svg viewBox="-30 0 260 70" className="ty-lobby-logo" aria-hidden="true">
               <text x={100} y={52} textAnchor="middle" fontSize={50} fontWeight={900} fill="#e0393e" stroke="#23252d" strokeWidth={3} paintOrder="stroke" fontFamily="'Bricolage Grotesque Variable', 'Figtree Variable', sans-serif">TYCOON</text>
             </svg>
             <p className="ty-muted">Buy places across India, collect rent, build houses and hotels, make deals. Last one standing wins.</p>
