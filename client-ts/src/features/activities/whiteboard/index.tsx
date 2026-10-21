@@ -40,6 +40,10 @@ const ERASER_R = 14;
 const LIVE_EVERY_MS = 40;
 const CURSOR_EVERY_MS = 80;
 
+/** A stroke exactly as it will be saved: previews draw this too, so letting go changes nothing */
+const finalize = (s: Stroke): Stroke | null => cleanStroke(s.k === 'pen' || s.k === 'hl' ? { ...s, p: simplify(s.p) } : s);
+const PENDING_MS = 10000; // how long a stroke waits to show up saved before it's dropped
+
 const newId = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 // ---- one chunk of strokes (each is its own shared store) -------------------------------------
@@ -90,6 +94,8 @@ const TOOL_LABELS: Record<Tool | 'eraser', string> = {
 interface LiveStroke {
   stroke: Stroke;
   at: number;
+  /** finished: waiting for its saved copy */
+  done?: boolean;
 }
 interface Cursor {
   x: number;
@@ -146,6 +152,7 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
   // ---- tools ----
   const [tool, setTool] = useState<Tool | 'eraser'>('pen');
   const [color, setColor] = useState(COLORS[0]);
+  const [customColor, setCustomColor] = useState('#14b8a6');
   const [sizeIx, setSizeIx] = useState(1);
   const ink = index.bg === 'dark' && color === COLORS[0] ? '#f4f4f6' : index.bg === 'light' && color === COLORS[1] ? '#1f2329' : color;
   const width = tool === 'text' ? TEXT_SIZES[sizeIx] : SIZES[sizeIx];
@@ -188,6 +195,10 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
 
   // ---- the eraser marks strokes as you drag over them ----
   const [erasing, setErasing] = useState<Set<string>>(new Set());
+  // Removed here but maybe not yet everywhere (the change makes a round trip): hidden right away
+  const [gone, setGone] = useState<Set<string>>(new Set());
+  // Added here but not saved yet: drawn on top until they are, so nothing blinks
+  const pendingRef = useRef<Map<string, { stroke: Stroke; at: number }>>(new Map());
 
   // committed strokes
   useEffect(() => {
@@ -195,8 +206,8 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     if (!ctx) return;
     ctx.fillStyle = BG[index.bg];
     ctx.fillRect(0, 0, BOARD_W, BOARD_H);
-    for (const s of strokes) drawStroke(ctx, s, { dim: erasing.has(s.id) });
-  }, [strokes, erasing, fit, index.bg]); // eslint-disable-line react-hooks/exhaustive-deps
+    for (const s of strokes) if (!gone.has(s.id)) drawStroke(ctx, s, { dim: erasing.has(s.id) });
+  }, [strokes, erasing, gone, fit, index.bg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- live strokes and cursors from the others ----
   const liveRef = useRef<Map<string, LiveStroke>>(new Map()); // `${peer}:${id}`
@@ -210,7 +221,9 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     if (msg?.e !== epochRef.current || typeof msg.id !== 'string') return;
     const key = `${from}:${msg.id}`;
     if (msg.done) {
-      liveRef.current.delete(key);
+      // keep showing it until the saved copy arrives (then the overlay drops it), so it doesn't blink
+      const entry = liveRef.current.get(key);
+      if (entry) liveRef.current.set(key, { ...entry, at: Date.now(), done: true });
       redrawOverlay();
       return;
     }
@@ -237,8 +250,14 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
       const now = Date.now();
       let changed = false;
       for (const [k, v] of liveRef.current) {
-        if (now - v.at > 4000) {
+        if (now - v.at > (v.done ? PENDING_MS : 4000)) {
           liveRef.current.delete(k);
+          changed = true;
+        }
+      }
+      for (const [id, v] of pendingRef.current) {
+        if (now - v.at > PENDING_MS) {
+          pendingRef.current.delete(id);
           changed = true;
         }
       }
@@ -258,9 +277,13 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     const committed = new Set(strokes.map((s) => s.id));
     for (const [k, v] of liveRef.current) {
       if (committed.has(v.stroke.id)) liveRef.current.delete(k);
+      else drawStroke(ctx, finalize(v.stroke) ?? v.stroke);
+    }
+    for (const [id, v] of pendingRef.current) {
+      if (committed.has(id)) pendingRef.current.delete(id);
       else drawStroke(ctx, v.stroke);
     }
-    if (mineRef.current) drawStroke(ctx, mineRef.current);
+    if (mineRef.current) drawStroke(ctx, finalize(mineRef.current) ?? mineRef.current);
     if (eraserAt.current) {
       ctx.beginPath();
       ctx.arc(eraserAt.current.x, eraserAt.current.y, ERASER_R, 0, Math.PI * 2);
@@ -280,10 +303,17 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     if (!list.length || full) return;
     const last = chunks[index.chunks - 1];
     if (!last || last.epoch !== index.epoch) return;
+    const now = Date.now();
+    for (const st of list) pendingRef.current.set(st.id, { stroke: st, at: now });
+    if (list.some((st) => gone.has(st.id))) setGone((prev) => new Set([...prev].filter((id) => !list.some((st) => st.id === id))));
+    redrawOverlay();
     last.dispatch({ kind: 'add', strokes: list });
     if (last.strokes.length + list.length >= CHUNK_MAX) dispatchIndex({ kind: 'grow', from: index.chunks - 1 });
   };
   const removeStrokes = (list: Stroke[]): void => {
+    for (const st of list) pendingRef.current.delete(st.id);
+    setGone((prev) => new Set([...prev, ...list.map((st) => st.id)]));
+    redrawOverlay();
     const byChunk = new Map<(a: ChunkAction) => void, string[]>();
     for (const s of list) {
       const d = findChunk(s.id);
@@ -322,7 +352,8 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     const x = (e.clientX - r.left) / fit.scale;
     const y = (e.clientY - r.top) / fit.scale;
     const m = tool === 'hl' ? width * 1.5 + 1 : tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ell' ? width / 2 + 1 : 0;
-    return { x: Math.max(m, Math.min(BOARD_W - m, x)), y: Math.max(m, Math.min(BOARD_H - m, y)) };
+    // whole board units: exactly what's sent and saved, so every screen smooths the same points
+    return { x: Math.round(Math.max(m, Math.min(BOARD_W - m, x))), y: Math.round(Math.max(m, Math.min(BOARD_H - m, y))) };
   };
   const sent = useRef(0); // numbers of my live stroke already sent
   const liveTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -343,7 +374,7 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
   };
 
   const eraseAt = (x: number, y: number): void => {
-    const hit = strokes.filter((s) => !erasing.has(s.id) && hits(s, x, y, ERASER_R)).map((s) => s.id);
+    const hit = strokes.filter((s) => !erasing.has(s.id) && !gone.has(s.id) && hits(s, x, y, ERASER_R)).map((s) => s.id);
     if (hit.length) setErasing((prev) => new Set([...prev, ...hit]));
   };
 
@@ -409,9 +440,9 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
   const onUp = (): void => {
     if (tool === 'eraser') {
       if (erasing.size) {
-        const gone = strokes.filter((s) => erasing.has(s.id));
-        removeStrokes(gone);
-        record({ type: 'erase', strokes: gone });
+        const erased = strokes.filter((s) => erasing.has(s.id));
+        removeStrokes(erased);
+        record({ type: 'erase', strokes: erased });
         setErasing(new Set());
       }
       return;
@@ -423,12 +454,11 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     flushLive(true);
     mineRef.current = null;
     const tiny = s.k !== 'pen' && s.k !== 'hl' && Math.hypot(s.p[2] - s.p[0], s.p[3] - s.p[1]) < 3;
-    if (!tiny) {
-      const finished = cleanStroke({ ...s, p: s.k === 'pen' || s.k === 'hl' ? simplify(s.p) : s.p });
-      if (finished) {
-        addStrokes([finished]);
-        record({ type: 'add', strokes: [finished] });
-      }
+    const finished = tiny ? null : finalize(s);
+    if (finished) {
+      // goes into pending before this redraw: it never leaves the screen
+      addStrokes([finished]);
+      record({ type: 'add', strokes: [finished] });
     }
     redrawOverlay();
   };
@@ -497,6 +527,12 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
           {COLORS.map((c) => (
             <button key={c} type="button" className={`wb-swatch${color === c ? ' is-on' : ''}`} style={{ background: c }} onClick={() => setColor(c)} aria-label={`Colour ${c}`} aria-pressed={color === c} />
           ))}
+          {/* any colour: the system colour picker, showing the picked colour once one is chosen */}
+          <label className={`wb-swatch wb-picker${!COLORS.includes(color) ? ' is-on' : ''}`} title="Pick any colour" style={!COLORS.includes(color) ? { ['--picked' as string]: color } : undefined}>
+            <input type="color" value={COLORS.includes(color) ? customColor : color} aria-label="Pick any colour"
+              onInput={(e) => { const v = (e.target as HTMLInputElement).value; setCustomColor(v); setColor(v); }}
+              onChange={(e) => { setCustomColor(e.target.value); setColor(e.target.value); }} />
+          </label>
         </div>
         <div className="wb-group">
           {SIZES.map((sz, i) => (

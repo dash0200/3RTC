@@ -96,3 +96,14 @@
   .stage-activity.is-full .wb-stage { min-width: 0; }
   .stage-activity.is-full .wb-foot { position: absolute; left: 112px; bottom: 12px; pointer-events: none; z-index: 2; }
 }
+
+/* any colour: a rainbow swatch that opens the system colour picker */
+.wb-picker {
+  position: relative;
+  display: inline-block;
+  background: conic-gradient(#e5484d, #f2b705, #2fa84f, #14b8a6, #2f7fe0, #a855f7, #e5484d);
+  overflow: hidden;
+}
+.wb-picker.is-on { background: var(--picked); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85); }
+.wb-picker input { position: absolute; inset: -6px; width: calc(100% + 12px); height: calc(100% + 12px); opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.wb-picker:focus-within { outline: 2px solid var(--rd-focus, #6aa0ff); outline-offset: 2px; }
