@@ -81,8 +81,10 @@ export function cleanStroke(x: unknown): Stroke | null {
   if (typeof s.id !== 'string' || !s.id || s.id.length > 40) return null;
   if (!TOOLS.includes(s.k as Tool) || typeof s.c !== 'string' || !HEX.test(s.c)) return null;
   if (!inRange(Number(s.w), 1, 120) || !Array.isArray(s.p)) return null;
+  // Points past the edge (a stroke that left the board) are kept at the edge, not refused
   const p = s.p.slice(0, MAX_POINTS).map(Number);
-  if (p.length < 2 || p.length % 2 || !p.every((v, i) => inRange(v, -200, (i % 2 ? BOARD_H : BOARD_W) + 200))) return null;
+  if (p.length < 2 || p.length % 2 || !p.every(Number.isFinite)) return null;
+  for (let i = 0; i < p.length; i++) p[i] = Math.max(0, Math.min(i % 2 ? BOARD_H : BOARD_W, p[i]));
   if (s.k !== 'pen' && s.k !== 'hl' && s.k !== 'text' && p.length !== 4) return null;
   if (s.k === 'text' && (typeof s.t !== 'string' || !s.t.trim())) return null;
   return {
