@@ -63,6 +63,10 @@ export interface PeerMeshContext {
   fallbackUrls?: string[];
   setSignalStatus: (status: SignalStatus) => void;
   logLocalDebug: (tag: string, detail: string) => void;
+  /** See SignalingContext.onRoomError */
+  onRoomError?: (message: string, roomId: string | null) => boolean;
+  /** See SignalingContext.onHostChanged */
+  onHostChanged?: (hostPeerId: string, fromPeerId: string) => void;
 }
 
 export interface PeerMeshHookResult {
@@ -75,6 +79,7 @@ export interface PeerMeshHookResult {
   joinRoom: (pin: string) => void;
   leaveRoom: () => void;
   sendSignal: (data: OutgoingSignalingMessage | Record<string, unknown>) => void;
+  transferHost: (targetPeerId: string) => void;
   getHostToken: () => string | null;
   networkHint: NetworkHint | null;
   dismissNetworkHint: () => void;
@@ -96,8 +101,14 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     signalUrl,
     fallbackUrls = [],
     setSignalStatus,
-    logLocalDebug
+    logLocalDebug,
+    onRoomError,
+    onHostChanged
   } = ctx;
+  const onRoomErrorRef = useRef(onRoomError);
+  onRoomErrorRef.current = onRoomError;
+  const onHostChangedRef = useRef(onHostChanged);
+  onHostChangedRef.current = onHostChanged;
   const { addSystemMessage, showToast } = notices;
   const {
     isAudioBlockedRef,
@@ -476,7 +487,9 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         setRoomId,
         showToast,
         username,
-        findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage)
+        findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage),
+        onRoomError: (message: string, room: string | null) => onRoomErrorRef.current?.(message, room) ?? false,
+        onHostChanged: (hostId: string, fromId: string) => onHostChangedRef.current?.(hostId, fromId)
       }),
     [
       peerIdRef,
@@ -522,7 +535,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     void findRoomOn(others, code).then((url) => {
       if (currentRoomRef.current) return; // in a room by now
       if (!url) {
-        showToast(notFoundMessage || `Room "${code}" not found. Please verify the 5-digit code or create a room.`);
+        const message = notFoundMessage || `Room "${code}" not found. Please verify the 5-digit code or create a room.`;
+        if (!onRoomErrorRef.current?.(message, code)) showToast(message);
         return;
       }
       addSystemMessage(`🔄 Room ${code} is on another 3RTC server. Connecting there...`);
@@ -545,6 +559,12 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   );
 
   const getHostToken = useCallback(() => roomTokensRef.current.host, []);
+
+  // The host makes someone else in the room the host (the server checks we are the host)
+  const transferHost = useCallback(
+    (targetPeerId: string) => sendSignal({ type: 'transfer-host', targetPeerId }),
+    [sendSignal]
+  );
 
   const joinRoom = useCallback(
     (pin: string) =>
@@ -581,6 +601,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     leaveRoom,
     sendSignal,
     getHostToken,
+    transferHost,
     networkHint,
     dismissNetworkHint
   };

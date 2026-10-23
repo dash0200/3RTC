@@ -3,6 +3,7 @@
  * Stay is the big, focused choice; Back again (or Escape, or tapping outside) also stays.
  */
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useBackLayer } from '../core/backStack';
 
 export interface LeaveRoomDialogProps {
@@ -33,9 +34,17 @@ export default function LeaveRoomDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [isOpen, onStay]);
 
+  // A real modal: everything else is out of reach (keyboard, screen readers) while it's open
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const app = document.getElementById('root');
+    app?.setAttribute('inert', '');
+    return () => app?.removeAttribute('inert');
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div className="leave-dialog-backdrop" onClick={onStay} role="presentation">
       <div
         className="leave-dialog"
@@ -59,6 +68,7 @@ export default function LeaveRoomDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

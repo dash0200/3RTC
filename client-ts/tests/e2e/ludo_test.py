@@ -159,8 +159,7 @@ with sync_playwright() as p:
     check('boards still match', same_board([host, watcher, late]))
 
     host.screenshot(path=str(harness.OUT / 'ludo-desktop.png'))
-    harness.show_game_bar(host)
-    host.locator('.activity-close-btn').click()
+    harness.end_game(host)
     check('closing Ludo closes it for everyone', wait(lambda: watcher.locator('.ludo-board').count() == 0 and late.locator('.ludo-board').count() == 0, 6))
     check('no page errors', not errors, errors[:3])
     b.close()
