@@ -491,9 +491,9 @@ export default function ActivityStage({
 
                 {shown === 'full' && (
                     // Minimise to the bubble (it nudges you on your turn). Over a video it says where you go
-                    <button type="button" className="activity-bar-btn activity-video-btn" onClick={minimise}
+                    <button type="button" className="activity-bar-btn activity-video-btn" onClick={minimise} aria-label={mediaActive ? 'Video' : 'Minimise'}
                         title={mediaActive ? 'Watch the video: the game becomes a bubble that nudges you on your turn' : 'Minimise: the game becomes a bubble that nudges you on your turn'}>
-                        {mediaActive ? '▶ Video' : '▾ Minimise'}
+                        {mediaActive ? '▶' : '▾'}<span className="activity-btn-text">{mediaActive ? ' Video' : ' Minimise'}</span>
                     </button>
                 )}
                 {chat?.onToggleSplitView && !isFull && shown === 'full' && (
