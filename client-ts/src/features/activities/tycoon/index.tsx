@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { useRoom, useSharedState, useSharedPresence } from '../../../core/RoomContext';
 import { useActivityStatus } from '../activityHost';
 import { sound } from '../../../utils/sound';
+import { getClientId } from '../../../utils/clientId';
 import { GROUP_COLORS, GROUP_NAMES, JAIL_FINE, SPACES, START_CASH, START_PAY, STATION_RENT, SURPRISE, TOKENS, TREASURE, UTILITY_TIMES, isBuyable, priceOf, groupOf, groupMembers, type GroupId, type TokenId } from './board';
 import {
   INITIAL,
@@ -271,6 +272,20 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
   const myTurn = s.phase === 'playing' && s.turn === me && me >= 0;
   const away = (seat: number) => Boolean(s.players[seat] && !s.players[seat].bot && !present.has(s.players[seat].id));
   const current = s.players[s.turn];
+
+  // Back after the phone dropped out, a reload or a rejoin (a new peer id): your seat is yours
+  // again, and the computer stops playing for you (the same app: its client id)
+  const myCid = getClientId();
+  const oldSeat = me < 0 ? s.players.findIndex((p, i) => !p.bot && p.cid === myCid && away(i)) : -1;
+  const reclaimKey = oldSeat >= 0 ? `${oldSeat}:${s.players[oldSeat].id}` : '';
+  useEffect(() => {
+    if (!reclaimKey) return undefined;
+    const ask = () => dispatch({ kind: 'join', name: room.getSelf().username });
+    ask();
+    // again in a moment if the first ask came before the others knew which app we are
+    const t = setInterval(ask, 3000);
+    return () => clearInterval(t);
+  }, [reclaimKey, dispatch, room]);
 
   // ---- token walking ----
   const [shownPos, setShownPos] = useState<number[]>(() => s.players.map((p) => p.pos));
