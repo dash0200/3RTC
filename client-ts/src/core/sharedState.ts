@@ -91,10 +91,16 @@ export function createSharedStore<S, A>(
   let initialCatchUp = true;
   countLive(bus, key, 1);
 
-  const catchUpTimer = setTimeout(() => {
-    initialCatchUp = false;
-  }, 3000);
-  (catchUpTimer as unknown as { unref?: () => void })?.unref?.();
+  let catchUpTimer: ReturnType<typeof setTimeout>;
+  const startCatchUp = () => {
+    initialCatchUp = true;
+    clearTimeout(catchUpTimer);
+    catchUpTimer = setTimeout(() => {
+      initialCatchUp = false;
+    }, 3000);
+    (catchUpTimer as unknown as { unref?: () => void })?.unref?.();
+  };
+  startCatchUp();
 
   const listeners = new Set<() => void>();
   const notify = () => {
@@ -127,8 +133,24 @@ export function createSharedStore<S, A>(
     ) {
       return;
     }
+    const previousAuthority = presence.authorityId;
     presence = next;
+    if (previousAuthority !== null && next.authorityId !== previousAuthority) catchUpWithNewAuthority(next.authorityId);
     for (const listener of [...presenceListeners]) listener();
+  };
+
+  // Who decides changed while we still have nothing (e.g. the host left the game just as we
+  // joined it): a state that came from the new authority a moment earlier was ignored, because it
+  // wasn't the authority yet. Ask again.
+  const catchUpWithNewAuthority = (newAuthority: string | null) => {
+    if (version > 0 || !newAuthority) return;
+    if (newAuthority === room.getSelfId()) {
+      // We decide now, with nothing: take the state of anyone who has it (a short catch-up again)
+      startCatchUp();
+      bus.broadcast('room-state-request', { key });
+    } else {
+      bus.send(newAuthority, 'room-state-request', { key });
+    }
   };
 
   const addMember = (id: string | null | undefined) => {
