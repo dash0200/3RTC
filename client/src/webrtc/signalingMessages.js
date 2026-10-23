@@ -279,6 +279,8 @@ export async function processSignalingMessage(msg, ctx) {
                 sendSignal({ type: 'join', roomId: String(msg.roomId), peerId: peerIdRef?.current, rejoin: true, ...(tokens.seat ? { seatToken: tokens.seat } : {}) });
                 break;
             }
+            // The room may be on another 3RTC server: look there before saying it doesn't exist
+            if (msg.code === 'not-found' && ctx.findRoomElsewhere?.(String(msg.roomId || ''), msg.message || '')) break;
             showToast(msg.message || 'Signaling error');
             break;
         }

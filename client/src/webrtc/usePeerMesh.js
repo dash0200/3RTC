@@ -21,6 +21,7 @@ import { processSignalingMessage } from './signalingMessages';
 import { BUILD } from '../version';
 import { useSignalingConnection } from '../hooks/useSignalingConnection';
 import { candidateType } from './networkHint';
+import { findRoomOn, sameServer } from './findRoom';
 
 const WAITING_TEXT = 'Waiting for peer to enter 5-digit code...';
 
@@ -273,12 +274,38 @@ export function usePeerMesh(ctx) {
     }, [addSystemMessage, bus, cleanupPeer, getIdentity, isAudioBlockedRef, isMicMutedRef, localMutedPeersRef, localStreamRef, logLocalDebug, peerIdRef, peerVolumesRef, peersRef, sendSignal, setPeerMetadata, setPeerVoiceStates, showToast, updateP2PStatus]);
     getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
 
+    // Rooms live on the server they were made on (the app may be on a fallback): see findRoom.js
+    const findRoomElsewhereRef = useRef(() => false);
+    const lastRoomSearchRef = useRef(null);
+
     const handleSignalingMessage = useCallback((msg) => processSignalingMessage(msg, {
         addSystemMessage, cleanupPeer, currentRoomRef, currentScreenTrackRef, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef,
-        logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username
+        logLocalDebug, peerIdRef, peersRef, roomTokensRef, sendSignal, setHostPeerId, setIsHost, setP2pStatusText, setPeerCount, setRoomId, showToast, username,
+        findRoomElsewhere: (code, notFoundMessage) => findRoomElsewhereRef.current(code, notFoundMessage)
     }), [peerIdRef, setHostPeerId, addSystemMessage, cleanupPeer, getOrCreatePeerConnection, isHostRef, isMicMutedRef, localStreamRef, logLocalDebug, peersRef, sendSignal, showToast, username]);
 
-    useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, roomTokensRef, setSignalStatus, showToast, signalUrl, wsRef });
+    const switchServer = useSignalingConnection({ addSystemMessage, currentRoomRef, fallbackUrls, handleSignalingMessage, isHostRef, peerIdRef, peersRef, pendingSignalsRef, roomTokensRef, setSignalStatus, showToast, signalUrl, wsRef });
+
+    findRoomElsewhereRef.current = (code, notFoundMessage) => {
+        if (!/^\d{5}$/.test(code)) return false;
+        const last = lastRoomSearchRef.current;
+        if (last && last.code === code && Date.now() - last.at < 30000) return false; // looked already
+        const here = wsRef.current?.url;
+        const others = [...new Set([signalUrl, ...(fallbackUrls || [])])].filter((url) => url && !sameServer(url, here));
+        if (!others.length) return false;
+        lastRoomSearchRef.current = { code, at: Date.now() };
+        findRoomOn(others, code).then((url) => {
+            if (currentRoomRef.current) return; // in a room by now
+            if (!url) {
+                showToast(notFoundMessage || `Room "${code}" not found. Please verify the 5-digit code or create a room.`);
+                return;
+            }
+            addSystemMessage(`🔄 Room ${code} is on another 3RTC server. Connecting there...`);
+            pendingSignalsRef.current.push({ type: 'join', roomId: code, peerId: peerIdRef.current });
+            switchServer(url);
+        });
+        return true;
+    };
 
     // With a code: a host coming back gets that room again (the server's resume path)
     // (it needs the room's host token: `hostToken`, saved with "Rejoin room" on the home screen)

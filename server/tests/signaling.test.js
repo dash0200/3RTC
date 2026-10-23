@@ -244,6 +244,22 @@ describe('signaling server', () => {
         for (const c of [solo, host, guest, grab]) c.close();
     });
 
+    it('answers whether a room is on this server, limited like joins (M3)', async () => {
+        const host = await connected('h7e');
+        host.send({ type: 'create-room', peerId: 'h7e' });
+        const { roomId } = await host.next('room-created');
+        const asker = await connected('q7e');
+        asker.send({ type: 'find-room', roomId });
+        assert.deepEqual(await asker.next('room-found'), { type: 'room-found', roomId, exists: true });
+        const missing = roomId === '99999' ? '99998' : '99999';
+        asker.send({ type: 'find-room', roomId: missing });
+        assert.equal((await asker.next('room-found')).exists, false);
+        // Asking about rooms that aren't there counts as failed joins: no faster for guessing codes
+        for (let i = 0; i < 20; i++) asker.send({ type: 'find-room', roomId: missing });
+        assert.equal((await asker.next('error')).code, 'rate-limited');
+        for (const c of [host, asker]) c.close();
+    });
+
     it("brings back a closed room only with a seat token for it (a stranger can't make up rooms)", async () => {
         const host = await connected('h8');
         host.send({ type: 'create-room', peerId: host.peerId });
