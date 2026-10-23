@@ -67,10 +67,36 @@ export function createSeats(secret) {
         return want.length === got.length && crypto.timingSafeEqual(want, got) ? epoch : null;
     };
 
+    // Host tokens carry the room's host generation: it goes up each time the host hands the room to
+    // someone else, so an earlier host's token stops working (see signaling.js, transfer-host).
+    // Generation 0 keeps the original v1 form, so tokens from before transfers existed still work.
+    const makeHost = (roomId, epoch, gen, now) => {
+        if (!gen) return make('host', roomId, epoch, '', now);
+        const exp = Math.floor((now + TOKEN_TTL_MS) / 1000);
+        return `v2.${epoch}.${gen}.${exp}.${sign(body('host', roomId, epoch, `g${gen}`, exp))}`;
+    };
+    /** { epoch, gen } of a valid host token for this room, or null. */
+    const checkHostGen = (token, roomId, now) => {
+        if (typeof token !== 'string' || token.length > 200) return null;
+        if (!token.startsWith('v2.')) {
+            const epoch = check('host', token, roomId, '', now);
+            return epoch ? { epoch, gen: 0 } : null;
+        }
+        const [, epoch, genText, expText, sig] = token.split('.');
+        const gen = Number(genText);
+        const exp = Number(expText);
+        if (!/^[0-9a-f]{16}$/.test(epoch || '') || !Number.isInteger(gen) || gen < 1 || gen > 1e6 || !Number.isInteger(exp) || !sig) return null;
+        if (exp * 1000 < now) return null;
+        const want = Buffer.from(sign(body('host', roomId, epoch, `g${gen}`, exp)));
+        const got = Buffer.from(sig);
+        return want.length === got.length && crypto.timingSafeEqual(want, got) ? { epoch, gen } : null;
+    };
+
     return {
         seatToken: (roomId, epoch, peerId, now = Date.now()) => make('seat', roomId, epoch, peerId, now),
-        hostToken: (roomId, epoch, now = Date.now()) => make('host', roomId, epoch, '', now),
+        hostToken: (roomId, epoch, gen = 0, now = Date.now()) => makeHost(roomId, epoch, gen, now),
         checkSeat: (token, roomId, peerId, now = Date.now()) => check('seat', token, roomId, peerId, now),
-        checkHost: (token, roomId, now = Date.now()) => check('host', token, roomId, '', now)
+        checkHost: (token, roomId, now = Date.now()) => checkHostGen(token, roomId, now)?.epoch ?? null,
+        checkHostGen: (token, roomId, now = Date.now()) => checkHostGen(token, roomId, now)
     };
 }

@@ -20,7 +20,10 @@ export type SignalingErrorCode =
   | 'seat-taken'
   | 'room-full'
   | 'not-found'
-  | 'server-busy';
+  | 'server-busy'
+  | 'rate-limited'
+  | 'not-host'
+  | 'target-not-found';
 
 export interface BaseSignalingMessage {
   type: string;
@@ -71,6 +74,12 @@ export interface PingMessage extends BaseSignalingMessage {
   type: 'ping';
 }
 
+/** The host makes someone else in the room the host */
+export interface TransferHostMessage extends BaseSignalingMessage {
+  type: 'transfer-host';
+  targetPeerId: string;
+}
+
 // Server -> Browser
 export interface RoomCreatedMessage extends BaseSignalingMessage {
   type: 'room-created';
@@ -104,6 +113,15 @@ export interface JoinedMessage extends BaseSignalingMessage {
 export interface HostUpdateMessage extends BaseSignalingMessage {
   type: 'host';
   hostPeerId: string;
+  /** Set when the host handed the room on: who did it */
+  from?: string;
+}
+
+/** To the new host after a transfer: its host token */
+export interface HostTokenMessage extends BaseSignalingMessage {
+  type: 'host-token';
+  roomId: string;
+  hostToken: string;
 }
 
 export interface PeerJoinedMessage extends BaseSignalingMessage {
@@ -158,13 +176,15 @@ export type OutgoingSignalingMessage =
   | SendOfferMessage
   | SendAnswerMessage
   | SendIceCandidateMessage
-  | PingMessage;
+  | PingMessage
+  | TransferHostMessage;
 
 export type IncomingSignalingMessage =
   | RoomCreatedMessage
   | RoomResumedMessage
   | JoinedMessage
   | HostUpdateMessage
+  | HostTokenMessage
   | PeerJoinedMessage
   | PeerLeftMessage
   | LeftMessage

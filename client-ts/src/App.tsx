@@ -234,10 +234,23 @@ export default function App() {
     return true;
   }, []);
 
+  // The host handed the room on: tell everyone who is host now
+  const handleHostChanged = useCallback((newHostId: string, fromId: string) => {
+    const self = peerIdRef.current;
+    const nameOf = (id: string) => peerMetadataRef.current[id]?.username || 'Someone';
+    const text = newHostId === self
+      ? `👑 ${nameOf(fromId)} made you the host`
+      : fromId === self
+        ? `👑 ${nameOf(newHostId)} is now the host`
+        : `👑 ${nameOf(fromId)} made ${nameOf(newHostId)} the host`;
+    addSystemMessage(text);
+    showToast(text);
+  }, [addSystemMessage, showToast]);
+
   const mesh = usePeerMesh({
     bus, peersRef, peerIdRef, isHostRef, hostPeerIdRef, setHostPeerId, setPeerMetadata, username, notices, voice,
     identityFields: () => identityFieldsRef.current(),
-    signalUrl, fallbackUrls, setSignalStatus, logLocalDebug, onRoomError: handleRoomError
+    signalUrl, fallbackUrls, setSignalStatus, logLocalDebug, onRoomError: handleRoomError, onHostChanged: handleHostChanged
   });
   const { roomId, isHost, peerCount, isP2PConnected } = mesh;
 
@@ -766,6 +779,7 @@ export default function App() {
       localUser={localUser}
       onSetPeerVolume={handleSetPeerVolume}
       onToggleMutePeer={handleToggleMutePeer}
+      onMakeHost={mesh.transferHost}
       onToggleMic={toggleMicrophone}
       roomId={roomId}
       onCopyRoom={handleCopyRoom}

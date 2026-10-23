@@ -65,6 +65,8 @@ export interface PeerMeshContext {
   logLocalDebug: (tag: string, detail: string) => void;
   /** See SignalingContext.onRoomError */
   onRoomError?: (message: string, roomId: string | null) => boolean;
+  /** See SignalingContext.onHostChanged */
+  onHostChanged?: (hostPeerId: string, fromPeerId: string) => void;
 }
 
 export interface PeerMeshHookResult {
@@ -77,6 +79,7 @@ export interface PeerMeshHookResult {
   joinRoom: (pin: string) => void;
   leaveRoom: () => void;
   sendSignal: (data: OutgoingSignalingMessage | Record<string, unknown>) => void;
+  transferHost: (targetPeerId: string) => void;
   getHostToken: () => string | null;
   networkHint: NetworkHint | null;
   dismissNetworkHint: () => void;
@@ -99,10 +102,13 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     fallbackUrls = [],
     setSignalStatus,
     logLocalDebug,
-    onRoomError
+    onRoomError,
+    onHostChanged
   } = ctx;
   const onRoomErrorRef = useRef(onRoomError);
   onRoomErrorRef.current = onRoomError;
+  const onHostChangedRef = useRef(onHostChanged);
+  onHostChangedRef.current = onHostChanged;
   const { addSystemMessage, showToast } = notices;
   const {
     isAudioBlockedRef,
@@ -482,7 +488,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         showToast,
         username,
         findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage),
-        onRoomError: (message: string, room: string | null) => onRoomErrorRef.current?.(message, room) ?? false
+        onRoomError: (message: string, room: string | null) => onRoomErrorRef.current?.(message, room) ?? false,
+        onHostChanged: (hostId: string, fromId: string) => onHostChangedRef.current?.(hostId, fromId)
       }),
     [
       peerIdRef,
@@ -553,6 +560,12 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
 
   const getHostToken = useCallback(() => roomTokensRef.current.host, []);
 
+  // The host makes someone else in the room the host (the server checks we are the host)
+  const transferHost = useCallback(
+    (targetPeerId: string) => sendSignal({ type: 'transfer-host', targetPeerId }),
+    [sendSignal]
+  );
+
   const joinRoom = useCallback(
     (pin: string) =>
       sendSignal({ type: 'join', roomId: pin, peerId: peerIdRef.current || '' }),
@@ -588,6 +601,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     leaveRoom,
     sendSignal,
     getHostToken,
+    transferHost,
     networkHint,
     dismissNetworkHint
   };

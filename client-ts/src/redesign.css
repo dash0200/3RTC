@@ -2533,3 +2533,7 @@
 
 /* Why joining didn't work: stays under the join form until the code changes */
 .join-error { margin: 8px 0 0; font-size: 14px; line-height: 1.4; color: var(--rd-danger-text); }
+
+/* People: the host can hand the room to someone (second tap confirms) */
+.card-host-row { display: flex; justify-content: flex-end; margin-top: 8px; }
+.card-make-host-btn.is-confirming { background: var(--rd-accent); border-color: transparent; color: #fff; }

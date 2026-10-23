@@ -61,6 +61,12 @@ export interface PingMessage extends SignalingMessageBase {
   type: 'ping';
 }
 
+/** The host makes someone else in the room the host (answered with host-token to them and host to all) */
+export interface TransferHostMessage extends SignalingMessageBase {
+  type: 'transfer-host';
+  targetPeerId: string;
+}
+
 /** "Is room X on this server?" (answered with { type: 'room-found', roomId, exists }) */
 export interface FindRoomMessage extends SignalingMessageBase {
   type: 'find-room';
@@ -70,6 +76,8 @@ export interface FindRoomMessage extends SignalingMessageBase {
 export interface RoomInfo {
   epoch: string;
   hostPeerId: string | null;
+  /** Times the host handed the room on; host tokens of an earlier generation no longer work */
+  hostGen?: number;
 }
 
 export interface TokensResult {
