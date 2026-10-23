@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { getNetworkHealthGrade, generateDiagnosticReport } from '../utils/networkMonitor';
 import { copyToClipboard } from '../utils/clipboard';
 import type { NetworkStatsSummary, PeerNetworkStatsRecord } from '../hooks/useNetworkStats';
@@ -11,6 +11,8 @@ export interface NetworkDiagnosticsModalProps {
   roomId?: string | null;
   username?: string;
   onTriggerPing?: () => void;
+  /** extra panels at the end (the Stream doctor) */
+  children?: ReactNode;
 }
 
 export default function NetworkDiagnosticsModal({
@@ -20,7 +22,8 @@ export default function NetworkDiagnosticsModal({
   peersStats = [],
   roomId = '',
   username = '',
-  onTriggerPing
+  onTriggerPing,
+  children
 }: NetworkDiagnosticsModalProps) {
   const [copied, setCopied] = useState(false);
 
@@ -338,6 +341,8 @@ export default function NetworkDiagnosticsModal({
             </div>
           )}
         </div>
+
+        {children}
 
         {/* Footer Actions */}
         <div className="hud-footer">

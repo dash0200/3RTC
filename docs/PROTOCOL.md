@@ -95,6 +95,34 @@ viewer is used only if it matches the owner's SHA-256 for it; a viewer that sent
 asked again. An older owner ignores `swarm` (relay tree as before); older viewers never send it, so
 they keep using the tree, which only contains viewers like them.
 
+### Whiteboard (`features/activities/whiteboard`)
+Finished strokes are shared state (`act:whiteboard` and its chunks `act:whiteboard:<epoch>:<n>`).
+While drawing, two messages that are not state:
+| type | fields |
+|---|---|
+| `wb-live` | `e` (board epoch), `id, k, c, w`, `from` (how many numbers were sent before) and `pts` (the new ones), `name`; or `{ e, id, done: true }` when the stroke ends |
+| `wb-cursor` | `x, y, name` (board units, at most ~12 a second), or `gone: true` |
+
+### Cards in hand (Last Card)
+Shared stores can pass `redact(state, peerId)` (core/sharedState.ts): every copy of the state sent to
+a peer is made for that peer, so in Last Card each app receives its own hand and nobody else's. No new
+message types.
+
+### Stream doctor (`features/diagnostics/speedTest.ts`)
+A test between two apps from the Network HUD. Every app answers; older apps ignore these types, and
+no test data is sent to a peer before it answered `diag-hello`.
+| type | direction | fields |
+|---|---|---|
+| `diag-hello` / `diag-hello-ok` | tester → peer → tester | `v, nonce`; the reply adds `device` (browser, cores, network hints) and `live` (that app's streaming numbers) |
+| `diag-ping` / `diag-pong` | either | `t, n`: round trip on the control channel |
+| `diag-burst` | tester → peer | `id, high, low, ms`: send test frames to me for `ms`, keeping the bulk channel's buffer between `low` and `high` bytes |
+| `diag-burst-end` | peer → tester | `id, sender` (frames, time waiting on the buffer, drain time), `link` (its getStats view), or `error` |
+| `diag-recv-end` / `diag-recv-result` | tester → peer → tester | after the tester sent frames: `id, frames`; the reply has `meter` (what arrived, gaps, speed) and `link` |
+| `diag-stats` / `diag-stats-ok` | tester → peer → tester | `id`; the reply has `link, live, device` |
+
+Test frames (bulk channel, binary): 16 KB, starting with `DGN1`, then the test id and a sequence
+number (uint32, big-endian).
+
 ### Local file format (`features/files/useFileFormat.js`)
 | type | direction | fields |
 |---|---|---|
@@ -124,14 +152,15 @@ dice; actions `sit`, `stand`, `add-bot`, `clear-seat`, `rules`, `start`, `roll`,
 Browser → server: `create-room {peerId}`, `create-room {roomId, peerId, hostToken, seatToken?}`
 (the host getting its room back), `join {roomId, peerId, rejoin?, seatToken?}`, `leave`,
 `offer {targetId, offer, fresh?, iceRestart?}`, `answer {targetId, answer}`,
-`ice-candidate {targetId, candidate}` (`candidate` is accepted too), `ping`.
+`ice-candidate {targetId, candidate}` (`candidate` is accepted too), `ping`,
+`find-room {roomId}` (is that room on this server? limited like a join).
 
 Server → browser: `room-created {roomId, peerId, hostPeerId, seatToken, hostToken}`,
 `room-resumed {roomId, peerId, peers, hostPeerId, seatToken, hostToken}`,
 `joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId}` (the host got the room back,
 maybe with a new peer id), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
-`pong`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`, `room-full`, `not-found`,
-`server-busy`).
+`pong`, `room-found {roomId, exists}`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`,
+`room-full`, `not-found`, `server-busy`, `rate-limited`).
 
 **Seats** (`server/seats.js`): peer ids are public (everyone in the room sees them), so naming one
 proves nothing. The server signs a **seat token** (this peer id in this room) and, for the host, a
@@ -139,12 +168,20 @@ proves nothing. The server signs a **seat token** (this peer id in this room) an
 - a peer id held by another live connection is only given to someone with its seat token (a peer
   whose signaling dropped reclaims its own seat);
 - `create-room` with a code (resume) needs the room's host token: after a signaling drop, a server
-  restart, or a page reload (new peer id; the app saves the token with "Rejoin room");
+  restart, a page reload (new peer id; the app saves the token with "Rejoin room"), or Leave then
+  Rejoin. The host token is enough for the host's own seat or a free one, not for a guest's live seat;
 - `join` with `rejoin` brings back a room that's gone (server restart) only with a seat token for it.
 Tokens name the room instance (a random id given at creation), so a token from an earlier room with
 the same code doesn't work on a new one, and they expire after 24 hours. They are signed with the
 server's secret (`SIGNAL_SECRET`, or `.signal-secret` made on first start in production), so they
 survive restarts. The app sends tokens only back to the server, never to peers.
+
+**Several servers** (Oracle first, then GCP): rooms live in the memory of the server they were made
+on. Both servers must use the **same secret** (the deploy scripts upload `server/.signal-secret`,
+made once and git-ignored, to each), so when the app falls back to the other server the host's and
+guests' tokens still work there and the room comes back. And before telling someone a code doesn't
+exist, the app asks the other servers (`find-room`) and moves to the one that has the room
+(`webrtc/findRoom`), staying on it for reconnects.
 
 **Who is the host** comes from the server (`hostPeerId`: whoever made the room or got it back with
 its host token; `null` when not known, e.g. a room brought back by a guest until the host returns).

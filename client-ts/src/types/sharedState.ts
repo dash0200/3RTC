@@ -28,6 +28,11 @@ export type Reducer<S, A> = (state: S, action: A, meta: ActionMeta) => S;
 export interface SharedStoreOptions<S, A> {
   initial: S;
   reducer: Reducer<S, A>;
+  /**
+   * Hide parts of the state from some peers (cards in other players' hands): every copy of the
+   * state sent to `peerId` is `redact(state, peerId)`. Optional; without it everyone gets it all.
+   */
+  redact?: (state: S, peerId: string) => S;
 }
 
 export interface PresenceInfo {

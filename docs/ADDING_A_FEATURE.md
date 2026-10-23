@@ -1,5 +1,8 @@
 # Adding a feature
 
+> The app is `client-ts/` (TypeScript). File names below are written `.js` / `.jsx`; in the
+> code they are `.ts` / `.tsx`.
+
 Pick the recipe that matches what you're building. None of them needs changes to the connection
 layer (`webrtc/`), and older app versions in the same room keep working.
 
@@ -23,9 +26,9 @@ state is dropped on that device) while **End** closes it for everyone. So:
   `useSharedPresence(key)` (`{ authorityId, members }`): only people who have the game count, so
   someone who left it is "away" (the reducer's `meta.present` is the same list).
 
-1. **Copy the example:** `client/src/features/activities/sample/` → `features/activities/<id>/`.
+1. **Copy the example:** `client-ts/src/features/activities/sample/` → `features/activities/<id>/`.
    `index.jsx` default-exports the component. It receives `activityId`. For a full game, read
-   `features/activities/ludo/`: rules and dice in `rules.js` (tested in `tests/unit/ludo.test.js`),
+   `features/activities/ludo/`: rules and dice in `rules.js` (tested in `tests/unit/ludo.test.ts`),
    board geometry in `board.js`, UI and move animation in `index.jsx`, and the pattern for
    computer players / people who left (the authority's app dispatches an `auto` action that the
    reducer accepts only from the authority: `meta.by === meta.selfId`).
@@ -59,6 +62,11 @@ state is dropped on that device) while **End** closes it for everyone. So:
    ```
 
    Rules for the reducer: no side effects, don't mutate `state`, plain JSON in and out.
+   **Secret information** (cards in hand): pass `redact: (state, peerId) => copyForThatPeer` along with
+   `initial` and `reducer`. Every copy of the state sent to a peer goes through it, so a player's app
+   never receives the others' cards. Only the authority holds everything; if it changes mid-game the
+   new one has only its own copy, so the game must rebuild the rest (see `activities/lastcard/rules.ts`:
+   players send their hands back, the rest is dealt again).
    `meta.present` (who is connected) and `meta.hostId` let it handle people who left.
    Randomness (dice, shuffles) is fine inside the reducer: only the authority runs it and
    everyone receives the result.
@@ -80,8 +88,8 @@ state is dropped on that device) while **End** closes it for everyone. So:
    it at phone width (390 px).
 5. **Libraries:** prefer MIT / BSD / Apache. Avoid GPL ones (for chess: `chess.js` and
    `react-chessboard` are fine; `chessground` and `stockfish` are GPL).
-6. **Test:** add reducer cases to `client/tests/unit/` (use `fakeRoom.js` for multi-peer tests,
-   see `sharedState.test.js`), and a browser test next to `client/tests/e2e/activities_test.py`.
+6. **Test:** add reducer cases to `client-ts/tests/unit/` (for multi-peer tests wire in-memory apps
+   together, see `sharedRejoin.test.ts`), and a browser test next to `client-ts/tests/e2e/activities_test.py`.
 
 Need fast, frequent messages that aren't state (a cursor position, a "thinking…" hint)? Use the
 bus directly: `room.bus.broadcast('chess-cursor', { square })` and
@@ -89,7 +97,7 @@ bus directly: `room.bus.broadcast('chess-cursor', { square })` and
 
 ## B. A room-wide feature that isn't an activity (polls in chat, a timer, room themes)
 
-1. Create `client/src/features/<name>/use<Name>.js`, a hook taking `{ room, ... }`.
+1. Create `client-ts/src/features/<name>/use<Name>.js`, a hook taking `{ room, ... }`.
 2. Send with `room.bus.broadcast('<name>-<what>', payload)` / `room.bus.send(peerId, ...)`.
    Receive with `usePeerMessageOn(room.bus, '<name>-<what>', (msg, fromPeerId) => ...)`.
 3. State that must match for everyone and that late joiners need: use
@@ -133,7 +141,7 @@ use it for a playing video or the open game: those are only closed by their own 
 
 ## Checklist before shipping
 
-- `npm run lint`, `npm test` and `npm run build` in `client/`
-- `python client/tests/e2e/run_all.py` (all browser suites)
+- `npm run lint`, `npm test` and `npm run build` in `client-ts/`
+- `python client-ts/tests/e2e/run_all.py` (all browser suites)
 - Phone layout checked
 - New message types listed in `docs/PROTOCOL.md`

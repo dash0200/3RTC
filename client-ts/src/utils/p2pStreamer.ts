@@ -11,6 +11,8 @@
 // 16 KB chunks: sent on their own "bulk" data channel, so chat, reactions and play/pause on the
 // control channel only ever wait for one small chunk instead of queuing behind the video.
 // The receiver reads chunkSize from the header, so this can change without breaking peers.
+import * as telemetry from '../features/diagnostics/telemetry';
+
 export const STREAM_CHUNK_SIZE = 16384;
 export const BUFFERED_AMOUNT_HIGH = 512 * 1024; // 512 KB backpressure threshold
 export const BUFFERED_AMOUNT_LOW = 128 * 1024;  // 128 KB resume threshold
@@ -526,6 +528,7 @@ export class P2PRangeSender {
   public isPumping: boolean;
   public isAborted: boolean;
   public drainResolve: (() => void) | null;
+  private telemetryKey = `send-${Math.random().toString(36).slice(2)}`;
 
   constructor(file: File | null, dataChannel: RTCDataChannel, options: P2PRangeSenderOptions = {}) {
     this.file = file;
@@ -570,6 +573,7 @@ export class P2PRangeSender {
   }
 
   start(): void {
+    telemetry.noteShareStart(this.telemetryKey, this.fileSize, this.file?.name, this.isRelay);
     try {
       this.dataChannel.send(JSON.stringify(P2PRangeSender.header(this.file || { name: 'video', size: this.fileSize }, this.streamNo, this.senderName, this.headerExtra)));
     } catch (err) {
@@ -621,7 +625,9 @@ export class P2PRangeSender {
         this.current = block;
         let data: Uint8Array;
         try {
+          const readStart = performance.now();
           data = await this.readBlock(block);
+          if (!this.isRelay) telemetry.noteRead(performance.now() - readStart);
         } catch (err) {
           if (this.isRelay) {
             this.onMiss?.(block);
@@ -632,7 +638,9 @@ export class P2PRangeSender {
         if (this.isAborted) break;
         this.onBlockRead?.(block, data);
         for (let offset = 0; offset < data.length && !this.isAborted; offset += RANGE_PACKET_PAYLOAD) {
+          const waitStart = performance.now();
           await this._waitForDrain();
+          telemetry.noteDrainWait(performance.now() - waitStart);
           if (this.isAborted || this.dataChannel.readyState !== 'open') break;
           const payload = data.subarray(offset, Math.min(offset + RANGE_PACKET_PAYLOAD, data.length));
           const packet = new Uint8Array(RANGE_HEADER_BYTES + payload.length);
@@ -643,6 +651,7 @@ export class P2PRangeSender {
           view.setUint32(12, offset, false);
           packet.set(payload, RANGE_HEADER_BYTES);
           this.dataChannel.send(packet.buffer);
+          telemetry.noteSent(packet.byteLength);
         }
         this.current = -1;
       }
@@ -657,6 +666,7 @@ export class P2PRangeSender {
   abort(): void {
     if (this.isAborted) return;
     this.isAborted = true;
+    telemetry.noteShareEnd(this.telemetryKey);
     this.queue = [];
     if (this.drainResolve) this.drainResolve();
     try {
@@ -793,7 +803,16 @@ export class P2PRangeReceiver {
     this.hashBlock = options.hashBlock || sha256Hex;
     this.onBadBlock = options.onBadBlock || (() => { });
     this.seed = options.seed ?? Math.random();
+    this.telemetryKey = telemetry.noteWatchStart({
+      fileName: this.fileName,
+      fileSize: this.fileSize,
+      ownerId: this.ownerId ?? undefined,
+      relayed: this.isRelayed,
+      swarm: this.swarm
+    });
   }
+
+  private telemetryKey = '';
 
   get isRelayed(): boolean {
     return this.sourceId !== null && this.sourceId !== this.ownerId;
@@ -812,6 +831,7 @@ export class P2PRangeReceiver {
   useOwner(reason = ''): void {
     if (!this.isRelayed || this.isAborted) return;
     this.sourceId = this.ownerId;
+    telemetry.noteWatchSource(false);
     this.onSourceChange(this.ownerId, reason);
     const urgent: number[] = [];
     const rest: number[] = [];
@@ -1144,6 +1164,8 @@ export class P2PRangeReceiver {
 
   private _finish(index: number, entry: BlockEntry, from?: string | null): void {
     entry.done = true;
+    const askedAt = this.pending.get(index);
+    telemetry.noteBlockDone(askedAt !== undefined ? Date.now() - askedAt : null);
     this.pending.delete(index);
     this.sourceOf.delete(index);
     this.cachedBytes += entry.data.length;
@@ -1186,6 +1208,7 @@ export class P2PRangeReceiver {
     entry.got?.add(offset);
     entry.data.set(payload, offset);
     entry.received += payload.length;
+    telemetry.noteReceived(payload.length);
     if (this.swarm && fromPeerId !== null && fromPeerId !== this.ownerId) {
       entry.peer = fromPeerId;
       this.lastDataFrom.set(fromPeerId, Date.now());
@@ -1276,6 +1299,7 @@ export class P2PRangeReceiver {
 
   private _askBackground(blocks: number[], now: number): void {
     const again = blocks.filter((b) => this.pending.has(b));
+    telemetry.noteReask(again.length);
     this._penalizeSlow(again);
     for (const b of blocks) {
       this.pending.set(b, now);
@@ -1355,6 +1379,7 @@ export class P2PRangeReceiver {
     };
 
     if (isMissing(index)) {
+      telemetry.noteReask(again.length);
       this._penalizeSlow(again);
       again.length = 0;
       this.pending.set(index, now);
@@ -1411,8 +1436,11 @@ export class P2PRangeReceiver {
     for (let attempt = 1; ; attempt++) {
       if (this.isAborted) throw new Error('aborted');
       this._request(index);
+      const waitStart = performance.now();
+      const waited = !this.blocks.get(index)?.done;
       try {
         await this._waitForBlock(index);
+        if (waited) telemetry.notePlayerWait(performance.now() - waitStart);
         break;
       } catch (err) {
         if (this.isAborted) throw err;
@@ -1528,6 +1556,7 @@ export class P2PRangeReceiver {
 
   abort(): void {
     this.isAborted = true;
+    telemetry.noteWatchEnd(this.telemetryKey);
     for (const entry of this.blocks.values()) {
       for (const w of entry.waiters) w.reject(new Error('aborted'));
       entry.waiters = [];

@@ -10984,6 +10984,55 @@ video::cue {
   background: var(--bg-primary);
 }
 
+/* Full size with a mouse: the bar floats over the game and tucks away (like the video player's) */
+.stage-activity.has-overlay-bar .activity-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 8;
+  background: linear-gradient(rgba(10, 10, 13, 0.94), rgba(10, 10, 13, 0.82));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.stage-activity.has-overlay-bar.bar-tucked .activity-bar:not(:has(:focus-visible)):not(:hover) {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+/* the tab that brings the bar back: small, in the top-right corner, out of the game's way */
+.activity-bar-handle {
+  position: absolute;
+  top: 0;
+  right: 14px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: rgba(14, 14, 18, 0.82);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.2s ease, height 0.2s ease;
+}
+.activity-bar-handle:hover,
+.activity-bar-handle:focus-visible { opacity: 1; height: 26px; }
+.activity-bar-handle-grip { width: 22px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.4); }
+
+/* "Bigger": the game covers the whole app window */
+.stage-activity.is-bigger {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+}
+
 .activity-bar {
   display: flex;
   align-items: center;

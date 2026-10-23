@@ -218,3 +218,8 @@
 .stage-activity.is-sidebar .ludo-phase-playing .ludo-seat-home {
   font-size: 11px;
 }
+
+/* Full size on a computer: the board takes all the height it can get */
+@media (min-width: 761px) {
+  .stage-activity.is-full .ludo { padding: 8px 12px; gap: 16px; }
+}

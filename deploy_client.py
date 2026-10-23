@@ -11,7 +11,7 @@ from pathlib import Path
 
 def main():
     root_dir = Path(__file__).resolve().parent
-    script_path = root_dir / "client" / "deploy_vercel.py"
+    script_path = root_dir / "client-ts" / "deploy_vercel.py"
     if not script_path.exists():
         print(f"[ERROR] Could not find {script_path}")
         sys.exit(1)

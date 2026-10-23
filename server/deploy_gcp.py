@@ -16,6 +16,8 @@ import urllib.request
 import webbrowser
 import getpass
 import tempfile
+import hashlib
+import secrets
 from pathlib import Path
 
 # Eligible Always Free regions and zones
@@ -641,6 +643,69 @@ def configure_quick_picks(gcloud, zone, instance_name):
     print("[OK] Key saved on the server. Quick picks refresh now, then about every 3.5 hours.")
 
 
+def local_signal_secret():
+    """The signing secret every 3RTC signaling server must share (see seats.js), so a room keeps
+    working when people move between servers (the app falls back from Oracle to GCP). Taken from
+    SIGNAL_SECRET, else server/.signal-secret next to this script (made once, git-ignored). The
+    Oracle deploy script uploads the same file."""
+    env_secret = os.environ.get("SIGNAL_SECRET", "").strip()
+    if env_secret:
+        return env_secret
+    secret_file = Path(__file__).resolve().parent / ".signal-secret"
+    try:
+        saved = secret_file.read_text(encoding="utf-8").strip()
+        if len(saved) >= 32:
+            return saved
+    except FileNotFoundError:
+        pass
+    secret = secrets.token_hex(32)
+    secret_file.write_text(secret + "\n", encoding="utf-8")
+    try:
+        os.chmod(secret_file, 0o600)
+    except OSError:
+        pass
+    print(f"[OK] Made a shared signing secret in {secret_file}. Keep this file: the Oracle deploy uses it too.")
+    return secret
+
+
+def sync_signal_secret(gcloud, zone, instance_name):
+    """Install the shared signing secret as /opt/webrtc-server/.signal-secret (only if it differs)."""
+    print_step("Step 7b: Shared signing secret (Oracle and GCP must match)")
+    secret = local_signal_secret()
+    want = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    res = subprocess.run([
+        gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+        "--command=sudo cat /opt/webrtc-server/.signal-secret 2>/dev/null | tr -d '[:space:]' | sha256sum | cut -c1-64",
+        "--quiet"
+    ], capture_output=True, text=True, check=False)
+    if (res.stdout or "").strip() == want:
+        print("[OK] The server already uses the shared signing secret.")
+        return
+    fd, local_path = tempfile.mkstemp(prefix="signal-secret-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(secret + "\n")
+        os.chmod(local_path, 0o600)
+        run_cmd([
+            gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+            '--command=mkdir -p "$HOME/staging_3rtc" && chmod 700 "$HOME/staging_3rtc"',
+            "--quiet"
+        ], capture_output=False)
+        run_cmd([
+            gcloud, "compute", "scp", local_path, f"{instance_name}:staging_3rtc/.signal-secret",
+            f"--zone={zone}", "--quiet"
+        ], capture_output=False)
+    finally:
+        os.remove(local_path)
+    run_cmd([
+        gcloud, "compute", "ssh", instance_name, f"--zone={zone}",
+        f"--command=STAGING_DIR=\"$HOME/staging_3rtc\" && sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} \"$STAGING_DIR/.signal-secret\" /opt/webrtc-server/.signal-secret"
+        ' && rm -f "$STAGING_DIR/.signal-secret" && sudo systemctl restart webrtc-signaling',
+        "--quiet"
+    ], capture_output=False)
+    print("[OK] Shared signing secret installed; the service restarted.")
+
+
 def main():
     print("""
 ============================================================
@@ -654,6 +719,7 @@ def main():
     ensure_firewall(gcloud)
     instance_name, external_ip = deploy_vm(gcloud, zone, server_files)
     wait_for_ready(external_ip)
+    sync_signal_secret(gcloud, zone, instance_name)
     configure_quick_picks(gcloud, zone, instance_name)
 
 

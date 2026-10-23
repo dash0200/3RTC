@@ -282,14 +282,67 @@ export default function ActivityStage({
     const ActivityComponent = useMemo(() => (definition ? lazyFor(definition) : null), [definition]);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const [isFull, toggleFull] = useStageFullscreen(rootRef);
+    // "Bigger": the game covers the whole app window (not the screen, like Full screen does)
+    const [bigger, setBigger] = useState(false);
     const [status, setStatus] = useState<ActivityStatus>({ attention: false, color: '', label: '' });
-    const onStatus = useCallback((next: ActivityStatus) => setStatus((prev) => {
-        if (prev.attention === next.attention && prev.color === next.color && prev.label === next.label) return prev;
+    // Passed up right away (not from inside a state update): when the game closes, its last
+    // "nothing needs you" still reaches the app even though this component is going away
+    const lastStatus = useRef<ActivityStatus>({ attention: false, color: '', label: '' });
+    const onStatus = useCallback((next: ActivityStatus) => {
+        const prev = lastStatus.current;
+        if (prev.attention === next.attention && prev.color === next.color && prev.label === next.label) return;
+        lastStatus.current = next;
+        setStatus(next);
         onStatusChange?.(next);
-        return next;
-    }), [onStatusChange]);
+    }, [onStatusChange]);
+    // Gone (ended, or closed here): nothing to call attention to
+    useEffect(() => () => onStatusChange?.({ attention: false, color: '', label: '' }), [onStatusChange]);
 
     const shown = view === 'sidebar' && !isPhone ? 'sidebar' : view === 'window' && !isPhone ? 'window' : view === 'bubble' ? 'bubble' : 'full';
+    const isBigger = bigger && shown === 'full' && !isFull && !isPhone;
+
+    // Full size with a mouse: like the video player, the bar floats over the game and tucks
+    // away, so the game gets the whole stage. It comes back when the pointer nears the top
+    // (or the keyboard reaches it), and shows for a few seconds when the game opens full size.
+    const canHover = useMemo(() => {
+        try {
+            return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+        } catch {
+            return false;
+        }
+    }, []);
+    const overlayBar = shown === 'full' && !isPhone && canHover;
+    // shown again whenever the view changes (tagged with the view it belongs to)
+    const [bar, setBar] = useState({ view: shown, shown: true });
+    const barShown = bar.view === shown ? bar.shown : true;
+    const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showBarFor = useCallback((ms: number) => {
+        setBar({ view: shown, shown: true });
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => setBar({ view: shown, shown: false }), ms);
+    }, [shown]);
+    useEffect(() => {
+        if (!overlayBar) return undefined;
+        hideTimer.current = setTimeout(() => setBar({ view: shown, shown: false }), 2500);
+        return () => {
+            if (hideTimer.current) clearTimeout(hideTimer.current);
+        };
+    }, [overlayBar, shown]);
+    // Only the tab at the top brings the bar back (not just moving near the top: that got in the
+    // way of drawing and playing there). It stays while the pointer is on it.
+    const keepBar = () => showBarFor(2500); // the tab: show (and tuck again if the pointer never gets to the bar)
+    const holdBar = () => {
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+    const leaveBar = () => showBarFor(500);
+    useEffect(() => {
+        if (!isBigger) return undefined;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setBigger(false);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [isBigger]);
     const { box, startDrag } = useFloatingBox(rootRef, shown === 'window');
     const setView = (v: ActivityViewKind) => onViewChange?.(v);
 
@@ -361,17 +414,24 @@ export default function ActivityStage({
 
     const content = (
         <div
-            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
+            className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${isBigger ? 'is-bigger' : ''} ${overlayBar ? 'has-overlay-bar' : ''} ${overlayBar && !barShown ? 'bar-tucked' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
             role="region"
             aria-label={definition.name}
             aria-hidden={shown === 'bubble' ? true : undefined}
             ref={rootRef}
             style={shown === 'window' ? { width: box.width, right: box.right, bottom: box.bottom, ...(status.color ? ({ '--bubble-ring': status.color } as React.CSSProperties) : {}) } : undefined}
         >
+            {overlayBar && !barShown && (
+                <button type="button" className="activity-bar-handle" onMouseEnter={(e) => { if (!e.buttons) keepBar(); }} onClick={keepBar} onFocus={keepBar}
+                    title={`${definition.name} controls`} aria-label={`Show ${definition.name} controls`}>
+                    <span aria-hidden="true">{definition.icon}</span><span className="activity-bar-handle-grip" aria-hidden="true" />
+                </button>
+            )}
             {shown === 'window' && (
                 <span className="activity-resize" onPointerDown={(e) => startDrag(e, 'resize')} title="Drag to resize" aria-hidden="true" />
             )}
-            <div className={`activity-bar ${canSwipeAway ? 'can-swipe' : ''}`} onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : undefined}>
+            <div className={`activity-bar ${canSwipeAway ? 'can-swipe' : ''}`} onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : undefined}
+                onMouseEnter={overlayBar ? holdBar : undefined} onMouseMove={overlayBar ? holdBar : undefined} onMouseLeave={overlayBar ? leaveBar : undefined}>
                 {canSwipeAway && <span className="activity-grab" aria-hidden="true" />}
                 <span className="activity-bar-icon" aria-hidden="true">{definition.icon}</span>
                 <span className="activity-bar-name">{definition.name}</span>
@@ -425,6 +485,12 @@ export default function ActivityStage({
                     <button type="button" className={`activity-bar-btn activity-chat-btn ${chat.splitView ? 'is-on' : ''}`} onClick={chat.onToggleSplitView}
                         aria-pressed={chat.splitView} title={chat.splitView ? 'Bigger board (hide chat messages)' : 'Show chat messages below the game'}>
                         💬<span className="activity-btn-text"> Chat</span>{!chat.splitView && chat.unread > 0 && <span className="activity-chat-badge">{chat.unread > 9 ? '9+' : chat.unread}</span>}
+                    </button>
+                )}
+                {shown === 'full' && !isPhone && !isFull && (
+                    <button type="button" className={`activity-bar-btn activity-bigger-btn ${isBigger ? 'is-on' : ''}`} onClick={() => setBigger((b) => !b)}
+                        title={isBigger ? 'Back to the normal size (Esc)' : 'Make the game fill the whole window'} aria-pressed={isBigger}>
+                        {isBigger ? '⤡ Smaller' : '⤢ Bigger'}
                     </button>
                 )}
                 {canFullscreen() && shown === 'full' && !isPhone && (
