@@ -28,6 +28,8 @@ import re
 import urllib.request
 import getpass
 import tempfile
+import hashlib
+import secrets
 from pathlib import Path
 
 # Force line buffering for interactive terminals
@@ -521,6 +523,65 @@ def configure_quick_picks(ssh_bin, user, host, key_path):
     )
     execute_remote_ssh(ssh_bin, user, host, key_path, cmd)
     print("[OK] YouTube API key installed. Quick picks will refresh from YouTube API.")
+
+
+def local_signal_secret():
+    """The signing secret every 3RTC signaling server must share (see seats.js), so a room keeps
+    working when people move between servers (the app falls back from Oracle to GCP). Taken from
+    SIGNAL_SECRET, else server/.signal-secret next to this script (made once, git-ignored). The
+    GCP deploy script uploads the same file."""
+    env_secret = os.environ.get("SIGNAL_SECRET", "").strip()
+    if env_secret:
+        return env_secret
+    secret_file = Path(__file__).resolve().parent / ".signal-secret"
+    try:
+        saved = secret_file.read_text(encoding="utf-8").strip()
+        if len(saved) >= 32:
+            return saved
+    except FileNotFoundError:
+        pass
+    secret = secrets.token_hex(32)
+    secret_file.write_text(secret + "\n", encoding="utf-8")
+    try:
+        os.chmod(secret_file, 0o600)
+    except OSError:
+        pass
+    print(f"[OK] Made a shared signing secret in {secret_file}. Keep this file: the GCP deploy uses it too.")
+    return secret
+
+
+def sync_signal_secret(ssh_bin, user, host, key_path):
+    """Install the shared signing secret as /opt/webrtc-server/.signal-secret (only if it differs)."""
+    print_step("Shared signing secret (Oracle and GCP must match)")
+    secret = local_signal_secret()
+    want = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    res = subprocess.run([
+        ssh_bin, "-i", str(key_path),
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={get_known_hosts_path()}",
+        "-o", "ConnectTimeout=10",
+        f"{user}@{host}",
+        "sudo cat /opt/webrtc-server/.signal-secret 2>/dev/null | tr -d '[:space:]' | sha256sum | cut -c1-64"
+    ], capture_output=True, text=True, check=False)
+    if (res.stdout or "").strip() == want:
+        print("[OK] The server already uses the shared signing secret.")
+        return
+    prepare_remote_staging(ssh_bin, user, host, key_path)
+    fd, local_path = tempfile.mkstemp(prefix="signal-secret-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(secret + "\n")
+        os.chmod(local_path, 0o600)
+        copy_remote_scp(find_scp(), user, host, key_path, [local_path], "staging_3rtc/.signal-secret")
+    finally:
+        os.remove(local_path)
+    cmd = (
+        'STAGING_DIR="$HOME/staging_3rtc" && '
+        f"sudo install -m 600 -o {SERVICE_USER} -g {SERVICE_USER} \"$STAGING_DIR/.signal-secret\" /opt/webrtc-server/.signal-secret"
+        ' && rm -f "$STAGING_DIR/.signal-secret" && sudo systemctl restart webrtc-signaling'
+    )
+    execute_remote_ssh(ssh_bin, user, host, key_path, cmd)
+    print("[OK] Shared signing secret installed; the service restarted.")
 
 
 def copy_remote_scp(scp_bin, user, host, key_path, local_files, remote_dest):
@@ -1143,6 +1204,7 @@ def launch_oci_vm_automated(script_dir, server_files, oci_bin, ssh_bin, scp_bin=
     execute_remote_ssh(ssh_bin, "ubuntu", public_ip, priv_key, build_update_command(server_files))
 
     wait_for_ready(public_ip)
+    sync_signal_secret(ssh_bin, "ubuntu", public_ip, priv_key)
     configure_quick_picks(ssh_bin, "ubuntu", public_ip, priv_key)
 
 
@@ -1184,6 +1246,7 @@ def deploy_via_ssh(script_dir, server_files, ssh_bin, scp_bin, cached_info=None)
     execute_remote_ssh(ssh_bin, user, host, key_path, build_update_command(server_files))
     save_cache(script_dir, {"host": host, "user": user, "key_path": str(key_path)})
     wait_for_ready(host)
+    sync_signal_secret(ssh_bin, user, host, key_path)
     configure_quick_picks(ssh_bin, user, host, key_path)
 
 

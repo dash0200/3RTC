@@ -232,7 +232,12 @@ export function attachSignaling(server) {
             }
             const peerId = isValidPeerId(data.peerId) ? data.peerId : ws.peerId;
             let room = rooms.get(resumeRoomId) || openRoom(resumeRoomId, epoch, peerId);
-            if (!maySit(resumeRoomId, room, peerId, ws, data.seatToken)) {
+            // The host token proves this is the host: enough for the host's own seat or a free one
+            // (Rejoin after Leave sends no seat token). A guest who is still here keeps theirs.
+            const holder = room.get(peerId);
+            const guestSeatInUse = Boolean(holder && holder !== ws && holder.readyState === WebSocket.OPEN &&
+              roomInfo.get(resumeRoomId)?.hostPeerId !== peerId);
+            if (guestSeatInUse && !maySit(resumeRoomId, room, peerId, ws, data.seatToken)) {
               safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
               return;
             }
@@ -448,6 +453,28 @@ export function attachSignaling(server) {
               peerId: ws.peerId
             });
           }
+          break;
+        }
+
+        case 'find-room': {
+          // "Is room X on this server?" The app asks the other 3RTC servers before telling someone
+          // a code doesn't exist (rooms live on the server they were made on). Limited exactly
+          // like a join, so it's no faster for guessing codes.
+          const roomId = typeof data.roomId === 'string' || typeof data.roomId === 'number' ? String(data.roomId).trim() : '';
+          if (!/^\d{5}$/.test(roomId)) {
+            safeSend(ws, { type: 'error', message: 'Invalid roomId: must be strictly a 5-digit number (e.g. 12345)' });
+            return;
+          }
+          const nowFind = Date.now();
+          ws.failedJoins = (ws.failedJoins || []).filter((t) => nowFind - t < RATE_LIMIT.failedJoinWindowMs);
+          if (rateLimiter.isJoinBanned(ws.clientIp).banned || !rateLimiter.checkJoinRate(ws.clientIp) ||
+            ws.failedJoins.length >= RATE_LIMIT.maxFailedJoins) {
+            safeSend(ws, { type: 'error', code: 'rate-limited', message: 'Too many join attempts. Please slow down.' });
+            return;
+          }
+          const exists = rooms.has(roomId);
+          if (!exists) ws.failedJoins.push(nowFind);
+          safeSend(ws, { type: 'room-found', roomId, exists });
           break;
         }
 

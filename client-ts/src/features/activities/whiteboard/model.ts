@@ -212,6 +212,10 @@ export function hits(s: Stroke, x: number, y: number, r: number): boolean {
 
 // ---- drawing ----------------------------------------------------------------------------------
 
+/** Pen points further apart than this (board units) meet at a sharp corner, not a curve */
+const SHARP_RUN = 24;
+const SHARP_TURN = Math.PI / 5; // 36°: gentle bends in big curves stay smooth
+
 export const FONT = "'Figtree Variable', system-ui, sans-serif";
 
 /** Draw one stroke on a context already scaled to board units */
@@ -239,11 +243,26 @@ export function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, opts: { dim
         break;
       }
       ctx.moveTo(p[0], p[1]);
-      // smooth: curves through the midpoints
+      // smooth: curves through the midpoints, except at real corners (a long straight run on
+      // either side and a sharp turn, e.g. a stroke that ran along the board's edge): those
+      // stay sharp, or a square would come out as an oval
       for (let i = 2; i + 3 < p.length; i += 2) {
         const mx = (p[i] + p[i + 2]) / 2;
         const my = (p[i + 1] + p[i + 3]) / 2;
-        ctx.quadraticCurveTo(p[i], p[i + 1], mx, my);
+        const ax = p[i] - p[i - 2];
+        const ay = p[i + 1] - p[i - 1];
+        const bx = p[i + 2] - p[i];
+        const by = p[i + 3] - p[i + 1];
+        const before = Math.hypot(ax, ay);
+        const after = Math.hypot(bx, by);
+        // how sharply the line turns here (0 straight on, π a full U-turn)
+        const turn = before && after ? Math.acos(Math.max(-1, Math.min(1, (ax * bx + ay * by) / (before * after)))) : 0;
+        if ((before > SHARP_RUN || after > SHARP_RUN) && turn > SHARP_TURN) {
+          ctx.lineTo(p[i], p[i + 1]);
+          ctx.lineTo(mx, my);
+        } else {
+          ctx.quadraticCurveTo(p[i], p[i + 1], mx, my);
+        }
       }
       ctx.lineTo(p[p.length - 2], p[p.length - 1]);
       ctx.stroke();

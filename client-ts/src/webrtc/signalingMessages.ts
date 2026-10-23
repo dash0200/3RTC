@@ -29,6 +29,9 @@ export interface SignalingContext {
   setHostPeerId?: (hostPeerId: string | null | undefined) => void;
   roomTokensRef?: { current: RoomTokens };
   peerIdRef?: { current: string | null };
+  /** "Room not found" here: look for it on the other servers. True if a search started (it tells
+   *  the user itself); false to show `notFoundMessage` now. */
+  findRoomElsewhere?: (roomId: string, notFoundMessage: string) => boolean;
 }
 
 export async function processSignalingMessage(
@@ -385,6 +388,8 @@ export async function processSignalingMessage(
         });
         break;
       }
+      // The room may be on another 3RTC server: look there before saying it doesn't exist
+      if (msg.code === 'not-found' && ctx.findRoomElsewhere?.(String(msg.roomId || ''), msg.message || '')) break;
       showToast(msg.message || 'Signaling error');
       break;
     }

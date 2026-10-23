@@ -11001,22 +11001,30 @@ video::cue {
   transform: translateY(-100%);
   pointer-events: none;
 }
-/* a small handle says the bar is up there */
+/* the tab that brings the bar back: small, in the top-right corner, out of the game's way */
 .activity-bar-handle {
   position: absolute;
-  top: 5px;
-  left: 50%;
-  width: 46px;
-  height: 5px;
-  margin-left: -23px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.28);
+  top: 0;
+  right: 14px;
   z-index: 7;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.25s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: rgba(14, 14, 18, 0.82);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.2s ease, height 0.2s ease;
 }
-.stage-activity.bar-tucked .activity-bar-handle { opacity: 1; }
+.activity-bar-handle:hover,
+.activity-bar-handle:focus-visible { opacity: 1; height: 26px; }
+.activity-bar-handle-grip { width: 22px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.4); }
 
 /* "Bigger": the game covers the whole app window */
 .stage-activity.is-bigger {

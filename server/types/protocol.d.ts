@@ -61,6 +61,12 @@ export interface PingMessage extends SignalingMessageBase {
   type: 'ping';
 }
 
+/** "Is room X on this server?" (answered with { type: 'room-found', roomId, exists }) */
+export interface FindRoomMessage extends SignalingMessageBase {
+  type: 'find-room';
+  roomId: string;
+}
+
 export interface RoomInfo {
   epoch: string;
   hostPeerId: string | null;
