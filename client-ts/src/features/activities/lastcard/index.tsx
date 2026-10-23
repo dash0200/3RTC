@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { useRoom, useSharedState, useSharedPresence } from '../../../core/RoomContext';
 import { useActivityStatus } from '../activityHost';
 import { sound } from '../../../utils/sound';
+import { getClientId } from '../../../utils/clientId';
 import {
   COLORS,
   COLOR_NAMES,
@@ -110,6 +111,20 @@ export default function LastCard({ activityId }: LastCardProps): JSX.Element {
   const myTurn = s.phase === 'playing' && !s.restoring && me === s.turn;
   const name = (seat: number): string => s.players[seat]?.name || `Player ${seat + 1}`;
   const away = (seat: number): boolean => Boolean(s.players[seat] && !s.players[seat].bot && !present.has(s.players[seat].id));
+
+  // Back after the phone dropped out, a reload or a rejoin (a new peer id): your seat is yours
+  // again, and the computer stops playing for you (the same app: its client id)
+  const myCid = getClientId();
+  const oldSeat = me < 0 ? s.players.findIndex((p, i) => !p.bot && p.cid === myCid && away(i)) : -1;
+  const reclaimKey = oldSeat >= 0 ? `${oldSeat}:${s.players[oldSeat].id}` : '';
+  useEffect(() => {
+    if (!reclaimKey) return undefined;
+    const ask = () => dispatch({ kind: 'join', name: room.getSelf().username });
+    ask();
+    // again in a moment if the first ask came before the others knew which app we are
+    const t = setInterval(ask, 3000);
+    return () => clearInterval(t);
+  }, [reclaimKey, dispatch, room]);
 
   // Remember our hand: if the game's authority changes, we send it back
   const handRef = useRef<number[] | null>(null);
