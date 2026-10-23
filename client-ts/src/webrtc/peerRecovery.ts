@@ -22,6 +22,8 @@ export interface PeerRecoveryEntry {
   isInitiator?: boolean;
   restartAttempts?: number;
   rebuilt?: boolean;
+  rebuilds?: number;
+  reconnectNoticeShown?: boolean;
   wasInterrupted?: boolean;
   isConnected?: boolean;
   localCandidateTypes?: Set<string> | string[];
@@ -147,7 +149,11 @@ export function attachPeerRecovery(
     if (!peerEntry.brokenSince) peerEntry.brokenSince = Date.now();
 
     if (!peerEntry.isInitiator) {
-      if (Date.now() - peerEntry.brokenSince > RECOVERY.maxWaitMs) {
+      // The other side runs the recovery. While both of us are still in the room it keeps
+      // trying, so keep this connection for its offers; drop it only if it never worked or
+      // our own signaling is down too (we rejoin the room once it's back)
+      const signalingUp = wsRef.current?.readyState === WebSocket.OPEN;
+      if ((!peerEntry.everConnected || !signalingUp) && Date.now() - peerEntry.brokenSince > RECOVERY.maxWaitMs) {
         noteBlocked();
         cleanupPeer(targetPeerId);
         setPeerCount(peersRef.current.size + 1);
@@ -170,7 +176,8 @@ export function attachPeerRecovery(
     const attempts = peerEntry.restartAttempts ?? 0;
     if (!channelDead && attempts < RECOVERY.maxIceRestarts) {
       peerEntry.restartAttempts = attempts + 1;
-      if (peerEntry.restartAttempts === 1) {
+      if (peerEntry.restartAttempts === 1 && !peerEntry.reconnectNoticeShown) {
+        peerEntry.reconnectNoticeShown = true;
         addSystemMessage('⚠️ Connection to a peer was interrupted. Reconnecting...');
       }
       logLocalDebug(
@@ -179,23 +186,28 @@ export function attachPeerRecovery(
       );
       sendIceRestartOffer();
       scheduleRecovery(RECOVERY.retryMs);
-    } else if (!peerEntry.rebuilt) {
-      logLocalDebug('PEER_REBUILD', `Peer ${targetPeerId}: rebuilding the connection`);
+    } else if (!peerEntry.rebuilt || peerEntry.everConnected) {
+      // Rebuild the connection from scratch. A connection that worked before is rebuilt again and
+      // again while they're still in the room (a long Wi-Fi or UDP drop, a busy network while
+      // gaming): it comes back by itself once the network does. Leaving the room ends it (peer-left).
+      const rebuilds = (peerEntry.rebuilds ?? 0) + 1;
+      logLocalDebug('PEER_REBUILD', `Peer ${targetPeerId}: rebuilding the connection (${rebuilds})`);
       cleanupPeer(targetPeerId);
       const fresh = getOrCreatePeerConnectionRef.current?.(targetPeerId, true);
       if (fresh) {
         fresh.rebuilt = true;
+        fresh.rebuilds = rebuilds;
         fresh.everConnected = peerEntry.everConnected;
         fresh.blockedNoted = peerEntry.blockedNoted;
+        fresh.wasInterrupted = peerEntry.wasInterrupted;
+        fresh.reconnectNoticeShown = peerEntry.reconnectNoticeShown;
+        fresh.brokenSince = peerEntry.brokenSince;
+        // A fresh connection to someone we were talking to: if it isn't up in a while, recover it
+        // the same way (the first-connection timer skips connections that worked before)
+        if (fresh.everConnected) fresh.scheduleRecovery?.(RECOVERY.firstConnectMs);
       }
-    } else if (!peerEntry.everConnected) {
-      noteBlocked();
-      cleanupPeer(targetPeerId);
-      setPeerCount(peersRef.current.size + 1);
     } else {
-      addSystemMessage(
-        '❌ Could not reconnect to a peer. They can rejoin the room to connect again.'
-      );
+      noteBlocked();
       cleanupPeer(targetPeerId);
       setPeerCount(peersRef.current.size + 1);
     }
@@ -214,10 +226,12 @@ export function attachPeerRecovery(
       }
       peerEntry.everConnected = true;
       const wasRecovering =
-        peerEntry.wasInterrupted && (peerEntry.restartAttempts ?? 0) > 0;
+        peerEntry.wasInterrupted && ((peerEntry.restartAttempts ?? 0) > 0 || Boolean(peerEntry.rebuilds));
       peerEntry.restartAttempts = 0;
+      peerEntry.rebuilds = 0;
       peerEntry.brokenSince = 0;
       peerEntry.wasInterrupted = false;
+      peerEntry.reconnectNoticeShown = false;
       peerEntry.isConnected = peerEntry.dataChannel?.readyState === 'open';
       updateP2PStatus();
       if (wasRecovering) {
