@@ -1,6 +1,6 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { INITIAL, netWorth, reducer, rentOf, type TyAction, type TyMeta, type TyState } from '../../src/features/activities/tycoon/rules';
+import { INITIAL, buildBlock, netWorth, reducer, rentOf, type TyAction, type TyMeta, type TyState } from '../../src/features/activities/tycoon/rules';
 import { JAIL, SPACES, START_CASH, START_PAY } from '../../src/features/activities/tycoon/board';
 
 const realRandom = Math.random;
@@ -130,6 +130,34 @@ describe('Tycoon turns', () => {
     s = act(s, 'a', { kind: 'sell', pos: 1 });
     assert.equal(s.players[0].cash, cash + 250);
     assert.equal(act(s, 'a', { kind: 'mortgage', pos: 1 }), s); // houses in the group
+  });
+
+  it('says why you can’t build (the card shows this instead of a button that does nothing)', () => {
+    const s0 = game();
+    const owner = [...s0.owner];
+    owner[1] = 0;
+    owner[3] = 1;
+    let s = { ...s0, owner };
+    assert.match(buildBlock(s, 0, 1)!, /Own all 2 brown places.*you have 1.*Laad Bazaar \(Ben\)/);
+    owner[3] = null;
+    s = { ...s, owner: [...owner] };
+    assert.match(buildBlock(s, 0, 1)!, /Laad Bazaar \(for sale\)/);
+    owner[3] = 0;
+    s = { ...s, owner: [...owner] };
+    assert.equal(buildBlock(s, 0, 1), null);
+    assert.equal(buildBlock(s, 1, 1)?.startsWith('Own all'), true, 'Ben owns none of them');
+    assert.match(buildBlock({ ...s, turn: 1 }, 0, 1)!, /on your turn/);
+    s = act(s, 'a', { kind: 'build', pos: 1 });
+    assert.match(buildBlock(s, 0, 1)!, /evenly: put a house on Laad Bazaar first/);
+    assert.equal(buildBlock(s, 0, 3), null);
+    assert.match(buildBlock(withPlayers(s, [{ cash: 100 }]), 0, 3)!, /costs ₹500: you have ₹100/);
+    const mortgaged = [...s.mortgaged];
+    mortgaged[3] = true;
+    assert.match(buildBlock({ ...s, mortgaged }, 0, 1)!, /mortgage on Laad Bazaar/);
+    // every reason it gives, the build action refuses too
+    for (const t of [{ ...s, turn: 1 }, withPlayers(s, [{ cash: 100 }]), { ...s, mortgaged }]) {
+      for (const pos of [1, 3]) if (buildBlock(t, 0, pos)) assert.equal(act(t, 'a', { kind: 'build', pos }), t);
+    }
   });
 
   it('debt: raise money, or go bankrupt and hand everything to the creditor', () => {

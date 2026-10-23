@@ -7,10 +7,11 @@ import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { useRoom, useSharedState, useSharedPresence } from '../../../core/RoomContext';
 import { useActivityStatus } from '../activityHost';
 import { sound } from '../../../utils/sound';
-import { GROUP_COLORS, JAIL_FINE, SPACES, STATION_RENT, SURPRISE, TOKENS, TREASURE, UTILITY_TIMES, isBuyable, priceOf, groupOf, type TokenId } from './board';
+import { GROUP_COLORS, GROUP_NAMES, JAIL_FINE, SPACES, START_CASH, START_PAY, STATION_RENT, SURPRISE, TOKENS, TREASURE, UTILITY_TIMES, isBuyable, priceOf, groupOf, groupMembers, type GroupId, type TokenId } from './board';
 import {
   INITIAL,
   ROUND_OPTIONS,
+  buildBlock,
   mortgageValue,
   netWorth,
   ownsGroup,
@@ -44,6 +45,8 @@ function Deed({ s, pos, me, onAct, onClose }: { s: TyState; pos: number; me: num
   const header = sp.kind === 'property' ? GROUP_COLORS[sp.group] : sp.kind === 'station' ? '#23252d' : sp.kind === 'utility' ? '#3aa0a5' : '#6b6e78';
   const g = groupOf(pos);
   const groupBuilt = g ? SPACES.some((x, i) => x.kind === 'property' && x.group === g && s.houses[i] > 0) : false;
+  // Your coloured place: why you can't build on it yet (whole set, your turn, evenly, cash...)
+  const whyNot = mine && sp.kind === 'property' && s.phase === 'playing' ? buildBlock(s, me, pos) : null;
   return (
     <div className="ty-modal" role="dialog" aria-label={sp.name} onClick={onClose}>
       <div className="ty-deed" onClick={(e) => e.stopPropagation()}>
@@ -86,9 +89,10 @@ function Deed({ s, pos, me, onAct, onClose }: { s: TyState; pos: number; me: num
             {owner === null ? 'For sale' : <>Owned by <b style={{ color: s.players[owner].color }}>{s.players[owner].name}</b>{s.mortgaged[pos] ? ' · mortgaged' : ''}</>}
           </p>
         )}
+        {mine && whyNot && <p className="ty-deed-hint" data-testid="ty-build-hint">🏗️ {whyNot}</p>}
         {mine && myTurn && (
           <div className="ty-deed-actions">
-            {sp.kind === 'property' && ownsGroup(s, me, pos) && s.step !== 'debt' && s.houses[pos] < 5 && (
+            {sp.kind === 'property' && !whyNot && (
               <button type="button" className="ty-btn ty-btn-go" onClick={() => onAct({ kind: 'build', pos })}>Build {s.houses[pos] === 4 ? 'hotel' : 'house'} ({rupees(sp.house)})</button>
             )}
             {s.houses[pos] > 0 && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'sell', pos })}>Sell {s.houses[pos] === 5 ? 'hotel' : 'a house'} (+{rupees(houseHalf(pos))})</button>}
@@ -119,6 +123,68 @@ function describeSpace(pos: number): string {
     case 'treasure': return 'Draw a Treasure card.';
     default: return '';
   }
+}
+
+// ---- how to play ------------------------------------------------------------------------------
+
+/** The rules in plain words, opened from the lobby and from the table ("How to play") */
+function HowToPlay({ onClose }: { onClose: () => void }): JSX.Element {
+  const sets = (Object.keys(GROUP_COLORS) as GroupId[]).map((g) => ({ g, n: groupMembers(g).length }));
+  return (
+    <div className="ty-modal" role="dialog" aria-label="How to play Tycoon" onClick={onClose}>
+      <div className="ty-guide" onClick={(e) => e.stopPropagation()}>
+        <h4>How to play Tycoon</h4>
+        <section>
+          <h5>The goal</h5>
+          <p>Buy places, charge rent, and be the last one with money. With a round limit (set in the lobby), the richest after the last round wins: cash, places and houses all count.</p>
+        </section>
+        <section>
+          <h5>Your turn</h5>
+          <ol>
+            <li>Tap <b>🎲 Roll</b>. Your token moves that many spaces.</li>
+            <li>Landed on a place nobody owns? <b>Buy</b> it, or say <b>No thanks</b>.</li>
+            <li>Someone else’s place? You pay them rent, automatically.</li>
+            <li>Build or make deals if you like, then tap <b>End turn</b>.</li>
+          </ol>
+          <p>Everyone starts with {rupees(START_CASH)} and gets {rupees(START_PAY)} each time they pass Start. Doubles: roll again. Three doubles in a row: straight to jail.</p>
+        </section>
+        <section className="ty-guide-build">
+          <h5>🏗️ Building houses and hotels</h5>
+          <ol>
+            <li><b>Own every place of one colour.</b> Most colours have 3 places, brown and dark blue have 2. Buy them as you land on them, or trade for the missing ones.</li>
+            <li>On your turn, tap one of those places: in <b>Your places</b> (a set that’s ready shows 🏗️) or on the board. Then tap <b>Build house</b>.</li>
+            <li>Build <b>evenly</b>: every place in the set needs a house before any gets a second one.</li>
+            <li>After 4 houses, the next one is a <b>hotel</b>: the highest rent there is.</li>
+          </ol>
+          <p>Each place’s card shows the house price and the rent at every step. If you can’t build, the card says why (a place still missing, not your turn, not enough cash, a mortgage to pay off). Owning a whole set doubles the rent even before you build.</p>
+          <div className="ty-guide-sets">
+            {sets.map(({ g, n }) => <span key={g}><i style={{ background: GROUP_COLORS[g] }} />{GROUP_NAMES[g]} · {n}</span>)}
+          </div>
+        </section>
+        <section>
+          <h5>Transport and utilities</h5>
+          <p>Transport rent goes up with how many you own: {STATION_RENT.map((r) => rupees(r)).join(', ')}. Utilities charge {UTILITY_TIMES[0]}× the dice roll, or {UTILITY_TIMES[1]}× if you own both. You can’t build on these.</p>
+        </section>
+        <section>
+          <h5>🤝 Deals</h5>
+          <p>Tap <b>Make a deal</b> to offer places and cash to another player for theirs. They accept or decline. It’s the way to finish a colour set. Places in a set with houses on it can’t be traded.</p>
+        </section>
+        <section>
+          <h5>Short of money</h5>
+          <p><b>Mortgage</b> a place for half its price; it charges no rent until you pay that back (plus 10%). <b>Sell</b> houses for half what they cost. If you owe more than you have, raise the money and tap <b>Pay</b>. If you can’t, declare bankruptcy: you’re out, and what you own goes to the player you owed (or back to the bank).</p>
+        </section>
+        <section>
+          <h5>Jail, cards and Chai Break</h5>
+          <p>To get out of jail: pay {rupees(JAIL_FINE)}, use a get-out card, or roll doubles (on the third try you pay and go). Surprise and Treasure cards bring money, fines or a trip somewhere. With the Chai Break pot rule on, whoever lands on Chai Break collects every tax and fine paid so far.</p>
+        </section>
+        <section>
+          <h5>Left, or away from the keys?</h5>
+          <p>If someone leaves, the game plays for them. If you don’t move for a minute, it plays your turn for you.</p>
+        </section>
+        <button type="button" className="ty-btn ty-btn-go ty-guide-close" onClick={onClose}>Got it</button>
+      </div>
+    </div>
+  );
 }
 
 // ---- trades ------------------------------------------------------------------------------------
@@ -287,6 +353,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
   // ---- local UI ----
   const [deed, setDeed] = useState<number | null>(null);
   const [trading, setTrading] = useState(false);
+  const [guide, setGuide] = useState(false);
   const [confirmBankrupt, setConfirmBankrupt] = useState(-1);
 
   const incoming = s.phase === 'playing' && s.trade && s.trade.to === me ? s.trade : null;
@@ -311,6 +378,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
               <text x={100} y={52} textAnchor="middle" fontSize={50} fontWeight={900} fill="#e0393e" stroke="#23252d" strokeWidth={3} paintOrder="stroke" fontFamily="'Bricolage Grotesque Variable', 'Figtree Variable', sans-serif">TYCOON</text>
             </svg>
             <p className="ty-muted">Buy places across India, collect rent, build houses and hotels, make deals. Last one standing wins.</p>
+            <button type="button" className="ty-btn ty-btn-sm ty-guide-btn" onClick={() => setGuide(true)}>📖 How to play</button>
           </div>
           <ul className="ty-players">
             {s.players.map((p, i) => (
@@ -353,12 +421,14 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
             <p className="ty-muted">A player or the host starts the game.</p>
           )}
         </div>
+        {guide && <HowToPlay onClose={() => setGuide(false)} />}
       </div>
     );
   }
 
   // ---- table -------------------------------------------------------------------------------------------
   const myPlaces = me >= 0 ? SPACES.map((_, i) => i).filter((i) => s.owner[i] === me) : [];
+  const canBuildNow = myTurn && myPlaces.some((i) => !buildBlock(s, me, i));
   const status = (() => {
     if (s.phase === 'over') return s.winner === me ? 'You won! 🏆' : `${s.players[s.winner ?? 0]?.name} won! 🏆`;
     if (!current) return '';
@@ -371,7 +441,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
       case 'roll': return current.jail ? 'You’re in jail: roll doubles, pay, or use a card.' : s.doubles ? 'Doubles! Roll again.' : 'Your turn: roll the dice.';
       case 'buy': return `Buy ${SPACES[s.pendingBuy!].name} for ${rupees(priceOf(s.pendingBuy!))}?`;
       case 'debt': return `You owe ${rupees(debtTotal)} (${s.debt?.reason}). Sell houses or mortgage places, then pay.`;
-      default: return 'Build, deal, or end your turn.';
+      default: return canBuildNow ? 'You can build: tap a place marked 🏗️ in Your places. Or make a deal, or end your turn.' : 'Make a deal, or end your turn.';
     }
   })();
 
@@ -468,13 +538,15 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
               {myPlaces.length ? myPlaces.map((i) => {
                 const sp = SPACES[i];
                 return (
-                  <button key={i} type="button" className={`ty-chip${s.mortgaged[i] ? ' is-mortgaged' : ''}`} style={{ ['--chip' as string]: sp.kind === 'property' ? GROUP_COLORS[sp.group] : '#6b6e78' }} onClick={() => setDeed(i)}>
+                  <button key={i} type="button" className={`ty-chip${s.mortgaged[i] ? ' is-mortgaged' : ''}${sp.kind === 'property' && ownsGroup(s, me, i) ? ' is-set' : ''}`} style={{ ['--chip' as string]: sp.kind === 'property' ? GROUP_COLORS[sp.group] : '#6b6e78' }} onClick={() => setDeed(i)}
+                    title={sp.kind === 'property' && ownsGroup(s, me, i) ? 'You own the whole colour set: tap to build houses' : undefined}>
                     <span className="ty-chip-dot" />
                     {sp.name}
+                    {sp.kind === 'property' && ownsGroup(s, me, i) && s.houses[i] === 0 && <span className="ty-chip-set" aria-label="whole set: you can build"> 🏗️</span>}
                     {s.houses[i] === 5 ? ' 🏨' : s.houses[i] ? ` ${'🏠'.repeat(s.houses[i])}` : ''}
                   </button>
                 );
-              }) : <span className="ty-muted">None yet. Tap any space on the board for details.</span>}
+              }) : <span className="ty-muted">None yet. Tap any space on the board for details. Own every place of one colour to build houses.</span>}
             </div>
           </>
         )}
@@ -483,13 +555,17 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
           {s.log.slice(-6).reverse().map((l, i) => <li key={`${s.log.length}-${i}`}>{l}</li>)}
         </ol>
 
-        {canManage && s.phase === 'playing' && (
-          <button type="button" className="ty-btn ty-btn-sm ty-end" onClick={() => dispatch({ kind: 'end-game' })}>End game now (richest wins)</button>
-        )}
+        <div className="ty-row">
+          <button type="button" className="ty-btn ty-btn-sm ty-guide-btn" onClick={() => setGuide(true)}>📖 How to play</button>
+          {canManage && s.phase === 'playing' && (
+            <button type="button" className="ty-btn ty-btn-sm ty-end" onClick={() => dispatch({ kind: 'end-game' })}>End game now (richest wins)</button>
+          )}
+        </div>
       </aside>
 
       {deed !== null && <Deed s={s} pos={deed} me={me} onAct={dispatch} onClose={() => setDeed(null)} />}
       {trading && me >= 0 && <TradeDialog s={s} me={me} onSend={dispatch} onClose={() => setTrading(false)} />}
+      {guide && <HowToPlay onClose={() => setGuide(false)} />}
     </div>
   );
 }
