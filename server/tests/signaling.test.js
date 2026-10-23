@@ -208,6 +208,42 @@ describe('signaling server', () => {
         for (const c of [host, stranger, other, reloaded]) c.close();
     });
 
+    it('gives the host its room back after Leave with only the host token (same peer id, M2)', async () => {
+        // Alone: leaving closes the room; Rejoin brings it back
+        const solo = await connected('h7c');
+        solo.send({ type: 'create-room', peerId: 'h7c' });
+        const soloRoom = await solo.next('room-created');
+        solo.send({ type: 'leave' });
+        await solo.next('left');
+        solo.send({ type: 'create-room', roomId: soloRoom.roomId, peerId: 'h7c', hostToken: soloRoom.hostToken });
+        const soloBack = await solo.next('room-resumed');
+        assert.equal(soloBack.roomId, soloRoom.roomId);
+        assert.equal(soloBack.hostPeerId, 'h7c');
+
+        // With a guest still in the room: the host comes back as host
+        const host = await connected('h7d');
+        host.send({ type: 'create-room', peerId: 'h7d' });
+        const created = await host.next('room-created');
+        const guest = await connected('g7d');
+        guest.send({ type: 'join', roomId: created.roomId, peerId: 'g7d' });
+        await guest.next('joined');
+        host.send({ type: 'leave' });
+        await host.next('left');
+        await guest.next('peer-left');
+        host.send({ type: 'create-room', roomId: created.roomId, peerId: 'h7d', hostToken: created.hostToken });
+        const back = await host.next('room-resumed');
+        assert.deepEqual(back.peers, ['g7d']);
+        assert.equal((await guest.next('host')).hostPeerId, 'h7d');
+
+        // The host token is for the host's seat: it can't take over a guest who is still there
+        const grab = await connected('g7d');
+        grab.send({ type: 'create-room', roomId: created.roomId, peerId: 'g7d', hostToken: created.hostToken });
+        assert.equal((await grab.next('error')).code, 'seat-taken');
+        host.send({ type: 'offer', targetId: 'g7d', offer: { type: 'offer', sdp: 'still-guest' } });
+        assert.equal((await guest.next('offer')).offer.sdp, 'still-guest');
+        for (const c of [solo, host, guest, grab]) c.close();
+    });
+
     it("brings back a closed room only with a seat token for it (a stranger can't make up rooms)", async () => {
         const host = await connected('h8');
         host.send({ type: 'create-room', peerId: host.peerId });
