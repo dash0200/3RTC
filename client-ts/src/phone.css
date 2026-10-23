@@ -1051,18 +1051,38 @@
 /* An activity (game) open: the stage grows so the board fits; the activity scrolls inside */
 .phone-app .stage-section.stage-phone:has(.stage-activity.is-full) {
   aspect-ratio: auto;
-  height: 72dvh;
+  flex: 0 1 72dvh;
+  height: auto;
+  min-height: 0;
   max-height: none;
 }
 /* "Chat" on in the game bar: a smaller game, so the chat messages fit below it */
 .phone-app .stage-section.stage-phone:has(.stage-activity.is-full.is-chat-split) {
-  height: 56dvh;
+  flex-basis: 56dvh;
 }
-/* Phone bar: the three buttons stay on one line */
+/* ...and on a short phone the game gives way first: the tabs and the message box always fit */
+.phone-app:has(.stage-activity.is-full) .chat-section.embedded {
+  min-height: 136px; /* tabs (60) + message box (~72) */
+}
+.phone-app .chat-section.embedded > .chat-nav-tabs,
+.phone-app .chat-section.embedded > .chat-footer {
+  flex-shrink: 0;
+}
+/* Phone bar: the buttons stay on one line; a long game name shortens instead of pushing End off */
 .phone-app .activity-bar { gap: 6px; padding: 8px 10px; }
 .phone-app .activity-bar-meta { display: none; }
+.phone-app .activity-bar-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .phone-app .activity-bar .activity-bar-btn,
-.phone-app .activity-bar .activity-close-btn { padding: 6px 10px; }
+.phone-app .activity-bar .activity-close-btn { padding: 6px 10px; flex: none; white-space: nowrap; }
+@media (max-width: 380px) {
+  .phone-app .activity-video-btn .activity-btn-text { display: none; }
+}
 
 /* A link source playing (features/media/LinkPlayer.jsx): 16:9 plus its bar, like YouTube */
 .phone-app .stage-section.stage-phone:has(.link-player) {
@@ -1096,3 +1116,39 @@
 }
 /* Game bar on a phone: "Chat" as an icon, so Minimise, Leave and End fit */
 .phone-app .activity-chat-btn .activity-btn-text { display: none; }
+
+/* ---------- Phone held sideways (short screen) ----------
+   Stacked, the video left no room for the chat: the message box and the tabs were cut off.
+   Side by side instead: video (or game) on the left, Chat / Queue / People on the right. */
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 560px) {
+  .app-container.phone-app:has(> .stage-section.stage-phone) {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  .phone-app > .phone-topbar,
+  .phone-app > .phone-actionbar { grid-column: 1 / -1; }
+  .phone-app > .stage-section.stage-phone,
+  .phone-app > .stage-section.stage-phone:has(.stage-activity.is-full) {
+    grid-column: 1;
+    grid-row: 2;
+    aspect-ratio: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+  .phone-app > .chat-section.embedded {
+    grid-column: 2;
+    grid-row: 2;
+    min-height: 0;
+  }
+}
+
+/* Typing with the keyboard up (the screen gets short): the call buttons step aside and the video
+   shrinks, so the tabs and the message box stay on screen. (A portrait phone with the keyboard up
+   is wider than tall; held sideways it leaves very little height.) */
+@media (orientation: landscape) and (max-width: 559px), (max-height: 260px) {
+  .phone-app:has(.chat-footer :focus) > .phone-actionbar { display: none; }
+  .phone-app:has(.chat-footer :focus) > .stage-section.stage-phone { flex-shrink: 1; min-height: 0; }
+  .phone-app:has(.chat-footer :focus) > .chat-section.embedded { min-height: 136px; }
+}

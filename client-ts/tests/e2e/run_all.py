@@ -18,8 +18,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ORDER = [
-    'connection', 'network_blocked', 'devices', 'chat_attach', 'youtube_sync', 'youtube_unavailable', 'host_controls', 'queue', 'quick_picks_region',
-    'activities', 'ludo', 'ludo_stack', 'ludo_rejoin', 'ludo_video', 'ludo_leave', 'room_basics', 'host_spoof', 'phone_layout', 'back_button', 'media_links', 'stream', 'stream_uneven',
+    'connection', 'network_blocked', 'devices', 'chat_attach', 'youtube_sync', 'youtube_unavailable', 'host_controls', 'host_transfer', 'queue', 'quick_picks_region',
+    'activities', 'ludo', 'ludo_stack', 'ludo_rejoin', 'ludo_video', 'ludo_leave', 'room_basics', 'host_spoof', 'phone_layout', 'phone_reach', 'back_button', 'media_links', 'stream', 'stream_uneven',
     'local_video_sync', 'file_format', 'swarm', 'media_session', 'full_room',
 ]
 

@@ -101,7 +101,7 @@ with sync_playwright() as p:
     back(phone)
     check('Back again asks about the room, the game stays', wait(lambda: leave_dialog(phone), 3) and phone.locator('.ludo-board').count() == 1)
     phone.get_by_role('button', name='Stay').click()
-    host.get_by_role('button', name='End for everyone').click()
+    harness.end_game(host)
     wait(lambda: phone.locator('.ludo-board').count() == 0, 6)
 
     # A video open: Back doesn't close it (it has its own Exit button)

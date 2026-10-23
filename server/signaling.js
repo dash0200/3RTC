@@ -58,11 +58,12 @@ export function attachSignaling(server) {
    * @param {string} epoch
    * @param {string | null} hostPeerId
    */
-  function openRoom(roomId, epoch, hostPeerId) {
+  function openRoom(roomId, epoch, hostPeerId, hostGen = 0) {
     /** @type {Map<string, import('./types/protocol.d.ts').SignalingSocket>} */
     const room = new Map();
     rooms.set(roomId, room);
-    roomInfo.set(roomId, { epoch, hostPeerId });
+    // hostGen: how many times the host has handed the room on (host tokens name it; older ones stop working)
+    roomInfo.set(roomId, { epoch, hostPeerId, hostGen });
     return room;
   }
 
@@ -98,7 +99,7 @@ export function attachSignaling(server) {
     if (!info) return {};
     return {
       seatToken: seats.seatToken(roomId, info.epoch, peerId),
-      ...(info.hostPeerId === peerId && isHostVerified ? { hostToken: seats.hostToken(roomId, info.epoch) } : {})
+      ...(info.hostPeerId === peerId && isHostVerified ? { hostToken: seats.hostToken(roomId, info.epoch, info.hostGen || 0) } : {})
     };
   }
 
@@ -223,15 +224,16 @@ export function attachSignaling(server) {
           const resumeRoomId = typeof data.roomId === 'string' || typeof data.roomId === 'number'
             ? String(data.roomId).trim() : '';
           if (/^\d{5}$/.test(resumeRoomId)) {
-            const epoch = seats.checkHost(data.hostToken, resumeRoomId);
+            const host = seats.checkHostGen(data.hostToken, resumeRoomId);
             const existing = roomInfo.get(resumeRoomId);
-            if (!epoch || (existing && existing.epoch !== epoch)) {
+            // A host token from before the room was handed on (lower generation) no longer works
+            if (!host || (existing && (existing.epoch !== host.epoch || host.gen < (existing.hostGen || 0)))) {
               log('WARN', `Refused to resume room "${resumeRoomId}" (no valid host token)`);
               safeSend(ws, { type: 'error', code: 'resume-denied', roomId: resumeRoomId, message: `Couldn't get room ${resumeRoomId} back` });
               return;
             }
             const peerId = isValidPeerId(data.peerId) ? data.peerId : ws.peerId;
-            let room = rooms.get(resumeRoomId) || openRoom(resumeRoomId, epoch, peerId);
+            let room = rooms.get(resumeRoomId) || openRoom(resumeRoomId, host.epoch, peerId, host.gen);
             // The host token proves this is the host: enough for the host's own seat or a free one
             // (Rejoin after Leave sends no seat token). A guest who is still here keeps theirs.
             const holder = room.get(peerId);
@@ -252,7 +254,10 @@ export function attachSignaling(server) {
             room.set(peerId, ws);
             ws.roomId = resumeRoomId;
             const currentInfo = roomInfo.get(resumeRoomId);
-            if (currentInfo) currentInfo.hostPeerId = peerId;
+            if (currentInfo) {
+              currentInfo.hostPeerId = peerId;
+              currentInfo.hostGen = Math.max(currentInfo.hostGen || 0, host.gen);
+            }
 
             const otherPeers = getOtherPeers(resumeRoomId, peerId);
             log('RESUME', `Peer ${peerId} resumed room "${resumeRoomId}" (Total: ${room.size})`);
@@ -452,6 +457,33 @@ export function attachSignaling(server) {
               type: 'peer-joined',
               peerId: ws.peerId
             });
+          }
+          break;
+        }
+
+        case 'transfer-host': {
+          // The host hands the room to someone else in it. Only the host the server knows may do it;
+          // the new host gets a host token of the next generation, so the old host's token can't take
+          // the room back (its seat token still works: it stays as a guest).
+          const roomId = ws.roomId;
+          const info = roomId ? roomInfo.get(roomId) : null;
+          const room = roomId ? rooms.get(roomId) : null;
+          if (!roomId || !info || !room || info.hostPeerId !== ws.peerId || room.get(ws.peerId) !== ws) {
+            safeSend(ws, { type: 'error', code: 'not-host', message: 'Only the host can make someone else the host' });
+            return;
+          }
+          const targetId = typeof data.targetPeerId === 'string' ? data.targetPeerId : '';
+          const target = room.get(targetId);
+          if (!targetId || targetId === ws.peerId || !target || target.readyState !== WebSocket.OPEN) {
+            safeSend(ws, { type: 'error', code: 'target-not-found', message: 'That person is no longer in the room' });
+            return;
+          }
+          info.hostGen = (info.hostGen || 0) + 1;
+          info.hostPeerId = targetId;
+          log('HOST', `Peer ${ws.peerId} made ${targetId} the host of room "${roomId}" (generation ${info.hostGen})`);
+          safeSend(target, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
+          for (const [, clientWs] of room.entries()) {
+            safeSend(clientWs, { type: 'host', hostPeerId: targetId, from: ws.peerId });
           }
           break;
         }

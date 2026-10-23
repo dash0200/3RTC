@@ -32,7 +32,15 @@ export interface SignalingContext {
   /** "Room not found" here: look for it on the other servers. True if a search started (it tells
    *  the user itself); false to show `notFoundMessage` now. */
   findRoomElsewhere?: (roomId: string, notFoundMessage: string) => boolean;
+  /** Couldn't get into a room (full, not found...) before being in one: show it where the user joined.
+   *  True if shown there (then no toast). */
+  onRoomError?: (message: string, roomId: string | null) => boolean;
+  /** The host handed the room to `hostPeerId` (`fromPeerId` did it) */
+  onHostChanged?: (hostPeerId: string, fromPeerId: string) => void;
 }
+
+// Errors that mean "you didn't get into the room"
+const ROOM_ERROR_CODES = new Set(['not-found', 'room-full', 'seat-taken', 'rate-limited', 'server-busy']);
 
 export async function processSignalingMessage(
   msg: IncomingSignalingMessage,
@@ -370,6 +378,28 @@ export async function processSignalingMessage(
 
     case 'host': {
       setHostPeerId?.(msg.hostPeerId ?? null);
+      const selfId = peerIdRef?.current;
+      if (selfId && msg.hostPeerId === selfId) {
+        // We were made the host
+        if (!isHostRef.current) {
+          setIsHost(true);
+          isHostRef.current = true;
+        }
+      } else if (isHostRef.current && msg.hostPeerId) {
+        // We handed the room on: our host token is no good any more
+        setIsHost(false);
+        isHostRef.current = false;
+        if (roomTokensRef?.current) roomTokensRef.current = { ...roomTokensRef.current, host: null };
+      }
+      if (msg.from) ctx.onHostChanged?.(msg.hostPeerId, msg.from);
+      break;
+    }
+
+    case 'host-token': {
+      // After being made the host: the token that gets the room back (reload, Rejoin, signaling drop)
+      if (roomTokensRef?.current && roomTokensRef.current.roomId === String(msg.roomId) && typeof msg.hostToken === 'string') {
+        roomTokensRef.current = { ...roomTokensRef.current, host: msg.hostToken };
+      }
       break;
     }
 
@@ -390,6 +420,8 @@ export async function processSignalingMessage(
       }
       // The room may be on another 3RTC server: look there before saying it doesn't exist
       if (msg.code === 'not-found' && ctx.findRoomElsewhere?.(String(msg.roomId || ''), msg.message || '')) break;
+      if (!currentRoomRef.current && msg.code && ROOM_ERROR_CODES.has(msg.code) &&
+        ctx.onRoomError?.(msg.message || 'Couldn\'t join that room', msg.roomId ? String(msg.roomId) : null)) break;
       showToast(msg.message || 'Signaling error');
       break;
     }

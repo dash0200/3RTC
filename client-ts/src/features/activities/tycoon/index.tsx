@@ -180,7 +180,7 @@ function TradeDialog({ s, me, onSend, onClose }: { s: TyState; me: number; onSen
 
 function tradeSummary(s: TyState): { give: string; get: string } {
   const t = s.trade!;
-  const list = (props: number[], cash: number) => [...props.map((i) => SPACES[i].name), ...(cash ? [rupees(cash)] : [])].join(', ') || 'nothing';
+  const list = (props: number[], cash: number) => [...props.map((i) => SPACES[i].name), ...(cash ? [rupees(cash)] : [])].join(', ');
   return { give: list(t.giveProps, t.giveCash), get: list(t.getProps, t.getCash) };
 }
 
@@ -430,7 +430,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
           const t = tradeSummary(s);
           return (
             <div className="ty-offer" role="alert">
-              <b>{s.players[incoming.from].name}</b> offers {t.give} for your {t.get}.
+              <b>{s.players[incoming.from].name}</b> {t.give && t.get ? <>offers {t.give} for your {t.get}.</> : t.give ? <>offers you {t.give}.</> : <>asks you for {t.get}.</>}
               <div className="ty-row">
                 <button type="button" className="ty-btn ty-btn-go" onClick={() => dispatch({ kind: 'trade-answer', accept: true })}>Accept</button>
                 <button type="button" className="ty-btn" onClick={() => dispatch({ kind: 'trade-answer', accept: false })}>Decline</button>

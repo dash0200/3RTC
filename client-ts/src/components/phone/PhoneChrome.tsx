@@ -3,7 +3,7 @@ import { Logo } from '../Logo';
 import { Icon as LineIcon } from '../icons';
 import { getAvatarColor } from '../../utils/sound';
 import { getInitials } from '../PeerVoiceRoster';
-import { getMobileJoinUrl, getServerTag } from '../../utils/qrCode';
+import { getMobileJoinUrl, getServerTag } from '../../utils/joinUrl';
 import type { NetworkStatsSummary } from '../../hooks/useNetworkStats';
 
 export interface PhonePerson {

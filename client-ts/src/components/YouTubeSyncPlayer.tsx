@@ -252,7 +252,8 @@ export default function YouTubeSyncPlayer({
                 setIsPlaying(true);
               } catch { }
             },
-            onStateChange: handlePlayerStateChange,
+            // Through a ref: the player lives as long as the video, the handler must be this render's
+            onStateChange: (e: { data: number }) => handlePlayerStateChangeRef.current?.(e),
             onError: (e: { data: number }) => handlePlayerErrorRef.current?.(e.data, playerVideoId)
           }
         });
@@ -344,6 +345,8 @@ export default function YouTubeSyncPlayer({
 
     lastStateRef.current = state;
   };
+  const handlePlayerStateChangeRef = useRef(handlePlayerStateChange);
+  handlePlayerStateChangeRef.current = handlePlayerStateChange;
 
   // 5. Polling interval to track time and detect timeline scrubbing
   useEffect(() => {

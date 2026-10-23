@@ -380,6 +380,8 @@ export interface PeerVoicePanelProps {
   isPttActive?: boolean;
   onPttPressStart?: (e: React.SyntheticEvent) => void;
   onPttPressEnd?: (e: React.SyntheticEvent) => void;
+  /** Host only: make that person the host (asks for a second tap) */
+  onMakeHost?: (peerId: string) => void;
 }
 
 /**
@@ -397,11 +399,20 @@ export function PeerVoicePanel({
   onOpenAudioSettings,
   isPttActive = false,
   onPttPressStart,
-  onPttPressEnd
+  onPttPressEnd,
+  onMakeHost
 }: PeerVoicePanelProps) {
   // Live speaking rings / meters
   const { peers: connectedPeers, localUser } = useLiveVoiceUsers(connectedPeersProp, localUserProp);
   const isPttMode = audioSettings?.inputMode === 'ptt';
+  // "Make host" needs a second tap within a few seconds (you lose host controls)
+  const [confirmHostFor, setConfirmHostFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!confirmHostFor) return undefined;
+    const t = setTimeout(() => setConfirmHostFor(null), 4000);
+    return () => clearTimeout(t);
+  }, [confirmHostFor]);
+  const canMakeHost = Boolean(localUser?.isHost && onMakeHost);
 
   return (
     <div className="peer-voice-panel">
@@ -585,6 +596,26 @@ export function PeerVoicePanel({
                   </div>
                   <span className="meter-reading">{peer.isSpeaking ? `${peer.audioLevel}%` : 'Silent'}</span>
                 </div>
+
+                {canMakeHost && !peer.isHost && targetId && (
+                  <div className="card-host-row">
+                    <button
+                      type="button"
+                      className={`card-mute-toggle-btn card-make-host-btn ${confirmHostFor === targetId ? 'is-confirming' : ''}`}
+                      onClick={() => {
+                        if (confirmHostFor !== targetId) {
+                          setConfirmHostFor(targetId);
+                          return;
+                        }
+                        setConfirmHostFor(null);
+                        onMakeHost?.(targetId);
+                      }}
+                      title={confirmHostFor === targetId ? `Tap again: ${peer.username} becomes the host and you lose host controls` : `Make ${peer.username} the host`}
+                    >
+                      {confirmHostFor === targetId ? `Make ${peer.username} host?` : '👑 Make host'}
+                    </button>
+                  </div>
+                )}
 
                 {/* Volume Slider 0% - 200% */}
                 <div className="card-volume-control">

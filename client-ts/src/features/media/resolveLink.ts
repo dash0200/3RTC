@@ -58,11 +58,13 @@ export async function resolvePastedLink(text: string): Promise<ResolvePastedLink
   }
   const media = { ...res.media };
   if (res.guessed) {
-    const { probeVideoUrl } = await import('./adapters/html5');
+    const { probeVideoUrl, explainLinkFailure } = await import('./adapters/html5');
     if (!(await probeVideoUrl(media.url))) {
+      const reason = await explainLinkFailure(media.url);
       return {
-        error:
-          'That link isn\'t a video this browser can play. Paste a YouTube, Vimeo or Twitch link, or a direct video link (.mp4, .webm, .m3u8).'
+        error: reason.startsWith('This link isn\'t a video')
+          ? 'That link isn\'t a video this browser can play. Paste a YouTube, Vimeo or Twitch link, or a direct video link (.mp4, .webm, .m3u8).'
+          : `${reason}.`
       };
     }
   }

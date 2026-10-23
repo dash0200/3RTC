@@ -210,6 +210,7 @@ export default function LinkPlayer({
                     onEndedRef.current?.();
                     break;
                 case 'error':
+                    setStatus('');
                     setError(e.message || 'This video can\'t be played here');
                     break;
                 default:
@@ -225,7 +226,11 @@ export default function LinkPlayer({
                     }
                     adapterRef.current = adapter;
                 })
-                .catch((err) => alive && setError(err?.message || 'This video can\'t be played here'));
+                .catch((err) => {
+                    if (!alive) return;
+                    setStatus('');
+                    setError(err?.message || 'This video can\'t be played here');
+                });
         }
         // Keep the known position fresh (some players only answer asynchronously)
         const poll = setInterval(async () => {

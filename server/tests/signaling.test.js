@@ -244,6 +244,52 @@ describe('signaling server', () => {
         for (const c of [solo, host, guest, grab]) c.close();
     });
 
+    it('lets the host hand the room to someone else, and the old host token stops working', async () => {
+        const host = await connected('h7t');
+        host.send({ type: 'create-room', peerId: 'h7t' });
+        const created = await host.next('room-created');
+        const guest = await connected('g7t');
+        guest.send({ type: 'join', roomId: created.roomId, peerId: 'g7t' });
+        const joined = await guest.next('joined');
+        const other = await connected('o7t');
+        other.send({ type: 'join', roomId: created.roomId, peerId: 'o7t' });
+        await other.next('joined');
+
+        // Only the host may do it, and only to someone who is here
+        guest.send({ type: 'transfer-host', targetPeerId: 'g7t' });
+        assert.equal((await guest.next('error')).code, 'not-host');
+        host.send({ type: 'transfer-host', targetPeerId: 'nobody' });
+        assert.equal((await host.next('error')).code, 'target-not-found');
+        host.send({ type: 'transfer-host', targetPeerId: 'h7t' });
+        assert.equal((await host.next('error')).code, 'target-not-found', 'not to yourself');
+
+        host.send({ type: 'transfer-host', targetPeerId: 'g7t' });
+        const token = await guest.next('host-token');
+        assert.equal(token.roomId, created.roomId);
+        assert.ok(token.hostToken.startsWith('v2.'));
+        for (const c of [host, guest, other]) assert.deepEqual(await c.next('host'), { type: 'host', hostPeerId: 'g7t', from: 'h7t' });
+
+        // The old host can't make anyone host any more
+        host.send({ type: 'transfer-host', targetPeerId: 'o7t' });
+        assert.equal((await host.next('error')).code, 'not-host');
+        // ...nor take the room back with its old host token (e.g. after reloading)
+        const oldBack = await connected('h7t-new');
+        oldBack.send({ type: 'create-room', roomId: created.roomId, peerId: 'h7t-new', hostToken: created.hostToken });
+        assert.equal((await oldBack.next('error')).code, 'resume-denied');
+        // The new host's token works (it reloads the page: new peer id)
+        guest.close();
+        const newBack = await connected('g7t-new');
+        newBack.send({ type: 'create-room', roomId: created.roomId, peerId: 'g7t-new', hostToken: token.hostToken });
+        const resumed = await newBack.next('room-resumed');
+        assert.equal(resumed.hostPeerId, 'g7t-new');
+        assert.ok(resumed.hostToken.startsWith('v2.'), 'its fresh token keeps the generation');
+        // ...and can hand it on again (back to the first host, now a guest)
+        newBack.send({ type: 'transfer-host', targetPeerId: 'h7t' });
+        assert.ok((await host.next('host-token')).hostToken);
+        assert.equal(joined.hostPeerId, 'h7t');
+        for (const c of [host, other, oldBack, newBack]) c.close();
+    });
+
     it('answers whether a room is on this server, limited like joins (M3)', async () => {
         const host = await connected('h7e');
         host.send({ type: 'create-room', peerId: 'h7e' });
