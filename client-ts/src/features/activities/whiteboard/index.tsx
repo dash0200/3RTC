@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent } from 'react';
 import { useRoom, useSharedState, usePeerMessage } from '../../../core/RoomContext';
 import { releaseSharedStores } from '../../../core/sharedState';
+import { useActivityZoom } from '../usePinchZoom';
 import {
   BG,
   BOARD_H,
@@ -166,7 +167,8 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     const el = wrapRef.current;
     if (!el) return undefined;
     const measure = (): void => {
-      const r = el.getBoundingClientRect();
+      // layout size, not the size on screen: a pinch-zoom (scaled) mustn't refit the board
+      const r = { width: el.clientWidth, height: el.clientHeight };
       const scale = Math.max(0.05, Math.min(r.width / BOARD_W, r.height / BOARD_H));
       setFit({ w: Math.floor(BOARD_W * scale), h: Math.floor(BOARD_H * scale), scale });
     };
@@ -175,7 +177,9 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const dpr = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1;
+  // Zoomed in on a phone: more pixels so lines stay sharp (in steps, so a pinch doesn't redraw on every move)
+  const zoom = useActivityZoom();
+  const dpr = (typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1) * (zoom > 1 ? Math.min(3, Math.ceil(zoom * 2) / 2) : 1);
 
   const prepare = (canvas: HTMLCanvasElement | null): CanvasRenderingContext2D | null => {
     if (!canvas) return null;
@@ -207,7 +211,7 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     ctx.fillStyle = BG[index.bg];
     ctx.fillRect(0, 0, BOARD_W, BOARD_H);
     for (const s of strokes) if (!gone.has(s.id)) drawStroke(ctx, s, { dim: erasing.has(s.id) });
-  }, [strokes, erasing, gone, fit, index.bg]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [strokes, erasing, gone, fit, index.bg, dpr]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- live strokes and cursors from the others ----
   const liveRef = useRef<Map<string, LiveStroke>>(new Map()); // `${peer}:${id}`
@@ -291,7 +295,7 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
-  }, [overlayTick, strokes, fit, index.bg]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [overlayTick, strokes, fit, index.bg, dpr]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- adding and removing (with undo) ----
   const [, setUndoTick] = useState(0);
@@ -347,10 +351,12 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
   // ---- pointer ----
   const toBoard = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
     const r = overRef.current!.getBoundingClientRect();
+    // on screen the board may be zoomed (pinch on a phone): r is its size there, fit.w its size in the layout
+    const k = r.width ? fit.w / r.width : 1;
     // past the edge counts as the edge: a stroke that leaves the board runs along it, just
     // inside so the whole line shows
-    const x = (e.clientX - r.left) / fit.scale;
-    const y = (e.clientY - r.top) / fit.scale;
+    const x = ((e.clientX - r.left) * k) / fit.scale;
+    const y = ((e.clientY - r.top) * k) / fit.scale;
     const m = tool === 'hl' ? width * 1.5 + 1 : tool === 'pen' || tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ell' ? width / 2 + 1 : 0;
     // whole board units: exactly what's sent and saved, so every screen smooths the same points
     return { x: Math.round(Math.max(m, Math.min(BOARD_W - m, x))), y: Math.round(Math.max(m, Math.min(BOARD_H - m, y))) };
@@ -463,6 +469,23 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
     redrawOverlay();
   };
 
+  // The browser (or a pinch to zoom) took the finger: drop what it started, nothing gets drawn or erased
+  const onCancel = (): void => {
+    if (tool === 'eraser') {
+      setErasing(new Set());
+      eraserAt.current = null;
+      redrawOverlay();
+      return;
+    }
+    const s = mineRef.current;
+    if (!s) return;
+    if (liveTimer.current) clearInterval(liveTimer.current);
+    liveTimer.current = null;
+    mineRef.current = null;
+    if (sent.current) room.bus.broadcast('wb-live', { e: index.epoch, id: s.id, done: true }); // the others saw the start of it
+    redrawOverlay();
+  };
+
   const onLeave = (): void => {
     eraserAt.current = null;
     room.bus.broadcast('wb-cursor', { gone: true });
@@ -567,7 +590,7 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
             onPointerDown={onDown}
             onPointerMove={onMove}
             onPointerUp={onUp}
-            onPointerCancel={onUp}
+            onPointerCancel={onCancel}
             onPointerLeave={onLeave}
             role="img"
             aria-label={`Whiteboard with ${total} drawing${total === 1 ? '' : 's'}`}
