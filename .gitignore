@@ -73,11 +73,11 @@ server/quick-picks-cache.json
 quick-picks-cache.json
 
 # Browser test output (logs, screenshots, generated media)
-client/tests/e2e/.out/
+client-ts/tests/e2e/.out/
 __pycache__/
 
 # Signaling server secret (production, made on first start)
 .signal-secret
 
-# A root lockfile is only a side effect of installing from the repo root (Vercel installs from client/)
+# A root lockfile is only a side effect of installing from the repo root (Vercel installs from client-ts/)
 /package-lock.json

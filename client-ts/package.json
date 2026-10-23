@@ -9,6 +9,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "tsx --test \"tests/unit/*.test.ts\"",
+    "test:e2e": "python tests/e2e/run_all.py",
+    "deploy": "python deploy_vercel.py",
     "preview": "vite preview"
   },
   "dependencies": {
