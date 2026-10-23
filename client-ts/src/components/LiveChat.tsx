@@ -132,6 +132,8 @@ export interface LiveChatProps {
   localUser?: (SelfInfo & { isMuted?: boolean; isSpeaking?: boolean }) | null;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
   onToggleMutePeer?: (peerId: string) => void;
+  /** Host only: make that person the host */
+  onMakeHost?: (peerId: string) => void;
   onToggleMic?: () => void;
   roomId?: string | null;
   onCopyRoom?: () => void;
@@ -190,6 +192,7 @@ export default function LiveChat({
   localUser = null,
   onSetPeerVolume,
   onToggleMutePeer,
+  onMakeHost,
   onToggleMic,
   roomId = '',
   onCopyRoom,
@@ -1488,6 +1491,7 @@ export default function LiveChat({
             localUser={localUser}
             onSetPeerVolume={onSetPeerVolume}
             onToggleMutePeer={onToggleMutePeer}
+            onMakeHost={onMakeHost}
             onToggleMic={onToggleMic}
             onToggleBlockAudio={onToggleBlockAudio}
             roomId={roomId}

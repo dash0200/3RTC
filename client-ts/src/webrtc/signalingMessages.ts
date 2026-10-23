@@ -35,6 +35,8 @@ export interface SignalingContext {
   /** Couldn't get into a room (full, not found...) before being in one: show it where the user joined.
    *  True if shown there (then no toast). */
   onRoomError?: (message: string, roomId: string | null) => boolean;
+  /** The host handed the room to `hostPeerId` (`fromPeerId` did it) */
+  onHostChanged?: (hostPeerId: string, fromPeerId: string) => void;
 }
 
 // Errors that mean "you didn't get into the room"
@@ -376,6 +378,28 @@ export async function processSignalingMessage(
 
     case 'host': {
       setHostPeerId?.(msg.hostPeerId ?? null);
+      const selfId = peerIdRef?.current;
+      if (selfId && msg.hostPeerId === selfId) {
+        // We were made the host
+        if (!isHostRef.current) {
+          setIsHost(true);
+          isHostRef.current = true;
+        }
+      } else if (isHostRef.current && msg.hostPeerId) {
+        // We handed the room on: our host token is no good any more
+        setIsHost(false);
+        isHostRef.current = false;
+        if (roomTokensRef?.current) roomTokensRef.current = { ...roomTokensRef.current, host: null };
+      }
+      if (msg.from) ctx.onHostChanged?.(msg.hostPeerId, msg.from);
+      break;
+    }
+
+    case 'host-token': {
+      // After being made the host: the token that gets the room back (reload, Rejoin, signaling drop)
+      if (roomTokensRef?.current && roomTokensRef.current.roomId === String(msg.roomId) && typeof msg.hostToken === 'string') {
+        roomTokensRef.current = { ...roomTokensRef.current, host: msg.hostToken };
+      }
       break;
     }
 

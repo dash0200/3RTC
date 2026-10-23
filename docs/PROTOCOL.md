@@ -153,14 +153,16 @@ Browser → server: `create-room {peerId}`, `create-room {roomId, peerId, hostTo
 (the host getting its room back), `join {roomId, peerId, rejoin?, seatToken?}`, `leave`,
 `offer {targetId, offer, fresh?, iceRestart?}`, `answer {targetId, answer}`,
 `ice-candidate {targetId, candidate}` (`candidate` is accepted too), `ping`,
-`find-room {roomId}` (is that room on this server? limited like a join).
+`find-room {roomId}` (is that room on this server? limited like a join), `transfer-host {targetPeerId}`
+(the host makes someone in the room the host).
 
 Server → browser: `room-created {roomId, peerId, hostPeerId, seatToken, hostToken}`,
 `room-resumed {roomId, peerId, peers, hostPeerId, seatToken, hostToken}`,
-`joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId}` (the host got the room back,
-maybe with a new peer id), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
+`joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId, from?}` (the host got the room back,
+maybe with a new peer id; with `from`: `from` handed the room to `hostPeerId`), `host-token {roomId, hostToken}`
+(to the new host after a transfer), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
 `pong`, `room-found {roomId, exists}`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`,
-`room-full`, `not-found`, `server-busy`, `rate-limited`).
+`room-full`, `not-found`, `server-busy`, `rate-limited`, `not-host`, `target-not-found`).
 
 **Seats** (`server/seats.js`): peer ids are public (everyone in the room sees them), so naming one
 proves nothing. The server signs a **seat token** (this peer id in this room) and, for the host, a
@@ -175,6 +177,13 @@ Tokens name the room instance (a random id given at creation), so a token from a
 the same code doesn't work on a new one, and they expire after 24 hours. They are signed with the
 server's secret (`SIGNAL_SECRET`, or `.signal-secret` made on first start in production), so they
 survive restarts. The app sends tokens only back to the server, never to peers.
+
+**Handing the room on** (`transfer-host`): only the peer the server knows as host may do it, to someone
+connected in the room. The room's **host generation** goes up by one; host tokens name it (`v2.` tokens;
+generation 0 keeps the `v1.` form), and the server refuses a host token of an earlier generation, so the
+old host can't take the room back (its seat token still works: it stays as a guest). After a server
+restart a room brought back by a guest has no generation yet: the first valid host token sets it, and a
+later generation still wins.
 
 **Several servers** (Oracle first, then GCP): rooms live in the memory of the server they were made
 on. Both servers must use the **same secret** (the deploy scripts upload `server/.signal-secret`,
