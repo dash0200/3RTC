@@ -18,6 +18,7 @@ import { createPortal } from 'react-dom';
 import ChatPeek, { type ChatPeekMessage } from './ChatPeek';
 import ActivityBubble from './ActivityBubble';
 import { ActivityHostProvider, type ActivityStatus, type ActivityViewKind } from './activityHost';
+import { ActivityZoomContext, usePinchZoom } from './usePinchZoom';
 
 const WINDOW_KEY = '3rtc_activity_window';
 const WINDOW_MIN = 300; // narrower and the board's tokens get too small to hit
@@ -383,7 +384,11 @@ export default function ActivityStage({
 
     // The game can be minimised at any time (a video playing or not): swipe it down on a phone
     const canSwipeAway = isPhone && shown === 'full';
-    useSwipeDown(rootRef, canSwipeAway, minimise);
+    // Phone, game open: pinch to zoom it (zoomed in, a finger pans the game: no swiping it away)
+    const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null);
+    const zoomRef = useRef<HTMLDivElement | null>(null);
+    const zoom = usePinchZoom(bodyEl, zoomRef, isPhone && shown === 'full');
+    useSwipeDown(rootRef, canSwipeAway && zoom.z === 1, minimise);
 
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
     const showPeek = chat && shown === 'full' && (isFull || !chat.isListVisible);
@@ -526,15 +531,24 @@ export default function ActivityStage({
                     </button>
                 )}
             </div>
-            <div className="activity-body">
-                <ActivityErrorBoundary key={definition.id}>
-                    <Suspense fallback={<div className="activity-message">Loading {definition.name}…</div>}>
-                        <ActivityHostProvider onStatus={onStatus}>
-                            {ActivityComponent ? <ActivityComponent activityId={definition.id} /> : null}
-                        </ActivityHostProvider>
-                    </Suspense>
-                </ActivityErrorBoundary>
+            <div className="activity-body" ref={setBodyEl}>
+                <div className="activity-zoom" ref={zoomRef}>
+                    <ActivityErrorBoundary key={definition.id}>
+                        <Suspense fallback={<div className="activity-message">Loading {definition.name}…</div>}>
+                            <ActivityHostProvider onStatus={onStatus}>
+                                <ActivityZoomContext.Provider value={zoom.z}>
+                                    {ActivityComponent ? <ActivityComponent activityId={definition.id} /> : null}
+                                </ActivityZoomContext.Provider>
+                            </ActivityHostProvider>
+                        </Suspense>
+                    </ActivityErrorBoundary>
+                </div>
             </div>
+            {zoom.z > 1 && (
+                <button type="button" className="activity-zoom-reset" onClick={zoom.reset} aria-label="Reset zoom">
+                    {zoom.z.toFixed(1)}× · Reset zoom
+                </button>
+            )}
             {showPeek && <ChatPeek messages={chat.messages} onOpenChat={isFull ? toggleFull : chat.onOpenChat} />}
         </div>
     );
