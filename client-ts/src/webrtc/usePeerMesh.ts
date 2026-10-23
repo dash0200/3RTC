@@ -22,6 +22,7 @@ import { processSignalingMessage } from './signalingMessages';
 import { BUILD } from '../version';
 import { useSignalingConnection, type SignalStatus, type RoomTokens } from '../hooks/useSignalingConnection';
 import { candidateType, type NetworkHint } from './networkHint';
+import { findRoomOn, sameServer } from './findRoom';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage, RoomBus } from '../types';
 import type { PeerEntryRecord } from './peerEntry';
 import type { PeerMetadataRecord } from './peerMessages';
@@ -448,6 +449,10 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   );
   getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
 
+  // Rooms live on the server they were made on (the app may be on a fallback): see findRoom.ts
+  const findRoomElsewhereRef = useRef<(code: string, notFoundMessage: string) => boolean>(() => false);
+  const lastRoomSearchRef = useRef<{ code: string; at: number } | null>(null);
+
   const handleSignalingMessage = useCallback(
     (msg: IncomingSignalingMessage) =>
       processSignalingMessage(msg, {
@@ -470,7 +475,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         setPeerCount,
         setRoomId,
         showToast,
-        username
+        username,
+        findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage)
       }),
     [
       peerIdRef,
@@ -489,7 +495,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     ]
   );
 
-  useSignalingConnection({
+  const switchServer = useSignalingConnection({
     addSystemMessage,
     currentRoomRef,
     fallbackUrls,
@@ -504,6 +510,27 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     signalUrl,
     wsRef
   });
+
+  findRoomElsewhereRef.current = (code: string, notFoundMessage: string) => {
+    if (!/^\d{5}$/.test(code)) return false;
+    const last = lastRoomSearchRef.current;
+    if (last && last.code === code && Date.now() - last.at < 30000) return false; // looked already
+    const here = wsRef.current?.url;
+    const others = [...new Set([signalUrl, ...fallbackUrls])].filter((url) => url && !sameServer(url, here));
+    if (!others.length) return false;
+    lastRoomSearchRef.current = { code, at: Date.now() };
+    void findRoomOn(others, code).then((url) => {
+      if (currentRoomRef.current) return; // in a room by now
+      if (!url) {
+        showToast(notFoundMessage || `Room "${code}" not found. Please verify the 5-digit code or create a room.`);
+        return;
+      }
+      addSystemMessage(`🔄 Room ${code} is on another 3RTC server. Connecting there...`);
+      pendingSignalsRef.current.push({ type: 'join', roomId: code, peerId: peerIdRef.current || '' });
+      switchServer(url);
+    });
+    return true;
+  };
 
   const createRoom = useCallback(
     (resumeRoomId?: string | null, hostToken?: string | null) =>

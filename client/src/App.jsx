@@ -102,6 +102,13 @@ export default function App() {
     });
 
     const fallbackUrls = useMemo(() => {
+        if (IS_LOCAL) {
+            // Development and browser tests: other local servers to fall back to / look for rooms on
+            try {
+                const devPool = localStorage.getItem('webrtc_signal_fallbacks');
+                if (devPool) return devPool.split(',').map((u) => u.trim()).filter(Boolean);
+            } catch { /* storage blocked */ }
+        }
         if (signalUrl === ORACLE_SIGNAL_URL) {
             return [GCP_SIGNAL_URL, 'wss://signal.3rtc.me', 'wss://34.57.36.145.sslip.io:443'];
         }

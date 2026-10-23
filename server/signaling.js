@@ -456,6 +456,28 @@ export function attachSignaling(server) {
           break;
         }
 
+        case 'find-room': {
+          // "Is room X on this server?" The app asks the other 3RTC servers before telling someone
+          // a code doesn't exist (rooms live on the server they were made on). Limited exactly
+          // like a join, so it's no faster for guessing codes.
+          const roomId = typeof data.roomId === 'string' || typeof data.roomId === 'number' ? String(data.roomId).trim() : '';
+          if (!/^\d{5}$/.test(roomId)) {
+            safeSend(ws, { type: 'error', message: 'Invalid roomId: must be strictly a 5-digit number (e.g. 12345)' });
+            return;
+          }
+          const nowFind = Date.now();
+          ws.failedJoins = (ws.failedJoins || []).filter((t) => nowFind - t < RATE_LIMIT.failedJoinWindowMs);
+          if (rateLimiter.isJoinBanned(ws.clientIp).banned || !rateLimiter.checkJoinRate(ws.clientIp) ||
+            ws.failedJoins.length >= RATE_LIMIT.maxFailedJoins) {
+            safeSend(ws, { type: 'error', code: 'rate-limited', message: 'Too many join attempts. Please slow down.' });
+            return;
+          }
+          const exists = rooms.has(roomId);
+          if (!exists) ws.failedJoins.push(nowFind);
+          safeSend(ws, { type: 'room-found', roomId, exists });
+          break;
+        }
+
         case 'offer':
         case 'answer':
         case 'ice-candidate':
