@@ -57,10 +57,16 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
     let version = 0;
     let initialCatchUp = true;
     countLive(bus, key, 1);
-    const catchUpTimer = setTimeout(() => {
-        initialCatchUp = false;
-    }, 3000);
-    catchUpTimer?.unref?.();
+    let catchUpTimer;
+    const startCatchUp = () => {
+        initialCatchUp = true;
+        clearTimeout(catchUpTimer);
+        catchUpTimer = setTimeout(() => {
+            initialCatchUp = false;
+        }, 3000);
+        catchUpTimer?.unref?.();
+    };
+    startCatchUp();
     const listeners = new Set();
     const notify = () => {
         for (const listener of [...listeners]) listener();
@@ -79,8 +85,23 @@ export function createSharedStore(bus, room, key, { initial, reducer }) {
         const members = [room.getSelfId(), ...memberPeers()].sort();
         const next = { authorityId: authorityId(), members };
         if (next.authorityId === presence.authorityId && next.members.join() === presence.members.join()) return;
+        const previousAuthority = presence.authorityId;
         presence = next;
+        if (previousAuthority !== null && next.authorityId !== previousAuthority) catchUpWithNewAuthority(next.authorityId);
         for (const listener of [...presenceListeners]) listener();
+    };
+    // Who decides changed while we still have nothing (e.g. the host left the game just as we
+    // joined it): a state that came from the new authority a moment earlier was ignored, because it
+    // wasn't the authority yet. Ask again.
+    const catchUpWithNewAuthority = (newAuthority) => {
+        if (version > 0 || !newAuthority) return;
+        if (newAuthority === room.getSelfId()) {
+            // We decide now, with nothing: take the state of anyone who has it (a short catch-up again)
+            startCatchUp();
+            bus.broadcast('room-state-request', { key });
+        } else {
+            bus.send(newAuthority, 'room-state-request', { key });
+        }
     };
     const addMember = (id) => {
         if (!id || !absent.delete(id)) return;
