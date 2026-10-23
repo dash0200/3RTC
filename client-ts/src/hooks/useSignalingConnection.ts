@@ -3,7 +3,7 @@
  * and on reconnect resumes the room (host) or rejoins it (guest) and recovers broken P2P links.
  * Incoming messages go to the latest `handleSignalingMessage`.
  */
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage } from '../types';
 
 export interface SignalStatus {
@@ -40,7 +40,9 @@ export interface SignalingConnectionContext {
   handleSignalingMessage: (msg: IncomingSignalingMessage) => void;
 }
 
-export function useSignalingConnection(ctx: SignalingConnectionContext): void {
+/** Returns switchServer(url): move to that signaling server now (the one that has the room the user
+ *  is joining) and stay on it for reconnects, until the server settings change. */
+export function useSignalingConnection(ctx: SignalingConnectionContext): (url: string) => void {
   const {
     addSystemMessage,
     currentRoomRef,
@@ -59,6 +61,10 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): void {
 
   const fallbackKey = fallbackUrls.join(' ');
   const handleSignalingMessageRef = useRef<(msg: IncomingSignalingMessage) => void>(handleSignalingMessage);
+  const switchServerRef = useRef<((url: string) => void) | null>(null);
+  // The server that has our room, when it isn't the one we'd pick (see switchServer); kept across
+  // re-runs of the effect below, dropped when the chosen server (settings) changes
+  const roomServerRef = useRef<{ url: string; base: string } | null>(null);
 
   useEffect(() => {
     handleSignalingMessageRef.current = handleSignalingMessage;
@@ -68,6 +74,7 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): void {
     let isCancelled = false;
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
     let pingInterval: ReturnType<typeof setInterval> | null = null;
+    if (roomServerRef.current && roomServerRef.current.base !== signalUrl) roomServerRef.current = null;
 
     const safeCloseSocket = (socket: WebSocket | null) => {
       if (!socket) return;
@@ -113,7 +120,7 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): void {
 
       setSignalStatus({ connected: false, label: 'Connecting...' });
 
-      const activeUrl = urls[urlIndex] || signalUrl;
+      const activeUrl = roomServerRef.current?.url || urls[urlIndex] || signalUrl;
       const activeLabel = getServerLabel(activeUrl);
 
       let ws: WebSocket;
@@ -224,7 +231,9 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): void {
           );
         }
 
-        if (!hasOpened && urls.length > 1) {
+        if (!hasOpened && roomServerRef.current) {
+          roomServerRef.current = null; // the room's server can't be reached now: back to the usual order
+        } else if (!hasOpened && urls.length > 1) {
           urlIndex = (urlIndex + 1) % urls.length;
         }
 
@@ -242,10 +251,33 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): void {
       };
     };
 
+    switchServerRef.current = (url: string) => {
+      if (isCancelled) return;
+      roomServerRef.current = { url, base: signalUrl };
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (pingInterval) clearInterval(pingInterval);
+      const old = wsRef.current;
+      if (old) {
+        // Quietly: its close must not set the status or schedule a reconnect
+        old.onopen = null;
+        old.onmessage = null;
+        old.onerror = null;
+        old.onclose = null;
+        try {
+          old.close(1000, 'Switching server');
+        } catch {
+          // already closed
+        }
+        wsRef.current = null;
+      }
+      connect();
+    };
+
     connect();
 
     return () => {
       isCancelled = true;
+      switchServerRef.current = null;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (pingInterval) clearInterval(pingInterval);
       if (wsRef.current) {
@@ -255,4 +287,6 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): void {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signalUrl, fallbackKey, showToast, addSystemMessage]);
+
+  return useCallback((url: string) => switchServerRef.current?.(url), []);
 }

@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "client"
+    "client-ts"
   ],
   "scripts": {
-    "build": "npm run build --workspace=client",
-    "dev": "npm run dev --workspace=client",
-    "start": "npm start --workspace=client",
-    "test": "npm test --workspace=client"
+    "build": "npm run build --workspace=client-ts",
+    "dev": "npm run dev --workspace=client-ts",
+    "start": "npm start --workspace=client-ts",
+    "test": "npm test --workspace=client-ts"
   }
 }

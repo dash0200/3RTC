@@ -1,7 +1,7 @@
 {
   "framework": "vite",
-  "buildCommand": "npm run build --workspace=client",
-  "outputDirectory": "client/dist",
+  "buildCommand": "npm run build --workspace=client-ts",
+  "outputDirectory": "client-ts/dist",
   "headers": [
     {
       "source": "/(.*)",
@@ -24,7 +24,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com https://s.ytimg.com https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: blob: https://fonts.gstatic.com https:; img-src 'self' blob: data: https:; media-src 'self' blob: https:; connect-src 'self' wss: https: blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://player.twitch.tv https://*.twitch.tv; worker-src 'self' blob:; object-src 'none'; base-uri 'self';"
+          "value": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com https://s.ytimg.com https://www.googletagmanager.com https://player.vimeo.com https://player.twitch.tv; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: blob: https://fonts.gstatic.com https:; img-src 'self' blob: data: https:; media-src 'self' blob: https:; connect-src 'self' wss: https: blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://player.twitch.tv https://*.twitch.tv; worker-src 'self' blob:; object-src 'none'; base-uri 'self';"
         }
       ]
     },

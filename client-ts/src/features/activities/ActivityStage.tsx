@@ -323,16 +323,18 @@ export default function ActivityStage({
     }, [shown]);
     useEffect(() => {
         if (!overlayBar) return undefined;
-        hideTimer.current = setTimeout(() => setBar({ view: shown, shown: false }), 3000);
+        hideTimer.current = setTimeout(() => setBar({ view: shown, shown: false }), 2500);
         return () => {
             if (hideTimer.current) clearTimeout(hideTimer.current);
         };
     }, [overlayBar, shown]);
-    const onStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-        if (!overlayBar || e.pointerType !== 'mouse') return;
-        const top = rootRef.current?.getBoundingClientRect().top ?? 0;
-        if (e.clientY - top < 72) showBarFor(1500);
+    // Only the tab at the top brings the bar back (not just moving near the top: that got in the
+    // way of drawing and playing there). It stays while the pointer is on it.
+    const keepBar = () => showBarFor(2500); // the tab: show (and tuck again if the pointer never gets to the bar)
+    const holdBar = () => {
+        if (hideTimer.current) clearTimeout(hideTimer.current);
     };
+    const leaveBar = () => showBarFor(500);
     useEffect(() => {
         if (!isBigger) return undefined;
         const onKey = (e: KeyboardEvent) => {
@@ -412,7 +414,6 @@ export default function ActivityStage({
 
     const content = (
         <div
-            onPointerMove={onStagePointerMove}
             className={`stage-activity is-${shown} ${isFull ? 'is-fullscreen' : ''} ${isBigger ? 'is-bigger' : ''} ${overlayBar ? 'has-overlay-bar' : ''} ${overlayBar && !barShown ? 'bar-tucked' : ''} ${chat?.splitView && shown === 'full' ? 'is-chat-split' : ''} ${status.attention ? 'needs-you' : ''}`}
             role="region"
             aria-label={definition.name}
@@ -420,11 +421,17 @@ export default function ActivityStage({
             ref={rootRef}
             style={shown === 'window' ? { width: box.width, right: box.right, bottom: box.bottom, ...(status.color ? ({ '--bubble-ring': status.color } as React.CSSProperties) : {}) } : undefined}
         >
-            {overlayBar && <span className="activity-bar-handle" aria-hidden="true" />}
+            {overlayBar && !barShown && (
+                <button type="button" className="activity-bar-handle" onMouseEnter={(e) => { if (!e.buttons) keepBar(); }} onClick={keepBar} onFocus={keepBar}
+                    title={`${definition.name} controls`} aria-label={`Show ${definition.name} controls`}>
+                    <span aria-hidden="true">{definition.icon}</span><span className="activity-bar-handle-grip" aria-hidden="true" />
+                </button>
+            )}
             {shown === 'window' && (
                 <span className="activity-resize" onPointerDown={(e) => startDrag(e, 'resize')} title="Drag to resize" aria-hidden="true" />
             )}
-            <div className={`activity-bar ${canSwipeAway ? 'can-swipe' : ''}`} onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : undefined}>
+            <div className={`activity-bar ${canSwipeAway ? 'can-swipe' : ''}`} onPointerDown={shown === 'window' ? (e) => startDrag(e, 'move') : undefined}
+                onMouseEnter={overlayBar ? holdBar : undefined} onMouseMove={overlayBar ? holdBar : undefined} onMouseLeave={overlayBar ? leaveBar : undefined}>
                 {canSwipeAway && <span className="activity-grab" aria-hidden="true" />}
                 <span className="activity-bar-icon" aria-hidden="true">{definition.icon}</span>
                 <span className="activity-bar-name">{definition.name}</span>

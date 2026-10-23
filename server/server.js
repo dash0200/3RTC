@@ -11,10 +11,10 @@ import { attachSignaling, MAX_ROOM_USERS } from './signaling.js';
 import { startQuickPicks, serveQuickPicks } from './quickPicks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Development only: serve the built app (npm run build in client/) next to signaling
+// Development only: serve the built app (npm run build in client-ts/) next to signaling
 const candidateDirs = [
-  path.resolve(__dirname, '../client/dist'),
-  path.resolve(__dirname, 'client/dist')
+  path.resolve(__dirname, '../client-ts/dist'),
+  path.resolve(__dirname, 'client-ts/dist')
 ];
 const clientDir = candidateDirs.find(d => fs.existsSync(d) && fs.existsSync(path.join(d, 'index.html'))) || candidateDirs[0];
 

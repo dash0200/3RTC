@@ -145,12 +145,12 @@ See [PROTOCOL.md](PROTOCOL.md) for every message.
 
 ## Tests
 
-- `client/tests/unit` (Node's built-in test runner, no extra packages): bus, shared state (with an
+- `client-ts/tests/unit` (Node's built-in test runner, no extra packages): bus, shared state (with an
   in-memory multi-peer network in `fakeRoom.js`), activities, relay tree, chat timestamps.
-  `npm test` in `client/`.
+  `npm test` in `client-ts/`.
 - `server/tests`: the signaling server (rooms, joining, size limit, relaying). `npm test` in `server/`.
-- `client/tests/e2e` (Python + Playwright): real browsers in real rooms: connection and recovery,
+- `client-ts/tests/e2e` (Python + Playwright): real browsers in real rooms: connection and recovery,
   six-person rooms, streaming, sync, host controls, queue, phone layout, activities.
-  `python client/tests/e2e/run_all.py`. See `client/tests/README.md`.
+  `python client-ts/tests/e2e/run_all.py`. See `client-ts/tests/README.md`.
 
 Adding something? Read [ADDING_A_FEATURE.md](ADDING_A_FEATURE.md).
