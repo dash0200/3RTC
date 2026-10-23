@@ -7,6 +7,7 @@ import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES, type
 import { usePeerMessageOn } from '../core/RoomContext';
 import type { RoomBus } from '../types';
 import type { PeerEntryRecord } from '../webrtc/peerEntry';
+import { DRIFT_LIMIT_S } from '../features/playback/drift';
 
 function keepIfSame<T>(prev: T, next: T): T {
   try {
@@ -54,6 +55,8 @@ export interface UseNetworkStatsContext {
   activeVideoId?: string | null;
   bus: RoomBus;
   localVideoFile?: File | null;
+  /** Anything playing for the room (YouTube, a link, a shared file) */
+  mediaActive?: boolean;
   peerMetadata: Record<string, { username?: string }>;
   peersRef: MutableRefObject<Map<string, PeerEntryRecord>>;
   roomId?: string | null;
@@ -61,7 +64,7 @@ export interface UseNetworkStatsContext {
 }
 
 export function useNetworkStats(ctx: UseNetworkStatsContext) {
-  const { activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast } = ctx;
+  const { activeVideoId, bus, localVideoFile, mediaActive, peerMetadata, peersRef, roomId, showToast } = ctx;
 
   const [networkStats, setNetworkStats] = useState<NetworkStatsSummary>({
     avgPingMs: null,
@@ -235,13 +238,15 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
       setPeersNetworkStats((prev) => keepIfSame(prev, peerStatsList));
 
       const currentAvg = pingCount > 0 ? Math.round(sumPing / pingCount) : null;
-      const drift = lastSyncDriftMsRef.current ?? (activeVideoId || localVideoFile ? 14 : undefined);
+      // Only a measured drift: nothing made up while it hasn't been measured or nothing is playing
+      const playing = Boolean(mediaActive ?? (activeVideoId || localVideoFile));
+      const drift = playing ? lastSyncDriftMsRef.current ?? undefined : undefined;
       const driftText =
         drift !== undefined
           ? drift <= 50
             ? `Strict Sync (±${drift}ms)`
             : `Acceptable Drift (±${drift}ms)`
-          : 'In Sync';
+          : playing ? `Auto re-sync keeps everyone within ${DRIFT_LIMIT_S} s` : 'No video playing';
 
       const nextStats: NetworkStatsSummary = {
         avgPingMs: currentAvg,
@@ -265,7 +270,7 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
       isCancelled = true;
       clearInterval(interval);
     };
-  }, [roomId, activeVideoId, localVideoFile, peerMetadata, peersRef]);
+  }, [roomId, activeVideoId, localVideoFile, mediaActive, peerMetadata, peersRef]);
 
   const handleTriggerPing = useCallback((): void => {
     for (const peerEntry of peersRef.current.values()) {

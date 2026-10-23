@@ -207,16 +207,16 @@ export default function NetworkDiagnosticsModal({
           <div className="hud-stat-card">
             <div className="stat-card-header">
               <span className="stat-label">PLAYBACK SYNC DRIFT</span>
-              <span className="stat-tag">STRICT</span>
+              {networkStats.syncDriftMs !== undefined && <span className="stat-tag">STRICT</span>}
             </div>
             <div className="stat-value-row">
               <span className="stat-main-value drift-value">
-                {networkStats.syncDriftMs !== undefined ? `±${networkStats.syncDriftMs}` : '<15'}
+                {networkStats.syncDriftMs !== undefined ? `±${networkStats.syncDriftMs}` : '—'}
               </span>
-              <span className="stat-unit">ms</span>
+              {networkStats.syncDriftMs !== undefined && <span className="stat-unit">ms</span>}
             </div>
             <div className="stat-subtext">
-              {networkStats.syncDriftStatus || 'In Sync (Threshold: ±800ms)'}
+              {networkStats.syncDriftStatus || 'No video playing'}
             </div>
           </div>
 

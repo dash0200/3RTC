@@ -12465,3 +12465,7 @@ video::cue {
   text-transform: uppercase;
   line-height: 1.4;
 }
+/* The game bar's tab says what it is (it brings back Leave, End, Window...) */
+.activity-bar-handle-label { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+/* End, second tap: make the confirmation obvious */
+.activity-close-btn.is-confirming { background: var(--rd-accent, #e5143d); border-color: transparent; color: #fff; }

@@ -415,6 +415,13 @@ def show_game_bar(pg):
         time.sleep(0.35)
 
 
+def end_game(pg):
+    """End the open game for everyone: End, then the confirming second tap ("End for all?")."""
+    show_game_bar(pg)
+    pg.locator('.stage-activity .activity-close-btn').click()
+    pg.locator('.stage-activity .activity-close-btn.is-confirming').click()
+
+
 def toggle_playback_lock(pg):
     """Host: turn "Only I control playback" on or off (computer: More options menu)."""
     pg.get_by_role('button', name='More options').click()

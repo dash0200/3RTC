@@ -81,10 +81,10 @@ with sync_playwright() as p:
     # Host controls lock: guests can't end it
     harness.toggle_playback_lock(host)
     wait(lambda: guest.locator('.rh-lock').count() == 1, 5)
-    guest.get_by_role('button', name='End for everyone').click(); time.sleep(0.8)
+    harness.end_game(guest); time.sleep(0.8)
     check('with the lock on, a guest cannot end the activity', host.locator('.stage-activity').count() == 1 and guest.locator('.stage-activity').count() == 1)
     check('...and is told why', 'Only the host' in toasts(guest), toasts(guest))
-    host.get_by_role('button', name='End for everyone').click()
+    harness.end_game(host)
     check('the host ends it for everyone', wait(lambda: guest.locator('.stage-activity, .activity-bubble').count() == 0 and late.locator('.stage-activity, .activity-bubble').count() == 0 and host.locator('.stage-activity, .activity-bubble').count() == 0, 6))
 
     # Leaving the room resets: start again, leave, the activity is gone there
