@@ -5,6 +5,7 @@
  */
 import {
   GO_TO_JAIL,
+  GROUP_NAMES,
   JAIL,
   JAIL_FINE,
   MAX_PLAYERS,
@@ -227,6 +228,37 @@ const houseCost = (pos: number): number => {
   const sp = SPACES[pos];
   return sp.kind === 'property' ? sp.house : 0;
 };
+/**
+ * Why `seat` can't build on `pos` right now, in words, or null when it can. The build action
+ * checks the same things; this is what the title deed shows instead of a button that does nothing.
+ */
+export function buildBlock(s: TyState, seat: number, pos: number): string | null {
+  const sp = SPACES[pos];
+  if (sp?.kind !== 'property' || seat < 0) return 'Houses go on coloured places only.';
+  const set = groupMembers(sp.group);
+  const colour = GROUP_NAMES[sp.group];
+  const mine = set.filter((i) => s.owner[i] === seat).length;
+  if (mine < set.length) {
+    const others = set.filter((i) => s.owner[i] !== seat).map((i) => {
+      const o = s.owner[i];
+      return `${SPACES[i].name}${o === null ? ' (for sale)' : ` (${s.players[o]?.name})`}`;
+    });
+    return `Own all ${set.length} ${colour} places to build: you have ${mine}. Still needed: ${others.join(', ')}.`;
+  }
+  if (s.houses[pos] >= 5) return 'This place has a hotel: it can’t take more.';
+  const mortgaged = set.find((i) => s.mortgaged[i]);
+  if (mortgaged !== undefined) return `Pay off the mortgage on ${SPACES[mortgaged].name} first.`;
+  if (s.phase !== 'playing' || s.turn !== seat) return 'You can build on your turn.';
+  if (s.step === 'debt') return 'Pay what you owe first.';
+  const fewest = Math.min(...set.map((i) => s.houses[i]));
+  if (s.houses[pos] > fewest) {
+    const next = set.find((i) => s.houses[i] === fewest)!;
+    return `Build evenly: put a house on ${SPACES[next].name} first.`;
+  }
+  if (s.players[seat].cash < houseCost(pos)) return `A ${s.houses[pos] === 4 ? 'hotel' : 'house'} here costs ${rupees(houseCost(pos))}: you have ${rupees(s.players[seat].cash)}.`;
+  return null;
+}
+
 export const mortgageValue = (pos: number): number => Math.round(priceOf(pos) / 2);
 export const unmortgageCost = (pos: number): number => Math.round(mortgageValue(pos) * 1.1);
 
@@ -647,10 +679,7 @@ function reducerCore(s: TyState, a: TyAction, seat: number): TyState {
       return bump(s, { pendingBuy: null, step: s.again && !p.jail ? 'roll' : 'done' });
     case 'build': {
       const pos = a.pos;
-      if (!myTurn || s.step === 'debt' || SPACES[pos]?.kind !== 'property' || s.owner[pos] !== seat || !ownsGroup(s, seat, pos)) return s;
-      const g = groupMembers(groupOf(pos)!);
-      if (g.some((i) => s.mortgaged[i]) || s.houses[pos] >= 5 || p.cash < houseCost(pos)) return s;
-      if (s.houses[pos] > Math.min(...g.map((i) => s.houses[i]))) return s; // build evenly
+      if (!myTurn || buildBlock(s, seat, pos)) return s; // whole colour set, evenly, no mortgages, the cash
       const houses = [...s.houses];
       houses[pos] += 1;
       return bump(withLog(addCash({ ...s, houses }, seat, -houseCost(pos)), `🏗️ ${p.name} built ${houses[pos] === 5 ? 'a hotel' : 'a house'} on ${SPACES[pos].name}.`));

@@ -211,3 +211,34 @@
   .stage-activity.is-full .ty-board-wrap { width: min(100cqh - 12px, 100cqw - 316px); }
   .stage-activity.is-full .ty-panel { flex-basis: 300px; }
 }
+
+/* ---- building hints and the guide ---- */
+.ty-deed-hint { margin: 10px 14px 0; padding: 8px 10px; border-radius: 10px; background: #f3ecdc; font-size: 13px; line-height: 1.4; color: #4a4c55; }
+.ty-chip.is-set { box-shadow: inset 0 0 0 2px var(--chip); }
+.ty-guide-btn { align-self: center; }
+.ty-guide {
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  border-radius: 16px;
+  background: #fffaf0;
+  color: #23252d;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.ty-guide h4 { margin: 0; font-size: 19px; }
+.ty-guide h5 { margin: 0 0 4px; font-size: 14.5px; }
+.ty-guide p, .ty-guide ol { margin: 0; }
+.ty-guide ol { padding-left: 20px; display: flex; flex-direction: column; gap: 3px; }
+.ty-guide-build { padding: 10px 12px; border-radius: 12px; background: #f3ecdc; }
+.ty-guide-sets { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; font-size: 12.5px; color: #4a4c55; }
+.ty-guide-sets span { display: inline-flex; align-items: center; gap: 5px; }
+.ty-guide-sets i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.ty-guide .ty-btn { background: #fff; color: #23252d; border-color: #d8d2c4; }
+.ty-guide .ty-btn-go { background: #22a35a; border-color: #22a35a; color: #fff; }
+.ty-guide-close { align-self: stretch; }
