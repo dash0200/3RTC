@@ -232,7 +232,12 @@ export function attachSignaling(server) {
             }
             const peerId = isValidPeerId(data.peerId) ? data.peerId : ws.peerId;
             let room = rooms.get(resumeRoomId) || openRoom(resumeRoomId, epoch, peerId);
-            if (!maySit(resumeRoomId, room, peerId, ws, data.seatToken)) {
+            // The host token proves this is the host: enough for the host's own seat or a free one
+            // (Rejoin after Leave sends no seat token). A guest who is still here keeps theirs.
+            const holder = room.get(peerId);
+            const guestSeatInUse = Boolean(holder && holder !== ws && holder.readyState === WebSocket.OPEN &&
+              roomInfo.get(resumeRoomId)?.hostPeerId !== peerId);
+            if (guestSeatInUse && !maySit(resumeRoomId, room, peerId, ws, data.seatToken)) {
               safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
               return;
             }
