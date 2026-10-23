@@ -28,6 +28,18 @@ export const GROUP_COLORS: Record<GroupId, string> = {
   navy: '#2a4fb5'
 };
 
+/** Colour names as people say them (the build hints, the guide) */
+export const GROUP_NAMES: Record<GroupId, string> = {
+  brown: 'brown',
+  sky: 'light blue',
+  pink: 'pink',
+  orange: 'orange',
+  red: 'red',
+  yellow: 'yellow',
+  green: 'green',
+  navy: 'dark blue'
+};
+
 const P = (name: string, city: string, group: GroupId, price: number, rent: number[], house: number): Space => ({
   kind: 'property', name, city, group, price, rent, house
 });
