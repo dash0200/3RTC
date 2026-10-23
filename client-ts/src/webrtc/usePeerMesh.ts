@@ -63,6 +63,8 @@ export interface PeerMeshContext {
   fallbackUrls?: string[];
   setSignalStatus: (status: SignalStatus) => void;
   logLocalDebug: (tag: string, detail: string) => void;
+  /** See SignalingContext.onRoomError */
+  onRoomError?: (message: string, roomId: string | null) => boolean;
 }
 
 export interface PeerMeshHookResult {
@@ -96,8 +98,11 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     signalUrl,
     fallbackUrls = [],
     setSignalStatus,
-    logLocalDebug
+    logLocalDebug,
+    onRoomError
   } = ctx;
+  const onRoomErrorRef = useRef(onRoomError);
+  onRoomErrorRef.current = onRoomError;
   const { addSystemMessage, showToast } = notices;
   const {
     isAudioBlockedRef,
@@ -476,7 +481,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         setRoomId,
         showToast,
         username,
-        findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage)
+        findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage),
+        onRoomError: (message: string, room: string | null) => onRoomErrorRef.current?.(message, room) ?? false
       }),
     [
       peerIdRef,
@@ -522,7 +528,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     void findRoomOn(others, code).then((url) => {
       if (currentRoomRef.current) return; // in a room by now
       if (!url) {
-        showToast(notFoundMessage || `Room "${code}" not found. Please verify the 5-digit code or create a room.`);
+        const message = notFoundMessage || `Room "${code}" not found. Please verify the 5-digit code or create a room.`;
+        if (!onRoomErrorRef.current?.(message, code)) showToast(message);
         return;
       }
       addSystemMessage(`🔄 Room ${code} is on another 3RTC server. Connecting there...`);

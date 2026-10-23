@@ -6,6 +6,8 @@ import { useRoomCodeInput } from '../hooks/useRoomCodeInput';
 import { Logo } from './Logo';
 
 export interface DesktopHomeProps {
+  /** Why the last join didn't work (shown while the code is still the one that failed) */
+  joinError?: { message: string; pin: string } | null;
   username?: string;
   initialPin?: string;
   onCreate?: (displayName: string) => void;
@@ -22,6 +24,7 @@ export interface DesktopHomeProps {
 export default function DesktopHome({
   username = '',
   initialPin = '',
+  joinError = null,
   onCreate,
   onJoin,
   onOpenServerSettings,
@@ -91,6 +94,9 @@ export default function DesktopHome({
                   Join
                 </button>
               </div>
+              {joinError && (!joinError.pin || code === joinError.pin) && (
+                <p className="join-error" role="alert">{joinError.message}</p>
+              )}
             </form>
 
             <ul className="dh-points">

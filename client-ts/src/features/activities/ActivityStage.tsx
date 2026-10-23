@@ -330,6 +330,21 @@ export default function ActivityStage({
     }, [overlayBar, shown]);
     // Only the tab at the top brings the bar back (not just moving near the top: that got in the
     // way of drawing and playing there). It stays while the pointer is on it.
+    // End is for everyone: a second tap within a few seconds confirms it (as with "Declare bankruptcy")
+    const [confirmEnd, setConfirmEnd] = useState(false);
+    useEffect(() => {
+        if (!confirmEnd) return undefined;
+        const t = setTimeout(() => setConfirmEnd(false), 4000);
+        return () => clearTimeout(t);
+    }, [confirmEnd]);
+    const endForEveryone = () => {
+        if (!confirmEnd) {
+            setConfirmEnd(true);
+            return;
+        }
+        setConfirmEnd(false);
+        onClose();
+    };
     const keepBar = () => showBarFor(2500); // the tab: show (and tuck again if the pointer never gets to the bar)
     const holdBar = () => {
         if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -424,7 +439,7 @@ export default function ActivityStage({
             {overlayBar && !barShown && (
                 <button type="button" className="activity-bar-handle" onMouseEnter={(e) => { if (!e.buttons) keepBar(); }} onClick={keepBar} onFocus={keepBar}
                     title={`${definition.name} controls`} aria-label={`Show ${definition.name} controls`}>
-                    <span aria-hidden="true">{definition.icon}</span><span className="activity-bar-handle-grip" aria-hidden="true" />
+                    <span aria-hidden="true">{definition.icon}</span><span className="activity-bar-handle-label">Menu</span><span className="activity-bar-handle-grip" aria-hidden="true" />
                 </button>
             )}
             {shown === 'window' && (
@@ -505,8 +520,9 @@ export default function ActivityStage({
                     {shown === 'window' || shown === 'sidebar' ? '✕' : 'Leave'}
                 </button>
                 {(shown === 'full' || shown === 'sidebar') && (
-                    <button type="button" className="activity-close-btn" onClick={onClose} title="End it for everyone" aria-label="End for everyone">
-                        End
+                    <button type="button" className={`activity-close-btn ${confirmEnd ? 'is-confirming' : ''}`} onClick={endForEveryone}
+                        title={confirmEnd ? 'Tap again to end it for everyone' : 'End it for everyone'} aria-label={confirmEnd ? 'Confirm: end for everyone' : 'End for everyone'}>
+                        {confirmEnd ? 'End for all?' : 'End'}
                     </button>
                 )}
             </div>

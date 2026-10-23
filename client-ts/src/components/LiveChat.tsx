@@ -25,6 +25,9 @@ import type { ChatMessage } from '../features/chat/useChat';
 import type { MediaItem, ConnectedPeer, SelfInfo } from '../types';
 import type { QuickPickVideo } from '../utils/quickPicks';
 
+// Longest chat message (the box stops there; a counter shows near the end)
+const MAX_CHAT_CHARS = 200;
+
 // 1-3 emojis and nothing else: shown large without a bubble, like WhatsApp
 const EMOJI_ONLY_RE = /^(?:[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f]|[0-9#*]\ufe0f?\u20e3|\s)+$/u;
 const GRAPHEMES = typeof Intl !== 'undefined' && 'Segmenter' in Intl
@@ -1095,7 +1098,7 @@ export default function LiveChat({
                   ref={textareaRef}
                   className="chat-pill-textarea"
                   rows={1}
-                  maxLength={200}
+                  maxLength={MAX_CHAT_CHARS}
                   placeholder={isP2PConnected ? 'Message the room' : 'Connecting…'}
                   value={inputText}
                   onChange={handleTextareaChange}
@@ -1103,6 +1106,12 @@ export default function LiveChat({
                   onPaste={handlePaste}
                   disabled={!isP2PConnected}
                 />
+                {/* Near the limit, say so (typing or pasting past it is cut off) */}
+                {inputText.length >= MAX_CHAT_CHARS - 40 && (
+                  <span className={`chat-char-count ${inputText.length >= MAX_CHAT_CHARS ? 'is-full' : ''}`} aria-live="polite">
+                    {inputText.length}/{MAX_CHAT_CHARS}
+                  </span>
+                )}
 
                 {/* Attach image */}
                 <input

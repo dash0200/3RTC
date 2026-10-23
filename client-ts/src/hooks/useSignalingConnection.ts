@@ -142,7 +142,8 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): (url: s
         }
 
         setSignalStatus({ connected: true, label: `${activeLabel} Connected`, activeUrl });
-        showToast(`Connected to ${activeLabel} signaling`);
+        // No toast: the connection pill already shows it, and a toast here would push out messages that matter
+        addSystemMessage(`Connected to ${activeLabel} signaling`);
         if (urlIndex > 0) {
           addSystemMessage(`🔄 Connected to backup signaling server (${activeLabel}).`);
         }

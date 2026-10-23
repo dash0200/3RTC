@@ -27,6 +27,29 @@ export type PlayerEmitEvent =
   | { type: 'playing' }
   | { type: 'error'; message: string };
 
+const NOT_PLAYABLE = 'This link isn\'t a video the browser can play';
+
+/** Why a direct video link didn't play: gone, private, unreachable, or not a playable format. */
+export async function explainLinkFailure(url: string, timeoutMs = 6000): Promise<string> {
+  try {
+    // One byte is enough to see whether the link answers (a simple range request needs no preflight)
+    const res = await fetch(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(timeoutMs) });
+    void res.body?.cancel().catch(() => {});
+    if (res.status === 404 || res.status === 410) return 'This link doesn\'t exist any more (the site says 404)';
+    if (res.status === 401 || res.status === 403) return 'This link is private: the site won\'t share it with other players';
+    if (res.status >= 500) return `The site couldn't send this video right now (error ${res.status})`;
+    return NOT_PLAYABLE;
+  } catch {
+    // Blocked from reading the answer (no CORS) or no answer at all: an opaque request tells them apart
+    try {
+      await fetch(url, { mode: 'no-cors', signal: AbortSignal.timeout(timeoutMs) });
+      return NOT_PLAYABLE;
+    } catch {
+      return 'Couldn\'t reach this link: the site may be down, or the address is wrong';
+    }
+  }
+}
+
 export async function createHtml5Adapter(
   container: HTMLElement,
   media: MediaItem,
@@ -71,8 +94,9 @@ export async function createHtml5Adapter(
   on('playing', () => emit({ type: 'playing' }));
   on('error', () => {
     if (hls) return;
-    const code = video.error?.code;
-    emit({ type: 'error', message: code === 4 ? 'This link isn\'t a video the browser can play' : 'The video couldn\'t be loaded' });
+    // The browser only says "can't play this source" (the same for a dead link and a wrong format):
+    // look at the link itself to say which
+    void explainLinkFailure(media.url).then((message) => emit({ type: 'error', message }));
   });
 
   return {

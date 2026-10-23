@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getMobileJoinUrl, getServerTag } from '../../utils/qrCode';
+import { getMobileJoinUrl, getServerTag } from '../../utils/joinUrl';
 import { copyToClipboard } from '../../utils/clipboard';
 import { Icon } from '../icons';
 import { useRoom } from '../../core/RoomContext';
