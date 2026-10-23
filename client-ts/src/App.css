@@ -7828,8 +7828,14 @@ video::cue {
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75), 0 0 32px rgba(56, 189, 248, 0.12);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  max-height: 100%;
+  overflow-y: auto;
   animation: qrCardSlideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* On a short screen the card scrolls (Close / Done stay reachable) instead of squeezing its parts */
+.qr-modal-card > * {
+  flex-shrink: 0;
 }
 
 @keyframes qrCardSlideUp {

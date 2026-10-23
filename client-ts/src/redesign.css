@@ -391,7 +391,7 @@
    Invite screen (?room=12345), phone and desktop
    ========================================================================== */
 .invite {
-  flex: 1; width: 100%; min-height: 100%;
+  flex: 1; width: 100%; min-height: 0;
   overflow-y: auto;
   display: flex; flex-direction: column;
   background: var(--rd-bg); color: var(--rd-text);
@@ -1272,6 +1272,8 @@
 .phone-sheet-head h2 { font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .phone-sheet-head .phone-icon-btn { width: 44px; height: 44px; border-radius: 12px; border: 0; background: var(--rd-raised); color: var(--rd-text); }
 .phone-sheet-body { display: flex; flex-direction: column; gap: 18px; }
+/* Sections keep their size and the sheet scrolls; shrinking them hid rows (More, Add a video) */
+.phone-sheet-body > * { flex-shrink: 0; }
 .app-container:not(.phone-app) .phone-sheet-layer { justify-content: center; align-items: center; }
 .app-container:not(.phone-app) .phone-sheet { width: min(520px, calc(100vw - 32px)); max-height: 86vh; border-radius: 24px; padding: 20px 24px 24px; }
 .app-container:not(.phone-app) .phone-sheet-handle { display: none; }
