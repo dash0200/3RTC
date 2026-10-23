@@ -790,7 +790,7 @@ export function reducer(s: TyState, a: TyAction, meta: TyMeta): TyState {
       const seat = seatOf(s, meta.by);
       if (!s.trade || seat !== s.trade.to) return s;
       if (!a.accept) return bump(withLog(s, `🙅 ${s.players[seat].name} said no to the deal.`), { trade: null });
-      if (!tradeValid(s, s.trade)) return bump(s, { trade: null });
+      if (!tradeValid(s, s.trade)) return bump(withLog(s, `🙅 That deal can't happen any more: the cash or places in it changed.`), { trade: null });
       return bump(doTrade(s, s.trade), { trade: null });
     }
     case 'trade-cancel': {

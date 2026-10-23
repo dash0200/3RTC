@@ -11,9 +11,6 @@ import LiveChat from './components/LiveChat';
 import DesktopHome from './components/DesktopHome';
 import InviteScreen from './components/InviteScreen';
 import ServerSettingsModal from './components/ServerSettingsModal';
-import AudioSettingsModal from './components/AudioSettingsModal';
-import NetworkDiagnosticsModal from './components/NetworkDiagnosticsModal';
-import QrCodeModal from './components/QrCodeModal';
 import PreJoinModal from './components/PreJoinModal';
 import { PhoneTopBar, PhoneActionBar } from './components/phone/PhoneChrome';
 import { AddVideoSheet, MoreSheet, SoundboardSheet } from './components/phone/PhoneSheets';
@@ -68,6 +65,10 @@ import type { LiveChatProps } from './components/LiveChat';
 
 // Loaded when the Network HUD opens
 const StreamDoctor = lazy(() => import('./features/diagnostics/StreamDoctor'));
+// Opened on demand: loaded the first time they open, not with the home page
+const AudioSettingsModal = lazy(() => import('./components/AudioSettingsModal'));
+const NetworkDiagnosticsModal = lazy(() => import('./components/NetworkDiagnosticsModal'));
+const QrCodeModal = lazy(() => import('./components/QrCodeModal'));
 
 export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
 export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
@@ -224,10 +225,32 @@ export default function App() {
     handlePttPressEnd, toggleBlockAudio, handleSetPeerVolume, handleToggleMutePeer, selectOutputDevice
   } = voice;
 
+  // Couldn't get into a room (not found, full...): shown on the join form, with the code kept, until
+  // the code is changed or a new attempt starts (a toast was gone before people read it)
+  const [joinError, setJoinError] = useState<{ message: string; pin: string; at: number } | null>(null);
+  const lastJoinPinRef = useRef('');
+  const handleRoomError = useCallback((message: string, failedRoomId: string | null) => {
+    setJoinError({ message, pin: failedRoomId || lastJoinPinRef.current, at: Date.now() });
+    return true;
+  }, []);
+
+  // The host handed the room on: tell everyone who is host now
+  const handleHostChanged = useCallback((newHostId: string, fromId: string) => {
+    const self = peerIdRef.current;
+    const nameOf = (id: string) => peerMetadataRef.current[id]?.username || 'Someone';
+    const text = newHostId === self
+      ? `👑 ${nameOf(fromId)} made you the host`
+      : fromId === self
+        ? `👑 ${nameOf(newHostId)} is now the host`
+        : `👑 ${nameOf(fromId)} made ${nameOf(newHostId)} the host`;
+    addSystemMessage(text);
+    showToast(text);
+  }, [addSystemMessage, showToast]);
+
   const mesh = usePeerMesh({
     bus, peersRef, peerIdRef, isHostRef, hostPeerIdRef, setHostPeerId, setPeerMetadata, username, notices, voice,
     identityFields: () => identityFieldsRef.current(),
-    signalUrl, fallbackUrls, setSignalStatus, logLocalDebug
+    signalUrl, fallbackUrls, setSignalStatus, logLocalDebug, onRoomError: handleRoomError, onHostChanged: handleHostChanged
   });
   const { roomId, isHost, peerCount, isP2PConnected } = mesh;
 
@@ -328,7 +351,7 @@ export default function App() {
   const chat = useChat({ room, isChatOpen: isPhone ? phoneChatOnScreen : isChatOpen });
   const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
   const soundboard = useSoundboard({ room, isAudioBlockedRef });
-  const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, peerMetadata, peersRef, roomId, showToast });
+  const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, mediaActive: isMediaActive, peerMetadata, peersRef, roomId, showToast });
   useDiagResponder(bus, peersRef);
 
   // ---- screens and dialogs -----------------------------------------------------------------
@@ -390,11 +413,15 @@ export default function App() {
   const handleConfirmCreate = (displayName: string) => {
     rememberName(displayName);
     setSidebarTab('invite');
+    lastJoinPinRef.current = '';
+    setJoinError(null);
     mesh.createRoom();
   };
   const handleConfirmJoin = (pin: string, displayName: string) => {
     rememberName(displayName);
     setSidebarTab('chat');
+    lastJoinPinRef.current = pin;
+    setJoinError(null);
     mesh.joinRoom(pin);
   };
 
@@ -752,6 +779,7 @@ export default function App() {
       localUser={localUser}
       onSetPeerVolume={handleSetPeerVolume}
       onToggleMutePeer={handleToggleMutePeer}
+      onMakeHost={mesh.transferHost}
       onToggleMic={toggleMicrophone}
       roomId={roomId}
       onCopyRoom={handleCopyRoom}
@@ -815,8 +843,10 @@ export default function App() {
               <InviteScreen pin={initialJoinPin} username={username} onJoin={handleInviteJoin} onDismiss={dismissInvite} />
             ) : (
               <PhoneHome
+                key={joinError?.at ?? 'home'}
                 username={username}
-                initialPin={initialJoinPin}
+                initialPin={joinError?.pin || initialJoinPin}
+                joinError={joinError}
                 onCreate={handleInitiateCreate}
                 onJoin={handleInitiateJoin}
                 onOpenServerSettings={openServerSettings}
@@ -861,7 +891,10 @@ export default function App() {
             <InviteScreen pin={initialJoinPin} username={username} onJoin={handleInviteJoin} onDismiss={dismissInvite} />
           ) : (
             <DesktopHome
+              key={joinError?.at ?? 'home'}
               username={username}
+              initialPin={joinError?.pin || initialJoinPin}
+              joinError={joinError}
               onCreate={handleInitiateCreate}
               onJoin={handleInitiateJoin}
               onOpenServerSettings={openServerSettings}
@@ -943,7 +976,7 @@ export default function App() {
           currentUrl={signalUrl}
           onApply={handleApplyServer}
         />
-        <AudioSettingsModal
+        {showAudioSettingsModal && <Suspense fallback={null}><AudioSettingsModal
           isOpen={showAudioSettingsModal}
           onClose={() => setShowAudioSettingsModal(false)}
           audioSettings={audioSettings}
@@ -953,8 +986,8 @@ export default function App() {
           isPttActive={isPttActive}
           voiceIsolationSupported={micPipeline.isolationSupported}
           voiceIsolationStatus={voiceIsolationStatus}
-        />
-        <NetworkDiagnosticsModal
+        /></Suspense>}
+        {showNetworkHudModal && <Suspense fallback={null}><NetworkDiagnosticsModal
           isOpen={showNetworkHudModal}
           onClose={() => setShowNetworkHudModal(false)}
           networkStats={networkStats}
@@ -966,14 +999,14 @@ export default function App() {
           <Suspense fallback={null}>
             <StreamDoctor bus={bus} peersRef={peersRef} peerNames={peerMetadata} selfName={username} />
           </Suspense>
-        </NetworkDiagnosticsModal>
-        <QrCodeModal
+        </NetworkDiagnosticsModal></Suspense>}
+        {showQrModal && <Suspense fallback={null}><QrCodeModal
           isOpen={showQrModal}
           onClose={() => setShowQrModal(false)}
           roomId={roomId}
           username={username}
           signalUrl={signalUrl}
-        />
+        /></Suspense>}
 
         <ReactionsEditor />
         <LeaveRoomDialog

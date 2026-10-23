@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import YouTubeSyncPlayer from './YouTubeSyncPlayer';
-import LocalVideoSyncPlayer from './LocalVideoSyncPlayer';
 import FloatingReactions from './FloatingReactions';
 import DesktopDock from './room/DesktopDock';
 import VideoPeopleOverlay from './room/VideoPeopleOverlay';
@@ -12,7 +11,6 @@ import LinkPlayer from '../features/media/LinkPlayer';
 import { mediaKey } from '../features/media/sources';
 import type { MediaItem } from '../types';
 import AmbientCinemaGlow from './room/AmbientCinemaGlow';
-import ScreenShareStage from './room/ScreenShareStage';
 
 import type { ConnectedPeer, SelfInfo, RoomBus } from '../types/room';
 import type { PlayerAction } from '../features/media/LinkPlayer';
@@ -29,6 +27,10 @@ import type { NetworkStatsSummary } from '../hooks/useNetworkStats';
 import type { ActiveSoundboardSfx } from '../features/soundboard/useSoundboard';
 import type { ActivityMenuItem } from '../features/activities/useActivities';
 import type { ActivityViewKind } from '../features/activities/activityHost';
+
+// Shown only once someone shares a file or their screen: loaded then, not with the home page
+const LocalVideoSyncPlayer = lazy(() => import('./LocalVideoSyncPlayer'));
+const ScreenShareStage = lazy(() => import('./room/ScreenShareStage'));
 
 export interface StageProps {
   rejoin?: RejoinInfo | null;
@@ -315,7 +317,7 @@ export default function Stage({
           </div>
         ) : screenShare?.isScreenShareActive ? (
           /* Case 2S: Live WebRTC Screen Share */
-          <ScreenShareStage
+          <Suspense fallback={null}><ScreenShareStage
             stream={screenShare.activeStream}
             isLocal={screenShare.isSharingScreen}
             presenterName={screenShare.screenSharer?.username || (screenShare.isSharingScreen ? (localUser?.username || username) : 'Peer')}
@@ -325,7 +327,7 @@ export default function Stage({
             roomId={roomId}
             bus={bus}
             localUser={localUser}
-          />
+          /></Suspense>
         ) : activeMedia ? (
           /* Case 2C: a link source, in sync through features/media */
           <LinkPlayer
@@ -352,7 +354,7 @@ export default function Stage({
           />
         ) : (localVideoFile || remoteLocalVideoMeta || streamVideoUrl) ? (
           /* Case 2A: Local Video Drag-and-Drop Sync Player or P2P Streamed Video */
-          <LocalVideoSyncPlayer
+          <Suspense fallback={null}><LocalVideoSyncPlayer
             initialFile={localVideoFile}
             remoteMeta={remoteLocalVideoMeta}
             onFileSelect={onLocalFileSelect}
@@ -371,7 +373,7 @@ export default function Stage({
             onSendReaction={onSendReaction}
             roomId={roomId}
             isPttSpaceActive={isPttMode && (audioSettings?.pttKey === 'Space' || audioSettings?.pttKey === ' ')}
-          />
+          /></Suspense>
         ) : (
           /* Case 2B: YouTube Player / Watch Party Stage */
           <YouTubeSyncPlayer

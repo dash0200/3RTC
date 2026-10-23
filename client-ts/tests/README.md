@@ -38,6 +38,7 @@ server you started), stop it: the connection test restarts the server on purpose
 | `youtube_sync` | play / pause / seek sync, computer and phone |
 | `youtube_unavailable` | blocked videos skipped and remembered |
 | `host_controls` | "only I control playback", wake lock, chat timestamps |
+| `host_transfer` | the host makes someone else the host: only the host can, a second tap confirms, everyone sees and is told, host controls move with it; reopening the app, the old host is a guest and the new host gets the room back |
 | `queue` | Quick Watch queue buttons, Play queue, browse window, phone sheet |
 | `quick_picks_region` | trending is a worldwide mix by default; "Trending in" switches to a country (remembered); India's rows first when India is chosen |
 | `activities` | start, shared state, late joiner, host lock, close, leave (dev sample activity) |

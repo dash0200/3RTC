@@ -5,6 +5,8 @@ import RejoinCard, { type RejoinInfo } from '../RejoinCard';
 import { useRoomCodeInput } from '../../hooks/useRoomCodeInput';
 
 export interface PhoneHomeProps {
+  /** Why the last join didn't work (shown while the code is still the one that failed) */
+  joinError?: { message: string; pin: string } | null;
   username?: string;
   initialPin?: string;
   onCreate?: (displayName: string) => void;
@@ -17,6 +19,7 @@ export interface PhoneHomeProps {
 export default function PhoneHome({
   username = '',
   initialPin = '',
+  joinError = null,
   onCreate,
   onJoin,
   onOpenServerSettings,
@@ -76,6 +79,9 @@ export default function PhoneHome({
         >
           Join room
         </button>
+        {joinError && (!joinError.pin || code === joinError.pin) && (
+          <p className="join-error" role="alert">{joinError.message}</p>
+        )}
       </div>
 
       <footer className="phone-home-foot">

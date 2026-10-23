@@ -29,6 +29,11 @@ def swipe(pg, x, y, dy, dx=0, steps=8):
     return mid
 
 
+def to_top(pg):
+    """Scroll the game back to its top (as a finger would first): a swipe down only puts it away from there."""
+    pg.evaluate("document.querySelectorAll('.stage-activity *').forEach((n) => { if (n.scrollTop) n.scrollTop = 0; })")
+
+
 def on_top(pg, sel):
     """Is the middle of `sel` the thing a tap there would hit?"""
     return pg.evaluate(f"(() => {{ const el = document.querySelector('{sel}'); if (!el) return false; const r = el.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!hit && el.contains(hit); }})()")
@@ -82,6 +87,7 @@ with sync_playwright() as p:
     phone.locator('.activity-bubble').click()
     check('...which opens it again', wait(lambda: view(phone) == 'full', 5))
     board = phone.locator('.ludo-board').bounding_box()
+    to_top(phone)
     swipe(phone, board['x'] + board['width'] / 2, board['y'] + 80, 220)
     check('...swipe down works without a video too', wait(lambda: view(phone) == 'bubble', 5))
     phone.locator('.activity-bubble').click()
@@ -175,6 +181,7 @@ with sync_playwright() as p:
     check('a sideways drag is not a swipe', view(phone) == 'full')
     swipe(phone, cx, cy + 200, -200); time.sleep(0.4)
     check('dragging up (to scroll the game) is not a swipe', view(phone) == 'full')
+    to_top(phone)
     mid = swipe(phone, cx, cy, 220)
     check('a swipe down on the board: the game follows the finger and goes away', 'translateY' in (mid or '') and wait(lambda: view(phone) == 'bubble', 5), mid)
     phone.locator('.activity-bubble').click()
@@ -237,6 +244,7 @@ with sync_playwright() as p:
           wait(lambda: view(phone) == 'full' and on_top(phone, '.stage-activity .activity-video-btn') and on_top(phone, '.stage-activity .activity-close-btn'), 10))  # (after any notice fades)
     phone.screenshot(path=str(harness.OUT / 'ludo_video_youtube_open.png'))
     board = phone.locator('.ludo-board').bounding_box()
+    to_top(phone)
     swipe(phone, board['x'] + board['width'] / 2, board['y'] + 80, 220)
     check('YouTube: swipe down goes back to the video', wait(lambda: view(phone) == 'bubble', 5))
     # (exited from the computer: phones have no Exit for a YouTube video in the redesign yet)

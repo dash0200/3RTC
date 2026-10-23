@@ -391,7 +391,7 @@
    Invite screen (?room=12345), phone and desktop
    ========================================================================== */
 .invite {
-  flex: 1; width: 100%; min-height: 100%;
+  flex: 1; width: 100%; min-height: 0;
   overflow-y: auto;
   display: flex; flex-direction: column;
   background: var(--rd-bg); color: var(--rd-text);
@@ -886,6 +886,8 @@
   background: var(--rd-accent); color: #fff; font-size: 12px; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center;
 }
+/* Logs are routine room events, not something to act on: a quiet count, not the red alert colour */
+.chat-section .tab-badge.logs-badge { background: rgba(255, 255, 255, 0.12); color: var(--rd-text-2); }
 
 /* Messages: a flat feed (avatar, coloured name, time, text) */
 .cm-feed { display: flex; flex-direction: column; gap: 4px; padding: 16px; }
@@ -1270,6 +1272,8 @@
 .phone-sheet-head h2 { font-family: var(--font-display); font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
 .phone-sheet-head .phone-icon-btn { width: 44px; height: 44px; border-radius: 12px; border: 0; background: var(--rd-raised); color: var(--rd-text); }
 .phone-sheet-body { display: flex; flex-direction: column; gap: 18px; }
+/* Sections keep their size and the sheet scrolls; shrinking them hid rows (More, Add a video) */
+.phone-sheet-body > * { flex-shrink: 0; }
 .app-container:not(.phone-app) .phone-sheet-layer { justify-content: center; align-items: center; }
 .app-container:not(.phone-app) .phone-sheet { width: min(520px, calc(100vw - 32px)); max-height: 86vh; border-radius: 24px; padding: 20px 24px 24px; }
 .app-container:not(.phone-app) .phone-sheet-handle { display: none; }
@@ -2524,3 +2528,14 @@
 
 
 
+
+/* Chat: characters used, shown only near the 200-character limit */
+.chat-char-count { align-self: center; flex: none; padding: 0 4px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--rd-text-2); }
+.chat-char-count.is-full { color: var(--rd-accent); font-weight: 700; }
+
+/* Why joining didn't work: stays under the join form until the code changes */
+.join-error { margin: 8px 0 0; font-size: 14px; line-height: 1.4; color: var(--rd-danger-text); }
+
+/* People: the host can hand the room to someone (second tap confirms) */
+.card-host-row { display: flex; justify-content: flex-end; margin-top: 8px; }
+.card-make-host-btn.is-confirming { background: var(--rd-accent); border-color: transparent; color: #fff; }
