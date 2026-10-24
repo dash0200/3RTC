@@ -53,6 +53,7 @@ import './redesign.css';
 import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 import { useBackLayer, useRoomBackGuard } from './core/backStack';
 import LeaveRoomDialog from './components/LeaveRoomDialog';
+import TabTitle from './components/TabTitle';
 import { saveLastRoom, readLastRoom, forgetLastRoom, type SavedLastRoom } from './utils/lastRoom';
 import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
@@ -803,6 +804,15 @@ export default function App() {
   return (
     <RoomProvider value={roomContext}>
       <div className={`app-container ${isPhone ? 'phone-app' : ''}`}>
+        <TabTitle
+          roomId={roomId ? String(roomId) : null}
+          peers={connectedPeers}
+          reconnecting={Boolean(roomId) && !signalStatus.connected}
+          game={roomId && activityOn && activities.definition ? { name: activities.definition.name, icon: activities.definition.icon, attention: Boolean(shownActivityStatus?.attention), label: shownActivityStatus?.label } : null}
+          invite={roomId && activities.current && !activityLoad.loaded && activities.definition ? { name: activities.definition.name, icon: activities.definition.icon, by: activities.current.startedByName } : null}
+          nowPlaying={roomId ? nowPlaying : ''}
+          messages={chat.messages}
+        />
         {isPhone ? (
           <>
             <PhoneTopBar
