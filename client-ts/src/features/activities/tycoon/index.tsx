@@ -17,7 +17,7 @@ import {
   netWorth,
   ownsGroup,
   reducer,
-  rupees,
+  money,
   seatOf,
   unmortgageCost,
   type TyAction,
@@ -34,7 +34,7 @@ const BOT_TRADE_MS = 2200;
 const HOP_MS = 150;
 const OPTIONS = { initial: INITIAL, reducer };
 
-const TOKEN_NAMES: Record<TokenId, string> = { auto: 'Auto', car: 'Car', scooter: 'Scooter', boat: 'Boat', plane: 'Plane', train: 'Train' };
+const TOKEN_NAMES: Record<TokenId, string> = { auto: 'Tuk-tuk', car: 'Car', scooter: 'Scooter', boat: 'Boat', plane: 'Plane', train: 'Train' };
 
 // ---- title deed --------------------------------------------------------------------------------
 
@@ -58,20 +58,20 @@ function Deed({ s, pos, me, onAct, onClose }: { s: TyState; pos: number; me: num
         {sp.kind === 'property' && (
           <table className="ty-deed-table">
             <tbody>
-              <tr><td>Rent</td><td>{rupees(sp.rent[0])}</td></tr>
-              <tr><td>Whole colour set</td><td>{rupees(sp.rent[0] * 2)}</td></tr>
+              <tr><td>Rent</td><td>{money(sp.rent[0])}</td></tr>
+              <tr><td>Whole colour set</td><td>{money(sp.rent[0] * 2)}</td></tr>
               {[1, 2, 3, 4].map((h) => (
-                <tr key={h} className={s.houses[pos] === h ? 'is-now' : ''}><td>With {h} house{h > 1 ? 's' : ''}</td><td>{rupees(sp.rent[h])}</td></tr>
+                <tr key={h} className={s.houses[pos] === h ? 'is-now' : ''}><td>With {h} house{h > 1 ? 's' : ''}</td><td>{money(sp.rent[h])}</td></tr>
               ))}
-              <tr className={s.houses[pos] === 5 ? 'is-now' : ''}><td>With a hotel</td><td>{rupees(sp.rent[5])}</td></tr>
-              <tr className="ty-deed-sep"><td>House / hotel costs</td><td>{rupees(sp.house)}</td></tr>
+              <tr className={s.houses[pos] === 5 ? 'is-now' : ''}><td>With a hotel</td><td>{money(sp.rent[5])}</td></tr>
+              <tr className="ty-deed-sep"><td>House / hotel costs</td><td>{money(sp.house)}</td></tr>
             </tbody>
           </table>
         )}
         {sp.kind === 'station' && (
           <table className="ty-deed-table">
             <tbody>
-              {STATION_RENT.map((r, i) => <tr key={i}><td>Owning {i + 1} transport{i ? 's' : ''}</td><td>{rupees(r)}</td></tr>)}
+              {STATION_RENT.map((r, i) => <tr key={i}><td>Owning {i + 1} transport{i ? 's' : ''}</td><td>{money(r)}</td></tr>)}
             </tbody>
           </table>
         )}
@@ -81,8 +81,8 @@ function Deed({ s, pos, me, onAct, onClose }: { s: TyState; pos: number; me: num
         {!isBuyable(pos) && <p className="ty-deed-text">{describeSpace(pos)}</p>}
         {isBuyable(pos) && (
           <div className="ty-deed-meta">
-            <span>Price {rupees(priceOf(pos))}</span>
-            <span>Mortgage {rupees(mortgageValue(pos))}</span>
+            <span>Price {money(priceOf(pos))}</span>
+            <span>Mortgage {money(mortgageValue(pos))}</span>
           </div>
         )}
         {isBuyable(pos) && (
@@ -94,11 +94,11 @@ function Deed({ s, pos, me, onAct, onClose }: { s: TyState; pos: number; me: num
         {mine && myTurn && (
           <div className="ty-deed-actions">
             {sp.kind === 'property' && !whyNot && (
-              <button type="button" className="ty-btn ty-btn-go" onClick={() => onAct({ kind: 'build', pos })}>Build {s.houses[pos] === 4 ? 'hotel' : 'house'} ({rupees(sp.house)})</button>
+              <button type="button" className="ty-btn ty-btn-go" onClick={() => onAct({ kind: 'build', pos })}>Build {s.houses[pos] === 4 ? 'hotel' : 'house'} ({money(sp.house)})</button>
             )}
-            {s.houses[pos] > 0 && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'sell', pos })}>Sell {s.houses[pos] === 5 ? 'hotel' : 'a house'} (+{rupees(houseHalf(pos))})</button>}
-            {!s.mortgaged[pos] && !groupBuilt && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'mortgage', pos })}>Mortgage (+{rupees(mortgageValue(pos))})</button>}
-            {s.mortgaged[pos] && s.step !== 'debt' && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'unmortgage', pos })}>Pay off mortgage ({rupees(unmortgageCost(pos))})</button>}
+            {s.houses[pos] > 0 && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'sell', pos })}>Sell {s.houses[pos] === 5 ? 'hotel' : 'a house'} (+{money(houseHalf(pos))})</button>}
+            {!s.mortgaged[pos] && !groupBuilt && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'mortgage', pos })}>Mortgage (+{money(mortgageValue(pos))})</button>}
+            {s.mortgaged[pos] && s.step !== 'debt' && <button type="button" className="ty-btn" onClick={() => onAct({ kind: 'unmortgage', pos })}>Pay off mortgage ({money(unmortgageCost(pos))})</button>}
           </div>
         )}
         <button type="button" className="ty-btn ty-deed-close" onClick={onClose}>Close</button>
@@ -115,11 +115,11 @@ const houseHalf = (pos: number): number => {
 function describeSpace(pos: number): string {
   const sp = SPACES[pos];
   switch (sp.kind) {
-    case 'start': return 'Collect ₹2,000 every time you pass or land here.';
-    case 'jail': return `Just visiting, unless you were sent here. To get out: pay ${rupees(JAIL_FINE)}, use a card, or roll doubles (three tries).`;
-    case 'parking': return 'Take a break. With the Chai Break pot rule on, collect every tax and fine paid so far.';
+    case 'start': return `Collect ${money(START_PAY)} every time you pass or land here.`;
+    case 'jail': return `Just visiting, unless you were sent here. To get out: pay ${money(JAIL_FINE)}, use a card, or roll doubles (three tries).`;
+    case 'parking': return 'Take a break. With the Coffee Break pot rule on, collect every tax and fine paid so far.';
     case 'gotojail': return 'Go straight to Jail. You don’t pass Start.';
-    case 'tax': return `Pay ${rupees(sp.amount)} to the bank.`;
+    case 'tax': return `Pay ${money(sp.amount)} to the bank.`;
     case 'surprise': return 'Draw a Surprise card.';
     case 'treasure': return 'Draw a Treasure card.';
     default: return '';
@@ -147,7 +147,7 @@ function HowToPlay({ onClose }: { onClose: () => void }): JSX.Element {
             <li>Someone else’s place? You pay them rent, automatically.</li>
             <li>Build or make deals if you like, then tap <b>End turn</b>.</li>
           </ol>
-          <p>Everyone starts with {rupees(START_CASH)} and gets {rupees(START_PAY)} each time they pass Start. Doubles: roll again. Three doubles in a row: straight to jail.</p>
+          <p>Everyone starts with {money(START_CASH)} and gets {money(START_PAY)} each time they pass Start. Doubles: roll again. Three doubles in a row: straight to jail.</p>
         </section>
         <section className="ty-guide-build">
           <h5>🏗️ Building houses and hotels</h5>
@@ -164,7 +164,7 @@ function HowToPlay({ onClose }: { onClose: () => void }): JSX.Element {
         </section>
         <section>
           <h5>Transport and utilities</h5>
-          <p>Transport rent goes up with how many you own: {STATION_RENT.map((r) => rupees(r)).join(', ')}. Utilities charge {UTILITY_TIMES[0]}× the dice roll, or {UTILITY_TIMES[1]}× if you own both. You can’t build on these.</p>
+          <p>Transport rent goes up with how many you own: {STATION_RENT.map((r) => money(r)).join(', ')}. Utilities charge {UTILITY_TIMES[0]}× the dice roll, or {UTILITY_TIMES[1]}× if you own both. You can’t build on these.</p>
         </section>
         <section>
           <h5>🤝 Deals</h5>
@@ -175,8 +175,8 @@ function HowToPlay({ onClose }: { onClose: () => void }): JSX.Element {
           <p><b>Mortgage</b> a place for half its price; it charges no rent until you pay that back (plus 10%). <b>Sell</b> houses for half what they cost. If you owe more than you have, raise the money and tap <b>Pay</b>. If you can’t, declare bankruptcy: you’re out, and what you own goes to the player you owed (or back to the bank).</p>
         </section>
         <section>
-          <h5>Jail, cards and Chai Break</h5>
-          <p>To get out of jail: pay {rupees(JAIL_FINE)}, use a get-out card, or roll doubles (on the third try you pay and go). Surprise and Treasure cards bring money, fines or a trip somewhere. With the Chai Break pot rule on, whoever lands on Chai Break collects every tax and fine paid so far.</p>
+          <h5>Jail, cards and Coffee Break</h5>
+          <p>To get out of jail: pay {money(JAIL_FINE)}, use a get-out card, or roll doubles (on the third try you pay and go). Surprise and Treasure cards bring money, fines or a trip somewhere. With the Coffee Break pot rule on, whoever lands on Coffee Break collects every tax and fine paid so far.</p>
         </section>
         <section>
           <h5>Left, or away from the keys?</h5>
@@ -247,7 +247,7 @@ function TradeDialog({ s, me, onSend, onClose }: { s: TyState; me: number; onSen
 
 function tradeSummary(s: TyState): { give: string; get: string } {
   const t = s.trade!;
-  const list = (props: number[], cash: number) => [...props.map((i) => SPACES[i].name), ...(cash ? [rupees(cash)] : [])].join(', ');
+  const list = (props: number[], cash: number) => [...props.map((i) => SPACES[i].name), ...(cash ? [money(cash)] : [])].join(', ');
   return { give: list(t.giveProps, t.giveCash), get: list(t.getProps, t.getCash) };
 }
 
@@ -392,7 +392,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
             <svg viewBox="-30 0 260 70" className="ty-lobby-logo" aria-hidden="true">
               <text x={100} y={52} textAnchor="middle" fontSize={50} fontWeight={900} fill="#e0393e" stroke="#23252d" strokeWidth={3} paintOrder="stroke" fontFamily="'Bricolage Grotesque Variable', 'Figtree Variable', sans-serif">TYCOON</text>
             </svg>
-            <p className="ty-muted">Buy places across India, collect rent, build houses and hotels, make deals. Last one standing wins.</p>
+            <p className="ty-muted">Buy famous streets around the world, collect rent, build houses and hotels, make deals. Last one standing wins.</p>
             <button type="button" className="ty-btn ty-btn-sm ty-guide-btn" onClick={() => setGuide(true)}>📖 How to play</button>
           </div>
           <ul className="ty-players">
@@ -422,7 +422,7 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
           </div>
           <div className="ty-rules">
             <div className="ty-rules-title">House rules{canManage ? '' : ' (the host sets these)'}</div>
-            <label className="ty-rule"><input type="checkbox" checked={s.rules.jackpot} disabled={!canManage} onChange={(e) => dispatch({ kind: 'rules', rules: { jackpot: e.target.checked } })} /><span>Chai Break pot: taxes and fines pile up for whoever lands on Chai Break</span></label>
+            <label className="ty-rule"><input type="checkbox" checked={s.rules.jackpot} disabled={!canManage} onChange={(e) => dispatch({ kind: 'rules', rules: { jackpot: e.target.checked } })} /><span>Coffee Break pot: taxes and fines pile up for whoever lands on Coffee Break</span></label>
             <div className="ty-rule">
               <span>Game length</span>
               <select value={s.rules.rounds} disabled={!canManage} onChange={(e) => dispatch({ kind: 'rules', rules: { rounds: Number(e.target.value) } })}>
@@ -454,8 +454,8 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
     }
     switch (s.step) {
       case 'roll': return current.jail ? 'You’re in jail: roll doubles, pay, or use a card.' : s.doubles ? 'Doubles! Roll again.' : 'Your turn: roll the dice.';
-      case 'buy': return `Buy ${SPACES[s.pendingBuy!].name} for ${rupees(priceOf(s.pendingBuy!))}?`;
-      case 'debt': return `You owe ${rupees(debtTotal)} (${s.debt?.reason}). Sell houses or mortgage places, then pay.`;
+      case 'buy': return `Buy ${SPACES[s.pendingBuy!].name} for ${money(priceOf(s.pendingBuy!))}?`;
+      case 'debt': return `You owe ${money(debtTotal)} (${s.debt?.reason}). Sell houses or mortgage places, then pay.`;
       default: return canBuildNow ? 'You can build: tap a place marked 🏗️ in Your places. Or make a deal, or end your turn.' : 'Make a deal, or end your turn.';
     }
   })();
@@ -484,18 +484,18 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
           {myTurn && !walking && (
             <div className="ty-actions">
               {s.step === 'roll' && <button type="button" className="ty-btn ty-btn-go ty-btn-big" onClick={() => dispatch({ kind: 'roll' })}>🎲 Roll</button>}
-              {s.step === 'roll' && current.jail > 0 && current.cash >= JAIL_FINE && <button type="button" className="ty-btn" onClick={() => dispatch({ kind: 'pay-jail' })}>Pay {rupees(JAIL_FINE)}</button>}
+              {s.step === 'roll' && current.jail > 0 && current.cash >= JAIL_FINE && <button type="button" className="ty-btn" onClick={() => dispatch({ kind: 'pay-jail' })}>Pay {money(JAIL_FINE)}</button>}
               {s.step === 'roll' && current.jail > 0 && current.jailCards.length > 0 && <button type="button" className="ty-btn" onClick={() => dispatch({ kind: 'jail-card' })}>Use card</button>}
               {s.step === 'buy' && (
                 <>
-                  <button type="button" className="ty-btn ty-btn-go ty-btn-big" disabled={current.cash < priceOf(s.pendingBuy!)} onClick={() => dispatch({ kind: 'buy' })}>Buy {rupees(priceOf(s.pendingBuy!))}</button>
+                  <button type="button" className="ty-btn ty-btn-go ty-btn-big" disabled={current.cash < priceOf(s.pendingBuy!)} onClick={() => dispatch({ kind: 'buy' })}>Buy {money(priceOf(s.pendingBuy!))}</button>
                   <button type="button" className="ty-btn" onClick={() => dispatch({ kind: 'skip' })}>No thanks</button>
                   <button type="button" className="ty-btn ty-btn-sm" onClick={() => setDeed(s.pendingBuy)}>Details</button>
                 </>
               )}
               {s.step === 'debt' && (
                 <>
-                  <button type="button" className="ty-btn ty-btn-go" disabled={current.cash < debtTotal} onClick={() => dispatch({ kind: 'pay-debt' })}>Pay {rupees(debtTotal)}</button>
+                  <button type="button" className="ty-btn ty-btn-go" disabled={current.cash < debtTotal} onClick={() => dispatch({ kind: 'pay-debt' })}>Pay {money(debtTotal)}</button>
                   {confirmBankrupt === s.seq ? (
                     <button type="button" className="ty-btn ty-btn-danger" onClick={() => dispatch({ kind: 'bankrupt' })}>Yes, I’m bankrupt</button>
                   ) : (
@@ -536,9 +536,9 @@ export default function Tycoon({ activityId }: TycoonProps): JSX.Element {
               <Token token={p.token} color={p.color} size={28} ghost={p.bankrupt} />
               <span className="ty-standing-main">
                 <span className="ty-standing-name">{p.name}{i === me ? ' (you)' : ''}{away(i) && <span className="ty-tag">away</span>}{p.jail > 0 && <span className="ty-tag">in jail</span>}</span>
-                <span className="ty-standing-sub">{p.bankrupt ? 'bankrupt' : `${SPACES.filter((_, k) => s.owner[k] === i).length} places · worth ${rupees(netWorth(s, i))}`}</span>
+                <span className="ty-standing-sub">{p.bankrupt ? 'bankrupt' : `${SPACES.filter((_, k) => s.owner[k] === i).length} places · worth ${money(netWorth(s, i))}`}</span>
               </span>
-              <span className="ty-cash">{rupees(p.cash)}</span>
+              <span className="ty-cash">{money(p.cash)}</span>
             </li>
           ))}
         </ul>

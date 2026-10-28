@@ -48,7 +48,7 @@ describe('Tycoon turns', () => {
     dice(1, 2);
     assert.equal(act(s, 'b', { kind: 'roll' }), s);
     s = act(s, 'a', { kind: 'roll' });
-    assert.equal(s.players[0].pos, 3); // Laad Bazaar
+    assert.equal(s.players[0].pos, 3); // Grand Bazaar
     assert.equal(s.step, 'buy');
     s = act(s, 'a', { kind: 'buy' });
     assert.equal(s.owner[3], 0);
@@ -138,22 +138,22 @@ describe('Tycoon turns', () => {
     owner[1] = 0;
     owner[3] = 1;
     let s = { ...s0, owner };
-    assert.match(buildBlock(s, 0, 1)!, /Own all 2 brown places.*you have 1.*Laad Bazaar \(Ben\)/);
+    assert.match(buildBlock(s, 0, 1)!, /Own all 2 brown places.*you have 1.*Grand Bazaar \(Ben\)/);
     owner[3] = null;
     s = { ...s, owner: [...owner] };
-    assert.match(buildBlock(s, 0, 1)!, /Laad Bazaar \(for sale\)/);
+    assert.match(buildBlock(s, 0, 1)!, /Grand Bazaar \(for sale\)/);
     owner[3] = 0;
     s = { ...s, owner: [...owner] };
     assert.equal(buildBlock(s, 0, 1), null);
     assert.equal(buildBlock(s, 1, 1)?.startsWith('Own all'), true, 'Ben owns none of them');
     assert.match(buildBlock({ ...s, turn: 1 }, 0, 1)!, /on your turn/);
     s = act(s, 'a', { kind: 'build', pos: 1 });
-    assert.match(buildBlock(s, 0, 1)!, /evenly: put a house on Laad Bazaar first/);
+    assert.match(buildBlock(s, 0, 1)!, /evenly: put a house on Grand Bazaar first/);
     assert.equal(buildBlock(s, 0, 3), null);
-    assert.match(buildBlock(withPlayers(s, [{ cash: 100 }]), 0, 3)!, /costs ₹500: you have ₹100/);
+    assert.match(buildBlock(withPlayers(s, [{ cash: 100 }]), 0, 3)!, /costs \$500: you have \$100/);
     const mortgaged = [...s.mortgaged];
     mortgaged[3] = true;
-    assert.match(buildBlock({ ...s, mortgaged }, 0, 1)!, /mortgage on Laad Bazaar/);
+    assert.match(buildBlock({ ...s, mortgaged }, 0, 1)!, /mortgage on Grand Bazaar/);
     // every reason it gives, the build action refuses too
     for (const t of [{ ...s, turn: 1 }, withPlayers(s, [{ cash: 100 }]), { ...s, mortgaged }]) {
       for (const pos of [1, 3]) if (buildBlock(t, 0, pos)) assert.equal(act(t, 'a', { kind: 'build', pos }), t);
@@ -169,7 +169,7 @@ describe('Tycoon turns', () => {
     let s: TyState = { ...s0, owner, houses: s0.houses.map((h, i) => (i === 39 ? 5 : i === 37 ? 5 : h)) };
     s = withPlayers(s, [{ pos: 36, cash: 1000 }]);
     dice(1, 2);
-    s = act(s, 'a', { kind: 'roll' }); // Marine Drive with a hotel: 20,000
+    s = act(s, 'a', { kind: 'roll' }); // Monte Carlo with a hotel: 20,000
     assert.equal(s.step, 'debt');
     assert.equal(act(s, 'a', { kind: 'end-turn' }), s);
     s = act(s, 'a', { kind: 'mortgage', pos: 6 });

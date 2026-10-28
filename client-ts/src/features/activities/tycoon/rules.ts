@@ -66,7 +66,7 @@ export interface Trade {
 }
 
 export interface Rules {
-  /** taxes and fines go into a pot that whoever lands on Chai Break collects */
+  /** taxes and fines go into a pot that whoever lands on Coffee Break collects */
   jackpot: boolean;
   /** end after this many rounds (0: play until one is left); the richest wins */
   rounds: number;
@@ -177,7 +177,8 @@ export type TyAction =
 
 // ---- small helpers -------------------------------------------------------------------------
 
-export const rupees = (n: number): string => `₹${Math.round(n).toLocaleString('en-IN')}`;
+/** Money on the board: one currency for every player, wherever they are */
+export const money = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
 const bump = (s: TyState, patch: Partial<TyState> = {}): TyState => ({ ...s, ...patch, seq: s.seq + 1 });
 const canManage = (meta: TyMeta): boolean => Boolean(meta.isHost || !meta.hostId || !meta.present?.includes(meta.hostId));
 export const seatOf = (s: TyState, peerId: string | null | undefined): number =>
@@ -255,7 +256,7 @@ export function buildBlock(s: TyState, seat: number, pos: number): string | null
     const next = set.find((i) => s.houses[i] === fewest)!;
     return `Build evenly: put a house on ${SPACES[next].name} first.`;
   }
-  if (s.players[seat].cash < houseCost(pos)) return `A ${s.houses[pos] === 4 ? 'hotel' : 'house'} here costs ${rupees(houseCost(pos))}: you have ${rupees(s.players[seat].cash)}.`;
+  if (s.players[seat].cash < houseCost(pos)) return `A ${s.houses[pos] === 4 ? 'hotel' : 'house'} here costs ${money(houseCost(pos))}: you have ${money(s.players[seat].cash)}.`;
   return null;
 }
 
@@ -385,7 +386,7 @@ function moveTo(s: TyState, seat: number, to: number, jump: boolean, forward = t
   next = { ...next, move: { seat, from, to, jump, seq: s.seq + 1 } };
   if (forward && to < from) {
     next = addCash(next, seat, START_PAY);
-    next = withLog(next, `🏁 ${s.players[seat].name} passed Start: +${rupees(START_PAY)}.`);
+    next = withLog(next, `🏁 ${s.players[seat].name} passed Start: +${money(START_PAY)}.`);
   }
   return next;
 }
@@ -459,12 +460,12 @@ function land(s0: TyState, seat: number, diceTotal: number, rentFactor = 1): TyS
     let rent = rentOf(s, pos, diceTotal);
     if (rentFactor === 2) rent *= 2;
     if (rentFactor === -1) rent = diceTotal * 100;
-    s = withLog(s, `🏠 ${name} owes ${s.players[owner].name} ${rupees(rent)} rent for ${sp.name}.`);
+    s = withLog(s, `🏠 ${name} owes ${s.players[owner].name} ${money(rent)} rent for ${sp.name}.`);
     return charge(s, seat, [{ to: owner, amount: rent }], `rent for ${sp.name}`);
   }
   switch (sp.kind) {
     case 'tax':
-      s = withLog(s, `🧾 ${name} pays ${sp.name}: ${rupees(sp.amount)}.`);
+      s = withLog(s, `🧾 ${name} pays ${sp.name}: ${money(sp.amount)}.`);
       return charge(s, seat, [{ to: null, amount: sp.amount }], sp.name);
     case 'surprise':
       return drawCard(s, seat, 's', diceTotal);
@@ -475,7 +476,7 @@ function land(s0: TyState, seat: number, diceTotal: number, rentFactor = 1): TyS
     case 'parking':
       if (s.rules.jackpot && s.pot > 0) {
         const pot = s.pot;
-        return withLog(addCash({ ...s, pot: 0 }, seat, pot), `☕ ${name} won the Chai Break pot: ${rupees(pot)}!`);
+        return withLog(addCash({ ...s, pot: 0 }, seat, pot), `☕ ${name} won the Coffee Break pot: ${money(pot)}!`);
       }
       return s;
     default:
@@ -503,7 +504,7 @@ function roll(s0: TyState, seat: number): TyState {
       s = { ...s, again: false };
     } else if (p.jail >= 3) {
       // third try: pay and go
-      s = withLog(setPlayer(s, seat, { jail: 0 }), `🎲 ${p.name} pays ${rupees(JAIL_FINE)} to leave jail.`);
+      s = withLog(setPlayer(s, seat, { jail: 0 }), `🎲 ${p.name} pays ${money(JAIL_FINE)} to leave jail.`);
       s = { ...s, again: false };
       s = charge(s, seat, [{ to: null, amount: JAIL_FINE }], 'jail fine');
       if (s.step === 'debt') return bump(s); // pays first, then moves on its next turn
@@ -657,7 +658,7 @@ function reducerCore(s: TyState, a: TyAction, seat: number): TyState {
       return roll(s, seat);
     case 'pay-jail':
       if (!myTurn || s.step !== 'roll' || !p.jail || p.cash < JAIL_FINE) return s;
-      return bump(withLog(settle(setPlayer(s, seat, { jail: 0 }), seat, [{ to: null, amount: JAIL_FINE }]), `🔓 ${p.name} paid ${rupees(JAIL_FINE)} to leave jail.`));
+      return bump(withLog(settle(setPlayer(s, seat, { jail: 0 }), seat, [{ to: null, amount: JAIL_FINE }]), `🔓 ${p.name} paid ${money(JAIL_FINE)} to leave jail.`));
     case 'jail-card': {
       if (!myTurn || s.step !== 'roll' || !p.jail || !p.jailCards.length) return s;
       const [card, ...restCards] = p.jailCards;
@@ -671,7 +672,7 @@ function reducerCore(s: TyState, a: TyAction, seat: number): TyState {
       if (!myTurn || s.step !== 'buy' || pos === null || p.cash < priceOf(pos)) return s;
       const owner = [...s.owner];
       owner[pos] = seat;
-      const bought = withLog(addCash({ ...s, owner, pendingBuy: null, step: 'roll' }, seat, -priceOf(pos)), `🔑 ${p.name} bought ${SPACES[pos].name} for ${rupees(priceOf(pos))}.`);
+      const bought = withLog(addCash({ ...s, owner, pendingBuy: null, step: 'roll' }, seat, -priceOf(pos)), `🔑 ${p.name} bought ${SPACES[pos].name} for ${money(priceOf(pos))}.`);
       return bump(bought, { step: s.again && !p.jail ? 'roll' : 'done' });
     }
     case 'skip':
