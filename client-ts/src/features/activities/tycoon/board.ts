@@ -1,6 +1,6 @@
 /**
- * Tycoon's board: 40 spaces around a square, India-themed. Money is in rupees.
- * Spaces 0 Start, 10 Jail, 20 Chai Break, 30 Go to Jail are the corners.
+ * Tycoon's board: 40 spaces around a square, famous streets and places around the world.
+ * Spaces 0 Start, 10 Jail, 20 Coffee Break, 30 Go to Jail are the corners.
  */
 
 export type GroupId = 'brown' | 'sky' | 'pink' | 'orange' | 'red' | 'yellow' | 'green' | 'navy';
@@ -46,45 +46,45 @@ const P = (name: string, city: string, group: GroupId, price: number, rent: numb
 
 export const SPACES: Space[] = [
   { kind: 'start', name: 'Start' },
-  P('Chandni Chowk', 'Delhi', 'brown', 600, [20, 100, 300, 900, 1600, 2500], 500),
+  P('Khao San Road', 'Bangkok', 'brown', 600, [20, 100, 300, 900, 1600, 2500], 500),
   { kind: 'treasure', name: 'Treasure' },
-  P('Laad Bazaar', 'Hyderabad', 'brown', 600, [40, 200, 600, 1800, 3200, 4500], 500),
+  P('Grand Bazaar', 'Istanbul', 'brown', 600, [40, 200, 600, 1800, 3200, 4500], 500),
   { kind: 'tax', name: 'Income Tax', amount: 2000 },
   { kind: 'station', name: 'Central Station', price: 2000 },
-  P('Johari Bazaar', 'Jaipur', 'sky', 1000, [60, 300, 900, 2700, 4000, 5500], 500),
+  P('La Rambla', 'Barcelona', 'sky', 1000, [60, 300, 900, 2700, 4000, 5500], 500),
   { kind: 'surprise', name: 'Surprise' },
-  P('Commercial Street', 'Bengaluru', 'sky', 1000, [60, 300, 900, 2700, 4000, 5500], 500),
-  P('Park Street', 'Kolkata', 'sky', 1200, [80, 400, 1000, 3000, 4500, 6000], 500),
+  P('Copacabana', 'Rio de Janeiro', 'sky', 1000, [60, 300, 900, 2700, 4000, 5500], 500),
+  P('Nyhavn', 'Copenhagen', 'sky', 1200, [80, 400, 1000, 3000, 4500, 6000], 500),
   { kind: 'jail', name: 'Jail' },
-  P('MG Road', 'Pune', 'pink', 1400, [100, 500, 1500, 4500, 6250, 7500], 1000),
+  P('Nanjing Road', 'Shanghai', 'pink', 1400, [100, 500, 1500, 4500, 6250, 7500], 1000),
   { kind: 'utility', name: 'Power Grid', price: 1500, icon: 'power' },
-  P('Fort Kochi', 'Kochi', 'pink', 1400, [100, 500, 1500, 4500, 6250, 7500], 1000),
-  P('Mall Road', 'Shimla', 'pink', 1600, [120, 600, 1800, 5000, 7000, 9000], 1000),
+  P('Orchard Road', 'Singapore', 'pink', 1400, [100, 500, 1500, 4500, 6250, 7500], 1000),
+  P('Bondi Beach', 'Sydney', 'pink', 1600, [120, 600, 1800, 5000, 7000, 9000], 1000),
   { kind: 'station', name: 'Metro Line', price: 2000 },
-  P('Anna Salai', 'Chennai', 'orange', 1800, [140, 700, 2000, 5500, 7500, 9500], 1000),
+  P('Unter den Linden', 'Berlin', 'orange', 1800, [140, 700, 2000, 5500, 7500, 9500], 1000),
   { kind: 'treasure', name: 'Treasure' },
-  P('Sector 17', 'Chandigarh', 'orange', 1800, [140, 700, 2000, 5500, 7500, 9500], 1000),
-  P('Law Garden', 'Ahmedabad', 'orange', 2000, [160, 800, 2200, 6000, 8000, 10000], 1000),
-  { kind: 'parking', name: 'Chai Break' },
-  P('Hazratganj', 'Lucknow', 'red', 2200, [180, 900, 2500, 7000, 8750, 10500], 1500),
+  P('Dam Square', 'Amsterdam', 'orange', 1800, [140, 700, 2000, 5500, 7500, 9500], 1000),
+  P('Gran Vía', 'Madrid', 'orange', 2000, [160, 800, 2200, 6000, 8000, 10000], 1000),
+  { kind: 'parking', name: 'Coffee Break' },
+  P('Myeongdong', 'Seoul', 'red', 2200, [180, 900, 2500, 7000, 8750, 10500], 1500),
   { kind: 'surprise', name: 'Surprise' },
-  P('Salt Lake', 'Kolkata', 'red', 2200, [180, 900, 2500, 7000, 8750, 10500], 1500),
-  P('Banjara Hills', 'Hyderabad', 'red', 2400, [200, 1000, 3000, 7500, 9250, 11000], 1500),
+  P('Marine Drive', 'Mumbai', 'red', 2200, [180, 900, 2500, 7000, 8750, 10500], 1500),
+  P('Oxford Street', 'London', 'red', 2400, [200, 1000, 3000, 7500, 9250, 11000], 1500),
   { kind: 'station', name: 'Airport Express', price: 2000 },
-  P('Koramangala', 'Bengaluru', 'yellow', 2600, [220, 1100, 3300, 8000, 9750, 11500], 1500),
-  P('Calangute', 'Goa', 'yellow', 2600, [220, 1100, 3300, 8000, 9750, 11500], 1500),
+  P('Via del Corso', 'Rome', 'yellow', 2600, [220, 1100, 3300, 8000, 9750, 11500], 1500),
+  P('The Strip', 'Las Vegas', 'yellow', 2600, [220, 1100, 3300, 8000, 9750, 11500], 1500),
   { kind: 'utility', name: 'Water Works', price: 1500, icon: 'water' },
-  P('Connaught Place', 'Delhi', 'yellow', 2800, [240, 1200, 3600, 8500, 10250, 12000], 1500),
+  P('Champs-Élysées', 'Paris', 'yellow', 2800, [240, 1200, 3600, 8500, 10250, 12000], 1500),
   { kind: 'gotojail', name: 'Go to Jail' },
-  P('Juhu', 'Mumbai', 'green', 3000, [260, 1300, 3900, 9000, 11000, 12750], 2000),
-  P('Indiranagar', 'Bengaluru', 'green', 3000, [260, 1300, 3900, 9000, 11000, 12750], 2000),
+  P('Rodeo Drive', 'Beverly Hills', 'green', 3000, [260, 1300, 3900, 9000, 11000, 12750], 2000),
+  P('Ginza', 'Tokyo', 'green', 3000, [260, 1300, 3900, 9000, 11000, 12750], 2000),
   { kind: 'treasure', name: 'Treasure' },
-  P('Lutyens’ Delhi', 'Delhi', 'green', 3200, [280, 1500, 4500, 10000, 12000, 14000], 2000),
+  P('Sheikh Zayed Road', 'Dubai', 'green', 3200, [280, 1500, 4500, 10000, 12000, 14000], 2000),
   { kind: 'station', name: 'Harbour Port', price: 2000 },
   { kind: 'surprise', name: 'Surprise' },
-  P('Malabar Hill', 'Mumbai', 'navy', 3500, [350, 1750, 5000, 11000, 13000, 15000], 2000),
-  { kind: 'tax', name: 'GST', amount: 1000 },
-  P('Marine Drive', 'Mumbai', 'navy', 4000, [500, 2000, 6000, 14000, 17000, 20000], 2000)
+  P('Fifth Avenue', 'New York', 'navy', 3500, [350, 1750, 5000, 11000, 13000, 15000], 2000),
+  { kind: 'tax', name: 'Luxury Tax', amount: 1000 },
+  P('Monte Carlo', 'Monaco', 'navy', 4000, [500, 2000, 6000, 14000, 17000, 20000], 2000)
 ];
 
 export const JAIL = 10;
@@ -127,40 +127,40 @@ export interface TycoonCard {
 
 export const SURPRISE: TycoonCard[] = [
   { text: 'Your startup got funded! Advance to Start.', effect: { type: 'moveTo', to: 0 } },
-  { text: 'Weekend trip: go to Connaught Place.', effect: { type: 'moveTo', to: 29 } },
-  { text: 'Biryani craving: head to Banjara Hills.', effect: { type: 'moveTo', to: 24 } },
+  { text: 'Weekend in Paris: go to Champs-Élysées.', effect: { type: 'moveTo', to: 29 } },
+  { text: 'Shopping spree: head to Oxford Street.', effect: { type: 'moveTo', to: 24 } },
   { text: 'Catch a train: go to Central Station.', effect: { type: 'moveTo', to: 5 } },
-  { text: 'Sea breeze! Take a walk on Marine Drive.', effect: { type: 'moveTo', to: 39 } },
+  { text: 'Feeling lucky? Head to Monte Carlo.', effect: { type: 'moveTo', to: 39 } },
   { text: 'Rush to the nearest station. If someone owns it, pay them double.', effect: { type: 'nearest', what: 'station' } },
   { text: 'Rush to the nearest station. If someone owns it, pay them double.', effect: { type: 'nearest', what: 'station' } },
   { text: 'Go to the nearest utility. If owned, pay 10× your dice roll.', effect: { type: 'nearest', what: 'utility' } },
-  { text: 'Your mutual fund paid a dividend. Collect ₹500.', effect: { type: 'money', amount: 500 } },
+  { text: 'Your shares paid a dividend. Collect $500.', effect: { type: 'money', amount: 500 } },
   { text: 'Lucky escape! Keep this card to get out of jail free.', effect: { type: 'jailFree' } },
   { text: 'Wrong turn at the roundabout. Go back 3 spaces.', effect: { type: 'back', spaces: 3 } },
-  { text: 'Caught jumping a signal. Go straight to Jail.', effect: { type: 'jail' } },
-  { text: 'Monsoon damage: pay ₹250 per house and ₹1,000 per hotel.', effect: { type: 'repairs', house: 250, hotel: 1000 } },
-  { text: 'Overspeeding challan: pay ₹150.', effect: { type: 'money', amount: -150 } },
-  { text: 'You were elected society secretary. Pay each player ₹500.', effect: { type: 'each', amount: -500 } },
-  { text: 'Your fixed deposit matured. Collect ₹1,500.', effect: { type: 'money', amount: 1500 } }
+  { text: 'Caught running a red light. Go straight to Jail.', effect: { type: 'jail' } },
+  { text: 'Storm damage: pay $250 per house and $1,000 per hotel.', effect: { type: 'repairs', house: 250, hotel: 1000 } },
+  { text: 'Speeding ticket: pay $150.', effect: { type: 'money', amount: -150 } },
+  { text: 'You were elected club chairperson. Pay each player $500.', effect: { type: 'each', amount: -500 } },
+  { text: 'Your savings bond matured. Collect $1,500.', effect: { type: 'money', amount: 1500 } }
 ];
 
 export const TREASURE: TycoonCard[] = [
-  { text: 'Diwali bonus! Advance to Start.', effect: { type: 'moveTo', to: 0 } },
-  { text: 'The bank made a mistake in your favour. Collect ₹2,000.', effect: { type: 'money', amount: 2000 } },
-  { text: 'Dentist visit. Pay ₹500.', effect: { type: 'money', amount: -500 } },
-  { text: 'You sold some old gold. Collect ₹500.', effect: { type: 'money', amount: 500 } },
+  { text: 'Holiday bonus! Advance to Start.', effect: { type: 'moveTo', to: 0 } },
+  { text: 'The bank made a mistake in your favour. Collect $2,000.', effect: { type: 'money', amount: 2000 } },
+  { text: 'Dentist visit. Pay $500.', effect: { type: 'money', amount: -500 } },
+  { text: 'You sold some old gold. Collect $500.', effect: { type: 'money', amount: 500 } },
   { text: 'A wise elder’s blessing: keep this card to get out of jail free.', effect: { type: 'jailFree' } },
   { text: 'Tax raid! Go straight to Jail.', effect: { type: 'jail' } },
-  { text: 'It’s your birthday! Collect ₹100 from every player.', effect: { type: 'each', amount: 100 } },
-  { text: 'Income tax refund. Collect ₹200.', effect: { type: 'money', amount: 200 } },
-  { text: 'Your LIC policy matured. Collect ₹1,000.', effect: { type: 'money', amount: 1000 } },
-  { text: 'Hospital bill. Pay ₹1,000.', effect: { type: 'money', amount: -1000 } },
-  { text: 'School fees are due. Pay ₹500.', effect: { type: 'money', amount: -500 } },
-  { text: 'Freelance project paid off. Collect ₹250.', effect: { type: 'money', amount: 250 } },
-  { text: 'Society maintenance: pay ₹400 per house and ₹1,150 per hotel.', effect: { type: 'repairs', house: 400, hotel: 1150 } },
-  { text: 'Second prize in the rangoli contest! Collect ₹100.', effect: { type: 'money', amount: 100 } },
-  { text: 'An uncle left you some savings. Collect ₹1,000.', effect: { type: 'money', amount: 1000 } },
-  { text: 'Chit fund payout. Collect ₹1,000.', effect: { type: 'money', amount: 1000 } }
+  { text: 'It’s your birthday! Collect $100 from every player.', effect: { type: 'each', amount: 100 } },
+  { text: 'Income tax refund. Collect $200.', effect: { type: 'money', amount: 200 } },
+  { text: 'Your life insurance matured. Collect $1,000.', effect: { type: 'money', amount: 1000 } },
+  { text: 'Hospital bill. Pay $1,000.', effect: { type: 'money', amount: -1000 } },
+  { text: 'School fees are due. Pay $500.', effect: { type: 'money', amount: -500 } },
+  { text: 'Freelance project paid off. Collect $250.', effect: { type: 'money', amount: 250 } },
+  { text: 'Building maintenance: pay $400 per house and $1,150 per hotel.', effect: { type: 'repairs', house: 400, hotel: 1150 } },
+  { text: 'Second prize in a baking contest! Collect $100.', effect: { type: 'money', amount: 100 } },
+  { text: 'An uncle left you some savings. Collect $1,000.', effect: { type: 'money', amount: 1000 } },
+  { text: 'You won the office lottery. Collect $1,000.', effect: { type: 'money', amount: 1000 } }
 ];
 
 export const TOKENS = ['auto', 'car', 'scooter', 'boat', 'plane', 'train'] as const;

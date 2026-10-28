@@ -61,7 +61,7 @@ const SHIPPED: ActivityDefinition[] = [
     id: 'tycoon',
     name: 'Tycoon',
     icon: '🏙️',
-    description: 'Buy, build and bargain across India, 2–6 players (or the computer)',
+    description: 'Buy, build and bargain around the world, 2–6 players (or the computer)',
     minPeople: 1,
     load: () => import('./tycoon/index')
   }

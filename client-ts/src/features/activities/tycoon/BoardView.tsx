@@ -3,9 +3,9 @@
  * dice in the middle, tokens walking from space to space, houses, owners and mortgages.
  */
 import { memo, type JSX } from 'react';
-import { GROUP_COLORS, SPACES, type Space } from './board';
+import { GROUP_COLORS, SPACES, START_PAY, type Space } from './board';
 import { BoardToken, Building, Die, SpaceIcon, Skyline } from './art';
-import { rupees, type TyState } from './rules';
+import { money, type TyState } from './rules';
 
 export const SIZE = 1000;
 const C = 130; // corner
@@ -38,16 +38,25 @@ export function spacePoint(i: number, lx: number, ly: number): { x: number; y: n
   return { x: SIZE - C + ly, y: C + k * W - lx };
 }
 
-/** Split a name into at most two lines */
-function lines(name: string, max = 12): string[] {
+const NAME_MAX = 12; // characters that fit across a space at the usual size
+
+/** Split a name into at most two lines, between words or after a hyphen (never inside a word) */
+function lines(name: string, max = NAME_MAX): string[] {
   if (name.length <= max) return [name];
   const words = name.split(' ');
   let a = '';
   let i = 0;
   while (i < words.length && (a + (a ? ' ' : '') + words[i]).length <= max) a += (a ? ' ' : '') + words[i++];
-  if (!a) return [name.slice(0, max), name.slice(max)];
+  if (!a) {
+    const dash = words[0].indexOf('-');
+    if (dash > 0) return [words[0].slice(0, dash + 1), [words[0].slice(dash + 1), ...words.slice(1)].join(' ')];
+    return [words[0], words.slice(1).join(' ')].filter(Boolean);
+  }
   return [a, words.slice(i).join(' ')];
 }
+
+/** A line too long for the space gets a smaller size instead of running over */
+const fitSize = (line: string, size: number): number => (line.length > NAME_MAX ? Math.max(8, (size * NAME_MAX) / line.length) : size);
 
 const T = ({ x, y, size, weight = 700, fill = '#23252d', children }: { x: number; y: number; size: number; weight?: number; fill?: string; children: string }) => (
   <text x={x} y={y} textAnchor="middle" fontSize={size} fontWeight={weight} fill={fill} fontFamily="'Figtree Variable', system-ui, sans-serif">
@@ -63,7 +72,7 @@ function EdgeSpace({ sp, i }: { sp: Space; i: number }): JSX.Element {
       <rect width={W} height={C} fill="#fbf6e9" stroke="#2b2d35" strokeWidth={1.5} />
       {sp.kind === 'property' && <rect width={W} height={24} fill={GROUP_COLORS[sp.group]} stroke="#2b2d35" strokeWidth={1.5} />}
       {name.map((l, n) => (
-        <T key={n} x={W / 2} y={nameY + n * 13} size={11.5}>{l}</T>
+        <T key={n} x={W / 2} y={nameY + n * 13} size={fitSize(l, 11.5)}>{l}</T>
       ))}
       {sp.kind === 'property' && <T x={W / 2} y={nameY + name.length * 13 + 2} size={9.5} weight={500} fill="#6b6e78">{sp.city}</T>}
       {sp.kind === 'station' && <SpaceIcon kind="station" x={W / 2 - 20} y={52} s={40} />}
@@ -71,8 +80,8 @@ function EdgeSpace({ sp, i }: { sp: Space; i: number }): JSX.Element {
       {sp.kind === 'surprise' && <SpaceIcon kind="surprise" x={W / 2 - 22} y={44} s={44} />}
       {sp.kind === 'treasure' && <SpaceIcon kind="treasure" x={W / 2 - 22} y={44} s={44} />}
       {sp.kind === 'tax' && <SpaceIcon kind="tax" x={W / 2 - 19} y={46} s={38} />}
-      {'price' in sp && <T x={W / 2} y={C - 10} size={11.5} weight={600}>{rupees(sp.price)}</T>}
-      {sp.kind === 'tax' && <T x={W / 2} y={C - 10} size={11.5} weight={600}>{`Pay ${rupees(sp.amount)}`}</T>}
+      {'price' in sp && <T x={W / 2} y={C - 10} size={11.5} weight={600}>{money(sp.price)}</T>}
+      {sp.kind === 'tax' && <T x={W / 2} y={C - 10} size={11.5} weight={600}>{`Pay ${money(sp.amount)}`}</T>}
       <title>{`${i}`}</title>
     </>
   );
@@ -91,7 +100,7 @@ const Corner = ({ i }: { i: number }): JSX.Element => {
       <rect width={C} height={C} fill="#fbf6e9" stroke="#2b2d35" strokeWidth={1.5} />
       {sp.kind === 'start' && (
         <>
-          <T x={C / 2} y={42} size={15} weight={600}>COLLECT ₹2,000</T>
+          <T x={C / 2} y={42} size={15} weight={600}>{`COLLECT ${money(START_PAY)}`}</T>
           <T x={C / 2} y={78} size={30} weight={900} fill="#e0393e">START</T>
           <SpaceIcon kind="start" x={C / 2 - 26} y={86} s={52} />
         </>
@@ -108,7 +117,7 @@ const Corner = ({ i }: { i: number }): JSX.Element => {
       {sp.kind === 'parking' && (
         <>
           <SpaceIcon kind="chai" x={C / 2 - 30} y={20} s={60} />
-          <T x={C / 2} y={98} size={17} weight={900} fill="#b86b2d">CHAI</T>
+          <T x={C / 2} y={98} size={17} weight={900} fill="#b86b2d">COFFEE</T>
           <T x={C / 2} y={117} size={17} weight={900} fill="#b86b2d">BREAK</T>
         </>
       )}
@@ -216,7 +225,7 @@ export function BoardView({ s, shownPos, rolling, highlight, onSpace }: BoardVie
       {s.rules.jackpot && (
         <g transform={`translate(${C + 40} ${C + 40})`}>
           <rect width={170} height={44} rx={22} fill="#fff8e1" stroke="#b86b2d" strokeWidth={2} />
-          <T x={85} y={29} size={18} weight={800} fill="#b86b2d">{`☕ Pot ${rupees(s.pot)}`}</T>
+          <T x={85} y={29} size={18} weight={800} fill="#b86b2d">{`☕ Pot ${money(s.pot)}`}</T>
         </g>
       )}
 
