@@ -61,7 +61,7 @@ export function SpaceIcon({ kind, x, y, s }: { kind: string; x: number; y: numbe
           <path d="M9 4h22v32l-4-3-3.5 3-3.5-3-3.5 3-3.5-3-4 3z" fill="#fff" stroke={INK} strokeWidth={1.8} strokeLinejoin="round" />
           <path d="M14 12h12M14 18h12M14 24h7" stroke={INK} strokeWidth={2} strokeLinecap="round" />
           <circle cx={29} cy={29} r={8} fill="#2fa84f" />
-          <text x={29} y={30} textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={800} fill="#fff">₹</text>
+          <text x={29} y={30} textAnchor="middle" dominantBaseline="central" fontSize={11} fontWeight={800} fill="#fff">$</text>
         </g>
       );
     case 'chai':
@@ -203,7 +203,7 @@ export function Building({ hotel, x, y, s }: { hotel: boolean; x: number; y: num
   );
 }
 
-/** The city skyline in the middle of the board */
+/** A world-city skyline in the middle of the board */
 export function Skyline({ x, y, w }: { x: number; y: number; w: number }): JSX.Element {
   const k = w / 400;
   return (
@@ -219,14 +219,14 @@ export function Skyline({ x, y, w }: { x: number; y: number; w: number }): JSX.E
         <rect x={20} y={80} width={36} height={50} />
         <rect x={62} y={40} width={30} height={90} />
         <path d="M100 130V60l20-16 20 16v70z" />
-        {/* gateway arch */}
-        <path d="M150 130V64h70v66h-14V96a21 21 0 00-42 0v34z" />
-        <rect x={146} y={56} width={78} height={10} rx={2} />
-        <circle cx={185} cy={52} r={6} />
+        {/* a tall lattice tower */}
+        <path d="M185 22l3 34 6 34 18 40h-14c-3-14-8-22-13-22s-10 8-13 22h-14l18-40 6-34z" />
+        <rect x={172} y={56} width={26} height={5} rx={1} />
+        <rect x={166} y={88} width={38} height={6} rx={1} />
         <rect x={232} y={70} width={26} height={60} />
-        {/* minaret */}
-        <rect x={266} y={50} width={12} height={80} />
-        <circle cx={272} cy={46} r={8} />
+        {/* clock tower */}
+        <rect x={265} y={56} width={15} height={74} />
+        <path d="M263 57l9.5-22 9.5 22z" />
         <rect x={290} y={86} width={40} height={44} />
         <rect x={336} y={30} width={22} height={100} />
         <path d="M336 30l11-18 11 18z" />
@@ -237,6 +237,7 @@ export function Skyline({ x, y, w }: { x: number; y: number; w: number }): JSX.E
           <rect key={i} x={[26, 40, 68, 80, 68, 80, 238, 246, 296, 310, 296, 310, 340, 350, 340, 370, 384, 370][i]} y={[90, 104, 52, 52, 72, 92, 80, 98, 96, 96, 112, 112, 50, 70, 90, 86, 86, 104][i]} width={6} height={7} />
         ))}
       </g>
+      <circle cx={272.5} cy={68} r={5} fill="#ffe7a3" opacity={0.9} />
       <rect x={-10} y={128} width={420} height={6} rx={3} fill="#1d4e6a" />
     </g>
   );
