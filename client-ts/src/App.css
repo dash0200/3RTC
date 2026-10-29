@@ -12505,3 +12505,7 @@ video::cue {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
   cursor: pointer;
 }
+/* Zoomed in (mouse): a hand to move the game; grabbing while dragging */
+.activity-body.can-pan { cursor: grab; }
+.activity-body.is-panning,
+.activity-body.is-panning * { cursor: grabbing !important; user-select: none; }
