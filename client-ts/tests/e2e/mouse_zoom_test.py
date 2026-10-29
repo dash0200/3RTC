@@ -1,6 +1,7 @@
 """Computer: the mouse wheel over a game zooms it around the pointer; zoomed in, the pointer is a
-hand and dragging moves the game (a click without dragging still plays); the chess board and the
-whiteboard keep their own drag; wheeling back out (or "Reset zoom") goes back to 1x."""
+hand and dragging moves the game (a click without dragging still plays); on the chess board a drag
+moves the view except on your pieces (they still move), the whiteboard still draws; wheeling back
+out (or "Reset zoom") goes back to 1x."""
 import os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness  # noqa: E402
@@ -104,17 +105,64 @@ with sync_playwright() as p:
     check('"Reset zoom" goes back to 1x', zoom(pg) == 1.0)
     harness.end_game(pg); pg.wait_for_timeout(600)
 
-    # ---- Chess: dragging a piece still moves it, zoomed in ----
+    # ---- Chess, zoomed in: drag the board to move the view; your pieces still move ----
     harness.open_activity(pg, 'Chess'); pg.wait_for_timeout(1200)
     pg.locator('.chess-mini-btn', has_text=re.compile(r'^Play$')).first.click(); pg.wait_for_timeout(300)
-    pg.locator('.chess-mini-btn', has_text='+ Computer').first.click(); pg.wait_for_timeout(1500)
-    svg = pg.locator('.chess svg').first.bounding_box()
-    wheel_in(pg, svg['x'] + svg['width'] / 2, svg['y'] + svg['height'] / 2, 3)
-    check('chess: the wheel zooms the board', zoom(pg) > 1.2, zoom(pg))
+    pg.locator('.chess-mini-btn', has_text='+ Computer').first.click(); pg.wait_for_timeout(800)
+    if pg.evaluate("document.querySelector('.chess').innerText.indexOf('h') < document.querySelector('.chess').innerText.indexOf('a')"):
+        pg.get_by_role('button', name='Swap colours').click(); pg.wait_for_timeout(500)  # play white (at the bottom)
+    pg.get_by_role('button', name='Start game').click()
+    wait(lambda: pg.locator('.chess-board.can-move').count() > 0, 8)
+
+    def sq(name):
+        """Centre of a square on screen (white at the bottom)"""
+        r = pg.locator('.chess svg').first.bounding_box()
+        k = r['width'] / 834
+        f, rank = 'abcdefgh'.index(name[0]), int(name[1]) - 1
+        return r['x'] + (34 + (f + 0.5) * 100) * k, r['y'] + ((7 - rank) + 0.5) * 100 * k
+
+    def in_view(name):
+        x, y = sq(name)
+        bb = body(pg)
+        return bb['x'] + 20 < x < bb['x'] + bb['w'] - 20 and bb['y'] + 20 < y < bb['y'] + bb['h'] - 20
+
+    def drag_view(dx, dy, at='d5'):
+        x, y = sq(at)
+        bb = body(pg)
+        x, y = min(max(x, bb['x'] + 30), bb['x'] + bb['w'] - 30), min(max(y, bb['y'] + 30), bb['y'] + bb['h'] - 30)
+        pg.mouse.move(x, y); pg.mouse.down(); pg.mouse.move(x + dx, y + dy, steps=8); pg.mouse.up(); time.sleep(0.2)
+
+    def piece_on(name):
+        x, y = sq(name)
+        return pg.evaluate(f"(() => {{ const e = document.elementFromPoint({x}, {y}); return Boolean(e && e.closest('.chess-piece')); }})()")
+
+    x, y = sq('e5')
+    wheel_in(pg, x, y, 4)
+    check('chess: the wheel zooms the board', zoom(pg) > 1.8, zoom(pg))
+    check('...a hand over the empty squares', pg.evaluate("getComputedStyle(document.querySelector('.chess-board')).cursor") == 'grab')
     b0 = body(pg)
-    svg = pg.locator('.chess svg').first.bounding_box()
-    pg.mouse.move(svg['x'] + svg['width'] / 2, svg['y'] + svg['height'] / 2); pg.mouse.down(); pg.mouse.move(svg['x'] + svg['width'] / 2 + 60, svg['y'] + svg['height'] / 2 + 60, steps=6); pg.mouse.up()
-    check('...a drag on the board is the game\'s (it doesn\'t move the view)', abs(body(pg)['left'] - b0['left']) < 2 and abs(body(pg)['top'] - b0['top']) < 2, [b0, body(pg)])
+    drag_view(0, -200, at='d5')
+    check('...dragging an empty part of the board moves the view (it used to do nothing)', body(pg)['top'] > b0['top'] + 100, [b0, body(pg)])
+    for _ in range(6):
+        if in_view('e2'):
+            break
+        drag_view(0, -150, at='d4')
+    check('...dragged until your pawns are in view', in_view('e2'))
+    x, y = sq('e2'); pg.mouse.click(x, y); time.sleep(0.3)
+    check('...a click selects your pawn', pg.locator('.chess-mark-selected').count() == 1)
+    drag_view(30, 40, at='d4')
+    check('...moving the view keeps it selected (the drag isn\'t a click on the board)', pg.locator('.chess-mark-selected').count() == 1)
+    x, y = sq('e4'); pg.mouse.click(x, y)
+    check('...and a click on e4 moves it there', wait(lambda: piece_on('e4') and not piece_on('e2'), 4))
+    wait(lambda: pg.locator('.chess-board.can-move').count() > 0 and pg.locator('.chess-mark-last').count() == 2 and not piece_on('e2'), 15)
+    time.sleep(1.5)  # the computer's reply
+    for _ in range(6):
+        if in_view('d2') and in_view('d4'):
+            break
+        drag_view(0, -120, at='c4')
+    x, y = sq('d2'); x2, y2 = sq('d4')
+    pg.mouse.move(x, y); pg.mouse.down(); pg.mouse.move(x2, y2, steps=10); pg.mouse.up()
+    check('...dragging a piece still moves the piece (d2 to d4), not the view', wait(lambda: piece_on('d4') and not piece_on('d2'), 4))
     harness.end_game(pg); pg.wait_for_timeout(600)
 
     # ---- Ludo, Last Card: the wheel zooms them too ----
