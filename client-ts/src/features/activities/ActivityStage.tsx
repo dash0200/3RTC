@@ -384,10 +384,10 @@ export default function ActivityStage({
 
     // The game can be minimised at any time (a video playing or not): swipe it down on a phone
     const canSwipeAway = isPhone && shown === 'full';
-    // Phone, game open: pinch to zoom it (zoomed in, a finger pans the game: no swiping it away)
+    // Zoom the game: mouse wheel and drag on a computer, pinch on a phone (zoomed in, a finger pans the game: no swiping it away)
     const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null);
     const zoomRef = useRef<HTMLDivElement | null>(null);
-    const zoom = usePinchZoom(bodyEl, zoomRef, isPhone && shown === 'full');
+    const zoom = usePinchZoom(bodyEl, zoomRef, shown !== 'bubble' && (shown === 'full' || !isPhone));
     useSwipeDown(rootRef, canSwipeAway && zoom.z === 1, minimise);
 
     // chat: { messages, isListVisible, unread, onOpenChat, splitView, onToggleSplitView } (from App)
