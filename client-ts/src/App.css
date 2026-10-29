@@ -12509,3 +12509,5 @@ video::cue {
 .activity-body.can-pan { cursor: grab; }
 .activity-body.is-panning,
 .activity-body.is-panning * { cursor: grabbing !important; user-select: none; }
+/* (the chess board: a hand between your pieces too, when zoomed in) */
+.activity-body.can-pan .chess-board.can-move { cursor: grab; }

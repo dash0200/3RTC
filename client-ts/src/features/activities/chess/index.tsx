@@ -215,7 +215,11 @@ function Board({ state, flipped, canMove, onMove }: BoardProps): JSX.Element {
     }
     if (mine(hit.sq)) {
       e.preventDefault();
-      svgRef.current?.setPointerCapture(e.pointerId);
+      try {
+        svgRef.current?.setPointerCapture(e.pointerId);
+      } catch {
+        /* that pointer isn't down any more (a press handed over late): a tap, no capture needed */
+      }
       setDrag({ from: hit.sq, x: hit.x, y: hit.y, moved: false });
       setSelected(hit.sq);
     } else {
@@ -260,6 +264,8 @@ function Board({ state, flipped, canMove, onMove }: BoardProps): JSX.Element {
         <g
           key={origin ? `${sq}:${state.seq}` : `${sq}`}
           className={`chess-piece${origin ? ' is-sliding' : ''}${mine(sq) ? ' is-mine' : ''}`}
+          // your pieces drag themselves; a drag anywhere else on the board moves a zoomed-in view
+          data-own-drag={mine(sq) ? '' : undefined}
           style={origin ? ({ '--dx': `${origin.x - x}px`, '--dy': `${origin.y - y}px` } as CSSProperties) : undefined}
         >
           <Piece type={typeOf(piece)} color={colorOf(piece)!} x={x + 4} y={y + 4} size={92} />

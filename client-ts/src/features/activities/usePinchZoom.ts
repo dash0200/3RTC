@@ -1,8 +1,9 @@
 /**
  * Zoom a game. Computer: the mouse wheel over the game zooms around the pointer (Ctrl+wheel and a
  * trackpad pinch too); zoomed in, the pointer is a hand: drag to move the game around (a click
- * without dragging still plays; the chess board and the whiteboard's canvas keep their own drag:
- * move those by dragging around them, or with the middle button). The wheel over a list or panel
+ * without dragging still plays; your chess pieces and the whiteboard's canvas keep their own drag:
+ * a drag elsewhere on the chess board moves it, the whiteboard moves by dragging around the board
+ * or with the middle button). The wheel over a list or panel
  * inside the game that scrolls (Ctrl+wheel always zooms) scrolls it as before.
  *
  * Phone: pinch to zoom (the page itself can't be zoomed: the viewport is fixed so the
@@ -152,15 +153,20 @@ export function usePinchZoom(
     };
 
     // ---- mouse: zoomed in, drag to move the game ----
-    const OWN_DRAG = 'button, a, input, select, textarea, label, [role="button"], [contenteditable="true"], .wb-over, .chess svg';
-    let drag: { id: number; x: number; y: number; left: number; top: number; moving: boolean } | null = null;
+    // Where a drag is the game's own: controls, your chess pieces ([data-own-drag]), the whiteboard's canvas
+    const OWN_DRAG = 'button, a, input, select, textarea, label, [role="button"], [contenteditable="true"], [data-own-drag], .wb-over';
+    let drag: { id: number; x: number; y: number; left: number; top: number; moving: boolean; down: PointerEvent } | null = null;
     let swallowClick = false;
     const onMouseDown = (e: PointerEvent): void => {
-      if (e.pointerType !== 'mouse' || zRef.current <= 1) return;
+      if (e.pointerType !== 'mouse' || zRef.current <= 1 || !e.isTrusted) return;
       const middle = e.button === 1;
       if (!middle && (e.button !== 0 || (e.target as Element | null)?.closest?.(OWN_DRAG))) return;
       if (middle) e.preventDefault(); // no auto-scroll
-      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, left: body.scrollLeft, top: body.scrollTop, moving: middle };
+      // Held back from the game until we know it's a click (handed over on release) or a drag (the
+      // view moves): a press on the chess board deselects your piece, so a drag to find the square
+      // mustn't count as one
+      e.stopPropagation();
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, left: body.scrollLeft, top: body.scrollTop, moving: middle, down: e };
       if (middle) {
         body.classList.add('is-panning');
         body.setPointerCapture?.(e.pointerId);
@@ -182,7 +188,19 @@ export function usePinchZoom(
     };
     const onMouseUp = (e: PointerEvent): void => {
       if (!drag || e.pointerId !== drag.id) return;
-      if (drag.moving) swallowClick = true; // that was a drag, not a click on the game
+      if (!drag.moving && e.type === 'pointerup') {
+        // a click after all: the game gets its press now, then this release
+        const d = drag.down;
+        d.target?.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, composed: true, pointerId: d.pointerId, pointerType: 'mouse', isPrimary: true,
+          button: 0, buttons: 1, clientX: d.clientX, clientY: d.clientY, screenX: d.screenX, screenY: d.screenY,
+          ctrlKey: d.ctrlKey, shiftKey: d.shiftKey, altKey: d.altKey, metaKey: d.metaKey
+        }));
+      }
+      if (drag.moving) {
+        swallowClick = true; // that was a drag, not a click on the game
+        setTimeout(() => { swallowClick = false; }, 0); // (only the click right after it)
+      }
       drag = null;
       body.classList.remove('is-panning');
     };

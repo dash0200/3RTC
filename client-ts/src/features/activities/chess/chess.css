@@ -54,7 +54,8 @@
 .chess-hint-capture { fill: none; stroke: rgba(20, 30, 20, 0.24); stroke-width: 8; pointer-events: none; }
 
 .chess-piece { pointer-events: none; }
-.chess-board.can-move .chess-piece.is-mine { cursor: grab; }
+/* your pieces take the pointer (a drag on them is a move, not a pan of a zoomed-in view) */
+.chess-board.can-move .chess-piece.is-mine { cursor: grab; pointer-events: auto; }
 .chess-board.can-move { cursor: pointer; }
 .chess-piece.is-sliding { animation: chess-slide 0.22s ease-out; }
 @keyframes chess-slide {
