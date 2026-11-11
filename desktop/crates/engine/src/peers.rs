@@ -25,6 +25,8 @@ use rtc_webrtc::{channels, convert, factory::Factory, sdp};
 
 /// How often each connection's audio levels are read.
 const LEVELS_EVERY: Duration = Duration::from_millis(150);
+/// How often the voice totals go to the log (in level ticks: about every 10 s).
+const FLOW_EVERY_TICKS: u32 = 67;
 
 /// Something a peer connection did (from libwebrtc's threads).
 #[derive(Debug)]
@@ -481,12 +483,17 @@ fn tune_sender(pc: &PeerConnection) {
 async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: Sink) {
     let mut tick = tokio::time::interval(LEVELS_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ticks: u32 = 0;
     loop {
         tick.tick().await;
         if pc.connection_state() != PeerConnectionState::Connected {
             continue;
         }
         if let Ok(report) = pc.get_stats().await {
+            ticks += 1;
+            if ticks % FLOW_EVERY_TICKS == 1 {
+                tracing::info!("audio with {peer}: {}", stats::flow(&report));
+            }
             sink(PeerEvent::Levels {
                 peer: peer.clone(),
                 generation,

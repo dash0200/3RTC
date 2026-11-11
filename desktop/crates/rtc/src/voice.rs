@@ -78,6 +78,7 @@ impl Voice {
                 pcf.set_adm_playout_enabled(true);
                 let track = pcf.create_device_audio_track("voice");
                 track.set_enabled(false);
+                log_sound_card(&pcf);
                 return Self {
                     factory: pcf,
                     track,
@@ -86,7 +87,9 @@ impl Voice {
                     tone: None,
                 };
             }
-            tracing::warn!("no audio device could be opened: sending silence");
+            tracing::warn!(
+                "audio: the sound card could not be opened, so others hear silence and you hear nothing"
+            );
         }
         let source = NativeAudioSource::new(AudioSourceOptions::default(), 48_000, 1, 100);
         let track = pcf.create_audio_track("voice", source.clone());
@@ -119,6 +122,13 @@ impl Voice {
     /// Send our voice (`true`) or silence.
     pub fn set_sending(&self, on: bool) {
         self.track.set_enabled(on);
+        if self.platform {
+            tracing::info!(
+                "audio: microphone {} (recording initialised: {})",
+                if on { "live" } else { "muted" },
+                self.factory.recording_is_initialized(),
+            );
+        }
     }
 
     /// Stop or start playing everyone's voice.
@@ -200,6 +210,34 @@ impl Voice {
         }
         ok
     }
+}
+
+/// Says in the log what the sound card looks like: what we capture from and play to.
+fn log_sound_card(pcf: &PeerConnectionFactory) {
+    let mics = pcf.recording_devices();
+    let speakers = pcf.playout_devices();
+    tracing::info!(
+        "audio: sound card open ({mics} microphones, {speakers} speakers; recording {}, playout {}, active {})",
+        on_off(pcf.adm_recording_enabled()),
+        on_off(pcf.adm_playout_enabled()),
+        pcf.is_platform_adm_active(),
+    );
+    for i in 0..u16::try_from(mics.max(0)).unwrap_or(0) {
+        tracing::info!("audio:   microphone {i}: {}", pcf.recording_device_name(i));
+    }
+    for i in 0..u16::try_from(speakers.max(0)).unwrap_or(0) {
+        tracing::info!("audio:   speaker {i}: {}", pcf.playout_device_name(i));
+    }
+    if mics <= 0 {
+        tracing::warn!("audio: no microphone found, so others will hear silence");
+    }
+    if speakers <= 0 {
+        tracing::warn!("audio: no speakers found, so you won't hear anyone");
+    }
+}
+
+const fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 impl Drop for Voice {
