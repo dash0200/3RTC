@@ -210,3 +210,30 @@ async fn falls_back_to_the_next_server_and_finds_rooms_across_servers() {
     };
     assert!(url.ends_with(&a_port.to_string()));
 }
+
+/// Secure servers (wss://) must not panic for want of TLS crypto (they did on Windows, where the
+/// real server is wss://orc.3rtc.me): a wss connection that can't be made just fails and retries.
+#[tokio::test]
+async fn a_wss_server_is_tried_without_panicking() {
+    // something that accepts the TCP connection (and then speaks no TLS), so the TLS setup runs
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((sock, _)) = listener.accept().await {
+            drop(sock);
+        }
+    });
+    let mut c = Config::new(format!("wss://127.0.0.1:{port}"));
+    c.backoff = Backoff::new(Duration::from_millis(50), Duration::from_millis(100));
+    let (_h, mut events) = spawn(c);
+    // the actor must still be alive (a panic would close the channel) after several attempts
+    let still_running = timeout(Duration::from_millis(800), events.recv()).await.is_err();
+    assert!(still_running, "the client stopped (panicked?)");
+    let found = find_room(
+        vec![format!("wss://127.0.0.1:{port}")],
+        rtc_protocol::RoomId::parse("12345").unwrap(),
+        Duration::from_secs(2),
+    )
+    .await;
+    assert_eq!(found, None);
+}

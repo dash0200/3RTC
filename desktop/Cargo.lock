@@ -5644,6 +5644,7 @@ dependencies = [
  "futures-util",
  "rand 0.9.5",
  "rtc-protocol",
+ "rustls",
  "tokio",
  "tokio-tungstenite",
  "tracing",
