@@ -570,7 +570,9 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
 - [ ] **M2: desktop essentials.** Push-to-talk and hotkeys, tray, notifications, start with
   Windows, `3rtc://`, rejoin card. `crates/platform-win` (the only crate allowed `unsafe`, each
   block with a `// SAFETY:` note).
-- [ ] **M3: version 1.** Chat images and emoji picker, reactions, soundboard, host controls,
+- [ ] **M3: version 1.** **Our own audio pipeline (ADR 0003): per-person volume and mute-for-me,
+  RNNoise (Voice Isolation), the mic-test meter and test sound, live device changes, lower delay;
+  libwebrtc's device path kept behind a setting until the checklist passes.** Chat images and emoji picker, reactions, soundboard, host controls,
   connection details (6.12 without stream doctor), low-power mode, portable zip and per-user
   installer, in-place updater (unsigned), settings migration. Exit: the plan's v1 budgets.
 - [ ] **M4: watch party.** Playback core, YouTube/Vimeo/Twitch web view, link sources, queue,
@@ -622,7 +624,8 @@ with `Xvfb` and Mesa's software Vulkan (`mesa-vulkan-drivers`).
 
 | Risk | Check | If it fails |
 |---|---|---|
-| `libwebrtc` crate's audio path on Windows (6.3) | Spike at the start of M1 step 5 | ADR, ask |
+| `libwebrtc` crate's audio path on Windows (6.3) | Spike at the start of M1 step 5 | Done: ADR 0002 (M1), ADR 0003 (M3) |
+| Echo cancellation in our own pipeline (delay, drift) | Fake-device echo test first thing in M3 | Keep the platform-device path as the default; ask |
 | `libwebrtc` crate and static CRT (`+crt-static`) link on MSVC | First Windows CI run | Drop `crt-static`, ship the VC++ runtime DLLs beside the exe; ADR |
 | `gpui-kit` 0.9.1 on Windows 10 (DirectX 11) | M1 step 1 | Ask |
 | Pixel-exact custom components on `gpui-kit` | M1 step 2 | Write on raw GPUI |
