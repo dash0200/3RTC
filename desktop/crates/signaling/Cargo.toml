@@ -1,0 +1,23 @@
+[package]
+name = "rtc-signaling"
+description = "3RTC signaling client: one WebSocket to the server, reconnecting by itself"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rtc-protocol.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+rand.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true
