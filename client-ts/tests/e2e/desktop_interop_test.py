@@ -93,6 +93,8 @@ with sync_playwright() as p:
     finally:
         if proc.poll() is None:
             proc.kill()
+        if os.environ.get('RTC_DUMP_DESKTOP_LOG'):
+            print('\n'.join(l for l in out if 'audio' in l or 'ERROR' in l or 'WARN' in l))
     check('no page errors', not errors, errors[:3])
     b.close()
 harness.summary()

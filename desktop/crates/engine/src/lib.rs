@@ -200,9 +200,15 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
         speaking: HashMap::new(),
         local: Speaking::default(),
     };
+    if config.mic == MicSource::Device && !engine.voice.is_device() {
+        let _ = engine.updates.send(Update::Notice(NO_SOUND_CARD.to_owned()));
+    }
     tokio::spawn(engine.run(queue, ui_rx));
     (Handle { tx: ui_tx }, updates)
 }
+
+/// Shown when the microphone and speakers couldn't be opened.
+const NO_SOUND_CARD: &str = "🔇 Couldn't open your microphone and speakers: voice won't work";
 
 struct Engine {
     room: Room,

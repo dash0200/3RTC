@@ -33,7 +33,12 @@ async fn main() -> anyhow::Result<()> {
         build: "000000.0000".into(),
         ice: Vec::new(),
         // a 440 Hz tone, so the other side can check it hears us
-        mic: MicSource::Tone(440.0),
+        // RTC_MIC=device uses the real sound card (libwebrtc's platform audio), anything else a tone.
+        mic: if std::env::var("RTC_MIC").as_deref() == Ok("device") {
+            MicSource::Device
+        } else {
+            MicSource::Tone(440.0)
+        },
     });
     let mut asked = false;
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
