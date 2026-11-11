@@ -5588,6 +5588,7 @@ dependencies = [
  "rtc-core",
  "rtc-engine",
  "rtc-protocol",
+ "rtc-ui",
  "serde",
  "serde_json",
  "tokio",
@@ -5637,6 +5638,14 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+]
+
+[[package]]
+name = "rtc-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
 ]
 
 [[package]]

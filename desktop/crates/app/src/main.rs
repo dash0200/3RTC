@@ -6,8 +6,8 @@
 // Release builds have no console window; dev builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod home;
 mod settings;
-mod theme;
 mod view;
 
 use anyhow::Context as _;
@@ -39,14 +39,16 @@ fn main() -> anyhow::Result<()> {
     let signaling_url = std::env::var("RTC_SIGNAL_URL").unwrap_or_else(|_| DEFAULT_SIGNAL_URL.to_owned());
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(rtc_ui::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            theme::apply(cx);
-            let bounds = Bounds::centered(None, size(px(980.), px(680.)), cx);
+            if let Err(e) = rtc_ui::init(cx) {
+                tracing::error!("couldn't load the fonts: {e:#}");
+            }
+            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(560.), px(420.))),
+                window_min_size: Some(size(px(1024.), px(640.))),
                 ..WindowOptions::default()
             };
             let opened = gpui_kit::open_window(options, cx, move |window, cx| {
