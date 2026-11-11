@@ -9,9 +9,15 @@ to build, in what order, how it must look, how to prove each part works, and whe
 - **What the UI must look like:** [`ui-reference/`](ui-reference) (screenshots of the web app) and
   the web sources named in each section below.
 
-If this spec and the web app's behaviour disagree, **the web app wins** for anything two apps in
-one room must agree on (messages, timings, who is host), and for how a screen looks. If this spec
-and the plan disagree, stop and ask.
+**What is copied and what is rebuilt** (owner's rule, 11 Nov): the desktop app matches the web app
+**only in UI/UX, the look and the feel**: screens, layout, colours, fonts, wording, interactions.
+**Everything else is a total rebuild for desktop**, aimed at better performance and quality than a
+browser can give: the audio pipeline, networking, file transfer, video playback, game engines,
+storage. Don't port the web app's internals; design each for desktop and record the design in an
+ADR. One hard constraint stays: desktop and web users must still share rooms, so the wire
+protocol (`docs/PROTOCOL.md`) and anything two apps must agree on (messages, timings that the other
+side relies on, who is host, game rules) follow the web app. If this spec and the plan disagree,
+stop and ask.
 
 ---
 
@@ -35,8 +41,9 @@ host hub, M7).
 
 1. **One milestone at a time** (section 10), in order. A milestone is finished only when its exit
    checklist passes. Don't start the next one before that.
-2. **Read before you write.** For each feature, read the web sources named for it and the matching
-   part of `docs/PROTOCOL.md` first. Port behaviour; don't invent it.
+2. **Read before you write.** For each feature, read the web sources named for it (for how it looks
+   and behaves for the user, and what it sends on the wire) and the matching part of
+   `docs/PROTOCOL.md`. Copy the experience and the protocol; build the internals fresh for desktop.
 3. **Never break the web app.** Any change under `client-ts/` or `server/` must keep
    `npm test` (both folders) and the e2e suites green. Protocol changes follow the rules at the
    top of `docs/PROTOCOL.md`: new types and fields only, never rename or repurpose.
