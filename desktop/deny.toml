@@ -4,13 +4,16 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# "Unmaintained" notices fail the build only for crates we depend on directly. The ones deep inside
+# GPUI (instant, paste, rustybuzz, zbus...) are not ours to replace; real vulnerabilities still fail.
+unmaintained = "workspace"
 
 [licenses]
 version = 2
 confidence-threshold = 0.9
 allow = [
   "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause",
-  "ISC", "Zlib", "Unicode-3.0", "Unicode-DFS-2016", "MPL-2.0", "CC0-1.0", "0BSD", "BSL-1.0",
+  "ISC", "Zlib", "Unicode-3.0", "MPL-2.0", "CC0-1.0", "0BSD", "BSL-1.0",
   "OpenSSL", "CDLA-Permissive-2.0", "Unlicense",
 ]
 private = { ignore = true }

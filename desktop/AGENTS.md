@@ -4,6 +4,8 @@ Read [`docs/BUILD_SPEC.md`](docs/BUILD_SPEC.md) first and follow it: it has the 
 architecture, the UI spec (the app must look like 3rtc.me; references in `docs/ui-reference/`),
 every feature with its web sources, the milestones and their exit checklists.
 
+Run the app with `dev.cmd` (Windows) or `./dev.sh`; `-Check` / `--check` runs what CI runs.
+
 Before every push, from `desktop/`:
 
 ```sh

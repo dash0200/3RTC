@@ -3,7 +3,8 @@
 //! GPUI owns the main thread; the engine (signaling, peer connections) runs on a small tokio
 //! runtime beside it. The two talk over channels only.
 
-#![windows_subsystem = "windows"]
+// Release builds have no console window; dev builds keep it for logs.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod settings;
 mod theme;
