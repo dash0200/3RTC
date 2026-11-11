@@ -1,7 +1,9 @@
 //! Audio levels from libwebrtc's stats: how loud our mic is and how loud each person sounds.
 //! Works the same whether the mic is the real device or a test tone.
 
-use libwebrtc::stats::RtcStats;
+use std::collections::HashMap;
+
+use libwebrtc::stats::{IceCandidateType, RtcStats};
 
 /// Levels found in one stats report (0..1, as `RTCAudioSourceStats.audioLevel`).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -31,7 +33,7 @@ pub fn levels(report: &[RtcStats]) -> Levels {
 }
 
 /// How much voice went each way on one connection, from one stats report (totals so far).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Flow {
     /// Audio bytes we sent.
     pub sent_bytes: u64,
@@ -51,12 +53,87 @@ pub struct Flow {
     pub concealed: u64,
     /// Their voice's level now (0..1).
     pub their_level: f64,
+    /// Total seconds their voice has waited in our jitter buffer (summed over samples).
+    pub jitter_buffer_secs: f64,
+    /// Samples that came out of the jitter buffer (divides the above).
+    pub jitter_buffer_samples: u64,
+    /// Network round trip on the connection in use (ms).
+    pub rtt_ms: Option<f64>,
+    /// How the connection runs: "direct (host → host, udp)", "relayed via TURN (udp)"...
+    pub path: Option<String>,
+}
+
+impl Flow {
+    /// Average time their voice waited in our jitter buffer since `before` (ms).
+    #[must_use]
+    pub fn jitter_buffer_ms_since(&self, before: &Self) -> Option<f64> {
+        let samples = self
+            .jitter_buffer_samples
+            .checked_sub(before.jitter_buffer_samples)?;
+        #[allow(clippy::cast_precision_loss)]
+        (samples > 0).then(|| 1000.0 * (self.jitter_buffer_secs - before.jitter_buffer_secs) / samples as f64)
+    }
+}
+
+fn kind(t: Option<IceCandidateType>) -> &'static str {
+    match t {
+        Some(IceCandidateType::Host) => "host",
+        Some(IceCandidateType::Srflx) => "srflx",
+        Some(IceCandidateType::Prflx) => "prflx",
+        Some(IceCandidateType::Relay) => "relay",
+        None => "?",
+    }
 }
 
 /// Picks the audio totals out of a stats report.
 #[must_use]
 pub fn flow(report: &[RtcStats]) -> Flow {
     let mut out = Flow::default();
+    let mut selected = None;
+    let mut pairs = HashMap::new();
+    let mut candidates = HashMap::new();
+    for s in report {
+        match s {
+            RtcStats::Transport(t) if !t.transport.selected_candidate_pair_id.is_empty() => {
+                selected = Some(t.transport.selected_candidate_pair_id.as_str());
+            }
+            RtcStats::CandidatePair(p) => {
+                pairs.insert(p.rtc.id.as_str(), &p.candidate_pair);
+            }
+            RtcStats::LocalCandidate(c) => {
+                candidates.insert(c.rtc.id.as_str(), &c.local_candidate);
+            }
+            RtcStats::RemoteCandidate(c) => {
+                candidates.insert(c.rtc.id.as_str(), &c.remote_candidate);
+            }
+            RtcStats::RemoteInboundRtp(r)
+                if r.stream.kind == "audio" && r.remote_inbound.round_trip_time > 0.0 =>
+            {
+                out.rtt_ms
+                    .get_or_insert(r.remote_inbound.round_trip_time * 1000.0);
+            }
+            _ => {}
+        }
+    }
+    let pair = selected
+        .and_then(|id| pairs.get(id))
+        .or_else(|| pairs.values().find(|p| p.nominated));
+    if let Some(p) = pair {
+        if p.current_round_trip_time > 0.0 {
+            out.rtt_ms = Some(p.current_round_trip_time * 1000.0);
+        }
+        if let (Some(l), Some(r)) = (
+            candidates.get(p.local_candidate_id.as_str()),
+            candidates.get(p.remote_candidate_id.as_str()),
+        ) {
+            let (lk, rk) = (kind(l.candidate_type), kind(r.candidate_type));
+            out.path = Some(if lk == "relay" || rk == "relay" {
+                format!("relayed via TURN ({lk} → {rk}, {})", l.protocol)
+            } else {
+                format!("direct ({lk} → {rk}, {})", l.protocol)
+            });
+        }
+    }
     for s in report {
         match s {
             RtcStats::OutboundRtp(o) if o.stream.kind == "audio" => {
@@ -73,6 +150,8 @@ pub fn flow(report: &[RtcStats]) -> Flow {
                 out.samples_received += r.inbound.total_samples_received;
                 out.concealed += r.inbound.concealed_samples;
                 out.their_level = out.their_level.max(r.inbound.audio_level);
+                out.jitter_buffer_secs += r.inbound.jitter_buffer_delay;
+                out.jitter_buffer_samples += r.inbound.jitter_buffer_emitted_count;
             }
             _ => {}
         }
