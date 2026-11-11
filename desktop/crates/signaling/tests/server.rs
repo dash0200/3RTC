@@ -12,7 +12,7 @@ use std::time::Duration;
 use rtc_protocol::PeerId;
 use rtc_protocol::sdp::{SdpType, SessionDescription};
 use rtc_protocol::signaling::{ClientMessage, ServerMessage};
-use rtc_signaling::{Backoff, Config, Event, spawn};
+use rtc_signaling::{Backoff, Config, Event, find_room, spawn};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::timeout;
@@ -89,7 +89,14 @@ async fn create_join_relay_and_reconnect() {
     };
 
     let (host, mut host_events) = spawn(config(port));
-    assert_eq!(next(&mut host_events).await, Event::Up);
+    assert!(matches!(
+        next(&mut host_events).await,
+        Event::Up {
+            label: "Local",
+            backup: false,
+            ..
+        }
+    ));
     host.send(ClientMessage::CreateRoom {
         peer_id: PeerId::new("desk-host").unwrap(),
         room_id: None,
@@ -101,7 +108,7 @@ async fn create_join_relay_and_reconnect() {
     };
 
     let (guest, mut guest_events) = spawn(config(port));
-    assert_eq!(next(&mut guest_events).await, Event::Up);
+    assert!(matches!(next(&mut guest_events).await, Event::Up { .. }));
     guest.send(ClientMessage::Join {
         room_id,
         peer_id: PeerId::new("desk-guest").unwrap(),
@@ -140,11 +147,66 @@ async fn create_join_relay_and_reconnect() {
     let _server = start_server(port).await.expect("restart");
     let up = timeout(Duration::from_secs(15), async {
         loop {
-            if host_events.recv().await == Some(Event::Up) {
+            if matches!(host_events.recv().await, Some(Event::Up { .. })) {
                 break;
             }
         }
     })
     .await;
     assert!(up.is_ok(), "never reconnected");
+}
+
+#[tokio::test]
+async fn falls_back_to_the_next_server_and_finds_rooms_across_servers() {
+    let (dead, a_port, b_port) = (free_port(), free_port(), free_port());
+    let Some(_a) = start_server(a_port).await else {
+        return;
+    };
+    let Some(_b) = start_server(b_port).await else {
+        return;
+    };
+
+    // the first server is down: the client moves on to the second and says it's a backup
+    let mut c = Config::with_fallbacks(vec![
+        format!("ws://127.0.0.1:{dead}"),
+        format!("ws://127.0.0.1:{b_port}"),
+    ]);
+    c.backoff = Backoff::new(Duration::from_millis(50), Duration::from_millis(100));
+    let (host, mut events) = spawn(c);
+    let Event::Up { url, backup, .. } = next(&mut events).await else {
+        panic!("not up")
+    };
+    assert!(url.ends_with(&b_port.to_string()) && backup);
+    host.send(ClientMessage::CreateRoom {
+        peer_id: PeerId::new("on-b").unwrap(),
+        room_id: None,
+        host_token: None,
+        seat_token: None,
+    });
+    let ServerMessage::RoomCreated { room_id, .. } = next_message(&mut events).await else {
+        panic!("no room")
+    };
+
+    // someone on server A looks for the room: only B has it
+    let urls = vec![
+        format!("ws://127.0.0.1:{a_port}"),
+        format!("ws://127.0.0.1:{b_port}"),
+    ];
+    let found = find_room(urls.clone(), room_id, Duration::from_secs(5)).await;
+    assert_eq!(found.as_deref(), Some(urls[1].as_str()));
+    let missing = find_room(
+        urls,
+        rtc_protocol::RoomId::parse("99999").unwrap(),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(missing, None);
+
+    // switching moves the connection and keeps it there
+    host.switch_server(format!("ws://127.0.0.1:{a_port}"));
+    assert_eq!(next(&mut events).await, Event::Down);
+    let Event::Up { url, .. } = next(&mut events).await else {
+        panic!("not up after switch")
+    };
+    assert!(url.ends_with(&a_port.to_string()));
 }

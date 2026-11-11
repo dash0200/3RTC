@@ -48,8 +48,9 @@ pub enum PeerMessage {
     /// My mic was muted or unmuted.
     #[serde(rename_all = "camelCase")]
     PeerVoiceStatus {
-        /// My peer id.
-        peer_id: PeerId,
+        /// My peer id (the web app leaves it out: the channel says who it is).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peer_id: Option<PeerId>,
         /// Muted now.
         is_muted: bool,
     },
@@ -267,6 +268,20 @@ mod tests {
         assert_eq!(
             v,
             json!({"type": "chat", "id": "m2", "isHost": true, "text": "hello", "sender": "Darshan"})
+        );
+    }
+
+    #[test]
+    fn reads_the_web_apps_voice_status() {
+        // exactly what useVoiceChat.ts sends: no peerId
+        let e =
+            Envelope::from_json(r#"{"type":"peer-voice-status","sender":"Riya","isMuted":false}"#).unwrap();
+        assert_eq!(
+            e.message,
+            PeerMessage::PeerVoiceStatus {
+                peer_id: None,
+                is_muted: false
+            }
         );
     }
 

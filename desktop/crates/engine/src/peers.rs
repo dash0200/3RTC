@@ -1,17 +1,30 @@
-//! The peer connections, keyed by peer id: opening them the web app's way, applying signaling
-//! in the right order, and turning libwebrtc's callbacks into engine messages.
+//! The peer connections, keyed by peer id: opening them the web app's way (voice and video
+//! transceivers, `chat-<peer>` and the pre-negotiated `bulk` channel), applying signaling in the
+//! right order, and turning libwebrtc's callbacks into engine messages.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use rtc_core::{Input, RemoteSignal};
+use rtc_core::{Input, LinkState, RemoteSignal};
 use rtc_protocol::PeerId;
 use rtc_protocol::peer::Envelope;
-use rtc_protocol::sdp::IceCandidate;
+use rtc_protocol::sdp::{IceCandidate, SessionDescription};
 use rtc_protocol::signaling::ClientMessage;
+use rtc_webrtc::libwebrtc::MediaType;
 use rtc_webrtc::libwebrtc::data_channel::{DataChannel, DataChannelState};
-use rtc_webrtc::libwebrtc::peer_connection::{AnswerOptions, OfferOptions, PeerConnection};
-use rtc_webrtc::{channels, convert, factory::Factory};
+use rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack;
+use rtc_webrtc::libwebrtc::peer_connection::{
+    AnswerOptions, OfferOptions, PeerConnection, PeerConnectionState,
+};
+use rtc_webrtc::libwebrtc::rtp_parameters::Priority;
+use rtc_webrtc::libwebrtc::rtp_transceiver::{RtpTransceiverDirection, RtpTransceiverInit};
+use rtc_webrtc::libwebrtc::session_description::SessionDescription as RtcDescription;
+use rtc_webrtc::stats::{self, Levels};
+use rtc_webrtc::{channels, convert, factory::Factory, sdp};
+
+/// How often each connection's audio levels are read.
+const LEVELS_EVERY: Duration = Duration::from_millis(150);
 
 /// Something a peer connection did (from libwebrtc's threads).
 #[derive(Debug)]
@@ -34,6 +47,18 @@ pub(crate) enum PeerEvent {
         generation: u64,
         text: String,
     },
+    /// The connection's state changed.
+    Link {
+        peer: PeerId,
+        generation: u64,
+        state: PeerConnectionState,
+    },
+    /// Audio levels on this connection.
+    Levels {
+        peer: PeerId,
+        generation: u64,
+        levels: Levels,
+    },
 }
 
 type Sink = Arc<dyn Fn(PeerEvent) + Send + Sync>;
@@ -46,24 +71,53 @@ struct Link {
     _bulk: Option<DataChannel>,
     has_remote: bool,
     pending: Vec<IceCandidate>,
+    levels: tokio::task::JoinHandle<()>,
 }
 
 pub(crate) struct Peers {
     factory: Factory,
+    voice: MediaStreamTrack,
     signaling: rtc_signaling::Handle,
     sink: Sink,
     links: HashMap<PeerId, Link>,
     next_generation: u64,
 }
 
+/// Offers keep every transceiver's direction (libwebrtc's default would stop receiving).
+const fn offer_options(ice_restart: bool) -> OfferOptions {
+    OfferOptions {
+        ice_restart,
+        offer_to_receive_audio: None,
+        offer_to_receive_video: None,
+    }
+}
+
+/// Our description with the web app's Opus settings.
+fn tuned(desc: &RtcDescription) -> Option<RtcDescription> {
+    let mut wire = convert::description_out(desc);
+    wire.sdp = sdp::tune_opus(&wire.sdp);
+    convert::description_in(&wire).ok()
+}
+
+/// Theirs, tuned the same way before it's applied (as the web app does).
+fn tuned_in(desc: &SessionDescription) -> Option<RtcDescription> {
+    let wire = SessionDescription {
+        kind: desc.kind,
+        sdp: sdp::tune_opus(&desc.sdp),
+    };
+    convert::description_in(&wire).ok()
+}
+
 impl Peers {
     pub(crate) fn new(
         factory: Factory,
+        voice: MediaStreamTrack,
         signaling: rtc_signaling::Handle,
         sink: impl Fn(PeerEvent) + Send + Sync + 'static,
     ) -> Self {
         Self {
             factory,
+            voice,
             signaling,
             sink: Arc::new(sink),
             links: HashMap::new(),
@@ -71,7 +125,7 @@ impl Peers {
         }
     }
 
-    fn create(&mut self, peer: &PeerId) -> Option<&mut Link> {
+    fn create(&mut self, peer: &PeerId, initiator: bool) -> Option<&mut Link> {
         self.close(peer);
         let pc = match self.factory.peer_connection() {
             Ok(pc) => pc,
@@ -99,10 +153,41 @@ impl Peers {
                 channel,
             });
         })));
+        let sink = Arc::clone(&self.sink);
+        let from = peer.clone();
+        pc.on_connection_state_change(Some(Box::new(move |state| {
+            sink(PeerEvent::Link {
+                peer: from.clone(),
+                generation,
+                state,
+            });
+        })));
+        // Voice: a track added before any description, so as the answerer it takes the offered
+        // audio line and the answer stays send-and-receive.
+        if let Err(e) = pc.add_track(self.voice.clone(), &["voice"]) {
+            tracing::error!("voice track to {peer}: {e:?}");
+        }
+        if initiator {
+            // as usePeerMesh: a video transceiver up front, so a screen share needs no new offer
+            let init = RtpTransceiverInit {
+                direction: RtpTransceiverDirection::SendRecv,
+                stream_ids: Vec::new(),
+                send_encodings: Vec::new(),
+            };
+            if let Err(e) = pc.add_transceiver_for_media(MediaType::Video, init) {
+                tracing::warn!("video transceiver to {peer}: {e:?}");
+            }
+        }
         // the bulk channel is pre-negotiated: both sides create it
         let bulk = pc
             .create_data_channel(channels::BULK_LABEL, channels::bulk_init())
             .ok();
+        let levels = tokio::spawn(watch_levels(
+            pc.clone(),
+            peer.clone(),
+            generation,
+            Arc::clone(&self.sink),
+        ));
         let link = Link {
             pc,
             generation,
@@ -110,6 +195,7 @@ impl Peers {
             _bulk: bulk,
             has_remote: false,
             pending: Vec::new(),
+            levels,
         };
         Some(self.links.entry(peer.clone()).insert_entry(link).into_mut())
     }
@@ -147,8 +233,9 @@ impl Peers {
     /// Starts a connection; the initiator opens `chat-<peer>` and sends the offer.
     pub(crate) async fn open(&mut self, peer: PeerId, initiator: bool) {
         let sink = Arc::clone(&self.sink);
-        let signaling = self.signaling.clone();
-        let Some(link) = self.create(&peer) else { return };
+        let Some(link) = self.create(&peer, initiator) else {
+            return;
+        };
         if !initiator {
             return;
         }
@@ -162,18 +249,29 @@ impl Peers {
             }
             Err(e) => tracing::error!("main channel to {peer}: {e:?}"),
         }
-        let offer = match link.pc.create_offer(OfferOptions::default()).await {
+        self.offer(&peer, false).await;
+    }
+
+    /// Makes and sends an offer (with an ICE restart when asked).
+    pub(crate) async fn offer(&mut self, peer: &PeerId, ice_restart: bool) {
+        let signaling = self.signaling.clone();
+        let Some(link) = self.links.get_mut(peer) else {
+            return;
+        };
+        let offer = match link.pc.create_offer(offer_options(ice_restart)).await {
             Ok(o) => o,
             Err(e) => return tracing::error!("offer to {peer}: {e:?}"),
         };
+        let offer = tuned(&offer).unwrap_or(offer);
         if let Err(e) = link.pc.set_local_description(offer.clone()).await {
             return tracing::error!("local offer for {peer}: {e:?}");
         }
+        tune_sender(&link.pc);
         signaling.send(ClientMessage::Offer {
-            target_id: peer,
+            target_id: peer.clone(),
             offer: convert::description_out(&offer),
             fresh: false,
-            ice_restart: false,
+            ice_restart,
         });
     }
 
@@ -183,12 +281,12 @@ impl Peers {
             RemoteSignal::Offer { offer, fresh } => {
                 let signaling = self.signaling.clone();
                 let link = if fresh || !self.links.contains_key(&peer) {
-                    self.create(&peer)
+                    self.create(&peer, false)
                 } else {
                     self.links.get_mut(&peer)
                 };
                 let Some(link) = link else { return };
-                let Ok(desc) = convert::description_in(&offer) else {
+                let Some(desc) = tuned_in(&offer) else {
                     return tracing::warn!("unreadable offer from {peer}");
                 };
                 if let Err(e) = link.pc.set_remote_description(desc).await {
@@ -200,9 +298,11 @@ impl Peers {
                     Ok(a) => a,
                     Err(e) => return tracing::error!("answer to {peer}: {e:?}"),
                 };
+                let answer = tuned(&answer).unwrap_or(answer);
                 if let Err(e) = link.pc.set_local_description(answer.clone()).await {
                     return tracing::error!("local answer for {peer}: {e:?}");
                 }
+                tune_sender(&link.pc);
                 signaling.send(ClientMessage::Answer {
                     target_id: peer,
                     answer: convert::description_out(&answer),
@@ -212,9 +312,7 @@ impl Peers {
                 let Some(link) = self.links.get_mut(&peer) else {
                     return;
                 };
-                let Ok(desc) = convert::description_in(&answer) else {
-                    return;
-                };
+                let Some(desc) = tuned_in(&answer) else { return };
                 if let Err(e) = link.pc.set_remote_description(desc).await {
                     return tracing::warn!("answer from {peer}: {e:?}");
                 }
@@ -254,7 +352,11 @@ impl Peers {
         }
     }
 
-    /// Turns a callback into a room input (or handles it here).
+    fn current(&self, peer: &PeerId, generation: u64) -> bool {
+        self.links.get(peer).is_some_and(|l| l.generation == generation)
+    }
+
+    /// Turns a callback into a room input (or handles it here). Levels come back separately.
     pub(crate) fn on_event(&mut self, e: PeerEvent) -> Option<Input> {
         match e {
             PeerEvent::Channel {
@@ -277,7 +379,7 @@ impl Peers {
                 generation,
                 open,
             } => {
-                self.links.get(&peer).filter(|l| l.generation == generation)?;
+                self.current(&peer, generation).then_some(())?;
                 Some(if open {
                     Input::ChannelOpen(peer)
                 } else {
@@ -289,7 +391,7 @@ impl Peers {
                 generation,
                 text,
             } => {
-                self.links.get(&peer).filter(|l| l.generation == generation)?;
+                self.current(&peer, generation).then_some(())?;
                 match Envelope::from_json(&text) {
                     Ok(envelope) => Some(Input::Peer { from: peer, envelope }),
                     Err(e) => {
@@ -298,7 +400,27 @@ impl Peers {
                     }
                 }
             }
+            PeerEvent::Link {
+                peer,
+                generation,
+                state,
+            } => {
+                self.current(&peer, generation).then_some(())?;
+                let state = match state {
+                    PeerConnectionState::Connected => LinkState::Connected,
+                    PeerConnectionState::Disconnected => LinkState::Disconnected,
+                    PeerConnectionState::Failed => LinkState::Failed,
+                    _ => return None,
+                };
+                Some(Input::Link { peer, state })
+            }
+            PeerEvent::Levels { .. } => None,
         }
+    }
+
+    /// Whether `generation` is still `peer`'s connection.
+    pub(crate) fn is_current(&self, peer: &PeerId, generation: u64) -> bool {
+        self.current(peer, generation)
     }
 
     /// Sends on the main channel, if it's open.
@@ -318,11 +440,15 @@ impl Peers {
 
     pub(crate) fn close(&mut self, peer: &PeerId) {
         if let Some(link) = self.links.remove(peer) {
+            link.levels.abort();
             if let Some(dc) = &link.main {
                 dc.on_message(None);
                 dc.on_state_change(None);
                 dc.close();
             }
+            link.pc.on_connection_state_change(None);
+            link.pc.on_ice_candidate(None);
+            link.pc.on_data_channel(None);
             link.pc.close();
         }
     }
@@ -331,6 +457,41 @@ impl Peers {
         let all: Vec<_> = self.links.keys().cloned().collect();
         for p in all {
             self.close(&p);
+        }
+    }
+}
+
+/// Voice sender: 128 kbps, high priority (`tuneAudioSender`).
+fn tune_sender(pc: &PeerConnection) {
+    for sender in pc.senders() {
+        if !matches!(sender.track(), Some(MediaStreamTrack::Audio(_))) {
+            continue;
+        }
+        let mut params = sender.parameters();
+        if let Some(enc) = params.encodings.first_mut() {
+            enc.max_bitrate = Some(sdp::voice_bitrate(4));
+            enc.priority = Priority::High;
+            if let Err(e) = sender.set_parameters(params) {
+                tracing::debug!("voice sender parameters: {e:?}");
+            }
+        }
+    }
+}
+
+async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: Sink) {
+    let mut tick = tokio::time::interval(LEVELS_EVERY);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        if pc.connection_state() != PeerConnectionState::Connected {
+            continue;
+        }
+        if let Ok(report) = pc.get_stats().await {
+            sink(PeerEvent::Levels {
+                peer: peer.clone(),
+                generation,
+                levels: stats::levels(&report),
+            });
         }
     }
 }

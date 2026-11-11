@@ -7,6 +7,10 @@
 
 #![deny(missing_docs)]
 
+pub mod recovery;
 mod room;
 
-pub use room::{ChatLine, Command, Effect, Identity, Input, Member, Phase, RemoteSignal, Room, UiEvent};
+pub use room::{
+    BLOCKED_MESSAGE, BLOCKED_TOAST, ChatLine, Command, Effect, Identity, Input, LinkState, MAX_CHAT_CHARS,
+    Member, NAME_MAX, Phase, RemoteSignal, Room, UiEvent, clean_name,
+};

@@ -12,6 +12,8 @@ publish.workspace = true
 rtc-protocol.workspace = true
 libwebrtc = "0.4"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
+tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

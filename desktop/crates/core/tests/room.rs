@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::print_stderr)] // tests: failing loudly is the point
 
-use rtc_core::{Command, Effect, Identity, Input, Phase, RemoteSignal, Room, UiEvent};
+use rtc_core::{Command, Effect, Identity, Input, LinkState, Phase, RemoteSignal, Room, UiEvent, clean_name};
 use rtc_protocol::peer::{Envelope, PeerMessage};
 use rtc_protocol::sdp::{SdpType, SessionDescription};
 use rtc_protocol::signaling::{ClientMessage, ErrorCode, ServerMessage};
@@ -210,7 +210,8 @@ fn chat_goes_out_and_comes_in_once() {
         10.0,
     );
     // she isn't the host, whatever the message claims
-    assert!(matches!(&fx[0], Effect::Ui(UiEvent::Chat(line)) if !line.is_host && line.name == "Riya"));
+    // her name comes from her identity on this connection, not from the message's `sender`
+    assert!(matches!(&fx[0], Effect::Ui(UiEvent::Chat(line)) if !line.is_host && line.name == "Someone"));
     assert!(
         r.update(
             Input::Peer {
@@ -240,37 +241,47 @@ fn messages_from_strangers_are_ignored() {
 #[test]
 fn signaling_loss_keeps_a_live_peer() {
     let mut r = hosting();
-    r.update(
-        Input::Server(ServerMessage::PeerJoined { peer_id: pid("riya") }),
-        0.0,
-    );
-    r.update(Input::ChannelOpen(pid("riya")), 0.0);
+    connected_to(&mut r, "riya");
     let fx = r.update(
         Input::Server(ServerMessage::PeerLeft { peer_id: pid("riya") }),
         0.0,
     );
     assert!(fx.is_empty());
     assert!(r.members().contains_key(&pid("riya")));
-    r.update(Input::ChannelClosed(pid("riya")), 0.0);
-    let fx = r.update(
-        Input::Server(ServerMessage::PeerLeft { peer_id: pid("riya") }),
+    // a link that isn't up: she's gone
+    r.update(
+        Input::Server(ServerMessage::PeerJoined {
+            peer_id: pid("arjun"),
+        }),
         0.0,
     );
-    assert!(fx.contains(&Effect::ClosePeer(pid("riya"))));
+    let fx = r.update(
+        Input::Server(ServerMessage::PeerLeft {
+            peer_id: pid("arjun"),
+        }),
+        0.0,
+    );
+    assert!(fx.contains(&Effect::ClosePeer(pid("arjun"))));
 }
 
 #[test]
 fn reconnecting_reclaims_the_seat() {
     let mut r = hosting();
-    let fx = r.update(Input::SignalingUp, 0.0);
+    let fx = r.update(
+        Input::SignalingUp {
+            label: "Local".into(),
+            backup: false,
+        },
+        0.0,
+    );
     assert_eq!(
-        fx,
-        vec![Effect::Send(ClientMessage::CreateRoom {
+        fx[1],
+        Effect::Send(ClientMessage::CreateRoom {
             peer_id: pid("me"),
             room_id: Some(room_id()),
             host_token: Some("host".into()),
             seat_token: Some("seat".into()),
-        })]
+        })
     );
 }
 
@@ -335,21 +346,24 @@ fn a_full_room_goes_back_to_idle_with_a_notice() {
         0.0,
     );
     assert_eq!(r.phase(), &Phase::Idle);
-    assert!(fx.contains(&Effect::Ui(UiEvent::Notice("That room is full.".into()))));
+    // the server's own words, as the web app shows them
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice("full".into()))));
 }
 
 #[test]
 fn mute_is_announced_in_a_room() {
     let mut r = hosting();
-    let fx = r.update(Input::Command(Command::SetMuted(true)), 0.0);
-    assert!(matches!(
-        &fx[0],
+    assert!(r.muted(), "the mic starts off");
+    let fx = r.update(Input::Command(Command::SetMuted(false)), 0.0);
+    assert_eq!(fx[0], Effect::SetMic(true));
+    assert!(fx.iter().any(|e| matches!(
+        e,
         Effect::Broadcast(Envelope {
-            message: PeerMessage::PeerVoiceStatus { is_muted: true, .. },
+            message: PeerMessage::PeerVoiceStatus { is_muted: false, .. },
             ..
         })
-    ));
-    assert!(r.update(Input::Command(Command::SetMuted(true)), 0.0).is_empty());
+    )));
+    assert!(r.update(Input::Command(Command::SetMuted(false)), 0.0).is_empty());
 }
 
 #[test]
@@ -360,4 +374,294 @@ fn the_name_can_change_only_between_rooms() {
     let mut r = hosting();
     r.update(Input::Command(Command::SetName("Other".into())), 0.0);
     assert_eq!(r.identity().username, "Darshan");
+}
+
+fn connected_to(r: &mut Room, peer: &str) {
+    r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid(peer) }),
+        0.0,
+    );
+    r.update(
+        Input::Link {
+            peer: pid(peer),
+            state: LinkState::Connected,
+        },
+        0.0,
+    );
+    r.update(Input::ChannelOpen(pid(peer)), 0.0);
+}
+
+fn logs(fx: &[Effect]) -> Vec<String> {
+    fx.iter()
+        .filter_map(|e| {
+            if let Effect::Ui(UiEvent::Log(t)) = e {
+                Some(t.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn room_events_go_to_the_logs_in_the_web_apps_words() {
+    let mut r = me();
+    r.update(Input::Command(Command::CreateRoom), 0.0);
+    let fx = r.update(
+        Input::Server(ServerMessage::RoomCreated {
+            room_id: room_id(),
+            peer_id: pid("me"),
+            host_peer_id: pid("me"),
+            seat_token: "s".into(),
+            host_token: "h".into(),
+        }),
+        0.0,
+    );
+    assert_eq!(
+        logs(&fx),
+        vec!["You created room 12345 as \"Darshan\".".to_owned()]
+    );
+    let fx = r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid("riya") }),
+        0.0,
+    );
+    assert_eq!(
+        logs(&fx),
+        vec!["A peer entered room 12345. Establishing P2P connection...".to_owned()]
+    );
+    let fx = r.update(Input::ChannelOpen(pid("riya")), 0.0);
+    assert_eq!(
+        logs(&fx),
+        vec!["Direct Peer-to-Peer DataChannel established. Chat & YouTube Sync is live!".to_owned()]
+    );
+    assert!(r.chat().is_empty(), "none of that is chat");
+}
+
+#[test]
+fn a_dropped_link_is_restarted_then_rebuilt_by_the_offering_side() {
+    let mut r = hosting();
+    r.update(
+        Input::SignalingUp {
+            label: "Local".into(),
+            backup: false,
+        },
+        0.0,
+    );
+    connected_to(&mut r, "riya");
+    r.update(
+        Input::Link {
+            peer: pid("riya"),
+            state: LinkState::Disconnected,
+        },
+        1000.0,
+    );
+    let fx = r.update(Input::Tick, 4500.0);
+    assert!(fx.contains(&Effect::IceRestart(pid("riya"))));
+    assert_eq!(
+        logs(&fx),
+        vec!["⚠️ Connection to a peer was interrupted. Reconnecting...".to_owned()]
+    );
+    let mut t = 4500.0;
+    let mut rebuilt = false;
+    while t < 60_000.0 && !rebuilt {
+        t += 500.0;
+        let fx = r.update(Input::Tick, t);
+        rebuilt = fx.contains(&Effect::OpenPeer {
+            peer: pid("riya"),
+            initiator: true,
+        });
+        if rebuilt {
+            assert!(fx.contains(&Effect::ClosePeer(pid("riya"))));
+        }
+    }
+    assert!(rebuilt, "rebuilt after the ICE restarts");
+    assert!(r.members().contains_key(&pid("riya")), "she's still in the room");
+    r.update(
+        Input::Link {
+            peer: pid("riya"),
+            state: LinkState::Connected,
+        },
+        t + 100.0,
+    );
+}
+
+#[test]
+fn a_bye_or_a_leave_ends_it_and_signaling_loss_alone_does_not() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    assert!(
+        r.update(
+            Input::Server(ServerMessage::PeerLeft { peer_id: pid("riya") }),
+            0.0
+        )
+        .is_empty()
+    );
+    let fx = r.update(Input::ChannelClosed(pid("riya")), 0.0);
+    assert!(
+        fx.contains(&Effect::ClosePeer(pid("riya"))),
+        "signaling gone and the link dropped: she left"
+    );
+    connected_to(&mut r, "arjun");
+    let bye = Envelope {
+        sender: None,
+        timestamp: None,
+        message: PeerMessage::PeerBye,
+    };
+    let fx = r.update(
+        Input::Peer {
+            from: pid("arjun"),
+            envelope: bye,
+        },
+        0.0,
+    );
+    assert!(fx.contains(&Effect::ClosePeer(pid("arjun"))));
+    assert!(r.members().is_empty());
+}
+
+#[test]
+fn deafening_mutes_and_unmuting_undeafens() {
+    let mut r = hosting();
+    r.update(Input::Command(Command::SetMuted(false)), 0.0);
+    let fx = r.update(Input::Command(Command::SetDeafened(true)), 0.0);
+    assert!(fx.contains(&Effect::SetDeafened(true)));
+    assert!(fx.contains(&Effect::SetMic(false)));
+    assert!(r.deafened() && r.muted());
+    let fx = r.update(Input::Command(Command::SetMuted(false)), 0.0);
+    assert!(fx.contains(&Effect::SetDeafened(false)) && fx.contains(&Effect::SetMic(true)));
+    assert!(!r.deafened() && !r.muted());
+}
+
+#[test]
+fn speaking_shows_on_the_right_person() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    r.update(
+        Input::Speaking {
+            peer: Some(pid("riya")),
+            speaking: true,
+        },
+        0.0,
+    );
+    assert!(r.members()[&pid("riya")].speaking);
+    r.update(
+        Input::Speaking {
+            peer: None,
+            speaking: true,
+        },
+        0.0,
+    );
+    assert!(r.speaking());
+    let muted = Envelope {
+        sender: None,
+        timestamp: None,
+        message: PeerMessage::PeerVoiceStatus {
+            peer_id: None,
+            is_muted: true,
+        },
+    };
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: muted,
+        },
+        0.0,
+    );
+    assert!(!r.members()[&pid("riya")].speaking);
+}
+
+#[test]
+fn host_handover_is_announced_as_the_web_app_does() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: identity_of("riya", "Riya", true),
+        },
+        0.0,
+    );
+    let fx = r.update(
+        Input::Server(ServerMessage::Host {
+            host_peer_id: pid("riya"),
+            from: Some(pid("me")),
+        }),
+        0.0,
+    );
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice("👑 Riya is now the host".into()))));
+}
+
+#[test]
+fn names_from_peers_are_cleaned() {
+    assert_eq!(clean_name("  Riya\u{200b}\u{202e}  K  "), "Riya K");
+    assert_eq!(clean_name("\u{0007}\u{feff}"), "Guest");
+    assert_eq!(clean_name(&"x".repeat(40)).chars().count(), 24);
+}
+
+proptest::proptest! {
+    /// Whatever arrives from the server or a peer, in any order, the room never panics.
+    #[test]
+    fn never_panics(msgs in proptest::collection::vec(".{0,200}", 0..30)) {
+        let mut r = hosting();
+        connected_to(&mut r, "riya");
+        for (i, m) in msgs.iter().enumerate() {
+            if let Ok(sm) = ServerMessage::from_json(m) { r.update(Input::Server(sm), i as f64); }
+            if let Ok(env) = Envelope::from_json(m) { r.update(Input::Peer { from: pid("riya"), envelope: env }, i as f64); }
+            r.update(Input::Tick, i as f64 * 1000.0);
+        }
+    }
+}
+
+#[test]
+fn a_code_not_on_this_server_is_looked_for_on_the_others() {
+    let mut r = me();
+    r.update(Input::Command(Command::Join(room_id())), 0.0);
+    let not_found = |r: &mut Room| {
+        r.update(
+            Input::Server(ServerMessage::Error {
+                message: "Room \"12345\" not found.".into(),
+                code: Some(ErrorCode::NotFound),
+                room_id: None,
+            }),
+            0.0,
+        )
+    };
+    assert_eq!(not_found(&mut r), vec![Effect::FindRoomElsewhere(room_id())]);
+    assert_eq!(
+        r.phase(),
+        &Phase::Joining(room_id()),
+        "still joining while we look"
+    );
+    let fx = r.update(
+        Input::RoomFound {
+            room: room_id(),
+            url: Some("wss://gcp.3rtc.me".into()),
+        },
+        0.0,
+    );
+    assert!(fx.contains(&Effect::SwitchServer("wss://gcp.3rtc.me".into())));
+    let fx = r.update(
+        Input::SignalingUp {
+            label: "Google Cloud".into(),
+            backup: true,
+        },
+        0.0,
+    );
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Send(ClientMessage::Join { .. }))),
+        "joins again there"
+    );
+    // nowhere: the server's message, back to the home screen
+    let mut r = me();
+    r.update(Input::Command(Command::Join(room_id())), 0.0);
+    not_found(&mut r);
+    let fx = r.update(
+        Input::RoomFound {
+            room: room_id(),
+            url: None,
+        },
+        0.0,
+    );
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice("Room \"12345\" not found.".into()))));
+    assert_eq!(r.phase(), &Phase::Idle);
 }
