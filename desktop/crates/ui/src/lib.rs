@@ -7,14 +7,18 @@
 #![deny(missing_docs)]
 
 mod assets;
+pub mod avatar;
 pub mod button;
 pub mod code_input;
+pub mod icons;
 pub mod logo;
+pub mod overlay;
 pub mod text_field;
 pub mod tokens;
 
-pub use assets::{Assets, Icon, icon};
+pub use assets::{Assets, icon, icon_bold, logo_play};
 use gpui_kit::App;
+pub use icons::Icon;
 
 /// Sets up fonts and the dark theme. Call once, right after `gpui_kit::init`.
 ///

@@ -6,7 +6,9 @@
 // Release builds have no console window; dev builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod dialogs;
 mod home;
+mod room;
 mod settings;
 mod view;
 
@@ -15,10 +17,6 @@ use gpui_kit::{AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 
 use crate::settings::Settings;
 use crate::view::RoomView;
-
-/// The signaling server the web app uses (`client-ts/src/App.tsx`, `DEFAULT_SIGNAL_URL`);
-/// `RTC_SIGNAL_URL` overrides it (a local server while developing).
-const DEFAULT_SIGNAL_URL: &str = "wss://orc.3rtc.me";
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -36,7 +34,6 @@ fn main() -> anyhow::Result<()> {
         .context("starting the engine runtime")?;
     let handle = runtime.handle().clone();
     let settings = Settings::load();
-    let signaling_url = std::env::var("RTC_SIGNAL_URL").unwrap_or_else(|_| DEFAULT_SIGNAL_URL.to_owned());
 
     gpui_kit::application()
         .with_assets(rtc_ui::Assets)
@@ -52,7 +49,7 @@ fn main() -> anyhow::Result<()> {
                 ..WindowOptions::default()
             };
             let opened = gpui_kit::open_window(options, cx, move |window, cx| {
-                cx.new(|cx| RoomView::new(window, cx, &handle, settings, signaling_url))
+                cx.new(|cx| RoomView::new(window, cx, &handle, settings))
             });
             if let Err(e) = opened {
                 tracing::error!("couldn't open the window: {e:#}");

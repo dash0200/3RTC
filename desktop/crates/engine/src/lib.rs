@@ -231,10 +231,7 @@ impl Engine {
         loop {
             let msg = tokio::select! {
                 m = queue.recv() => m,
-                r = ui.recv() => match r {
-                    Some(r) => Some(Msg::Ui(r)),
-                    None => None,
-                },
+                r = ui.recv() => r.map(Msg::Ui),
                 _ = tick.tick() => {
                     let fx = self.room.update(Input::Tick, now_ms());
                     self.apply(fx).await;
@@ -348,6 +345,7 @@ impl Engine {
                     let _ = self.updates.send(Update::Chat(line));
                 }
                 Effect::Ui(UiEvent::Log(text)) => {
+                    tracing::info!("{text}");
                     let _ = self.updates.send(Update::Log(text));
                 }
                 Effect::Ui(UiEvent::Notice(n)) => {

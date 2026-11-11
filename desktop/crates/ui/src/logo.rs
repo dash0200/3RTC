@@ -2,11 +2,17 @@
 
 use gpui_kit::{FontWeight, IntoElement, ParentElement as _, Styled as _, div, px};
 
-use crate::{Icon, icon, tokens};
+use crate::{logo_play, tokens};
 
 /// The logo at `size` (the mark's side; the web default is 30).
 #[must_use]
 pub fn logo(size: f32) -> impl IntoElement {
+    logo_sized(size, size * 0.68)
+}
+
+/// The logo with its own wordmark size (the room header uses 30 and 19).
+#[must_use]
+pub fn logo_sized(size: f32, word: f32) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -21,13 +27,13 @@ pub fn logo(size: f32) -> impl IntoElement {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(icon(Icon::LogoPlay, px((size * 0.42).round()), tokens::white())),
+                .child(logo_play(px((size * 0.42).round()), tokens::white())),
         )
         .child(
             div()
                 .font_family(tokens::FONT_DISPLAY_TIGHT_2)
                 .font_weight(FontWeight::BOLD)
-                .text_size(px(size * 0.68))
+                .text_size(px(word))
                 .child("3RTC"),
         )
 }

@@ -2,7 +2,8 @@
 
 use gpui_kit::{
     App, ClickEvent, ElementId, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
-    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 
 use crate::tokens;
@@ -36,6 +37,7 @@ pub struct Button {
     weight: Option<FontWeight>,
     disabled: bool,
     full_width: bool,
+    icon: Option<crate::Icon>,
     on_click: Option<Handler>,
 }
 
@@ -53,6 +55,7 @@ impl Button {
             weight: None,
             disabled: false,
             full_width: false,
+            icon: None,
             on_click: None,
         }
     }
@@ -97,6 +100,13 @@ impl Button {
     #[must_use]
     pub const fn weight(mut self, w: FontWeight) -> Self {
         self.weight = Some(w);
+        self
+    }
+
+    /// An icon before the label (18 px, the label's colour).
+    #[must_use]
+    pub const fn icon(mut self, which: crate::Icon) -> Self {
+        self.icon = Some(which);
         self
     }
 
@@ -158,6 +168,7 @@ impl RenderOnce for Button {
             .text_color(color)
             .text_size(self.font_size)
             .font_weight(self.weight.unwrap_or(weight))
+            .when_some(self.icon, |el, i| el.child(crate::icon(i, px(18.), color)))
             .child(self.label);
         if self.full_width {
             el = el.w_full();

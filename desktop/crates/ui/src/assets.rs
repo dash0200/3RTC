@@ -4,14 +4,17 @@ use std::borrow::Cow;
 
 use gpui_kit::{AssetSource, Hsla, Pixels, SharedString, Styled as _, Svg, svg};
 
-macro_rules! bundled {
-    ($( $path:literal ),* $(,)?) => {
-        &[ $( ($path, include_bytes!(concat!("../assets/", $path)) as &[u8]) ),* ]
-    };
-}
+use crate::icons::Icon;
 
-/// Our own asset files, by path.
-const FILES: &[(&str, &[u8])] = bundled!["icons/logo-play.svg", "icons/play.svg", "icons/check.svg",];
+/// Our own asset files that aren't in the web icon set.
+const OWN: &[(&str, &[u8])] = &[("icons/logo-play.svg", include_bytes!("../assets/logo-play.svg"))];
+
+fn find(path: &str) -> Option<&'static [u8]> {
+    OWN.iter()
+        .chain(crate::icons::FILES)
+        .find(|(p, _)| *p == path)
+        .map(|(_, b)| *b)
+}
 
 /// The bundled font files (static weights: every renderer picks them the same way).
 pub(crate) fn fonts() -> Vec<Cow<'static, [u8]>> {
@@ -42,15 +45,16 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        if let Some((_, bytes)) = FILES.iter().find(|(p, _)| *p == path) {
+        if let Some(bytes) = find(path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         gpui_kit::assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
-        let mut all: Vec<SharedString> = FILES
+        let mut all: Vec<SharedString> = OWN
             .iter()
+            .chain(crate::icons::FILES)
             .filter(|(p, _)| p.starts_with(path))
             .map(|(p, _)| (*p).into())
             .collect();
@@ -59,29 +63,33 @@ impl AssetSource for Assets {
     }
 }
 
-/// An icon from the web app's set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Icon {
-    /// The play triangle inside the logo mark.
-    LogoPlay,
-    /// A filled play triangle.
-    Play,
-    /// A check mark.
-    Check,
+/// The play triangle in the logo mark.
+#[must_use]
+pub fn logo_play(size: Pixels, color: Hsla) -> Svg {
+    svg()
+        .path("icons/logo-play.svg")
+        .size(size)
+        .flex_none()
+        .text_color(color)
 }
 
-impl Icon {
-    const fn path(self) -> &'static str {
-        match self {
-            Self::LogoPlay => "icons/logo-play.svg",
-            Self::Play => "icons/play.svg",
-            Self::Check => "icons/check.svg",
-        }
-    }
-}
-
-/// An icon element, `size` square, drawn in `color`.
+/// An icon at the web default stroke (2), `size` square, in `color`.
 #[must_use]
 pub fn icon(which: Icon, size: Pixels, color: Hsla) -> Svg {
-    svg().path(which.path()).size(size).flex_none().text_color(color)
+    svg()
+        .path(which.paths().0)
+        .size(size)
+        .flex_none()
+        .text_color(color)
+}
+
+/// An icon at the bolder stroke (2.4; the web app's `strokeWidth={2.2 or 2.4}`).
+#[must_use]
+pub fn icon_bold(which: Icon, size: Pixels, color: Hsla) -> Svg {
+    let (normal, bold) = which.paths();
+    svg()
+        .path(bold.unwrap_or(normal))
+        .size(size)
+        .flex_none()
+        .text_color(color)
 }

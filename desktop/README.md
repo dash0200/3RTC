@@ -14,7 +14,8 @@ Plan and decisions: [3RTC desktop plan](https://claude.ai/artifact/CDKXmq58x1GzJ
 | `signaling` (`rtc-signaling`) | WebSocket client actor: reconnects, pings, drops stale sends | yes |
 | `rtc` (`rtc-webrtc`) | Google's libwebrtc (LiveKit bindings) in the web app's shapes: channels, SDP, candidates | yes |
 | `engine` (`rtc-engine`) | The shell: runs `core` with `signaling` and `rtc` on one queue | yes |
-| `app` (`rtc-app`, binary `3rtc`) | The GPUI window | yes |
+| `ui` (`rtc-ui`) | Design tokens, fonts, the web icon set, shared components (look of 3rtc.me) | no |
+| `app` (`rtc-app`, binary `3rtc`) | The GPUI window: home, room, dialogs | yes |
 
 Dependencies point down the table only. Everything with rules in it (`protocol`, `core`) is pure
 and tested without a network.
@@ -46,8 +47,12 @@ cargo run -p rtc-app              # the app (RTC_SIGNAL_URL=ws://localhost:8080 
 - The signaling test starts `server/server.js`; run `npm ci` in `server/` first (it's skipped otherwise).
 - On Linux, libwebrtc's prebuilt library needs **clang 21+** (`CC`/`CXX`) and GPUI needs
   `libxkbcommon-dev libwayland-dev libfontconfig1-dev`. Windows needs only Visual Studio's C++ tools.
-- Desktop ↔ web check: `cargo build -p rtc-engine --example chat`, then
-  `python client-ts/tests/e2e/desktop_interop_test.py` (the web app hosts, the engine joins, they chat).
+- Desktop ↔ web checks: `cargo build -p rtc-engine --example chat -p rtc-app`, then
+  `python client-ts/tests/e2e/desktop_interop_test.py` (engine ↔ web app: chat, voice both ways, mute)
+  and `desktop_window_test.py` (the real window, driven on Xvfb, with a web user; screenshots in
+  `docs/progress/`).
+- Without a sound card, `RTC_FAKE_MIC=tone` sends a 440 Hz tone as your voice.
+- After `client-ts/src/components/icons.tsx` changes: `python crates/ui/tools/gen_icons.py`.
 
 ## Standards
 

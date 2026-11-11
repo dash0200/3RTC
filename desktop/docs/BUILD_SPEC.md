@@ -541,7 +541,17 @@ listed, references matched for the screens touched, `docs/perf.md` updated, and 
 checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
 
 - [x] **M0: proof.** Protocol, core, signaling, peers, engine, placeholder window, CI.
-- [ ] **M1: the real UI, and voice.**
+- [ ] **M1: the real UI, and voice.** *Built 11 Nov; waiting for the owner's Windows run
+  (`docs/checklists/M1.md`).* Done: `crates/ui` (tokens, bundled fonts, the web icon set
+  generated from `icons.tsx`, components); home, room (header, stage, dock, side panel with
+  Invite / Chat / Queue / People / Logs), devices and More popovers, Leave, QR, Voice settings
+  and Server settings dialogs; recovery (`core::recovery`, the web tests mirrored), server pool
+  and `find-room`; voice through libwebrtc's platform audio device (ADR 0002) with mute, deafen,
+  device choice and speaking rings. Tests: 61 Rust, `desktop_interop_test.py` (18 checks, voice
+  both ways) and `desktop_window_test.py` (9 checks, the real window driven on Xvfb).
+  **Open:** per-person volume, RNNoise and the mic-test meter need the custom audio path (ADR
+  0002, owner's call); the invite-link screen comes with `3rtc://` links (M2); quick picks with
+  the watch party (M4).
   1. Windows CI green; `3rtc.exe` runs on Windows 10 and 11; measure exe size.
   2. `crates/ui`: tokens, fonts, icons, components (5.2–5.5).
   3. Screens 1–8, 12, 13 with everything not yet built shown as the web app's own disabled or
