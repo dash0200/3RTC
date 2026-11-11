@@ -12,6 +12,8 @@ publish.workspace = true
 rtc-protocol.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
+# the TLS crypto for wss:// (tokio-tungstenite's rustls comes without one)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util.workspace = true
 rand.workspace = true
 tracing.workspace = true

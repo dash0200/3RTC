@@ -113,9 +113,20 @@ pub fn server_label(url: &str) -> &'static str {
     }
 }
 
+/// Picks the TLS crypto for `wss://` once per process (ring). Without it rustls can't choose one
+/// and panics on the first secure connection.
+pub fn install_tls_crypto() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // Err only means another part of the process installed one first: that one is used
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 /// Starts the client on the current tokio runtime.
 #[must_use]
 pub fn spawn(config: Config) -> (Handle, mpsc::UnboundedReceiver<Event>) {
+    install_tls_crypto();
     let (tx, rx) = mpsc::unbounded_channel();
     let (events_tx, events) = mpsc::unbounded_channel();
     tokio::spawn(run(config, rx, events_tx));
@@ -215,6 +226,7 @@ async fn run(
 /// Which of `urls` has room `room` (all asked at once), or `None` if none says yes in time
 /// (`findRoomOn` in `client-ts/src/webrtc/findRoom.ts`).
 pub async fn find_room(urls: Vec<String>, room: rtc_protocol::RoomId, wait: Duration) -> Option<String> {
+    install_tls_crypto();
     use futures_util::stream::{FuturesUnordered, StreamExt as _};
     let ask = |url: String| async move {
         let (mut socket, _) = tokio_tungstenite::connect_async(url.as_str()).await.ok()?;
