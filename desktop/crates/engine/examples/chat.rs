@@ -1,12 +1,14 @@
-//! A terminal chat client on the engine: `cargo run -p rtc-engine --example chat -- <ws url> <name> [room]`.
-//! Without a room code it creates one. Type a line to send it; `/quit` leaves.
-//! Used by the cross-app test (desktop engine ↔ web app in Chromium).
+//! A headless client on the engine: `cargo run -p rtc-engine --example chat -- <ws url> <name> [room]`.
+//! Without a room code it creates one. Its voice is a 440 Hz tone. Type a line to chat;
+//! `/mute`, `/unmute`, `/deafen`, `/undeafen`, `/quit` do what they say.
+//! Used by the cross-app tests (desktop engine ↔ web app in Chromium): one line per event,
+//! `ROOM <code> muted=<bool> speaking=<bool> members=<name>[+][~speaking][!muted],…`.
 
 #![allow(clippy::print_stdout)]
 
 use anyhow::{Context, bail};
 use rtc_core::Command;
-use rtc_engine::{Config, Handle, Phase, Update};
+use rtc_engine::{Config, Handle, MicSource, Phase, Update};
 use rtc_protocol::{ClientId, RoomId};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -25,11 +27,13 @@ async fn main() -> anyhow::Result<()> {
         .transpose()
         .context("room code")?;
     let (engine, mut updates) = rtc_engine::start(Config {
-        signaling_url: url,
+        signaling_urls: vec![url],
         username: name,
         client_id: ClientId::new(format!("cli-{:08x}", rand_id()))?,
         build: "000000.0000".into(),
         ice: Vec::new(),
+        // a 440 Hz tone, so the other side can check it hears us
+        mic: MicSource::Tone(440.0),
     });
     let mut asked = false;
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -44,18 +48,34 @@ async fn main() -> anyhow::Result<()> {
                             engine.command(room.map_or(Command::CreateRoom, Command::Join));
                         }
                         if let Phase::InRoom(id) = s.phase {
-                            let names: Vec<_> = s.members.iter()
-                                .map(|(_, m)| format!("{}{}", m.username.as_deref().unwrap_or("?"), if m.connected { "+" } else { "" }))
+                            let names: Vec<_> = s
+                                .members
+                                .iter()
+                                .map(|(_, m)| {
+                                    format!(
+                                        "{}{}{}{}",
+                                        m.username.as_deref().unwrap_or("?"),
+                                        if m.connected { "+" } else { "" },
+                                        if m.speaking { "~" } else { "" },
+                                        if m.muted { "!" } else { "" }
+                                    )
+                                })
                                 .collect();
-                            println!("ROOM {id} members={}", names.join(","));
+                            println!("ROOM {id} muted={} speaking={} members={}", s.muted, s.speaking, names.join(","));
                         }
                     }
-                    Update::Chat(c) => println!("CHAT {}: {}", if c.name.is_empty() { "*" } else { &c.name }, c.text),
+                    Update::Chat(c) => println!("CHAT {}: {}", c.name, c.text),
                     Update::Notice(n) => println!("NOTICE {n}"),
+                    Update::Log(l) => println!("LOG {l}"),
+                    Update::Devices(_) => {}
                 }
             }
             line = lines.next_line() => {
                 match line? {
+                    Some(l) if l == "/mute" => engine.command(Command::SetMuted(true)),
+                    Some(l) if l == "/unmute" => engine.command(Command::SetMuted(false)),
+                    Some(l) if l == "/deafen" => engine.command(Command::SetDeafened(true)),
+                    Some(l) if l == "/undeafen" => engine.command(Command::SetDeafened(false)),
                     Some(l) if l == "/quit" => {
                         engine.command(Command::Leave);
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;

@@ -55,6 +55,12 @@ impl Factory {
         }
     }
 
+    /// libwebrtc's factory (for tracks and the audio device).
+    #[must_use]
+    pub const fn inner(&self) -> &PeerConnectionFactory {
+        &self.inner
+    }
+
     /// A new peer connection, gathering candidates continually (networks change on laptops).
     ///
     /// # Errors

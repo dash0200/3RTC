@@ -1,6 +1,8 @@
 """Desktop ↔ web: the desktop engine (Rust, Google's libwebrtc) and the web app (Chromium) in one
 room. The web app hosts, the desktop joins by code; they connect directly, swap identities (the
-web app shows the desktop user's name) and chat both ways.
+web app shows the desktop user's name), chat both ways, and talk both ways: the desktop's voice
+is a 440 Hz tone the browser must receive, the browser's is Chromium's fake microphone, which the
+desktop must hear as speech. Mute on either side shows on the other.
 Needs the desktop example built: `cargo build -p rtc-engine --example chat` in desktop/ (skipped if not)."""
 import os, re, subprocess, sys, threading, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +57,34 @@ with sync_playwright() as p:
         check('desktop → web chat', wait(lambda: 'hello from the desktop app' in pg.locator('body').inner_text(), 10))
         names = pg.evaluate("[...document.querySelectorAll('.cm-name')].map(e => e.textContent)")
         check('...under the desktop user\'s name', 'Darshan' in names, names)
+
+        # ---- voice ----
+        def web_hears():
+            """Audio level the browser receives from the desktop (0..1)."""
+            return pg.evaluate("""(async () => { let best = 0;
+              for (const pc of window.__pcs) { if (pc.connectionState !== 'connected') continue;
+                (await pc.getStats()).forEach(r => { if (r.type === 'inbound-rtp' && r.kind === 'audio') best = Math.max(best, r.audioLevel || 0); }); }
+              return best; })()""")
+
+        def say(cmd):
+            proc.stdin.write(cmd + '\n'); proc.stdin.flush()
+
+        check('the desktop joins with its mic off', wait(lambda: saw(r'muted=true'), 5))
+        check('...and the browser hears nothing from it', web_hears() < 0.01, web_hears())
+        say('/unmute')
+        check('desktop unmutes: the browser receives its voice (tone level)', wait(lambda: web_hears() > 0.05, 10), web_hears())
+        check('...and the desktop counts itself as speaking', wait(lambda: saw(r'muted=false speaking=true'), 5))
+        say('/mute')
+        check('desktop mutes: the browser hears silence again', wait(lambda: web_hears() < 0.01, 10), web_hears())
+
+        pg.get_by_role('button', name='Turn microphone on').click()
+        check('browser unmutes: the desktop sees it unmuted', wait(lambda: saw(r'members=Riya\+(~)?(,|$)'), 10), out[-3:])
+        check('...and hears it speak (Chromium\'s fake mic beeps)', wait(lambda: saw(r'members=Riya\+~'), 15), out[-3:])
+        pg.get_by_role('button', name='Turn microphone off').click()
+        check('browser mutes: the desktop sees the muted badge', wait(lambda: saw(r'members=Riya\+~?!'), 10), out[-3:])
+
+        say('/deafen')
+        check('deafen mutes the desktop too', wait(lambda: saw(r'muted=true'), 5))
 
         proc.stdin.write('/quit\n'); proc.stdin.flush()
         proc.wait(timeout=10)

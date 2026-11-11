@@ -10,5 +10,8 @@
 pub mod channels;
 pub mod convert;
 pub mod factory;
+pub mod sdp;
+pub mod stats;
+pub mod voice;
 
 pub use libwebrtc;

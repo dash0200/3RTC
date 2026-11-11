@@ -5600,6 +5600,7 @@ dependencies = [
 name = "rtc-core"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "rtc-protocol",
 ]
 
@@ -5658,6 +5659,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
