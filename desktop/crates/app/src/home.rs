@@ -10,7 +10,7 @@ use gpui_kit::{
 use rtc_ui::button::{Button, Variant};
 use rtc_ui::code_input::CodeInput;
 use rtc_ui::tokens::{self, clamp_vh, clamp_vw};
-use rtc_ui::{Icon, icon, logo::logo, text_field::text_field};
+use rtc_ui::{Icon, icon, icon_bold, logo::logo, text_field::text_field};
 
 use crate::view::RoomView;
 
@@ -77,7 +77,7 @@ impl Home<'_> {
             .font_family(tokens::FONT_MAIN)
             .child(self.header(window, pad_x))
             .child(self.main(window, cx, pad_x))
-            .child(self.footer(window, pad_x))
+            .child(self.footer(window, cx, pad_x))
             .into_any_element()
     }
 
@@ -274,7 +274,7 @@ impl Home<'_> {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(icon(Icon::Check, px(16.), tokens::live()))
+                            .child(icon_bold(Icon::Check, px(16.), tokens::live()))
                             .child("Video, voice and chat stay between your devices"),
                     ),
             )
@@ -382,7 +382,12 @@ impl Home<'_> {
             .child(chat)
     }
 
-    fn footer(&self, window: &Window, pad_x: gpui_kit::Pixels) -> impl IntoElement {
+    fn footer(
+        &self,
+        window: &Window,
+        cx: &mut Context<'_, RoomView>,
+        pad_x: gpui_kit::Pixels,
+    ) -> impl IntoElement {
         div()
             .flex()
             .flex_none()
@@ -394,6 +399,15 @@ impl Home<'_> {
             .border_t_1()
             .border_color(tokens::raised())
             .text_size(px(13.))
+            .child(
+                div()
+                    .id("foot-server")
+                    .text_color(tokens::text_2())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(tokens::text()))
+                    .on_click(cx.listener(|v, _, _, cx| v.open_dialog(crate::view::Dialog::Server, cx)))
+                    .child("Server settings"),
+            )
             .child(link("foot-privacy", "Privacy", "/privacy"))
             .child(link("foot-about", "About", "/about"))
             .child(
