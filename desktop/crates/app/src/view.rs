@@ -2,7 +2,7 @@
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::{
     Context, Entity, FontWeight, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
     Subscription, Window, div, prelude::*, px,
@@ -11,12 +11,15 @@ use rtc_core::Command;
 use rtc_engine::{ChatLine, Config, Handle, Phase, Snapshot, Update};
 use rtc_protocol::{ClientId, RoomId};
 
+use rtc_ui::code_input::{CodeEvent, CodeInput};
+
+use crate::home::Home;
 use crate::settings::Settings;
 
 /// Build number shown to peers: `YYMMDD.HHMM` of the build (set by CI; `dev` locally).
 const BUILD: &str = match option_env!("RTC_BUILD") {
     Some(b) => b,
-    None => "dev",
+    None => "Development build",
 };
 
 pub(crate) struct RoomView {
@@ -28,7 +31,8 @@ pub(crate) struct RoomView {
     chat: Vec<ChatLine>,
     notice: Option<SharedString>,
     name: Entity<InputState>,
-    code: Entity<InputState>,
+    code: Entity<CodeInput>,
+    join_error: Option<SharedString>,
     message: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -43,15 +47,17 @@ impl RoomView {
     ) -> Self {
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Your name")
+                .placeholder("So your friends know it’s you")
                 .default_value(settings.username.clone())
         });
-        let code = cx.new(|cx| InputState::new(window, cx).placeholder("Room code"));
+        let code = cx.new(CodeInput::new);
         let message = cx.new(|cx| InputState::new(window, cx).placeholder("Message the room"));
         let subscriptions = vec![
-            cx.subscribe_in(&code, window, |this, _, e: &InputEvent, _, cx| {
-                if matches!(e, InputEvent::PressEnter { .. }) {
-                    this.join(cx);
+            cx.subscribe(&code, |this, _, e: &CodeEvent, cx| match e {
+                CodeEvent::Submit(_) => this.join(cx),
+                CodeEvent::Changed => {
+                    this.join_error = None;
+                    cx.notify();
                 }
             }),
             cx.subscribe_in(&message, window, |this, _, e: &InputEvent, window, cx| {
@@ -60,7 +66,7 @@ impl RoomView {
                 }
             }),
         ];
-        Self {
+        let mut this = Self {
             settings,
             signaling_url,
             runtime: runtime.clone(),
@@ -68,33 +74,27 @@ impl RoomView {
             room: None,
             chat: Vec::new(),
             notice: None,
+            join_error: None,
             name,
             code,
             message,
             _subscriptions: subscriptions,
-        }
+        };
+        this.start_engine(cx);
+        this
     }
 
-    /// Starts the engine (once a name is set) and pumps its updates into this view.
-    fn engine(&mut self, cx: &mut Context<'_, Self>) -> Option<Handle> {
-        if let Some(e) = &self.engine {
-            return Some(e.clone());
-        }
-        let username = self.name.read(cx).value().trim().to_owned();
-        if username.is_empty() {
-            self.notice = Some("Type your name first.".into());
-            cx.notify();
-            return None;
-        }
-        self.settings.username.clone_from(&username);
-        self.settings.save();
-        let client_id = ClientId::new(self.settings.client_id.clone()).ok()?;
+    /// Starts the engine and pumps its updates into this view.
+    fn start_engine(&mut self, cx: &mut Context<'_, Self>) {
+        let Ok(client_id) = ClientId::new(self.settings.client_id.clone()) else {
+            return;
+        };
         let config = Config {
             signaling_url: self.signaling_url.clone(),
-            username,
+            username: self.settings.username.clone(),
             client_id,
             build: BUILD.to_owned(),
-            ice: rtc_webrtc_defaults(),
+            ice: rtc_engine::IceServerConfig::defaults(),
         };
         let _guard = self.runtime.enter();
         let (handle, mut updates) = rtc_engine::start(config);
@@ -106,8 +106,24 @@ impl RoomView {
             }
         })
         .detach();
-        self.engine = Some(handle.clone());
-        Some(handle)
+        self.engine = Some(handle);
+    }
+
+    /// The name to go by: what's typed, else the saved one, else "Guest" (as the web app).
+    fn use_name(&mut self, cx: &mut Context<'_, Self>) {
+        let typed = self.name.read(cx).value().trim().to_owned();
+        let name = if !typed.is_empty() {
+            typed
+        } else if !self.settings.username.is_empty() {
+            self.settings.username.clone()
+        } else {
+            "Guest".to_owned()
+        };
+        if name != self.settings.username {
+            self.settings.username.clone_from(&name);
+            self.settings.save();
+        }
+        self.command(Command::SetName(name));
     }
 
     fn apply(&mut self, update: Update, cx: &mut Context<'_, Self>) {
@@ -121,27 +137,31 @@ impl RoomView {
                 self.room = Some(snapshot);
             }
             Update::Chat(line) => self.chat.push(line),
-            Update::Notice(n) => self.notice = Some(n.into()),
+            Update::Notice(n) => {
+                // before a room exists a notice is why the join failed: shown in the join card
+                if matches!(self.room.as_ref().map(|r| &r.phase), Some(Phase::InRoom(_))) {
+                    self.notice = Some(n.into());
+                } else {
+                    self.join_error = Some(n.into());
+                }
+            }
         }
         cx.notify();
     }
 
-    fn create(&mut self, cx: &mut Context<'_, Self>) {
-        if let Some(e) = self.engine(cx) {
-            e.command(Command::CreateRoom);
-        }
+    pub(crate) fn create(&mut self, cx: &mut Context<'_, Self>) {
+        self.join_error = None;
+        self.use_name(cx);
+        self.command(Command::CreateRoom);
     }
 
-    fn join(&mut self, cx: &mut Context<'_, Self>) {
-        let text = self.code.read(cx).value();
-        let Ok(room) = RoomId::parse(text.trim()) else {
-            self.notice = Some("Room codes are 5 digits.".into());
-            cx.notify();
+    pub(crate) fn join(&mut self, cx: &mut Context<'_, Self>) {
+        let Ok(room) = RoomId::parse(&self.code.read(cx).code()) else {
             return;
         };
-        if let Some(e) = self.engine(cx) {
-            e.command(Command::Join(room));
-        }
+        self.join_error = None;
+        self.use_name(cx);
+        self.command(Command::Join(room));
     }
 
     fn send_chat(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -162,45 +182,6 @@ impl RoomView {
         if let Some(e) = &self.engine {
             e.command(c);
         }
-    }
-
-    fn render_home(&self, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let busy = matches!(
-            self.room.as_ref().map(|r| &r.phase),
-            Some(Phase::Creating | Phase::Joining(_))
-        );
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_4()
-            .child(div().text_3xl().font_weight(FontWeight::BOLD).child("3RTC"))
-            .child(
-                div()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Talk, chat and play with friends."),
-            )
-            .child(
-                v_flex().w(px(320.)).gap_3().child(Input::new(&self.name)).child(
-                    Button::new("create")
-                        .primary()
-                        .label("Create a room")
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
-                ),
-            )
-            .child(
-                h_flex()
-                    .w(px(320.))
-                    .gap_2()
-                    .child(div().flex_1().child(Input::new(&self.code)))
-                    .child(
-                        Button::new("join")
-                            .label("Join")
-                            .disabled(busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.join(cx))),
-                    ),
-            )
     }
 
     fn render_room(&self, room: &Snapshot, id: RoomId, cx: &mut Context<'_, Self>) -> impl IntoElement {
@@ -323,36 +304,43 @@ impl RoomView {
     }
 }
 
-fn rtc_webrtc_defaults() -> Vec<rtc_engine::IceServerConfig> {
-    rtc_engine::IceServerConfig::defaults()
-}
-
 impl Render for RoomView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let body = match self.room.clone() {
-            Some(room) => match room.phase {
-                Phase::InRoom(id) => self.render_room(&room, id, cx).into_any_element(),
-                _ => self.render_home(cx).into_any_element(),
-            },
-            None => self.render_home(cx).into_any_element(),
-        };
-        v_flex()
-            .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(div().flex_1().min_h_0().child(body))
-            .children(self.notice.clone().map(|n| {
-                h_flex()
-                    .p_2()
-                    .px_3()
-                    .bg(cx.theme().secondary)
-                    .child(div().flex_1().child(n))
-                    .child(Button::new("dismiss").ghost().label("OK").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            this.notice = None;
-                            cx.notify();
-                        },
-                    )))
-            }))
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let room = self.room.clone();
+        if let Some(room) = &room
+            && let Phase::InRoom(id) = room.phase
+        {
+            return v_flex()
+                .size_full()
+                .bg(cx.theme().background)
+                .text_color(cx.theme().foreground)
+                .child(div().flex_1().min_h_0().child(self.render_room(room, id, cx)))
+                .children(self.notice.clone().map(|n| {
+                    h_flex()
+                        .p_2()
+                        .px_3()
+                        .bg(cx.theme().secondary)
+                        .child(div().flex_1().child(n))
+                        .child(Button::new("dismiss").ghost().label("OK").on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.notice = None;
+                                cx.notify();
+                            },
+                        )))
+                }))
+                .into_any_element();
+        }
+        Home {
+            name: &self.name.clone(),
+            code: &self.code.clone(),
+            online: room.as_ref().is_some_and(|r| r.online),
+            busy: matches!(
+                room.as_ref().map(|r| &r.phase),
+                Some(Phase::Creating | Phase::Joining(_))
+            ),
+            join_error: self.join_error.clone(),
+            build: BUILD,
+        }
+        .render(window, cx)
     }
 }

@@ -351,3 +351,13 @@ fn mute_is_announced_in_a_room() {
     ));
     assert!(r.update(Input::Command(Command::SetMuted(true)), 0.0).is_empty());
 }
+
+#[test]
+fn the_name_can_change_only_between_rooms() {
+    let mut r = me();
+    r.update(Input::Command(Command::SetName("Dash".into())), 0.0);
+    assert_eq!(r.identity().username, "Dash");
+    let mut r = hosting();
+    r.update(Input::Command(Command::SetName("Other".into())), 0.0);
+    assert_eq!(r.identity().username, "Darshan");
+}

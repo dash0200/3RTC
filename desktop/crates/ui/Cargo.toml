@@ -1,0 +1,16 @@
+[package]
+name = "rtc-ui"
+description = "3RTC desktop design system: tokens, fonts, icons and components matching 3rtc.me"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui-kit = "0.9.1"
+anyhow.workspace = true
+
+[lints]
+workspace = true

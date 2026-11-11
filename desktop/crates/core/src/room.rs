@@ -65,6 +65,8 @@ pub struct ChatLine {
 /// Something the user did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// Set the display name (only between rooms: a name doesn't change mid-room).
+    SetName(String),
     /// Make a new room.
     CreateRoom,
     /// Join a room by code.
@@ -313,6 +315,11 @@ impl Room {
 
     fn command(&mut self, c: Command, now_ms: f64, fx: &mut Vec<Effect>) {
         match c {
+            Command::SetName(name) => {
+                if self.phase == Phase::Idle {
+                    self.me.username = name;
+                }
+            }
             Command::CreateRoom if self.phase == Phase::Idle => {
                 self.phase = Phase::Creating;
                 fx.push(Effect::Send(ClientMessage::CreateRoom {
