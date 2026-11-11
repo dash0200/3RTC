@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()
         .context("starting the engine runtime")?;
+    let handle = runtime.handle().clone();
     let settings = Settings::load();
     let signaling_url = std::env::var("RTC_SIGNAL_URL").unwrap_or_else(|_| DEFAULT_SIGNAL_URL.to_owned());
 
@@ -47,7 +48,6 @@ fn main() -> anyhow::Result<()> {
                 window_min_size: Some(size(px(560.), px(420.))),
                 ..WindowOptions::default()
             };
-            let handle = runtime.handle().clone();
             let opened = gpui_kit::open_window(options, cx, move |window, cx| {
                 cx.new(|cx| RoomView::new(window, cx, &handle, settings, signaling_url))
             });
