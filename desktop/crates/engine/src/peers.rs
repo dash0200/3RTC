@@ -484,6 +484,7 @@ async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: S
     let mut tick = tokio::time::interval(LEVELS_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut ticks: u32 = 0;
+    let mut last_flow = stats::Flow::default();
     loop {
         tick.tick().await;
         if pc.connection_state() != PeerConnectionState::Connected {
@@ -492,7 +493,15 @@ async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: S
         if let Ok(report) = pc.get_stats().await {
             ticks += 1;
             if ticks % FLOW_EVERY_TICKS == 1 {
-                tracing::info!("audio with {peer}: {}", stats::flow(&report));
+                let flow = stats::flow(&report);
+                let ms = |v: Option<f64>| v.map_or_else(|| "?".to_owned(), |v| format!("{v:.0} ms"));
+                tracing::info!(
+                    "audio with {peer}: {flow}; network round trip {} {}; their voice waits {} in our jitter buffer",
+                    ms(flow.rtt_ms),
+                    flow.path.as_deref().unwrap_or("(path unknown)"),
+                    ms(flow.jitter_buffer_ms_since(&last_flow)),
+                );
+                last_flow = flow;
             }
             sink(PeerEvent::Levels {
                 peer: peer.clone(),
