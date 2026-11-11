@@ -1,6 +1,6 @@
 //! A headless client on the engine: `cargo run -p rtc-engine --example chat -- <ws url> <name> [room]`.
 //! Without a room code it creates one. Its voice is a 440 Hz tone. Type a line to chat;
-//! `/mute`, `/unmute`, `/deafen`, `/undeafen`, `/quit` do what they say.
+//! `/mute`, `/unmute`, `/deafen`, `/undeafen`, `/restart-audio`, `/quit` do what they say.
 //! Used by the cross-app tests (desktop engine ↔ web app in Chromium): one line per event,
 //! `ROOM <code> muted=<bool> speaking=<bool> members=<name>[+][~speaking][!muted],…`.
 
@@ -81,6 +81,7 @@ async fn main() -> anyhow::Result<()> {
                     Some(l) if l == "/unmute" => engine.command(Command::SetMuted(false)),
                     Some(l) if l == "/deafen" => engine.command(Command::SetDeafened(true)),
                     Some(l) if l == "/undeafen" => engine.command(Command::SetDeafened(false)),
+                    Some(l) if l == "/restart-audio" => engine.restart_audio(),
                     Some(l) if l == "/quit" => {
                         engine.command(Command::Leave);
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;

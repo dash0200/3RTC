@@ -74,6 +74,9 @@ with sync_playwright() as p:
         say('/unmute')
         check('desktop unmutes: the browser receives its voice (tone level)', wait(lambda: web_hears() > 0.05, 10), web_hears())
         check('...and the desktop counts itself as speaking', wait(lambda: saw(r'muted=false speaking=true'), 5))
+        say('/restart-audio')  # what the app does when a headset is plugged in or out
+        pg.wait_for_timeout(1500)
+        check('after an audio restart the browser still hears the desktop', wait(lambda: web_hears() > 0.05, 10), web_hears())
         say('/mute')
         check('desktop mutes: the browser hears silence again', wait(lambda: web_hears() < 0.01, 10), web_hears())
 
