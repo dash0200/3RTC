@@ -19,6 +19,20 @@ Plan and decisions: [3RTC desktop plan](https://claude.ai/artifact/CDKXmq58x1GzJ
 Dependencies point down the table only. Everything with rules in it (`protocol`, `core`) is pure
 and tested without a network.
 
+## Run it locally
+
+On Windows, from `desktop/` (or double-click `dev.cmd`):
+
+```powershell
+.\dev.cmd            # local signaling server + the app
+.\dev.cmd -Web       # ...plus the web app in your browser, on the same local server
+.\dev.cmd -Prod      # the app against the real server
+.\dev.cmd -Check     # format check, clippy, tests: run before pushing
+```
+
+Needs Rust (rustup), Visual Studio Build Tools with "Desktop development with C++", and Node.js 22
+for the local server. `./dev.sh` does the same on Linux and macOS.
+
 ## Build and test
 
 Rust is pinned in `rust-toolchain.toml`; `rustup` installs it on first use.
