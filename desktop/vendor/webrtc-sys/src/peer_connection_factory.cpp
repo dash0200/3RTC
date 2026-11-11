@@ -86,6 +86,23 @@ class EnableWarpFieldTrials final : public webrtc::FieldTrialsView {
   }
 };
 
+// 3RTC: aim the audio jitter buffer at the 90th percentile of packet delay instead of the
+// 95th (NetEq's default), so a few late packets from a phone on Wi-Fi don't hold everyone's
+// voice back. The other values are NetEq's defaults.
+constexpr char kNetEqDelayManagerValue[] =
+    "quantile:0.90,forget_factor:0.983,start_forget_weight:2,resample_interval_ms:500";
+
+class LowDelayNetEqFieldTrials final : public webrtc::FieldTrialsView {
+ public:
+  std::string Lookup(absl::string_view key) const override {
+    return key == "WebRTC-Audio-NetEqDelayManagerConfig" ? kNetEqDelayManagerValue : "";
+  }
+
+  std::unique_ptr<webrtc::FieldTrialsView> CreateCopy() const override {
+    return std::make_unique<LowDelayNetEqFieldTrials>();
+  }
+};
+
 // An Environment accepts a single FieldTrialsView, so to enable several
 // independent trial groups (e.g. zero-playout-delay AND WARP) we combine their
 // views into one: Lookup delegates to each sub-view and returns the first
@@ -124,6 +141,7 @@ class CompositeFieldTrials final : public webrtc::FieldTrialsView {
 webrtc::Environment CreateEnvironment(bool zero_playout_delay,
                                       bool enable_warp) {
   std::vector<std::unique_ptr<webrtc::FieldTrialsView>> views;
+  views.push_back(std::make_unique<LowDelayNetEqFieldTrials>());
   if (zero_playout_delay) {
     views.push_back(std::make_unique<ZeroPlayoutDelayFieldTrials>());
   }

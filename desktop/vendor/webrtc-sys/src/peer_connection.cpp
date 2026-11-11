@@ -57,6 +57,12 @@ webrtc::PeerConnectionInterface::RTCConfiguration to_native_rtc_configuration(
 
   rtc_config.enable_sctp_snap = config.enable_sctp_snap;
 
+  // 3RTC: once a burst of late packets has passed, let the audio jitter buffer (NetEq)
+  // speed playback up harder to get back down to its target, instead of staying behind for
+  // seconds. Phones on Wi-Fi deliver voice in bursts (power saving); with Chrome's default the
+  // desktop app held their voice 200-330 ms.
+  rtc_config.audio_jitter_buffer_fast_accelerate = true;
+
   return rtc_config;
 }
 
