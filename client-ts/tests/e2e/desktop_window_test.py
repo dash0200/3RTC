@@ -1,7 +1,9 @@
 """The desktop app's window, driven like a person would (Linux: Xvfb + xdotool), with a web user
 in the same room: create a room in the window, the browser joins by link, chat both ways, voice
 reaches the browser, the People / Logs tabs, the devices and More popovers, the QR code, voice
-settings, and Leave. Screenshots of each step go to desktop/docs/progress/window-*.png.
+settings, and Leave. M2: push-to-talk by holding the mic button, Desktop settings, a second
+launch with a 3rtc:// link (handed to the running app, which asks first), and the rejoin card
+after leaving. Screenshots of each step go to desktop/docs/progress/window-*.png.
 
 Needs: the app built (`cargo build -p rtc-app` in desktop/), Xvfb, xdotool, ImageMagick's
 `import`, Mesa's software Vulkan (mesa-vulkan-drivers). Skipped when any is missing."""
@@ -26,6 +28,7 @@ DISPLAY = ':93'
 home = tempfile.mkdtemp(prefix='3rtc-home-')
 log_path = os.path.join(home, 'app.log')
 env = dict(os.environ, DISPLAY=DISPLAY)
+APP_ENV = dict(env, HOME=home, XDG_CONFIG_HOME=home, VK_ICD_FILENAMES=LVP, RTC_INSTANCE=f'wtest-{os.getpid()}')
 
 
 def x(*args):
@@ -55,8 +58,8 @@ def web_hears(pg):
 
 xvfb = subprocess.Popen(['Xvfb', DISPLAY, '-screen', '0', '1440x900x24'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1)
-app = subprocess.Popen([str(APP)], env=dict(env, HOME=home, XDG_CONFIG_HOME=home, VK_ICD_FILENAMES=LVP,
-                       RTC_SIGNAL_URL=SIGNAL, RTC_FAKE_MIC='tone', RUST_LOG='warn,rtc_engine=info'),
+app = subprocess.Popen([str(APP)], env=dict(APP_ENV, RTC_SIGNAL_URL=SIGNAL, RTC_FAKE_MIC='tone',
+                       RUST_LOG='warn,rtc_engine=info'),
                        stdout=open(log_path, 'w'), stderr=subprocess.STDOUT)
 try:
     check('the window opens and reaches the server', wait(lambda: 'Connected to Local signaling' in log(), 40))
@@ -88,15 +91,39 @@ try:
         click(1385, 96); time.sleep(0.6); shot('logs')
         click(400, 860); time.sleep(0.6); shot('devices'); x('key', 'Escape')
         click(771, 860); time.sleep(0.6); shot('more')
-        click(790, 730); time.sleep(0.6); shot('voice-settings'); x('key', 'Escape')
+        click(727, 666); time.sleep(0.6); shot('voice-settings'); x('key', 'Escape')
         x('key', 'q'); time.sleep(0.6); shot('qr'); x('key', 'Escape')
         click(348, 860)  # mic off
         check('the mic button mutes (the browser hears silence)', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
+
+        # M2: push-to-talk, picked in Voice settings, then talking by holding the mic button
+        click(771, 860); time.sleep(0.6); click(727, 666); time.sleep(0.8)
+        x('mousemove', '720', '500'); x('click', '--repeat', '8', '5'); time.sleep(0.6)
+        click(856, 490); time.sleep(0.6); shot('voice-ptt'); x('key', 'Escape'); time.sleep(0.4)
+        x('mousemove', '348', '860', 'mousedown', '1')
+        check('push-to-talk: holding the mic button sends voice', wait(lambda: web_hears(pg) > 0.05, 10), web_hears(pg))
+        time.sleep(0.3); shot('ptt-talking')
+        x('mouseup', '1')
+        check('...and letting go stops it', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
+        click(771, 860); time.sleep(0.6); click(708, 798); time.sleep(0.6); shot('desktop'); x('key', 'Escape')
+
+        # a second launch with a link hands it to this app, which asks before joining
+        started = time.time()
+        second = subprocess.run([str(APP), '3rtc://join/54321'], env=APP_ENV, timeout=30, capture_output=True)
+        check('a second launch hands its link over and quits', second.returncode == 0 and time.time() - started < 15,
+              f'exit {second.returncode} after {time.time() - started:.1f}s')
+        time.sleep(1); shot('link'); x('key', 'Escape'); time.sleep(0.4)
+
         click(1023, 860); time.sleep(0.6); shot('leave')
         click(720, 520)
         check('Leave returns to the home screen', wait(lambda: 'You left the room.' in log(), 5))
         check('...and the browser sees the desktop user go',
               wait(lambda: pg.evaluate("window.__pcs.every(pc => pc.connectionState !== 'connected')"), 15))
+        time.sleep(1); x('mousemove', '700', '200'); shot('rejoin')
+        click(452, 405)  # the rejoin card
+        check('the rejoin card takes the desktop user back into the room',
+              wait(lambda: log().count('DataChannel established') >= 2, 25))
+        click(1023, 860); time.sleep(0.6); click(720, 520)
         b.close()
 finally:
     app.terminate(); xvfb.terminate()

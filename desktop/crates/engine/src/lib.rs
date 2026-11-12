@@ -74,6 +74,8 @@ pub struct Snapshot {
     pub server: &'static str,
     /// Our voice is the real microphone (not a test tone or silence).
     pub real_audio: bool,
+    /// The server's proof that we host the room, to get it back after a restart.
+    pub host_token: Option<String>,
 }
 
 /// What the engine tells the UI.
@@ -98,6 +100,7 @@ enum Request {
     Devices,
     Input(String),
     Output(String),
+    RestartAudio,
 }
 
 /// Sends commands to the engine. Dropping every clone stops it.
@@ -125,6 +128,11 @@ impl Handle {
     /// Plays through this speaker (`""`: the system default).
     pub fn set_output(&self, id: String) {
         let _ = self.tx.send(Request::Output(id));
+    }
+
+    /// Starts the microphone and speakers again, on the chosen or the default devices.
+    pub fn restart_audio(&self) {
+        let _ = self.tx.send(Request::RestartAudio);
     }
 
     /// A new unique id for a chat message.
@@ -199,10 +207,22 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
         server: "Cloud",
         speaking: HashMap::new(),
         local: Speaking::default(),
+        audio_restarted_at: 0.0,
     };
+    if config.mic == MicSource::Device && !engine.voice.is_device() {
+        let _ = engine.updates.send(Update::Notice(NO_SOUND_CARD.to_owned()));
+    }
     tokio::spawn(engine.run(queue, ui_rx));
     (Handle { tx: ui_tx }, updates)
 }
+
+/// Shown when the audio device changed under us and voice was restarted on the new one.
+const DEVICE_CHANGED: &str = "🎧 Audio device changed: voice moved to the new one";
+/// Least time between two audio restarts (ms).
+const AUDIO_RESTART_GAP_MS: f64 = 2000.0;
+
+/// Shown when the microphone and speakers couldn't be opened.
+const NO_SOUND_CARD: &str = "🔇 Couldn't open your microphone and speakers: voice won't work";
 
 struct Engine {
     room: Room,
@@ -217,6 +237,8 @@ struct Engine {
     server: &'static str,
     speaking: HashMap<PeerId, Speaking>,
     local: Speaking,
+    /// When the sound card was last restarted after a device change (ms since epoch).
+    audio_restarted_at: f64,
 }
 
 impl Engine {
@@ -233,6 +255,7 @@ impl Engine {
                 m = queue.recv() => m,
                 r = ui.recv() => r.map(Msg::Ui),
                 _ = tick.tick() => {
+                    self.recover_audio();
                     let fx = self.room.update(Input::Tick, now_ms());
                     self.apply(fx).await;
                     continue;
@@ -244,6 +267,20 @@ impl Engine {
         let fx = self.room.update(Input::Command(Command::Leave), now_ms());
         self.apply(fx).await;
         self.peers.close_all();
+    }
+
+    /// The sound card stopped (headset plugged in or out, default device changed): start it
+    /// again on the new device. At most every 2 s, in case the device is still settling.
+    fn recover_audio(&mut self) {
+        let now = now_ms();
+        if now - self.audio_restarted_at < AUDIO_RESTART_GAP_MS || !rtc_webrtc::native_log::take_device_lost()
+        {
+            return;
+        }
+        self.audio_restarted_at = now;
+        self.voice.restart();
+        let _ = self.updates.send(Update::Notice(DEVICE_CHANGED.to_owned()));
+        let _ = self.updates.send(Update::Devices(self.voice.devices()));
     }
 
     async fn handle(&mut self, msg: Msg) {
@@ -260,6 +297,10 @@ impl Engine {
             }
             Msg::Ui(Request::Output(id)) => {
                 self.voice.set_output(&id);
+                return;
+            }
+            Msg::Ui(Request::RestartAudio) => {
+                self.voice.restart();
                 return;
             }
             Msg::Signaling(SignalingEvent::Up { url, label, backup }) => {
@@ -398,6 +439,7 @@ impl Engine {
             online: self.online,
             server: self.server,
             real_audio: self.voice.is_device(),
+            host_token: self.room.host_token().map(str::to_owned),
         };
         let _ = self.updates.send(Update::Room(snapshot));
     }

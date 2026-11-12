@@ -28,6 +28,78 @@ pub(crate) struct Home<'a> {
     /// Why the last join didn't work.
     pub(crate) join_error: Option<SharedString>,
     pub(crate) build: &'static str,
+    /// The room you were last in, and whether you hosted it (the rejoin card).
+    pub(crate) rejoin: Option<(String, bool)>,
+}
+
+/// `RejoinCard.tsx`: "You were in room 12345 · Rejoin".
+fn rejoin_card(room: &str, was_host: bool, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let sky = |a: f32| gpui_kit::Hsla {
+        a,
+        ..rgb(0x7c_c4ff).into()
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .pl(px(16.))
+        .pr(px(12.))
+        .py(px(10.))
+        .rounded(px(14.))
+        .bg(sky(0.1))
+        .border_1()
+        .border_color(sky(0.3))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .text_size(px(14.))
+                .line_height(gpui_kit::relative(1.35))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child("You were in room")
+                        .child(div().font_weight(FontWeight::BOLD).child(room.to_owned())),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(tokens::text_2())
+                        .child(if was_host {
+                            "Your room: get it back with the same code"
+                        } else {
+                            "Jump back in"
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .id("rejoin")
+                .px(px(14.))
+                .py(px(9.))
+                .rounded(px(10.))
+                .bg(rgb(0x7c_c4ff))
+                .text_color(rgb(0x0b_1b2b))
+                .text_size(px(14.))
+                .font_weight(FontWeight::BOLD)
+                .cursor_pointer()
+                .on_click(cx.listener(|v, _, _, cx| v.rejoin(cx)))
+                .child("Rejoin"),
+        )
+        .child(
+            div()
+                .id("rejoin-dismiss")
+                .px(px(6.))
+                .py(px(4.))
+                .text_size(px(18.))
+                .text_color(tokens::text_3())
+                .cursor_pointer()
+                .on_click(cx.listener(|v, _, _, cx| v.dismiss_rejoin(cx)))
+                .child("×"),
+        )
 }
 
 fn link(id: &'static str, label: &'static str, path: &'static str) -> impl IntoElement {
@@ -260,6 +332,9 @@ impl Home<'_> {
             .flex()
             .flex_col()
             .gap(clamp_vh(window, 10., 1.4, 16.))
+            .when_some(self.rejoin.clone(), |el, (room, was_host)| {
+                el.child(rejoin_card(&room, was_host, cx))
+            })
             .child(card)
             .child(
                 div()

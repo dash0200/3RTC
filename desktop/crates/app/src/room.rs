@@ -425,21 +425,36 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
     let me_host = room.host.as_ref() == Some(&room.me);
     let mic_off = room.muted || room.deafened;
     let speaking = room.speaking && !mic_off;
-    let status = if room.deafened {
-        "Sound off"
+    // push-to-talk (`DesktopDock.tsx`): "Hold ~ to talk", "Talking"
+    let ptt = view.settings.voice_mode == crate::settings::VoiceMode::Ptt;
+    let ptt_key = view.settings.ptt_keys.to_string();
+    let status: String = if room.deafened {
+        "Sound off".into()
+    } else if ptt {
+        if view.ptt_talking && !room.muted {
+            "Talking".into()
+        } else {
+            format!("Hold {ptt_key} to talk")
+        }
     } else if room.muted {
-        "Mic off"
+        "Mic off".into()
     } else if speaking {
-        "Speaking"
+        "Speaking".into()
     } else {
-        "Mic on"
+        "Mic on".into()
     };
-    let mic_label = if room.deafened {
-        "Mic blocked"
+    let mic_label: String = if room.deafened {
+        "Mic blocked".into()
+    } else if ptt {
+        if view.ptt_talking && !room.muted {
+            "Talking".into()
+        } else {
+            format!("Hold {ptt_key}")
+        }
     } else if room.muted {
-        "Mic off"
+        "Mic off".into()
     } else {
-        "Mic on"
+        "Mic on".into()
     };
     let you = div()
         .flex()
@@ -541,10 +556,27 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .hover(|s| s.bg(tokens::white().opacity(0.05)))
-                .on_click(cx.listener(|v, _, _, cx| {
-                    v.toggle_mic();
-                    cx.notify();
-                }))
+                .when(!ptt, |el| {
+                    el.on_click(cx.listener(|v, _, _, cx| {
+                        v.toggle_mic();
+                        cx.notify();
+                    }))
+                })
+                // push-to-talk: hold the button to talk, like the key
+                .when(ptt, |el| {
+                    el.on_mouse_down(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|v, _, window, cx| v.ptt_button(true, window, cx)),
+                    )
+                    .on_mouse_up(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|v, _, window, cx| v.ptt_button(false, window, cx)),
+                    )
+                    .on_mouse_up_out(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(|v, _, window, cx| v.ptt_button(false, window, cx)),
+                    )
+                })
                 .child(icon(
                     if mic_off { Icon::MicOff } else { Icon::Mic },
                     px(20.),
@@ -678,6 +710,8 @@ pub(crate) fn device_list(view: &RoomView, input: bool, cx: &mut Context<'_, Roo
     div()
         .flex()
         .flex_col()
+        // it clips its rows, so in a scrolling column it would otherwise shrink to nothing
+        .flex_none()
         .rounded(px(10.))
         .border_1()
         .border_color(tokens::line_strong())
@@ -802,6 +836,16 @@ fn more_pop(cx: &mut Context<'_, RoomView>) -> impl IntoElement {
                     false,
                     None,
                     Some(Box::new(cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Qr, cx)))),
+                ))
+                .child(menu_item(
+                    "m-desktop",
+                    Some(Icon::More),
+                    "Desktop",
+                    false,
+                    None,
+                    Some(Box::new(
+                        cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Desktop, cx)),
+                    )),
                 )),
         ),
     )
@@ -982,6 +1026,31 @@ fn invite_tab(view: &RoomView, id: RoomId, cx: &mut Context<'_, RoomView>) -> im
                     ),
                 ),
         )
+        // the desktop app's own link, for friends who have it too
+        .child({
+            let app_link = crate::links::app_link(id);
+            let copied_app = view.copied == Some("app-link");
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(13.))
+                .text_color(tokens::text_3())
+                .child("Friends with the desktop app:")
+                .child(
+                    div()
+                        .id("copy-app-link")
+                        .font_family(tokens::FONT_MONO)
+                        .text_color(tokens::text_2())
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(tokens::text()))
+                        .on_click(cx.listener({
+                            let app_link = app_link.clone();
+                            move |v, _, _, cx| v.copy(app_link.clone(), "app-link", cx)
+                        }))
+                        .child(if copied_app { "Copied".to_owned() } else { app_link }),
+                )
+        })
         .child(div().flex_1())
         .child(
             div()
