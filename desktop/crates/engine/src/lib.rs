@@ -74,6 +74,8 @@ pub struct Snapshot {
     pub server: &'static str,
     /// Our voice is the real microphone (not a test tone or silence).
     pub real_audio: bool,
+    /// The server's proof that we host the room, to get it back after a restart.
+    pub host_token: Option<String>,
 }
 
 /// What the engine tells the UI.
@@ -437,6 +439,7 @@ impl Engine {
             online: self.online,
             server: self.server,
             real_audio: self.voice.is_device(),
+            host_token: self.room.host_token().map(str::to_owned),
         };
         let _ = self.updates.send(Update::Room(snapshot));
     }

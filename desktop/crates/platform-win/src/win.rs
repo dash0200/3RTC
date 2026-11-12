@@ -750,4 +750,15 @@ pub mod links {
     pub fn registered_command() -> Option<String> {
         CURRENT_USER.open(COMMAND).and_then(|k| k.get_string("")).ok()
     }
+
+    /// Stops `3rtc://` links opening this app.
+    ///
+    /// # Errors
+    /// If the user's registry can't be written.
+    pub fn unregister() -> std::io::Result<()> {
+        if registered_command().is_none() {
+            return Ok(());
+        }
+        CURRENT_USER.remove_tree(KEY).map_err(|e| super::io(&e))
+    }
 }

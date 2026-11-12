@@ -5595,6 +5595,7 @@ dependencies = [
  "rand 0.9.5",
  "rtc-core",
  "rtc-engine",
+ "rtc-platform-win",
  "rtc-protocol",
  "rtc-ui",
  "serde",
