@@ -29,7 +29,11 @@ fn user() -> String {
 
 /// Where instances meet (`RTC_INSTANCE` picks another, for tests).
 fn name() -> String {
-    let tag = std::env::var("RTC_INSTANCE").unwrap_or_else(|_| user());
+    name_for(&std::env::var("RTC_INSTANCE").unwrap_or_else(|_| user()))
+}
+
+/// The meeting point for `tag`: a named pipe on Windows, a socket file elsewhere.
+fn name_for(tag: &str) -> String {
     #[cfg(windows)]
     {
         format!(r"\\.\pipe\3rtc-{tag}")
@@ -152,14 +156,11 @@ fn listen(name: &str, tx: UnboundedSender<String>) -> std::io::Result<()> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)] // tests: failing loudly is the point
 
-    use super::{Instance, claim_at};
+    use super::{Instance, claim_at, name_for};
 
     #[test]
     fn a_second_launch_hands_its_message_to_the_first() {
-        let name = std::env::temp_dir()
-            .join(format!("3rtc-test-{}.sock", std::process::id()))
-            .to_string_lossy()
-            .into_owned();
+        let name = name_for(&format!("test-{}", std::process::id()));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
