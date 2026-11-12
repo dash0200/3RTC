@@ -3,14 +3,20 @@
 //! `/mute`, `/unmute`, `/deafen`, `/undeafen`, `/restart-audio`, `/quit` do what they say;
 //! `/react 🔥` sends a reaction, `/sound quack` a soundboard clip, `/image <path> [caption]` a
 //! chat picture. Pictures that arrive are reported with their size and FNV-1a 64 hash.
+//! Watch party: `/watch <link>` plays a YouTube or link source for everyone, `/queue <link>
+//! [title]` queues it, `/next`, `/skip` (vote), `/exit`; `/play <t>`, `/pause <t>`, `/seek <t>`
+//! act as if someone used the player, `/state <t> <playing>` reports where it is, `/ended` that it
+//! finished. What the player is told prints as `PLAYER …`, the room's watch state as
+//! `WATCH showing=<key|-> queue=<ids> votes=<names>`.
 //! Used by the cross-app tests (desktop engine ↔ web app in Chromium): one line per event,
 //! `ROOM <code> muted=<bool> speaking=<bool> members=<name>[+][~speaking][!muted],…`.
 
 #![allow(clippy::print_stdout)]
 
 use anyhow::{Context, bail};
-use rtc_core::Command;
+use rtc_core::{Command, PlayerCmd, PlayerReport, UserAction, WatchCommand};
 use rtc_engine::{Config, Handle, MicSource, OutgoingImage, Phase, Update};
+use rtc_protocol::media::{Link, detect_link};
 use rtc_protocol::{ClientId, RoomId};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -45,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
     // a steady test tone sounds like noise to RNNoise, which would (rightly) remove it
     engine.set_isolation(std::env::var("RTC_ISOLATION").as_deref() == Ok("1"));
     let mut asked = false;
+    let mut last_watch = String::new();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
         tokio::select! {
@@ -71,6 +78,16 @@ async fn main() -> anyhow::Result<()> {
                                 })
                                 .collect();
                             println!("ROOM {id} muted={} speaking={} members={}", s.muted, s.speaking, names.join(","));
+                            let w = format!(
+                                "WATCH showing={} queue={} votes={}",
+                                s.watch.showing.as_ref().map_or_else(|| "-".to_owned(), rtc_core::Showing::key),
+                                s.watch.queue.iter().map(|q| q.title.as_str()).collect::<Vec<_>>().join("|"),
+                                s.watch.skip_votes.join("|")
+                            );
+                            if w != last_watch {
+                                println!("{w}");
+                                last_watch = w;
+                            }
                         }
                     }
                     Update::Chat(c) => match &c.image {
@@ -84,6 +101,16 @@ async fn main() -> anyhow::Result<()> {
                         println!("IMAGE_READY {transfer_id} {} {:016x}", bytes.len(), fnv(&bytes));
                     }
                     Update::Notice(n) => println!("NOTICE {n}"),
+                    Update::Player(c) => match c {
+                        PlayerCmd::Open { showing, start, playing } => {
+                            println!("PLAYER open {} t={start:.1} playing={playing}", showing.key());
+                        }
+                        PlayerCmd::Play { at, .. } => println!("PLAYER play t={:.1}", at.unwrap_or(-1.0)),
+                        PlayerCmd::Pause { at, .. } => println!("PLAYER pause t={:.1}", at.unwrap_or(-1.0)),
+                        PlayerCmd::Seek { to, drift, .. } => println!("PLAYER seek t={to:.1} drift={drift}"),
+                        PlayerCmd::Close => println!("PLAYER close"),
+                    },
+                    Update::Pop => {}
                     Update::Log(l) => println!("LOG {l}"),
                     Update::Devices(_) | Update::Net(_) => {}
                 }
@@ -121,6 +148,55 @@ async fn main() -> anyhow::Result<()> {
                             }),
                             Err(e) => println!("NOTICE can't read {path}: {e}"),
                         }
+                    }
+                    Some(l) if l.starts_with("/watch ") => match detect_link(&l["/watch ".len()..]) {
+                        Ok(Link::YouTube(id)) => engine.command(Command::Watch(WatchCommand::PlayYouTube { id, title: "Test video".into() })),
+                        Ok(Link::Media { media, .. }) => engine.command(Command::Watch(WatchCommand::PlayLink(media))),
+                        Err(e) => println!("NOTICE {e}"),
+                    },
+                    Some(l) if l.starts_with("/queue ") => {
+                        let rest = l["/queue ".len()..].trim();
+                        let (link, title) = rest.split_once(' ').unwrap_or((rest, ""));
+                        let (video_id, media) = match detect_link(link) {
+                            Ok(Link::YouTube(id)) => (Some(id), None),
+                            Ok(Link::Media { media, .. }) => (None, Some(media)),
+                            Err(e) => {
+                                println!("NOTICE {e}");
+                                continue;
+                            }
+                        };
+                        engine.command(Command::Watch(WatchCommand::QueueAdd {
+                            id: Handle::new_message_id(),
+                            video_id,
+                            media,
+                            title: title.to_owned(),
+                            autoplay: true,
+                        }));
+                    }
+                    Some(l) if l == "/next" => engine.command(Command::Watch(WatchCommand::QueueNext)),
+                    Some(l) if l == "/skip" => engine.command(Command::Watch(WatchCommand::VoteSkip)),
+                    Some(l) if l == "/exit" => engine.command(Command::Watch(WatchCommand::Exit)),
+                    Some(l) if l == "/ended" => engine.command(Command::Watch(WatchCommand::Player(PlayerReport::Ended))),
+                    Some(l) if l.starts_with("/play ") || l.starts_with("/pause ") || l.starts_with("/seek ") => {
+                        let (verb, t) = l[1..].split_once(' ').unwrap_or(("", "0"));
+                        let action = match verb {
+                            "play" => UserAction::Play,
+                            "pause" => UserAction::Pause,
+                            _ => UserAction::Seek,
+                        };
+                        let time = t.trim().parse().unwrap_or(0.0);
+                        engine.command(Command::Watch(WatchCommand::Player(PlayerReport::User { action, time })));
+                    }
+                    Some(l) if l.starts_with("/state ") => {
+                        let mut it = l["/state ".len()..].split_whitespace();
+                        let time = it.next().and_then(|t| t.parse().ok()).unwrap_or(0.0);
+                        let playing = it.next() == Some("true");
+                        engine.command(Command::Watch(WatchCommand::Player(PlayerReport::State {
+                            time,
+                            playing,
+                            buffering: false,
+                            duration: 0.0,
+                        })));
                     }
                     Some(l) if l == "/quit" => {
                         engine.command(Command::Leave);

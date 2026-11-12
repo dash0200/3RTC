@@ -61,6 +61,13 @@ pub(crate) fn render(
         Dialog::Network => {
             dialog("net-dialog", px(720.), crate::net::dialog(view, cx), dismiss).into_any_element()
         }
+        Dialog::AppSound => dialog(
+            "app-sound-dialog",
+            px(480.),
+            crate::extras::app_sound_dialog(view, cx),
+            dismiss,
+        )
+        .into_any_element(),
     }
 }
 
@@ -1158,6 +1165,16 @@ fn desktop(
                     RoomView::set_low_power,
                     cx,
                 ))
+                .child(toggle_row(
+                    "d-overlay",
+                    "In-game overlay",
+                    "Shows who's in the call and who's talking in a corner of the screen, over games in borderless or windowed mode. Clicks go through it.",
+                    view.settings.overlay,
+                    supported,
+                    RoomView::set_overlay,
+                    cx,
+                ))
+                .when(view.settings.overlay && supported, |el| el.child(crate::extras::corner_picker(view, cx)))
                 .when(!supported, |el| el.child(hint("These work in the Windows app.")))
                 .child(updates(view, cx)),
         )

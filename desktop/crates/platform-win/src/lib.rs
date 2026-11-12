@@ -18,16 +18,32 @@
 pub mod art;
 pub mod keys;
 
+#[cfg(windows)]
+mod loopback;
 #[cfg(not(windows))]
 mod other;
 #[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
+mod ui_thread;
+#[cfg(windows)]
 mod win;
 
+#[cfg(windows)]
+pub use loopback::{AppSound, audio_apps};
+#[cfg(not(windows))]
+pub use other::Overlay;
+#[cfg(not(windows))]
+pub use other::{AppSound, audio_apps};
 #[cfg(not(windows))]
 pub use other::{
     KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
     set_window_icon, show_window,
 };
+#[cfg(windows)]
+pub use overlay::Overlay;
+#[cfg(windows)]
+pub use ui_thread::{ParentWindow, UiThread};
 #[cfg(windows)]
 pub use win::{
     KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
@@ -95,4 +111,53 @@ impl MenuItem {
             disabled: false,
         }
     }
+}
+
+/// A corner of the screen, for the in-game overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Corner {
+    /// Top left.
+    #[default]
+    TopLeft,
+    /// Top right.
+    TopRight,
+    /// Bottom left.
+    BottomLeft,
+    /// Bottom right.
+    BottomRight,
+}
+
+impl Corner {
+    /// From the settings' number (0–3).
+    #[must_use]
+    pub const fn from_index(i: u8) -> Self {
+        match i {
+            1 => Self::TopRight,
+            2 => Self::BottomLeft,
+            3 => Self::BottomRight,
+            _ => Self::TopLeft,
+        }
+    }
+}
+
+/// One person in the in-game overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayLine {
+    /// Their name.
+    pub name: String,
+    /// Talking now.
+    pub speaking: bool,
+    /// Their mic is off.
+    pub muted: bool,
+}
+
+/// A program with sound open (for "Share an app's sound").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioApp {
+    /// Its process id.
+    pub pid: u32,
+    /// Its name ("Spotify", "chrome").
+    pub name: String,
+    /// Playing sound right now.
+    pub playing: bool,
 }

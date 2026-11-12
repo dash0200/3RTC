@@ -75,6 +75,82 @@ struct Shared {
     rendering: AtomicBool,
     /// The names of the open devices.
     names: Mutex<(String, String)>,
+    /// One program's sound, mixed into what we send (BUILD_SPEC §9 feature 8).
+    app: Mutex<AppBuf>,
+}
+
+/// One program's sound waiting to be sent (48 kHz mono).
+#[derive(Debug, Default)]
+struct AppBuf {
+    on: bool,
+    gain: f32,
+    /// Enough has arrived to start (two frames), so short gaps don't stutter.
+    primed: bool,
+    samples: std::collections::VecDeque<f32>,
+}
+
+/// Most app sound kept waiting (300 ms): older goes, so it never lags behind.
+const APP_MAX: usize = FRAME * 30;
+
+/// Feeds one program's sound into what we send (the call hears it with our voice, also while
+/// the microphone is muted).
+#[derive(Clone)]
+pub struct AppFeed(Arc<Shared>);
+
+impl std::fmt::Debug for AppFeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AppFeed").finish_non_exhaustive()
+    }
+}
+
+impl AppFeed {
+    /// Sharing on or off, at `gain` (0..1).
+    pub fn set(&self, on: bool, gain: f32) {
+        let mut b = self.0.app.lock().unwrap_or_else(PoisonError::into_inner);
+        b.on = on;
+        b.gain = gain.clamp(0.0, 1.5);
+        if !on {
+            b.samples.clear();
+            b.primed = false;
+        }
+    }
+
+    /// More sound (48 kHz mono, -1..1), from the capture thread.
+    pub fn push(&self, samples: &[f32]) {
+        let mut b = self.0.app.lock().unwrap_or_else(PoisonError::into_inner);
+        if !b.on {
+            return;
+        }
+        b.samples.extend(samples.iter().copied());
+        let extra = b.samples.len().saturating_sub(APP_MAX);
+        b.samples.drain(..extra);
+    }
+}
+
+impl Shared {
+    /// The next 10 ms of app sound, if sharing and enough has arrived.
+    fn app_frame(&self, out: &mut [f32; FRAME]) -> bool {
+        let mut b = self.app.lock().unwrap_or_else(PoisonError::into_inner);
+        if !b.on {
+            return false;
+        }
+        if !b.primed {
+            if b.samples.len() < FRAME * 2 {
+                return false;
+            }
+            b.primed = true;
+            tracing::info!("audio: app sound flowing into the call");
+        }
+        if b.samples.len() < FRAME {
+            b.primed = false;
+            return false;
+        }
+        let gain = b.gain;
+        for (o, s) in out.iter_mut().zip(b.samples.drain(..FRAME)) {
+            *o = s * gain;
+        }
+        true
+    }
 }
 
 /// The audio pipeline. Dropping it stops everything.
@@ -210,6 +286,12 @@ impl Audio {
     #[must_use]
     pub fn meter(&self) -> Meter {
         Meter(Arc::clone(&self.shared))
+    }
+
+    /// A handle that feeds one program's sound into what we send.
+    #[must_use]
+    pub fn app_feed(&self) -> AppFeed {
+        AppFeed(Arc::clone(&self.shared))
     }
 
     /// Whether the microphone and the speakers are open.
@@ -567,7 +649,16 @@ impl Pipeline {
             self.shared
                 .mic_level
                 .store(peak(&clean).to_bits(), Ordering::Relaxed);
-            if self.live {
+            let mut app = [0.0f32; FRAME];
+            let sharing = self.shared.app_frame(&mut app);
+            if sharing {
+                // the program's sound goes out with our voice, or alone while muted
+                for (p, a) in pcm.iter_mut().zip(&app) {
+                    let voice = if self.live { to_f32(*p) } else { 0.0 };
+                    *p = to_i16((voice + a).clamp(-1.0, 1.0));
+                }
+            }
+            if self.live || sharing {
                 (self.sink)(&pcm);
             }
         }
@@ -607,6 +698,30 @@ mod tests {
     impl Echo for NoEcho {
         fn render(&mut self, _frame: &mut [i16]) {}
         fn capture(&mut self, _frame: &mut [i16], _delay_ms: i32) {}
+    }
+
+    #[test]
+    fn app_sound_waits_for_two_frames_and_never_lags() {
+        let shared = Arc::new(super::Shared::default());
+        let feed = super::AppFeed(Arc::clone(&shared));
+        let mut out = [0.0f32; super::FRAME];
+        feed.push(&[0.5; 480]);
+        assert!(!shared.app_frame(&mut out), "off: nothing kept");
+        feed.set(true, 0.5);
+        feed.push(&[0.5; 480]);
+        assert!(!shared.app_frame(&mut out), "one frame isn't enough to start");
+        feed.push(&[0.5; 480]);
+        assert!(shared.app_frame(&mut out));
+        assert!((out[0] - 0.25).abs() < 1e-6, "at its gain");
+        assert!(shared.app_frame(&mut out));
+        assert!(!shared.app_frame(&mut out), "ran dry: waits again");
+        feed.push(&[0.1; super::APP_MAX * 3]);
+        assert_eq!(
+            shared.app.lock().map(|b| b.samples.len()).unwrap_or(0),
+            super::APP_MAX
+        );
+        feed.set(false, 0.5);
+        assert!(!shared.app_frame(&mut out));
     }
 
     #[test]

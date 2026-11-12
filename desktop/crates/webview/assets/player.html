@@ -1,0 +1,256 @@
+<!doctype html>
+<!-- 3RTC's player page: hosts YouTube's, Vimeo's or Twitch's own embedded player (never their
+     streams), or the browser's <video> for a direct video link or an HLS stream, and talks to the
+     app: commands come in through window.rtc.cmd({...}), events go out through
+     window.ipc.postMessage(JSON). Served by the app as https://rtc.localhost/player.html.
+
+     The sync rules are the web app's (features/media/LinkPlayer.tsx, YouTubeSyncPlayer.tsx):
+     the page starts the player once it's ready, from what the room is doing (?t=&play=); the
+     events our own commands cause are expected for a moment and dropped, so only what a person
+     did with the player's controls goes to the app ({ev:'user', do, t}). -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #p, #p iframe, #p video { width: 100%; height: 100%; border: 0; display: block; background: #000; }
+</style>
+</head>
+<body>
+<div id="p"></div>
+<script>
+(function () {
+  const send = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (e) {} };
+  const params = new URLSearchParams(location.search);
+  const kind = params.get('kind');
+  const id = params.get('id') || '';
+  const start = parseFloat(params.get('t') || '0') || 0;
+  const live = params.get('live') === '1';
+
+  // ---- the adapter for this source: play, pause, seek(s), time(), paused(), duration() ----
+  let api = null;
+  let ready = false;
+  let buffering = false;
+  // the first thing to do once ready: where the room is
+  let pending = { do: params.get('play') === '0' ? 'pause' : 'play', t: start, initial: true };
+  const expectUntil = { play: 0, pause: 0, seek: 0 };
+  const expect = (k, ms) => { expectUntil[k] = Date.now() + ms; };
+  const consume = (k) => { if (Date.now() < expectUntil[k]) { expectUntil[k] = 0; return true; } return false; };
+  let lastTime = 0;
+
+  function emit(type, t) {
+    switch (type) {
+      case 'ready':
+        ready = true;
+        if (pending) { const p = pending; pending = null; apply(p); }
+        break;
+      case 'play':
+        buffering = false;
+        if (consume('play') || !ready) break;
+        send({ ev: 'user', do: 'play', t: t != null ? t : lastTime });
+        break;
+      case 'pause':
+        if (consume('pause') || !ready) break;
+        send({ ev: 'user', do: 'pause', t: t != null ? t : lastTime });
+        break;
+      case 'seek':
+        if (consume('seek') || !ready || live) break;
+        send({ ev: 'user', do: 'seek', t: t != null ? t : lastTime });
+        break;
+      case 'buffering': buffering = true; break;
+      case 'playing': buffering = false; break;
+      case 'ended': send({ ev: 'ended' }); break;
+    }
+    report();
+  }
+
+  async function report() {
+    if (!api || !ready) return;
+    try {
+      const [t, paused, d] = await Promise.all([api.time(), api.paused(), api.duration()]);
+      lastTime = Number(t) || 0;
+      send({ ev: 'state', playing: !paused, buffering, t: lastTime, d: Number.isFinite(Number(d)) ? Number(d) || 0 : 0 });
+    } catch (e) {}
+  }
+  setInterval(report, 500);
+
+  // a newer command cancels an older one still in progress
+  let gen = 0;
+  async function apply(c) {
+    if (!api) return;
+    const mine = ++gen;
+    const t = typeof c.t === 'number' && Number.isFinite(c.t) ? c.t : undefined;
+    let cur = 0;
+    try { cur = Number(await api.time()) || 0; } catch (e) {}
+    if (mine !== gen) return;
+    try {
+      if (c.do === 'play') {
+        if (!live && t !== undefined && Math.abs(cur - t) > 1.2) { expect('seek', 6000); await api.seek(t); if (mine !== gen) return; }
+        expect('play', 4000);
+        await api.play();
+      } else if (c.do === 'pause') {
+        if (!live && t !== undefined && Math.abs(cur - t) > 0.5) { expect('seek', 6000); await api.seek(t); if (mine !== gen) return; }
+        expect('pause', 3000);
+        await api.pause();
+      } else if (c.do === 'seek' && t !== undefined && !live) {
+        expect('seek', 6000);
+        await api.seek(t);
+      }
+    } catch (e) {}
+    report();
+  }
+
+  window.rtc = {
+    cmd(c) {
+      if (!ready) { pending = c; return; }   // the newest wins
+      apply(c);
+    }
+  };
+
+  function load(src, onload) {
+    const s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = onload;
+    s.onerror = () => send({ ev: 'error', message: 'Could not load the player (no internet?)' });
+    document.head.appendChild(s);
+  }
+
+  // ---- YouTube ----
+  function youtube() {
+    window.onYouTubeIframeAPIReady = () => {
+      let last = -1;
+      const p = new YT.Player('p', {
+        videoId: id,
+        playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0, modestbranding: 1, enablejsapi: 1, origin: location.origin },
+        events: {
+          onReady: () => {
+            api = {
+              play: () => p.playVideo(), pause: () => p.pauseVideo(),
+              seek: (s) => p.seekTo(s, true),
+              time: () => Promise.resolve(p.getCurrentTime()),
+              paused: () => Promise.resolve(p.getPlayerState() !== 1 && p.getPlayerState() !== 3),
+              duration: () => Promise.resolve(p.getDuration())
+            };
+            const d = p.getVideoData && p.getVideoData();
+            send({ ev: 'ready', title: (d && d.title) || '' });
+            emit('ready');
+          },
+          onStateChange: (e) => {
+            const s = e.data, t = p.getCurrentTime();
+            if (s === 1 && last !== 1) emit('play', t);
+            else if (s === 2 && last !== 2) emit('pause', t);
+            else if (s === 3) emit('buffering');
+            else if (s === 0) emit('ended');
+            if (s === 1) emit('playing');
+            last = s;
+          },
+          onError: (e) => {
+            const gone = e.data === 100 || e.data === 101 || e.data === 150;
+            send({ ev: 'error', unavailable: gone,
+                   message: gone ? (e.data === 100 ? 'removed or private' : 'blocked outside YouTube') : 'Video playback error' });
+          }
+        }
+      });
+      // YouTube has no seek event: a jump of more than 2.2 s between polls is one
+      let prev = -1;
+      setInterval(() => {
+        if (!api || !ready) return;
+        const t = p.getCurrentTime(), s = p.getPlayerState();
+        if (prev >= 0 && Math.abs(t - prev) > 2.2 && (s === 1 || s === 2 || s === 3)) emit('seek', t);
+        prev = t;
+      }, 350);
+    };
+    load('https://www.youtube.com/iframe_api');
+  }
+
+  // ---- Vimeo ----
+  function vimeo() {
+    load('https://player.vimeo.com/api/player.js', () => {
+      const p = new Vimeo.Player('p', { url: id, autoplay: false, responsive: false, width: '100%', height: '100%' });
+      api = {
+        play: () => p.play(), pause: () => p.pause(), seek: (s) => p.setCurrentTime(s),
+        time: () => p.getCurrentTime(), paused: () => p.getPaused(), duration: () => p.getDuration()
+      };
+      p.on('play', (d) => emit('play', d && d.seconds));
+      p.on('pause', (d) => emit('pause', d && d.seconds));
+      p.on('seeked', (d) => emit('seek', d && d.seconds));
+      p.on('bufferstart', () => emit('buffering'));
+      p.on('bufferend', () => emit('playing'));
+      p.on('ended', () => emit('ended'));
+      p.on('error', (e) => send({ ev: 'error', message: (e && e.message) || 'This video can\'t be played here' }));
+      p.ready().then(() => {
+        p.getVideoTitle().then((title) => send({ ev: 'ready', title })).catch(() => send({ ev: 'ready', title: '' }));
+        emit('ready');
+      }).catch((e) => send({ ev: 'error', message: (e && e.message) || 'This video can\'t be played here' }));
+    });
+  }
+
+  // ---- Twitch ----
+  function twitch() {
+    load('https://player.twitch.tv/js/embed/v1.js', () => {
+      const opts = { width: '100%', height: '100%', autoplay: false, parent: [location.hostname] };
+      if (/^v\d+$/.test(id)) opts.video = id; else opts.channel = id;
+      const p = new Twitch.Player('p', opts);
+      p.addEventListener(Twitch.Player.READY, () => {
+        api = {
+          play: () => p.play(), pause: () => p.pause(), seek: (s) => p.seek(s),
+          time: () => Promise.resolve(p.getCurrentTime()), paused: () => Promise.resolve(p.isPaused()),
+          duration: () => Promise.resolve(p.getDuration())
+        };
+        send({ ev: 'ready', title: '' });
+        emit('ready');
+      });
+      p.addEventListener(Twitch.Player.PLAY, () => emit('play', p.getCurrentTime()));
+      p.addEventListener(Twitch.Player.PLAYING, () => emit('playing'));
+      p.addEventListener(Twitch.Player.PAUSE, () => emit('pause', p.getCurrentTime()));
+      p.addEventListener(Twitch.Player.SEEK, (d) => emit('seek', d && d.position));
+      p.addEventListener(Twitch.Player.ENDED, () => emit('ended'));
+    });
+  }
+
+  // ---- a direct video file or an HLS stream: the browser's own player ----
+  function video(hls) {
+    const v = document.createElement('video');
+    v.controls = true; v.playsInline = true; v.preload = 'auto';
+    document.getElementById('p').appendChild(v);
+    api = {
+      play: () => v.play(), pause: () => v.pause(), seek: (s) => { v.currentTime = s; },
+      time: () => Promise.resolve(v.currentTime), paused: () => Promise.resolve(v.paused),
+      duration: () => Promise.resolve(Number.isFinite(v.duration) ? v.duration : 0)
+    };
+    v.addEventListener('play', () => emit('play', v.currentTime));
+    v.addEventListener('pause', () => { if (!v.ended) emit('pause', v.currentTime); });
+    v.addEventListener('seeked', () => emit('seek', v.currentTime));
+    v.addEventListener('waiting', () => emit('buffering'));
+    v.addEventListener('playing', () => emit('playing'));
+    v.addEventListener('ended', () => emit('ended'));
+    v.addEventListener('error', () => send({ ev: 'error', message: 'This video can\'t be played here' }));
+    v.addEventListener('loadedmetadata', () => {
+      if (ready) return;
+      const name = decodeURIComponent((new URL(id).pathname.split('/').filter(Boolean).pop()) || '');
+      send({ ev: 'ready', title: name });
+      emit('ready');
+    }, { once: true });
+    if (hls && !v.canPlayType('application/vnd.apple.mpegurl')) {
+      load('https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js', () => {
+        if (!window.Hls || !Hls.isSupported()) { send({ ev: 'error', message: 'HLS streams can\'t be played here' }); return; }
+        const h = new Hls();
+        h.loadSource(id); h.attachMedia(v);
+        h.on(Hls.Events.ERROR, (_e, d) => { if (d && d.fatal) send({ ev: 'error', message: 'The stream stopped' }); });
+      });
+    } else {
+      v.src = id;
+    }
+  }
+
+  if (kind === 'youtube') youtube();
+  else if (kind === 'vimeo') vimeo();
+  else if (kind === 'twitch') twitch();
+  else if (kind === 'file') video(false);
+  else if (kind === 'hls') video(true);
+  else send({ ev: 'error', message: 'unknown player ' + kind });
+})();
+</script>
+</body>
+</html>

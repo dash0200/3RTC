@@ -109,3 +109,38 @@ pub mod links {
         Ok(())
     }
 }
+
+/// The in-game overlay (there is none here).
+#[derive(Debug)]
+pub struct Overlay;
+
+impl Overlay {
+    /// No overlay here: always `None`.
+    #[must_use]
+    pub const fn start() -> Option<Self> {
+        None
+    }
+
+    /// Shows people in a corner (nothing here).
+    pub fn show(&self, _corner: crate::Corner, _lines: Vec<crate::OverlayLine>) {}
+}
+
+/// Programs with sound open (none here).
+#[must_use]
+pub fn audio_apps() -> Vec<crate::AudioApp> {
+    Vec::new()
+}
+
+/// One program's sound (not available here).
+#[derive(Debug)]
+pub struct AppSound;
+
+impl AppSound {
+    /// Not available here.
+    ///
+    /// # Errors
+    /// Always: per-app sound needs Windows.
+    pub fn start(_pid: u32, _on_samples: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, String> {
+        Err("sharing an app's sound needs Windows".to_owned())
+    }
+}

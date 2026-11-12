@@ -14,6 +14,7 @@
 
 mod ids;
 pub mod image;
+pub mod media;
 pub mod peer;
 pub mod sdp;
 pub mod signaling;

@@ -107,12 +107,16 @@ pub fn dialog(
         .flex()
         .items_center()
         .justify_center()
+        .p(px(24.))
         .on_click(move |_, window, cx| on_dismiss(window, cx))
         .child(
             div()
                 .id("dialog-card")
                 .w(width)
                 .max_w(px(width.into()))
+                // taller than the window: the card scrolls instead of being cut off
+                .max_h_full()
+                .overflow_y_scroll()
                 .bg(tokens::surface())
                 .border_1()
                 .border_color(tokens::line())

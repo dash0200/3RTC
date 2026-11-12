@@ -80,6 +80,8 @@ pub struct Snapshot {
     pub host_token: Option<String>,
     /// Only the host controls playback.
     pub playback_lock: bool,
+    /// The watch party: what's playing, the queue, skip votes.
+    pub watch: rtc_core::WatchView,
 }
 
 /// What the engine tells the UI.
@@ -108,6 +110,10 @@ pub enum Update {
     },
     /// The connection details for everyone (answer to [`Handle::net_stats`]).
     Net(Vec<NetPeer>),
+    /// Tell the player (the web view) what to do.
+    Player(rtc_core::PlayerCmd),
+    /// The queue moved on: play the pop.
+    Pop,
     /// A chat picture arrived whole.
     ImageReady {
         /// Its transfer.
@@ -176,6 +182,8 @@ pub struct Handle {
     tx: mpsc::UnboundedSender<Request>,
     /// Reads the microphone's level (our own audio path).
     meter: Option<rtc_webrtc::rtc_audio::Meter>,
+    /// Feeds one program's sound into the call (our own audio path).
+    app: Option<rtc_webrtc::rtc_audio::AppFeed>,
 }
 
 impl Handle {
@@ -247,6 +255,13 @@ impl Handle {
         });
     }
 
+    /// Where one program's sound goes to be sent with our voice (`None` without our own audio
+    /// path).
+    #[must_use]
+    pub fn app_feed(&self) -> Option<rtc_webrtc::rtc_audio::AppFeed> {
+        self.app.clone()
+    }
+
     /// Low-power mode: connections are checked half as often.
     pub fn set_low_power(&self, on: bool) {
         peers::LOW_POWER.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -312,6 +327,7 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
     let factory = Factory::new(config.ice);
     let voice = Voice::new(&factory, config.mic);
     let meter = voice.meter();
+    let app = voice.app_feed();
     let peer_tx = queue_tx.clone();
     let peers = Peers::new(factory, voice.track(), signaling.clone(), move |e| {
         let _ = peer_tx.send(Msg::Peer(e));
@@ -345,7 +361,14 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
         let _ = engine.updates.send(Update::Notice(NO_SOUND_CARD.to_owned()));
     }
     tokio::spawn(engine.run(queue, ui_rx));
-    (Handle { tx: ui_tx, meter }, updates)
+    (
+        Handle {
+            tx: ui_tx,
+            meter,
+            app,
+        },
+        updates,
+    )
 }
 
 /// Shown when the audio device changed under us and voice was restarted on the new one.
@@ -812,6 +835,12 @@ impl Engine {
                 Effect::Ui(UiEvent::Sound(s)) => {
                     let _ = self.updates.send(Update::Sound(s));
                 }
+                Effect::Ui(UiEvent::Player(c)) => {
+                    let _ = self.updates.send(Update::Player(c));
+                }
+                Effect::Ui(UiEvent::Pop) => {
+                    let _ = self.updates.send(Update::Pop);
+                }
                 Effect::BroadcastBulk(envelope) => self.send_frames(&envelope),
             }
         }
@@ -871,6 +900,7 @@ impl Engine {
             real_audio: self.voice.is_device(),
             host_token: self.room.host_token().map(str::to_owned),
             playback_lock: self.room.playback_lock(),
+            watch: self.room.watch(),
         };
         let _ = self.updates.send(Update::Room(snapshot));
     }

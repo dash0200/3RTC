@@ -287,6 +287,12 @@ impl Voice {
         self.pipeline.as_ref().map(Audio::meter)
     }
 
+    /// Feeds one program's sound into what we send (our own audio path only).
+    #[must_use]
+    pub fn app_feed(&self) -> Option<rtc_audio::AppFeed> {
+        self.pipeline.as_ref().map(Audio::app_feed)
+    }
+
     /// RNNoise ("Voice Isolation") on or off.
     pub fn set_isolation(&self, on: bool) {
         if let Some(p) = &self.pipeline {

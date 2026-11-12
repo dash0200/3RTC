@@ -586,10 +586,10 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   settings gained the push-to-talk panel and Global Hotkeys; More → Desktop has the rest. Tests:
   78 Rust, `desktop_window_test.py` 13 checks (push-to-talk by holding the mic button, the
   link hand-off, the rejoin card).
-- [ ] **M3: version 1.** **Our own audio pipeline (ADR 0003): per-person volume and mute-for-me,
+- [x] **M3: version 1.** **Our own audio pipeline (ADR 0003): per-person volume and mute-for-me,
   RNNoise (Voice Isolation), the mic-test meter and test sound, live device changes, lower delay;
   libwebrtc's device path kept behind a setting until the checklist passes.**
-  *Built 12 Nov; waiting for the owner's Windows run (`docs/checklists/M3.md`).*
+  *Done 12 Nov (the owner's Windows run passed).*
   `crates/audio`: the sound card through `cpal` (WASAPI shared mode, MMCSS priority), lock-free
   queues (`rtrb`), our own resampler, APM (echo, gain, high-pass, noise) then RNNoise and a noise
   gate on the way out; per-person queues, volume and a limiter on the way in; devices reopened
@@ -621,6 +621,20 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   Exit: the plan's v1 budgets, measured on Windows (checklist).
 - [ ] **M4: watch party.** Playback core, YouTube/Vimeo/Twitch web view, link sources, queue,
   quick picks, sync pill, people overlay; overlay and per-app sound (features 7, 8).
+  *Built 12 Nov, waiting for the owner's Windows run (`docs/checklists/M4.md`, starting with the
+  web view check).* The rules are in `rtc-core` (`room/watch.rs`: loads, play/pause/seek, late
+  join, the 1.5 s re-sync with backoff, host lock with revert, queue, vote skip); links are
+  checked and rebuilt in `rtc-protocol` (`media.rs`). The player is `crates/webview` (a WebView2
+  child window, `wry` 0.53) loading `assets/player.html` from `https://rtc.localhost/`; it is
+  hidden while a popover or dialog is open, reactions float in a strip beside it, toasts sit
+  under it. Direct file and HLS links play in that web view's `<video>` until mpv comes in M5.
+  The people overlay is phone-only in the web app, so the desktop (a computer layout) shows the
+  header's sync pill instead. Quick picks come from `/api/quick-picks` (saved list and the
+  built-in one as fallbacks), thumbnails cached on disk (40 MB). Features 7 and 8 are in
+  `rtc-platform-win` (`overlay.rs`: a click-through GDI layered window; `loopback.rs`: WASAPI
+  process loopback mixed into what we send, also while muted). Tests: `desktop_watch_test.py`
+  (24: YouTube and a video link both ways, re-sync, queue and vote skip, a late joiner landing
+  at the desktop's spot); 8 core tests (`tests/watch.rs`).
 - [ ] **M5: local video and sharing.** mpv player, block protocol and swarm, format card,
   subtitles, screen share, big files; then (M5b) GPU live stream and QUIC transfers.
 - [ ] **M6: games.** Shared state, activity shell, the five games (6.11), stream doctor.

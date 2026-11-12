@@ -412,7 +412,13 @@ fn float_at(f: &Float, t: f32) -> (f32, f32, f32, f32) {
 }
 
 /// The floating reactions and combo counters, over the stage's bottom right.
-pub(crate) fn layer(view: &RoomView) -> impl IntoElement {
+/// `beside`: a video plays, so they float in the strip beside it (the web view covers the rest).
+pub(crate) fn layer(view: &RoomView, beside: bool) -> impl IntoElement {
+    let w = if beside {
+        crate::watch::REACTION_STRIP - 8.0
+    } else {
+        LAYER_W
+    };
     let now = Instant::now();
     let tag_bg = Hsla {
         a: 0.88,
@@ -420,14 +426,14 @@ pub(crate) fn layer(view: &RoomView) -> impl IntoElement {
     };
     div()
         .absolute()
-        .right(px(28.))
+        .right(px(if beside { 4. } else { 28. }))
         .bottom(px(24.))
-        .w(px(LAYER_W))
+        .w(px(w))
         .h(px(LAYER_H))
         .children(view.fun.floats.iter().map(|f| {
             let t = now.duration_since(f.born).as_secs_f32() / f.secs;
             let (dx, up, scale, opacity) = float_at(f, t);
-            let x = f.lane / 100.0 * LAYER_W + dx;
+            let x = f.lane / 100.0 * w + if beside { dx * 0.4 } else { dx };
             div()
                 .absolute()
                 .bottom(px(up * f.rise * LAYER_H))
@@ -510,7 +516,8 @@ pub(crate) fn layer(view: &RoomView) -> impl IntoElement {
 }
 
 /// "Riya played Airhorn", over the stage while a clip plays (`.stage-soundboard-hud`).
-pub(crate) fn banner(view: &RoomView) -> Option<impl IntoElement> {
+/// `beside`: a video plays: the banner goes under it, in the stage's bottom edge.
+pub(crate) fn banner(view: &RoomView, beside: bool) -> Option<impl IntoElement> {
     let (s, at) = view.fun.banner.as_ref()?;
     let t = at.elapsed().as_secs_f32();
     let bars = (0..5).map(move |i| {
@@ -521,8 +528,12 @@ pub(crate) fn banner(view: &RoomView) -> Option<impl IntoElement> {
     Some(
         div()
             .absolute()
-            .bottom(px(84.))
-            .right(px(28.))
+            .bottom(px(if beside { 10. } else { 84. }))
+            .right(px(if beside {
+                crate::watch::REACTION_STRIP + 12.
+            } else {
+                28.
+            }))
             .flex()
             .items_center()
             .gap(px(12.))
