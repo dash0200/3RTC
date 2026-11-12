@@ -627,7 +627,6 @@ impl RoomView {
     /// Shows the window and brings it to the front (from the tray or another launch).
     fn show(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         rtc_platform_win::show_window(window);
-        window.activate_window();
         cx.notify();
     }
 
