@@ -143,6 +143,131 @@ pub enum PeerMessage {
         /// Only the host controls playback.
         playback_lock: bool,
     },
+    /// A YouTube video loaded, played, paused, seeked or closed (`usePlayback.ts`).
+    #[serde(rename_all = "camelCase")]
+    YtAction {
+        /// `load`, `play`, `pause`, `seek`, `close` or `unload`.
+        action: String,
+        /// `load`: the video.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_video_id: Option<String>,
+        /// `load` from older apps.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        video_id: Option<String>,
+        /// `load`: its title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Where, seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_time: Option<f64>,
+        /// Sent by the host (the host controls lock lets these through).
+        #[serde(default)]
+        from_host: bool,
+        /// A passed skip vote.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by_vote: Option<bool>,
+    },
+    /// The same for a link source (Vimeo, Twitch, a video file, HLS).
+    #[serde(rename_all = "camelCase")]
+    MediaAction {
+        /// As in `yt-action`.
+        action: String,
+        /// `load`: the source ([`crate::media::normalize`] it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<Value>,
+        /// Where, seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_time: Option<f64>,
+        /// Sent by the host.
+        #[serde(default)]
+        from_host: bool,
+        /// A passed skip vote.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by_vote: Option<bool>,
+    },
+    /// What are you watching? (sent when a channel opens, and by a guest the lock stopped).
+    YtRequestSync,
+    /// The answer for YouTube, or nothing playing.
+    #[serde(rename_all = "camelCase")]
+    YtSyncState {
+        /// The video (`null` with `nothing_playing`).
+        #[serde(default)]
+        video_id: Option<String>,
+        /// Nothing is playing here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nothing_playing: Option<bool>,
+        /// Where, seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_time: Option<f64>,
+        /// Playing (not paused).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_playing: Option<bool>,
+        /// The queue ([`crate::media::QueueItem::list`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue: Option<Vec<Value>>,
+        /// Who voted to skip (names).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skip_votes: Option<Vec<String>>,
+        /// The video's title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        active_video_title: Option<String>,
+    },
+    /// The answer for a link source.
+    #[serde(rename_all = "camelCase")]
+    MediaSyncState {
+        /// The source.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media: Option<Value>,
+        /// The queue.
+        #[serde(default)]
+        queue: Vec<Value>,
+        /// Who voted to skip.
+        #[serde(default)]
+        skip_votes: Vec<String>,
+        /// Where, seconds (absent: the player isn't up yet).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_time: Option<f64>,
+        /// Playing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_playing: Option<bool>,
+    },
+    /// The room's reference app says where it is, every 4 s (`useDriftSync.ts`).
+    #[serde(rename_all = "camelCase")]
+    MediaHeartbeat {
+        /// What is playing (`yt:<id>`, `link:<provider>:<url>`, …).
+        key: String,
+        /// Where, seconds.
+        current_time: f64,
+        /// Playing (not paused or buffering).
+        is_playing: bool,
+    },
+    /// The shared watch queue and vote to skip (`useQueue.ts`).
+    #[serde(rename_all = "camelCase")]
+    QueueAction {
+        /// `add`, `remove`, `reorder`, `clear`, `play-item`, `next`, `vote-skip`, `vote-skip-passed`.
+        action: String,
+        /// `add`: the item.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<Value>,
+        /// `remove`, `play-item`: which.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        /// `reorder`: the new order.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue: Option<Vec<Value>>,
+        /// `next`: the video now playing (`null` for a link source).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_video_id: Option<Value>,
+        /// `next`: its title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_title: Option<String>,
+        /// `next`: what's left.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remaining_queue: Option<Vec<Value>>,
+        /// `vote-skip`: the votes now.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skip_votes: Option<Vec<Value>>,
+    },
     /// Shared state (games, the open activity): the authority's full state for `key`.
     RoomState {
         /// What the state is for (`act:<activity-id>`, …).
@@ -399,6 +524,63 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v, json!({"type": "room-settings", "playbackLock": true}));
+    }
+
+    #[test]
+    fn reads_the_web_apps_playback_messages() {
+        let e = Envelope::from_json(r#"{"type":"yt-action","action":"load","fromHost":true,"newVideoId":"dQw4w9WgXcQ","title":"T","sender":"Riya","timestamp":5}"#).unwrap();
+        assert!(
+            matches!(e.message, PeerMessage::YtAction { ref action, ref new_video_id, from_host: true, .. } if action == "load" && new_video_id.as_deref() == Some("dQw4w9WgXcQ"))
+        );
+        let s =
+            Envelope::from_json(r#"{"type":"yt-sync-state","videoId":null,"nothingPlaying":true}"#).unwrap();
+        assert!(matches!(
+            s.message,
+            PeerMessage::YtSyncState {
+                video_id: None,
+                nothing_playing: Some(true),
+                ..
+            }
+        ));
+        let s = Envelope::from_json(r#"{"type":"yt-sync-state","mediaType":"youtube","videoId":"dQw4w9WgXcQ","currentTime":12.5,"isPlaying":true,"isBuffering":false,"queue":[],"skipVotes":["Riya"],"activeVideoTitle":"T"}"#).unwrap();
+        assert!(
+            matches!(s.message, PeerMessage::YtSyncState { current_time: Some(t), is_playing: Some(true), .. } if (t - 12.5).abs() < 1e-9)
+        );
+        let q = Envelope::from_json(r#"{"type":"queue-action","action":"next","nextVideoId":null,"nextTitle":"V","remainingQueue":[]}"#).unwrap();
+        assert!(matches!(
+            q.message,
+            PeerMessage::QueueAction {
+                next_video_id: None,
+                ..
+            }
+        ));
+        let r = Envelope {
+            sender: None,
+            timestamp: None,
+            message: PeerMessage::YtRequestSync,
+        }
+        .to_json()
+        .unwrap();
+        assert_eq!(r, r#"{"type":"yt-request-sync"}"#);
+        let n = Envelope {
+            sender: None,
+            timestamp: None,
+            message: PeerMessage::YtSyncState {
+                video_id: None,
+                nothing_playing: Some(true),
+                current_time: None,
+                is_playing: None,
+                queue: None,
+                skip_votes: None,
+                active_video_title: None,
+            },
+        }
+        .to_json()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&n).unwrap(),
+            serde_json::json!({"type":"yt-sync-state","videoId":null,"nothingPlaying":true})
+        );
     }
 
     #[test]

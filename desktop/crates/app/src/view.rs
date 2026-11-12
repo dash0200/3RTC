@@ -75,6 +75,8 @@ pub(crate) enum Dialog {
     Image,
     /// Connection details.
     Network,
+    /// Share one app's sound.
+    AppSound,
 }
 
 /// Which key is being recorded in the settings.
@@ -166,6 +168,10 @@ pub(crate) struct RoomView {
     /// Updates: where they are, and the task checking for them.
     pub(crate) update: crate::update::Status,
     update_task: Option<Task<()>>,
+    /// The watch party on screen: the player, quick picks, the queue's link box.
+    pub(crate) watch: crate::watch::WatchUi,
+    /// The in-game overlay and a shared app's sound.
+    pub(crate) extras: crate::extras::Extras,
 }
 
 /// Milliseconds since 1970.
@@ -233,9 +239,12 @@ impl RoomView {
                     this.create(cx);
                 }
             }),
-            cx.subscribe_in(&link, window, |this, _, e: &InputEvent, _, cx| {
+            cx.subscribe_in(&link, window, |this, _, e: &InputEvent, window, cx| {
                 if matches!(e, InputEvent::PressEnter { .. }) {
-                    this.play_link(cx);
+                    this.submit_link(false, window, cx);
+                } else if matches!(e, InputEvent::Change) && this.watch.link_error.is_some() {
+                    this.watch.link_error = None;
+                    cx.notify();
                 }
             }),
         ];
@@ -277,6 +286,17 @@ impl RoomView {
             }
         });
         rtc_platform_win::set_window_icon(window);
+        let (player_tx, player_rx) = tokio::sync::mpsc::unbounded_channel();
+        let watch = crate::watch::WatchUi::new(window, cx, player_tx);
+        subscriptions.push(cx.subscribe_in(
+            &watch.queue_link,
+            window,
+            |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::PressEnter { .. }) {
+                    this.submit_link(true, window, cx);
+                }
+            },
+        ));
         let mut this = Self {
             settings,
             runtime: runtime.clone(),
@@ -332,8 +352,11 @@ impl RoomView {
             net: crate::net::NetState::default(),
             update: crate::update::Status::Idle,
             update_task: None,
+            watch,
+            extras: crate::extras::Extras::default(),
         };
         this.start_updates(cx);
+        this.start_watch(player_rx, cx);
         this.log("Welcome to 3RTC! Create or join a room to chat and watch YouTube together.".to_owned());
         this.start_engine(cx);
         if let Some(room) = open_room {
@@ -442,6 +465,7 @@ impl RoomView {
                     self.pending = None;
                     self.lightbox = None;
                     self.emoji_open = false;
+                    self.stop_app_sound(cx);
                 }
                 let entered = was_in.is_none() && matches!(snapshot.phase, Phase::InRoom(_));
                 let alone = snapshot.members.is_empty();
@@ -455,6 +479,7 @@ impl RoomView {
                     self.tab = Tab::Chat;
                 }
                 self.desktop.show_room(self.room.as_ref());
+                self.sync_overlay();
                 if entered || was_in.is_some() != self.in_room().is_some() {
                     self.watch_keys();
                 }
@@ -495,6 +520,8 @@ impl RoomView {
                 }
             }
             Update::Devices(d) => self.devices = d,
+            Update::Player(c) => self.on_player_cmd(c, cx),
+            Update::Pop => self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice()),
         }
         cx.notify();
     }
@@ -559,10 +586,6 @@ impl RoomView {
     }
 
     /// "Play for everyone": watching together arrives with the watch party (M4).
-    pub(crate) fn play_link(&mut self, cx: &mut Context<'_, Self>) {
-        self.show_toast("Watching together comes in the next desktop update", cx);
-    }
-
     pub(crate) fn toggle_mic(&mut self) {
         if self.settings.voice_mode == VoiceMode::Ptt {
             return;

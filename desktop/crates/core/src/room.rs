@@ -174,6 +174,8 @@ pub enum Command {
     },
     /// Host only: lock playback to the host (or unlock it) (`useHostControls`).
     SetPlaybackLock(bool),
+    /// The watch party.
+    Watch(WatchCommand),
     /// We started sending a chat picture (the shell sends the bytes on the bulk channels).
     ImageSent {
         /// The chat message's id.
@@ -279,6 +281,10 @@ pub enum UiEvent {
     Reaction(Reaction),
     /// Play a soundboard clip (and show who played it).
     Sound(Sound),
+    /// Tell the player (the web view) what to do.
+    Player(PlayerCmd),
+    /// The queue moved on: the web app's pop.
+    Pop,
 }
 
 /// One thing for the shell to do.
@@ -328,6 +334,10 @@ pub enum Effect {
     Ui(UiEvent),
 }
 
+mod watch;
+
+pub use watch::{HEARTBEAT_MS, PlayerCmd, PlayerReport, Showing, UserAction, WatchCommand, WatchView};
+
 /// Chat lines kept in memory (older ones drop off).
 const CHAT_KEEP: usize = 500;
 
@@ -356,6 +366,8 @@ pub struct Room {
     playback_lock: bool,
     /// Since when the host has been gone with the lock on (it's lifted after a grace period).
     host_gone_since: Option<f64>,
+    /// The watch party.
+    watch: watch::Watch,
 }
 
 impl Room {
@@ -380,6 +392,7 @@ impl Room {
             last_reaction: BTreeMap::new(),
             playback_lock: false,
             host_gone_since: None,
+            watch: watch::Watch::new(),
         }
     }
 
@@ -544,6 +557,7 @@ impl Room {
                     self.recovery(&peer, actions, now_ms, &mut fx);
                 }
                 self.lift_lock_without_host(now_ms, &mut fx);
+                self.watch_tick(now_ms, &mut fx);
             }
         }
         fx
@@ -807,6 +821,11 @@ impl Room {
                 )));
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
+            Command::Watch(w) => {
+                if matches!(self.phase, Phase::InRoom(_)) {
+                    self.watch_command(w, now_ms, fx);
+                }
+            }
             Command::ImageSent { id, image, caption } => {
                 if !matches!(self.phase, Phase::InRoom(_)) {
                     return;
@@ -918,6 +937,7 @@ impl Room {
         self.last_reaction.clear();
         self.playback_lock = false;
         self.host_gone_since = None;
+        self.watch_reset(fx);
         fx.push(Effect::Ui(UiEvent::Changed));
     }
 
@@ -1186,7 +1206,12 @@ impl Room {
         let first = !m.connected;
         m.connected = true;
         let envelope = self.envelope(self.identity_message(false), now_ms);
-        fx.push(Effect::SendToPeer { peer, envelope });
+        fx.push(Effect::SendToPeer {
+            peer: peer.clone(),
+            envelope,
+        });
+        // what are they watching? (`useMediaSync.ts`)
+        self.watch_channel_open(peer, now_ms, fx);
         if first {
             self.log(
                 "Direct Peer-to-Peer DataChannel established. Chat & YouTube Sync is live!",
@@ -1420,6 +1445,15 @@ impl Room {
                     .to_owned(),
                 )));
                 fx.push(Effect::Ui(UiEvent::Changed));
+            }
+            m @ (PeerMessage::YtAction { .. }
+            | PeerMessage::MediaAction { .. }
+            | PeerMessage::YtRequestSync
+            | PeerMessage::YtSyncState { .. }
+            | PeerMessage::MediaSyncState { .. }
+            | PeerMessage::MediaHeartbeat { .. }
+            | PeerMessage::QueueAction { .. }) => {
+                self.watch_message(&from, envelope.sender.as_deref(), m, now_ms, fx);
             }
             PeerMessage::NetPong { .. }
             | PeerMessage::RoomState { .. }

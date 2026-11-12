@@ -125,7 +125,7 @@ fn header(view: &RoomView, room: &Snapshot, id: RoomId, cx: &mut Context<'_, Roo
                     tokens::text_2(),
                 )),
         )
-        .child(div().flex_1())
+        .child(crate::watch::header_middle(room))
         .when(room.playback_lock, |el| {
             el.child(
                 div()
@@ -143,6 +143,7 @@ fn header(view: &RoomView, room: &Snapshot, id: RoomId, cx: &mut Context<'_, Roo
                     .child("Host controls"),
             )
         })
+        .children(crate::watch::header_actions(room, cx))
         .child(
             div()
                 .id("conn")
@@ -259,11 +260,32 @@ fn badge(text: String, accent: bool) -> impl IntoElement {
 // ---- stage --------------------------------------------------------------------------------------
 
 fn stage(
-    view: &RoomView,
+    view: &mut RoomView,
     room: &Snapshot,
-    window: &Window,
+    window: &mut Window,
     cx: &mut Context<'_, RoomView>,
-) -> impl IntoElement {
+) -> AnyElement {
+    if room.watch.showing.is_some() {
+        // a video plays: the player, with floating reactions in a strip beside it (5.9 item 1)
+        return div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .bg(tokens::bg())
+            .child(
+                div()
+                    .absolute()
+                    .top(px(12.))
+                    .left(px(12.))
+                    .right(px(0.))
+                    // toasts and the soundboard banner show in this edge, under the video
+                    .bottom(px(60.))
+                    .child(crate::watch::player_area(view, window, cx)),
+            )
+            .child(crate::fun::layer(view, true))
+            .children(crate::fun::banner(view, true))
+            .into_any_element();
+    }
     let host_name = room
         .host
         .as_ref()
@@ -278,17 +300,121 @@ fn stage(
         "In sync".to_owned()
     };
     let focused = view.link.read(cx).focus_handle(cx).is_focused(window);
+    let picks = crate::watch::browser(view, room, cx);
+    let link_error = crate::watch::link_error(view);
+    let resolving = view.watch.resolving;
     div()
         .relative()
         .flex_1()
         .min_h_0()
         .bg(tokens::bg())
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .px(px(32.))
-        .py(px(28.))
+        .child(
+            div()
+                .id("stage-scroll")
+                .size_full()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .items_center()
+                .px(px(32.))
+                .pt(px(72.))
+                .pb(px(28.))
+                .gap(px(32.))
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(760.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.))
+                        .child(
+                            div()
+                                .text_center()
+                                .font_family(tokens::FONT_DISPLAY_TIGHT_2)
+                                .font_weight(FontWeight::BOLD)
+                                .text_size(px(34.))
+                                .child("What are we watching?"),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .border(px(1.5))
+                                .border_dashed()
+                                .border_color(tokens::line_strong())
+                                .rounded(px(20.))
+                                .bg(tokens::surface())
+                                .p(px(18.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(14.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap(px(10.))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .h(px(52.))
+                                                .px(px(12.))
+                                                .flex()
+                                                .items_center()
+                                                .rounded(px(12.))
+                                                .border_1()
+                                                .border_color(if focused {
+                                                    tokens::focus()
+                                                } else {
+                                                    tokens::line_strong()
+                                                })
+                                                .bg(tokens::bg())
+                                                .text_size(px(16.))
+                                                .child(
+                                                    gpui_kit::component::input::Input::new(&view.link)
+                                                        .appearance(false)
+                                                        .large(),
+                                                ),
+                                        )
+                                        .child(
+                                            Button::new(
+                                                "play-link",
+                                                if resolving {
+                                                    "Checking…"
+                                                } else {
+                                                    "Play for everyone"
+                                                },
+                                            )
+                                            .variant(Variant::Inverse)
+                                            .min_height(px(52.))
+                                            .padding_x(px(22.))
+                                            .font_size(px(16.))
+                                            .on_click(
+                                                cx.listener(|v, _, window, cx| {
+                                                    v.submit_link(false, window, cx);
+                                                }),
+                                            ),
+                                        ),
+                                )
+                                .children(link_error)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(8.))
+                                        .text_size(px(15.))
+                                        .text_color(tokens::text_2())
+                                        .child(icon(Icon::Upload, px(16.), tokens::text_2()))
+                                        .child("or drop a video file anywhere here ·")
+                                        .child(inline_link("browse", "browse files", cx))
+                                        .child(div().text_color(tokens::text_3()).child("MP4, MKV, WebM"))
+                                        .child("·")
+                                        .child(inline_link("share", "share screen", cx)),
+                                ),
+                        ),
+                )
+                .child(div().w_full().max_w(px(1180.)).child(picks)),
+        )
         .child(
             div()
                 .absolute()
@@ -306,89 +432,9 @@ fn stage(
                 .child(div().size(px(8.)).rounded_full().bg(tokens::live()))
                 .child(who),
         )
-        .child(
-            div()
-                .w_full()
-                .max_w(px(760.))
-                .flex()
-                .flex_col()
-                .gap(px(16.))
-                .child(
-                    div()
-                        .text_center()
-                        .font_family(tokens::FONT_DISPLAY_TIGHT_2)
-                        .font_weight(FontWeight::BOLD)
-                        .text_size(px(34.))
-                        .child("What are we watching?"),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .border(px(1.5))
-                        .border_dashed()
-                        .border_color(tokens::line_strong())
-                        .rounded(px(20.))
-                        .bg(tokens::surface())
-                        .p(px(18.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(14.))
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(10.))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .h(px(52.))
-                                        .px(px(12.))
-                                        .flex()
-                                        .items_center()
-                                        .rounded(px(12.))
-                                        .border_1()
-                                        .border_color(if focused {
-                                            tokens::focus()
-                                        } else {
-                                            tokens::line_strong()
-                                        })
-                                        .bg(tokens::bg())
-                                        .text_size(px(16.))
-                                        .child(
-                                            gpui_kit::component::input::Input::new(&view.link)
-                                                .appearance(false)
-                                                .large(),
-                                        ),
-                                )
-                                .child(
-                                    Button::new("play-link", "Play for everyone")
-                                        .variant(Variant::Inverse)
-                                        .min_height(px(52.))
-                                        .padding_x(px(22.))
-                                        .font_size(px(16.))
-                                        .on_click(cx.listener(|v, _, _, cx| v.play_link(cx))),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .justify_center()
-                                .gap(px(8.))
-                                .text_size(px(15.))
-                                .text_color(tokens::text_2())
-                                .child(icon(Icon::Upload, px(16.), tokens::text_2()))
-                                .child("or drop a video file anywhere here ·")
-                                .child(inline_link("browse", "browse files", cx))
-                                .child(div().text_color(tokens::text_3()).child("MP4, MKV, WebM"))
-                                .child("·")
-                                .child(inline_link("share", "share screen", cx)),
-                        ),
-                ),
-        )
-        .child(crate::fun::layer(view))
-        .children(crate::fun::banner(view))
+        .child(crate::fun::layer(view, false))
+        .children(crate::fun::banner(view, false))
+        .into_any_element()
 }
 
 fn inline_link(id: &'static str, label: &'static str, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
@@ -652,7 +698,9 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
             dock_btn("more", Icon::More, view.pop == Some(Pop::More), false)
                 .on_click(cx.listener(|v, _, _, cx| v.toggle_pop(Pop::More, cx))),
         )
-        .when(view.pop == Some(Pop::More), |el| el.child(more_pop(room, cx)));
+        .when(view.pop == Some(Pop::More), |el| {
+            el.child(more_pop(view, room, cx))
+        });
     div()
         .h(px(80.))
         .flex_none()
@@ -1029,7 +1077,7 @@ fn volume_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) 
     .into_any_element()
 }
 
-fn more_pop(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+fn more_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
     let is_host = room.host.as_ref() == Some(&room.me);
     let lock = room.playback_lock;
     deferred(
@@ -1057,6 +1105,18 @@ fn more_pop(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement
                     false,
                     None,
                     Some(Box::new(cx.listener(|v, _, _, cx| v.open_net(cx)))),
+                ))
+                .child(menu_item(
+                    "m-app-sound",
+                    Some(Icon::Speaker),
+                    if view.extras.sharing.is_some() {
+                        "Sharing an app's sound…"
+                    } else {
+                        "Share an app's sound…"
+                    },
+                    false,
+                    None,
+                    Some(Box::new(cx.listener(|v, _, _, cx| v.open_app_sound(cx)))),
                 ))
                 .child(menu_item(
                     "m-qr",
@@ -1115,12 +1175,12 @@ fn more_pop(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement
 type TabSpec = (Tab, &'static str, Option<(String, bool)>);
 
 fn panel(
-    view: &RoomView,
+    view: &mut RoomView,
     room: &Snapshot,
     id: RoomId,
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
-) -> impl IntoElement {
+) -> AnyElement {
     let alone = room.members.is_empty();
     let mut tabs: Vec<TabSpec> = Vec::new();
     if alone {
@@ -1188,7 +1248,7 @@ fn panel(
     let body = match tab {
         Tab::Invite => invite_tab(view, id, cx).into_any_element(),
         Tab::Chat => chat_tab(view, room, window, cx).into_any_element(),
-        Tab::Queue => queue_tab().into_any_element(),
+        Tab::Queue => crate::watch::queue_tab(view, room, window, cx),
         Tab::People => people_tab(view, room, cx).into_any_element(),
         Tab::Logs => logs_tab(view).into_any_element(),
     };
@@ -1203,6 +1263,7 @@ fn panel(
         .border_color(tokens::line())
         .child(bar)
         .child(div().flex_1().min_h_0().flex().flex_col().child(body))
+        .into_any_element()
 }
 
 fn invite_tab(view: &RoomView, id: RoomId, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
@@ -1567,32 +1628,6 @@ fn clock(at_ms: f64) -> String {
         .timestamp_millis_opt(ms)
         .single()
         .map_or_else(crate::view::time_now, |t| t.format("%-I:%M %p").to_string())
-}
-
-fn queue_tab() -> impl IntoElement {
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(8.))
-        .px(px(28.))
-        .text_center()
-        .child(div().text_size(px(32.)).child("🗒️"))
-        .child(
-            div()
-                .text_size(px(16.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Queue is empty"),
-        )
-        .child(
-            div()
-                .text_size(px(13.))
-                .line_height(gpui_kit::relative(1.5))
-                .text_color(tokens::text_3())
-                .child("Watching together, and its queue, come in the next desktop update."),
-        )
 }
 
 // a render helper: each argument is one thing the card shows

@@ -68,6 +68,12 @@ pub(crate) struct Settings {
     pub(crate) low_power: bool,
     /// Download and put in place new versions by itself.
     pub(crate) auto_update: bool,
+    /// "Trending in…": the quick picks' country (`3rtc_qp_region`; empty: worldwide).
+    pub(crate) qp_region: String,
+    /// The in-game overlay: who's talking, over games in borderless windows.
+    pub(crate) overlay: bool,
+    /// Where the overlay sits: 0 top left, 1 top right, 2 bottom left, 3 bottom right.
+    pub(crate) overlay_corner: u8,
 }
 
 /// The settings file's format now. Each change that needs more than new fields with defaults
@@ -172,8 +178,19 @@ impl Default for Settings {
             soundboard_muted: false,
             low_power: false,
             auto_update: true,
+            qp_region: String::new(),
+            overlay: false,
+            overlay_corner: 0,
         }
     }
+}
+
+/// The folder the settings live in (also the quick picks list).
+pub(crate) fn dir() -> Option<PathBuf> {
+    let p = path()?;
+    let d = p.parent()?.to_path_buf();
+    let _ = std::fs::create_dir_all(&d);
+    Some(d)
 }
 
 fn path() -> Option<PathBuf> {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/core", "crates/signaling", "crates/rtc", "crates/engine", "crates/ui", "crates/platform-win", "crates/audio", "crates/app"]
+members = ["crates/protocol", "crates/core", "crates/signaling", "crates/rtc", "crates/engine", "crates/ui", "crates/platform-win", "crates/audio", "crates/webview", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,6 +20,7 @@ rtc-engine = { path = "crates/engine" }
 rtc-ui = { path = "crates/ui" }
 rtc-platform-win = { path = "crates/platform-win" }
 rtc-audio = { path = "crates/audio" }
+rtc-webview = { path = "crates/webview" }
 
 # third party (one version each; cargo-deny checks for duplicates)
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +36,7 @@ rand = "0.9"
 unicode-segmentation = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 sha2 = "0.10"
+url = "2"
 proptest = "1"
 
 [workspace.lints.rust]

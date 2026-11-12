@@ -135,9 +135,9 @@ try:
         click(1385, 96); time.sleep(0.6); shot('logs')
         click(400, 860); time.sleep(0.6); shot('devices'); x('key', 'Escape')
         click(771, 860); time.sleep(0.6); shot('more')
-        click(727, 666); time.sleep(3.5); shot('network'); x('key', 'Escape'); time.sleep(0.3)
+        click(727, 622); time.sleep(3.5); shot('network'); x('key', 'Escape'); time.sleep(0.3)
         click(771, 860); time.sleep(0.6)
-        click(727, 622); time.sleep(0.6); shot('voice-settings')
+        click(727, 578); time.sleep(0.6); shot('voice-settings')
         x('mousemove', '720', '500'); x('click', '--repeat', '11', '5'); time.sleep(1.0); shot('voice-mic-test')
         x('key', 'Escape')
         x('key', 'q'); time.sleep(0.6); shot('qr'); x('key', 'Escape')
@@ -151,7 +151,7 @@ try:
         check('the mic button mutes (the browser hears silence)', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
 
         # M2: push-to-talk, picked in Voice settings, then talking by holding the mic button
-        click(771, 860); time.sleep(0.6); click(727, 622); time.sleep(0.8)
+        click(771, 860); time.sleep(0.6); click(727, 578); time.sleep(0.8)
         x('mousemove', '720', '500'); x('click', '--repeat', '16', '5'); time.sleep(0.6)
         click(856, 490); time.sleep(0.6); shot('voice-ptt'); x('key', 'Escape'); time.sleep(0.4)
         x('mousemove', '348', '860', 'mousedown', '1')
@@ -160,6 +160,15 @@ try:
         x('mouseup', '1')
         check('...and letting go stops it', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
         click(771, 860); time.sleep(0.6); click(708, 798); time.sleep(0.6); shot('desktop'); x('key', 'Escape')
+        click(771, 860); time.sleep(0.6); click(727, 666); time.sleep(1.0); shot('app-sound'); x('key', 'Escape')
+
+        # the watch party: a quick pick plays for everyone (the browser opens it)
+        click(1194, 96); time.sleep(0.4); click(1366, 31); time.sleep(0.6)  # hide the panel: the full stage
+        click(143, 516); time.sleep(1.5); x('mousemove', '700', '500'); shot('watch')
+        check('a quick pick plays for everyone: the browser opens it',
+              wait(lambda: pg.locator('.yt-fullstage-player, iframe[src*="youtube"], #yt-player').count() > 0
+                   or 'Darshan loaded' in pg.locator('body').inner_text(), 10))
+        click(1366, 31); time.sleep(0.6); click(1261, 96); time.sleep(0.6); shot('queue')
 
         # a second launch with a link hands it to this app, which asks before joining
         started = time.time()

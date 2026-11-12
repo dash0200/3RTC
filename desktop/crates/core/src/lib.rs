@@ -12,6 +12,7 @@ pub mod recovery;
 mod room;
 
 pub use room::{
-    BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect, Identity, Input, LinkState,
-    MAX_CHAT_CHARS, Member, NAME_MAX, Phase, Reaction, RemoteSignal, Room, Sound, UiEvent, clean_name,
+    BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect, HEARTBEAT_MS, Identity, Input,
+    LinkState, MAX_CHAT_CHARS, Member, NAME_MAX, Phase, PlayerCmd, PlayerReport, Reaction, RemoteSignal,
+    Room, Showing, Sound, UiEvent, UserAction, WatchCommand, WatchView, clean_name,
 };
