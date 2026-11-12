@@ -5628,6 +5628,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtc-platform-win"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "tracing",
+ "windows 0.62.2",
+ "windows-registry 0.6.1",
+]
+
+[[package]]
 name = "rtc-protocol"
 version = "0.1.0"
 dependencies = [
