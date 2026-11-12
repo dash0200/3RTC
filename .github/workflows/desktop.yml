@@ -39,6 +39,16 @@ jobs:
           manifest-path: desktop/Cargo.toml
           command: check licenses sources bans advisories
 
+  windows-check:
+    # Quick: the Windows-only crate checked for Windows from Linux (no C++ or linking needed),
+    # so mistakes in it show up in a minute or two, before the full Windows build finishes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add x86_64-pc-windows-msvc
+      - run: cargo clippy -p rtc-platform-win --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+
   windows:
     runs-on: windows-latest
     steps:

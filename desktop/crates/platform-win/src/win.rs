@@ -28,9 +28,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics,
     GetWindowThreadProcessId, HICON, ICON_BIG, ICON_SMALL, IsIconic, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
     MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXICON,
-    SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, ShowWindow, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_SETICON, WNDCLASSEXW, WS_OVERLAPPED,
+    SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, ShowWindowAsync,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
+    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_SETICON, WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -240,22 +240,35 @@ fn hwnd_of(window: &impl HasWindowHandle) -> Option<HWND> {
 }
 
 /// Hides the window (it stays open; the tray brings it back).
+///
+/// Asynchronous on purpose: this is called while the UI is handling an event, and a synchronous
+/// `ShowWindow` would make Windows call back into the UI at once (GPUI then reports "RefCell
+/// already borrowed" and drops frames). `ShowWindowAsync` posts the change instead.
 pub fn hide_window(window: &impl HasWindowHandle) {
     if let Some(h) = hwnd_of(window) {
-        // SAFETY: `h` is the app's own live window; this only changes whether it shows.
-        let _ = unsafe { ShowWindow(h, SW_HIDE) };
+        // SAFETY: `h` is the app's own live window; this only queues a change of visibility.
+        let _ = unsafe { ShowWindowAsync(h, SW_HIDE) };
     }
 }
 
-/// Shows the window (restored if minimised) and brings it to the front.
+/// Shows the window (restored if minimised) and brings it to the front, without calling back
+/// into the UI while it's busy (see [`hide_window`]).
 pub fn show_window(window: &impl HasWindowHandle) {
     let Some(h) = hwnd_of(window) else { return };
     // SAFETY: `h` is the app's own live window; IsIconic only reads its state.
     let minimised = unsafe { IsIconic(h) }.as_bool();
-    // SAFETY: as above; this only changes whether and how it shows.
-    let _ = unsafe { ShowWindow(h, if minimised { SW_RESTORE } else { SW_SHOW }) };
-    // SAFETY: as above.
-    let _ = unsafe { SetForegroundWindow(h) };
+    // SAFETY: as above; this only queues a change of visibility.
+    let _ = unsafe { ShowWindowAsync(h, if minimised { SW_RESTORE } else { SW_SHOW }) };
+    // Bringing it to the front from another thread: the activation messages then wait in the
+    // UI thread's queue instead of arriving in the middle of its current event.
+    let raw = h.0 as isize;
+    let _ = std::thread::Builder::new()
+        .name("3rtc-front".to_owned())
+        .spawn(move || {
+            // SAFETY: the window belongs to this process and outlives this brief call; if it was
+            // closed meanwhile, Windows just returns false.
+            let _ = unsafe { SetForegroundWindow(HWND(raw as *mut c_void)) };
+        });
 }
 
 /// The logo as an icon `size` pixels square (made once per size and kept for the app's life).
