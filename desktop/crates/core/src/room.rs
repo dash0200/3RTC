@@ -88,6 +88,17 @@ pub enum Command {
     },
     /// Mute or unmute the mic.
     SetMuted(bool),
+    /// Push-to-talk: the key went down (true) or the release delay ran out (false). Like
+    /// `SetMuted` without the toast and the log line, as the web app's push-to-talk.
+    PushToTalk(bool),
+    /// Get a room you hosted back (the rejoin card): the room code and the host token the
+    /// server gave you. If the server says no, you join it as a guest instead.
+    Resume {
+        /// The room.
+        room: RoomId,
+        /// The server's proof that you hosted it.
+        host_token: String,
+    },
     /// Stop or start hearing everyone ("deafen"); deafening also mutes the mic.
     SetDeafened(bool),
     /// Host only: hand hosting to someone.
@@ -283,6 +294,16 @@ impl Room {
     #[must_use]
     pub const fn host(&self) -> Option<&PeerId> {
         self.host.as_ref()
+    }
+
+    /// The server's proof that we host the room (to get it back later), if we do.
+    #[must_use]
+    pub fn host_token(&self) -> Option<&str> {
+        if self.is_host() {
+            self.host_token.as_deref()
+        } else {
+            None
+        }
     }
 
     /// We host the room.
@@ -525,7 +546,17 @@ impl Room {
                 }));
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
-            Command::CreateRoom | Command::Join(_) => {}
+            Command::Resume { room, host_token } if self.phase == Phase::Idle => {
+                self.phase = Phase::Creating;
+                fx.push(Effect::Send(ClientMessage::CreateRoom {
+                    peer_id: self.me.peer_id.clone(),
+                    room_id: Some(room),
+                    host_token: Some(host_token),
+                    seat_token: None,
+                }));
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
+            Command::CreateRoom | Command::Join(_) | Command::Resume { .. } => {}
             Command::Leave => {
                 if self.phase == Phase::Idle {
                     return;
@@ -567,7 +598,13 @@ impl Room {
                     // talking again means hearing again (as Discord and the web app do)
                     self.set_deafened(false, fx);
                 }
-                self.set_muted(muted, now_ms, fx);
+                self.set_muted(muted, now_ms, true, fx);
+            }
+            Command::PushToTalk(talking) => {
+                if self.muted != talking || (talking && self.deafened) {
+                    return;
+                }
+                self.set_muted(!talking, now_ms, false, fx);
             }
             Command::SetDeafened(deafened) => {
                 if self.deafened == deafened {
@@ -575,7 +612,7 @@ impl Room {
                 }
                 self.set_deafened(deafened, fx);
                 if deafened && !self.muted {
-                    self.set_muted(true, now_ms, fx);
+                    self.set_muted(true, now_ms, true, fx);
                 }
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
@@ -587,7 +624,8 @@ impl Room {
         }
     }
 
-    fn set_muted(&mut self, muted: bool, now_ms: f64, fx: &mut Vec<Effect>) {
+    /// `say`: log it and show a toast (not for push-to-talk, which happens all the time).
+    fn set_muted(&mut self, muted: bool, now_ms: f64, say: bool, fx: &mut Vec<Effect>) {
         self.muted = muted;
         fx.push(Effect::SetMic(!muted));
         if muted {
@@ -599,6 +637,8 @@ impl Room {
                 is_muted: muted,
             };
             fx.push(Effect::Broadcast(self.envelope(msg, now_ms)));
+        }
+        if say && matches!(self.phase, Phase::InRoom(_)) {
             self.log(
                 if muted {
                     "🔇 You muted your microphone."

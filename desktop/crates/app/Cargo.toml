@@ -17,6 +17,7 @@ rtc-protocol.workspace = true
 rtc-core.workspace = true
 rtc-engine.workspace = true
 rtc-ui.workspace = true
+rtc-platform-win.workspace = true
 gpui-kit = "0.9.1"
 tokio.workspace = true
 tracing.workspace = true

@@ -100,4 +100,12 @@ pub mod links {
     pub fn registered_command() -> Option<String> {
         None
     }
+
+    /// Stops `3rtc://` links opening this app (nothing to stop here).
+    ///
+    /// # Errors
+    /// Never.
+    pub fn unregister() -> std::io::Result<()> {
+        Ok(())
+    }
 }

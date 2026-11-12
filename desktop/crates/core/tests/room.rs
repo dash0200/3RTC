@@ -665,3 +665,60 @@ fn a_code_not_on_this_server_is_looked_for_on_the_others() {
     assert!(fx.contains(&Effect::Ui(UiEvent::Notice("Room \"12345\" not found.".into()))));
     assert_eq!(r.phase(), &Phase::Idle);
 }
+
+#[test]
+fn push_to_talk_unmutes_and_mutes_quietly() {
+    let mut r = hosting();
+    let fx = r.update(Input::Command(Command::PushToTalk(true)), 1.0);
+    assert!(!r.muted());
+    assert!(fx.iter().any(|e| matches!(e, Effect::SetMic(true))));
+    assert!(fx.iter().any(|e| matches!(e, Effect::Broadcast(env) if matches!(env.message, PeerMessage::PeerVoiceStatus { is_muted: false, .. }))));
+    assert!(logs(&fx).is_empty(), "no log line for every press");
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Ui(UiEvent::Notice(_)))),
+        "no toast either"
+    );
+    // pressing again while talking changes nothing
+    assert!(
+        r.update(Input::Command(Command::PushToTalk(true)), 2.0)
+            .is_empty()
+    );
+    let fx = r.update(Input::Command(Command::PushToTalk(false)), 3.0);
+    assert!(r.muted());
+    assert!(fx.iter().any(|e| matches!(e, Effect::SetMic(false))));
+    // deafened: the key doesn't open the mic
+    r.update(Input::Command(Command::SetDeafened(true)), 4.0);
+    r.update(Input::Command(Command::PushToTalk(true)), 5.0);
+    assert!(r.muted());
+}
+
+#[test]
+fn a_hosted_room_can_be_taken_back_with_its_token() {
+    let r = hosting();
+    assert_eq!(r.host_token(), Some("host"));
+    let mut r = me();
+    let fx = r.update(
+        Input::Command(Command::Resume {
+            room: room_id(),
+            host_token: "host".into(),
+        }),
+        0.0,
+    );
+    assert!(matches!(
+        &fx[0],
+        Effect::Send(ClientMessage::CreateRoom { room_id: Some(id), host_token: Some(t), .. }) if *id == room_id() && t == "host"
+    ));
+    assert_eq!(r.phase(), &Phase::Creating);
+    // only from the home screen
+    let mut busy = hosting();
+    assert!(
+        busy.update(
+            Input::Command(Command::Resume {
+                room: room_id(),
+                host_token: "host".into()
+            }),
+            0.0
+        )
+        .is_empty()
+    );
+}
