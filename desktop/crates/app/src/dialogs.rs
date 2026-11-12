@@ -48,6 +48,19 @@ pub(crate) fn render(
         Dialog::Link(room) => {
             dialog("link-dialog", px(380.), link(view, room, cx), dismiss).into_any_element()
         }
+        Dialog::Reactions => dialog(
+            "reactions-dialog",
+            px(460.),
+            crate::fun::editor(view, cx),
+            dismiss,
+        )
+        .into_any_element(),
+        Dialog::Image => {
+            dialog("image-dialog", px(900.), crate::chat::lightbox(view, cx), dismiss).into_any_element()
+        }
+        Dialog::Network => {
+            dialog("net-dialog", px(720.), crate::net::dialog(view, cx), dismiss).into_any_element()
+        }
     }
 }
 
@@ -378,8 +391,37 @@ fn voice(
                     div()
                         .text_size(px(12.))
                         .text_color(tokens::text_2())
-                        .child("Voices and app sounds use this. Echo cancellation, noise suppression and gain control are always on (the same as Chrome)."),
+                        .child("Voices and app sounds use this. Echo cancellation and gain control are always on."),
                 )
+                .child(div().h(px(1.)).bg(tokens::line()))
+                .child(section("MIC TEST", "Check Your Microphone"))
+                .child(mic_test(view, cx))
+                .child(toggle_row(
+                    "v-isolation",
+                    "✨ Voice Isolation",
+                    if view.settings.low_power {
+                        "Off while low-power mode is on (More → Desktop)."
+                    } else {
+                        "Removes background noise (keyboard, fans, traffic) so only your voice gets through."
+                    },
+                    view.settings.voice_isolation && !view.settings.low_power,
+                    view.has_pipeline() && !view.settings.low_power,
+                    RoomView::set_isolation,
+                    cx,
+                ))
+                .child(toggle_row(
+                    "v-classic",
+                    "Classic audio",
+                    if view.in_room().is_some() {
+                        "Windows' standard voice path, without per-person volume, Voice Isolation or the mic test. Change it outside a room."
+                    } else {
+                        "Windows' standard voice path, without per-person volume, Voice Isolation or the mic test. Try it if voices break up."
+                    },
+                    view.settings.classic_audio,
+                    view.in_room().is_none(),
+                    RoomView::set_classic_audio,
+                    cx,
+                ))
                 .child(div().h(px(1.)).bg(tokens::line()))
                 .child(section("INPUT MODE", "Voice Transmission Mode"))
                 .child(
@@ -937,6 +979,66 @@ fn hotkey_row(
         )
 }
 
+/// The mic meter (after echo cancelling and noise removal: what others hear) and the test sound.
+fn mic_test(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let works = view.has_pipeline();
+    // peak to a −60…0 dB scale, as meters show it
+    let level = if view.mic_meter > 0.001 {
+        (1.0 + 20.0 * view.mic_meter.log10() / 60.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let color = if level > 0.9 {
+        tokens::danger_text()
+    } else if level > 0.7 {
+        tokens::warn()
+    } else {
+        tokens::live_text()
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(tokens::text_2())
+                        .child(if works {
+                            "Speak: the bar shows what others hear."
+                        } else {
+                            "The mic test needs 3RTC's own audio (turn off Classic audio)."
+                        }),
+                )
+                .child(
+                    div()
+                        .id("mic-meter")
+                        .h(px(10.))
+                        .rounded_full()
+                        .bg(tokens::raised())
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .h_full()
+                                .rounded_full()
+                                .bg(color)
+                                .w(gpui_kit::relative(level)),
+                        ),
+                ),
+        )
+        .child(
+            Button::new("test-sound", "🔊 Play test sound")
+                .min_height(px(38.))
+                .disabled(!works)
+                .on_click(cx.listener(|v, _, _, _| v.play_test_sound())),
+        )
+}
+
 // ---- desktop settings -------------------------------------------------------------------------
 
 fn toggle_row(
@@ -1047,7 +1149,17 @@ fn desktop(
                     RoomView::set_open_links,
                     cx,
                 ))
-                .when(!supported, |el| el.child(hint("These work in the Windows app."))),
+                .child(toggle_row(
+                    "d-low-power",
+                    "Low-power mode",
+                    "For laptops on battery: calmer animations, Voice Isolation off, and connections checked less often.",
+                    view.settings.low_power,
+                    true,
+                    RoomView::set_low_power,
+                    cx,
+                ))
+                .when(!supported, |el| el.child(hint("These work in the Windows app.")))
+                .child(updates(view, cx)),
         )
         .child(
             div()
@@ -1064,6 +1176,81 @@ fn desktop(
                         .on_click(cx.listener(|v, _, _, cx| v.close_dialog(cx))),
                 ),
         )
+}
+
+/// More → Desktop → Updates: this build, what the check found, and its buttons.
+fn updates(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    use crate::update::Status;
+    let (text, color) = match &view.update {
+        Status::Idle => (
+            "Checks for new versions a little after starting.".to_owned(),
+            tokens::text_2(),
+        ),
+        Status::Checking => ("Checking for a new version…".to_owned(), tokens::text_2()),
+        Status::UpToDate => ("You have the latest version.".to_owned(), tokens::live_text()),
+        Status::Downloading(b, p) => (format!("Downloading 3RTC {b}… {p}%"), tokens::focus()),
+        Status::Ready(b) => (
+            format!("3RTC {b} is ready: it starts the next time you open 3RTC."),
+            tokens::live_text(),
+        ),
+        Status::Failed(e) => (format!("Couldn't update: {e}."), tokens::danger_text()),
+        Status::Dev => (
+            "A development build: updates are off.".to_owned(),
+            tokens::text_3(),
+        ),
+    };
+    let ready = matches!(view.update, Status::Ready(_));
+    let busy = matches!(
+        view.update,
+        Status::Checking | Status::Downloading(..) | Status::Dev
+    );
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .pt(px(6.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.))
+                        .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child("Updates"))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(tokens::text_3())
+                                .child(format!("This version: {}", crate::view::BUILD)),
+                        ),
+                )
+                .child(if ready {
+                    Button::new("restart-update", "Restart now")
+                        .variant(Variant::Primary)
+                        .min_height(px(34.))
+                        .on_click(cx.listener(|v, _, _, cx| v.restart_for_update(cx)))
+                        .into_any_element()
+                } else {
+                    Button::new("check-update", "Check for updates")
+                        .min_height(px(34.))
+                        .disabled(busy)
+                        .on_click(cx.listener(|v, _, _, cx| v.check_updates(true, cx)))
+                        .into_any_element()
+                }),
+        )
+        .child(div().text_size(px(12.5)).text_color(color).child(text))
+        .child(toggle_row(
+            "d-auto-update",
+            "Update automatically",
+            "New versions download in the background and start the next time you open 3RTC. Your settings are kept.",
+            view.settings.auto_update,
+            !matches!(view.update, Status::Dev),
+            RoomView::set_auto_update,
+            cx,
+        ))
 }
 
 // ---- a clicked link ----------------------------------------------------------------------------

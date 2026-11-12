@@ -6,13 +6,19 @@
 // Release builds have no console window; dev builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chat;
 mod desktop;
 mod dialogs;
+mod emoji;
+mod fun;
 mod home;
 mod links;
+mod net;
 mod room;
 mod settings;
 mod single;
+mod sounds;
+mod update;
 mod view;
 
 use anyhow::Context as _;
@@ -36,6 +42,12 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("starting the engine runtime")?;
     let handle = runtime.handle().clone();
+
+    // restarted after an update: let the old version close first, then tidy up after it
+    if std::env::args().any(|a| a == "--after-update") {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    std::thread::spawn(update::clean_up);
 
     // one 3RTC per person: a second launch (or a clicked 3rtc:// link) hands over to the first
     let open_room = links::room_in_args(std::env::args().skip(1));

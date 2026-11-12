@@ -521,8 +521,8 @@ profile as in `Cargo.toml` (LTO, one codegen unit); `mimalloc` once measured to 
 
 | # | Feature | Milestone | Notes |
 |---|---|---|---|
-| 1 | Push-to-talk anywhere (keyboard or mouse button) | M2 | `RegisterHotKey` where it works, low-level hook otherwise; tells the user when a game runs as admin |
-| 2 | Global mute / deafen hotkeys | M2 | |
+| 1 | Push-to-talk anywhere (keyboard or mouse button) | M2 | Held keys read with `GetAsyncKeyState` ~60×/s from a small thread: sees the release (which `RegisterHotKey` can't) and mouse buttons, swallows nothing, no keyboard hook (anti-cheat and antivirus flag hooks); tells the user when an app running as admin is in front (Windows hides its keys from every method) |
+| 2 | Global mute / deafen hotkeys | M2 | Same key reading; `RegisterHotKey` (which takes the combination from the app in front) is the option if double triggers in games bother anyone |
 | 3 | Voice that never throttles | M1 | soak test with the window hidden |
 | 4 | Tray, start with Windows, back into the last room | M2 | per-user Run key; asks first |
 | 5 | Native notifications (mention, your turn, someone joined) | M2 | respects Focus Assist |
@@ -534,7 +534,7 @@ profile as in `Cargo.toml` (LTO, one codegen unit); `mimalloc` once measured to 
 | 11 | Big files and folders, resumable; QUIC between desktop apps | M5 | falls back to the data channel with web users |
 | 12 | Local video in any format | M5 | mpv |
 | 13 | `3rtc://` links and "Open in app" | M2 | always asks, never opens by itself |
-| 14 | Low-power mode | M3 | |
+| 14 | Low-power mode | M3 | More → Desktop: calm reactions, no Voice Isolation, connections checked half as often |
 
 Settings for these live in Audio & Voice Settings (new sections in the same style) and a
 "Desktop" entry in the More menu.
@@ -588,9 +588,37 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   link hand-off, the rejoin card).
 - [ ] **M3: version 1.** **Our own audio pipeline (ADR 0003): per-person volume and mute-for-me,
   RNNoise (Voice Isolation), the mic-test meter and test sound, live device changes, lower delay;
-  libwebrtc's device path kept behind a setting until the checklist passes.** Chat images and emoji picker, reactions, soundboard, host controls,
-  connection details (6.12 without stream doctor), low-power mode, portable zip and per-user
-  installer, in-place updater (unsigned), settings migration. Exit: the plan's v1 budgets.
+  libwebrtc's device path kept behind a setting until the checklist passes.**
+  *Built 12 Nov; waiting for the owner's Windows run (`docs/checklists/M3.md`).*
+  `crates/audio`: the sound card through `cpal` (WASAPI shared mode, MMCSS priority), lock-free
+  queues (`rtrb`), our own resampler, APM (echo, gain, high-pass, noise) then RNNoise and a noise
+  gate on the way out; per-person queues, volume and a limiter on the way in; devices reopened
+  when unplugged or when Windows changes the default. Each remote track is read with
+  `NativeAudioStream` into the mixer. App: our path is the default, "Classic audio" (libwebrtc's
+  devices) is a switch in Voice settings; Voice settings gained the mic meter, "Play test sound"
+  and Voice Isolation (on by default); clicking a person in the dock (or 🔊 on their People card)
+  opens their volume (0–200%, presets, mute for me, reset), saved by their install id so it
+  sticks across rooms. Tests: `desktop_interop_test.py` with `RTC_MIC=pipeline` (20 checks: the
+  browser's voice reaches our mixer), `desktop_rejoin_test.py` (someone leaves and rejoins with the
+  same peer id: fixed in the vendored `AdmProxy::Init`, see `3RTC:`).
+  Then the rest of version 1. **Chat:** pictures both ways on the bulk channel (`IMG1` frames,
+  `rtc_protocol::image`), attached with the picture button, pasted (Ctrl+V) or dropped on the
+  window, with progress, a lightbox and Save; the emoji picker; your quick reactions over the
+  box; the web app's pop and chime. **Reactions:** the dock popover, keys 1–9 and 0, floating
+  emoji with lanes, combos (×3…) and the sender's name, the web app's limits (`rtc_core::fun`),
+  the "Your quick reactions" editor. **Soundboard:** the web app's seven clips (decoded to 48 kHz
+  in `crates/app/assets/sounds`), volume and mute, "… played …" banner, played through our mixer
+  (Windows' player on the classic path). **Host controls:** "Only I control playback" in More,
+  `room-settings` and `playbackLock` in identity, the "Host controls" pill, lifted 4 s after the
+  host leaves. **Connection details** (More): round trip, path, loss, jitter, data rates per
+  person, the latency graph, the Markdown report. **Low-power mode** (More → Desktop).
+  **Settings** are versioned (`settingsVersion` 2) and migrated on load. **Releases:**
+  `packaging/package.ps1` builds the exe, the portable zip, the per-user installer
+  (`packaging/3rtc.iss`, Inno Setup, no admin) and `latest.json`; the app checks
+  `https://3rtc.me/desktop/latest.json`, downloads a newer exe, checks its SHA-256 and swaps it in
+  place (`crates/app/src/update.rs`). Tests: 113 Rust, `desktop_fun_test.py` (11: reactions,
+  clips and pictures both ways, byte for byte), `desktop_window_test.py` (18).
+  Exit: the plan's v1 budgets, measured on Windows (checklist).
 - [ ] **M4: watch party.** Playback core, YouTube/Vimeo/Twitch web view, link sources, queue,
   quick picks, sync pill, people overlay; overlay and per-app sound (features 7, 8).
 - [ ] **M5: local video and sharing.** mpv player, block protocol and swarm, format card,
@@ -648,7 +676,7 @@ with `Xvfb` and Mesa's software Vulkan (`mesa-vulkan-drivers`).
 | Variable fonts in GPUI's text system | M1 step 2 | Bundle static weights 400/500/600/700 |
 | WebView2 inside a GPUI window (`wry`), z-order, message channel | Start of M4 | Separate child window for the player; ask |
 | libmpv render API into a GPUI surface | Start of M5 | mpv in a child window (same limits as the web view) |
-| Low-level keyboard hook vs anti-cheat and antivirus (unsigned exe) | M2 | `RegisterHotKey` only, documented limit |
+| Low-level keyboard hook vs anti-cheat and antivirus (unsigned exe) | M2 | No hook: held keys are read (`GetAsyncKeyState`); admin apps in front are the documented limit |
 | Exact parity of floating-point game or sync maths between TS and Rust | Golden vectors | Use integers or the same operation order; never "close enough" |
 
 ---

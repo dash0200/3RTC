@@ -3,6 +3,7 @@
 //! (`DesktopDock.tsx`, `.dock-*`) and the side panel (`LiveChat.tsx`, `InvitePanel.tsx`).
 
 use gpui_kit::component::Sizable as _;
+use gpui_kit::component::slider::Slider;
 use gpui_kit::{
     AnyElement, App, Context, Div, Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window,
@@ -125,6 +126,23 @@ fn header(view: &RoomView, room: &Snapshot, id: RoomId, cx: &mut Context<'_, Roo
                 )),
         )
         .child(div().flex_1())
+        .when(room.playback_lock, |el| {
+            el.child(
+                div()
+                    .h(px(32.))
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .rounded_full()
+                    .bg(alpha(tokens::warn(), 0.12))
+                    .text_color(tokens::warn())
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(icon(Icon::Lock, px(15.), tokens::warn()))
+                    .child("Host controls"),
+            )
+        })
         .child(
             div()
                 .id("conn")
@@ -369,6 +387,8 @@ fn stage(
                         ),
                 ),
         )
+        .child(crate::fun::layer(view))
+        .children(crate::fun::banner(view))
 }
 
 fn inline_link(id: &'static str, label: &'static str, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
@@ -503,12 +523,19 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
         .pl(px(10.))
         .border_l_1()
         .border_color(tokens::line())
-        .children(room.members.iter().take(3).map(|(_, m)| {
+        .children(room.members.iter().take(3).map(|(peer, m)| {
             let name = m.username.clone().unwrap_or_else(|| "Peer".to_owned());
+            let (_, muted_for_me) = view.peer_volume(m);
+            let who = peer.clone();
             div()
+                .id(SharedString::from(format!("dock-peer-{peer}")))
                 .relative()
+                .cursor_pointer()
+                .on_click(cx.listener(move |v, _, _, cx| v.open_volume(who.clone(), cx)))
                 .child(avatar(&name, 34., m.speaking && !m.muted, tokens::panel()))
-                .when(m.muted, |el| el.child(muted_badge(tokens::panel(), px(14.))))
+                .when(m.muted || muted_for_me, |el| {
+                    el.child(muted_badge(tokens::panel(), px(14.)))
+                })
         }))
         .when(room.members.len() > 3, |el| {
             el.child(
@@ -625,7 +652,7 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
             dock_btn("more", Icon::More, view.pop == Some(Pop::More), false)
                 .on_click(cx.listener(|v, _, _, cx| v.toggle_pop(Pop::More, cx))),
         )
-        .when(view.pop == Some(Pop::More), |el| el.child(more_pop(cx)));
+        .when(view.pop == Some(Pop::More), |el| el.child(more_pop(room, cx)));
     div()
         .h(px(80.))
         .flex_none()
@@ -637,15 +664,19 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
         .bg(tokens::panel())
         .border_t_1()
         .border_color(tokens::raised())
-        .child(
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .child(you)
-                .when(!room.members.is_empty(), |el| el.child(peers)),
-        )
+        .child(div().flex_1().flex().items_center().gap(px(12.)).child(you).when(
+            !room.members.is_empty(),
+            |el| {
+                el.child(
+                    div()
+                        .relative()
+                        .child(peers)
+                        .when(view.pop == Some(Pop::Volume), |el| {
+                            el.child(volume_pop(view, room, cx))
+                        }),
+                )
+            },
+        ))
         .child(
             div()
                 .flex()
@@ -669,8 +700,28 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                         cx.notify();
                     })),
                 )
-                .child(later_btn("reactions", Icon::Smile, cx))
-                .child(later_btn("sounds", Icon::Music, cx))
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            dock_btn("reactions", Icon::Smile, view.pop == Some(Pop::Reactions), false)
+                                .on_click(cx.listener(|v, _, _, cx| v.toggle_pop(Pop::Reactions, cx))),
+                        )
+                        .when(view.pop == Some(Pop::Reactions), |el| {
+                            el.child(crate::fun::reactions_pop(view, cx))
+                        }),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            dock_btn("sounds", Icon::Music, view.pop == Some(Pop::Sounds), false)
+                                .on_click(cx.listener(|v, _, _, cx| v.toggle_pop(Pop::Sounds, cx))),
+                        )
+                        .when(view.pop == Some(Pop::Sounds), |el| {
+                            el.child(crate::fun::sounds_pop(view, cx))
+                        }),
+                )
                 .child(later_btn("add-video", Icon::VideoAdd, cx))
                 .child(later_btn("screen", Icon::ScreenShare, cx))
                 .child(later_btn("games", Icon::Games, cx))
@@ -802,7 +853,185 @@ fn devices_pop(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElem
     .with_priority(1)
 }
 
-fn more_pop(cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+/// A person's volume for you (`PeerAudioPopover` in `PeerVoiceRoster.tsx`): the slider
+/// (0–200%), presets, mute for me and reset.
+fn volume_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> AnyElement {
+    let Some((peer, m)) = view
+        .volume_for
+        .as_ref()
+        .and_then(|p| room.members.iter().find(|(q, _)| q == p))
+    else {
+        return div().into_any_element();
+    };
+    let name = m.username.clone().unwrap_or_else(|| "Peer".to_owned());
+    let (volume, muted) = view.peer_volume(m);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pct = (volume * 100.0).round() as u32;
+    let works = view.has_pipeline();
+    let status = if m.speaking && !m.muted {
+        ("Speaking", tokens::live_text())
+    } else if muted {
+        ("You muted them", tokens::danger_text())
+    } else if m.muted {
+        ("Mic off", tokens::text_2())
+    } else {
+        ("Mic on", tokens::text_2())
+    };
+    let badge_text = if muted {
+        "0% (Muted)".to_owned()
+    } else if pct > 100 {
+        format!("{pct}% (Boosted)")
+    } else if pct == 100 {
+        "100% (Default)".to_owned()
+    } else {
+        format!("{pct}%")
+    };
+    let badge_color = if muted || pct == 0 {
+        tokens::danger_text()
+    } else if pct > 100 {
+        tokens::warn()
+    } else {
+        tokens::focus()
+    };
+    let preset = |label: &'static str, val: f32| {
+        let on = !muted && (volume - val).abs() < 0.04;
+        let who = peer.clone();
+        div()
+            .id(label)
+            .flex_1()
+            .py(px(6.))
+            .flex()
+            .justify_center()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if on { tokens::focus() } else { tokens::line() })
+            .bg(if on {
+                alpha(tokens::focus(), 0.12)
+            } else {
+                tokens::bg()
+            })
+            .text_color(if on { tokens::focus() } else { tokens::text_2() })
+            .text_size(px(12.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .cursor_pointer()
+            .hover(|s| s.border_color(tokens::line_strong()))
+            .on_click(cx.listener(move |v, _, _, cx| v.set_peer_volume(&who, val, false, cx)))
+            .child(label)
+    };
+    let (mute_who, reset_who) = (peer.clone(), peer.clone());
+    deferred(
+        div().absolute().bottom(px(56.)).left_0().occlude().child(
+            popover()
+                .id("volume-pop")
+                .w(px(300.))
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .on_mouse_down_out(cx.listener(|v, _, _, cx| {
+                    v.pop = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(avatar(&name, 36., m.speaking && !m.muted, tokens::surface()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .child(div().text_size(px(15.)).font_weight(FontWeight::BOLD).child(name.clone()))
+                                .child(div().text_size(px(12.)).text_color(status.1).child(status.0)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Individual Volume"),
+                        )
+                        .child(
+                            div()
+                                .px(px(7.))
+                                .py(px(1.))
+                                .rounded(px(6.))
+                                .bg(alpha(badge_color, 0.15))
+                                .text_color(badge_color)
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(badge_text),
+                        ),
+                )
+                .when_some(view.volume_slider.as_ref().filter(|_| works), |el, state| {
+                    el.child(Slider::new(state).accessibility_label(format!("Volume for {name}")))
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .text_size(px(11.))
+                                .text_color(tokens::text_2())
+                                .child("0%")
+                                .child("100%")
+                                .child("200%"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(6.))
+                                .child(preset("50%", 0.5))
+                                .child(preset("100%", 1.0))
+                                .child(preset("150%", 1.5))
+                                .child(preset("200%", 2.0)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap(px(8.))
+                                .child(
+                                    Button::new("volume-mute", if muted { "Unmute for Me" } else { "Mute for Me" })
+                                        .variant(if muted { Variant::Primary } else { Variant::Secondary })
+                                        .min_height(px(34.))
+                                        .font_size(px(13.))
+                                        .on_click(cx.listener(move |v, _, _, cx| {
+                                            v.set_peer_volume(&mute_who, volume, !muted, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("volume-reset", "Reset (100%)")
+                                        .min_height(px(34.))
+                                        .font_size(px(13.))
+                                        .on_click(cx.listener(move |v, _, _, cx| {
+                                            v.set_peer_volume(&reset_who, 1.0, false, cx);
+                                        })),
+                                ),
+                        )
+                })
+                .when(!works, |el| {
+                    el.child(
+                        div()
+                            .text_size(px(12.))
+                            .line_height(gpui_kit::relative(1.45))
+                            .text_color(tokens::text_2())
+                            .child("Per-person volume needs 3RTC's own audio. Turn off Classic audio in Voice settings."),
+                    )
+                }),
+        ),
+    )
+    .with_priority(1)
+    .into_any_element()
+}
+
+fn more_pop(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let is_host = room.host.as_ref() == Some(&room.me);
+    let lock = room.playback_lock;
     deferred(
         div().absolute().bottom(px(56.)).right(px(-100.)).occlude().child(
             menu()
@@ -825,9 +1054,9 @@ fn more_pop(cx: &mut Context<'_, RoomView>) -> impl IntoElement {
                     "m-conn",
                     Some(Icon::Signal),
                     "Connection details",
-                    true,
+                    false,
                     None,
-                    None,
+                    Some(Box::new(cx.listener(|v, _, _, cx| v.open_net(cx)))),
                 ))
                 .child(menu_item(
                     "m-qr",
@@ -837,6 +1066,34 @@ fn more_pop(cx: &mut Context<'_, RoomView>) -> impl IntoElement {
                     None,
                     Some(Box::new(cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Qr, cx)))),
                 ))
+                .when(is_host, |el| {
+                    el.child(menu_item(
+                        "m-lock",
+                        Some(Icon::Lock),
+                        "Only I control playback",
+                        false,
+                        Some(rtc_ui::overlay::switch(lock).into_any_element()),
+                        Some(Box::new(cx.listener(move |v, _, _, cx| {
+                            v.pop = None;
+                            v.command(rtc_core::Command::SetPlaybackLock(!lock));
+                            cx.notify();
+                        }))),
+                    ))
+                })
+                .when(!is_host && lock, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .min_h(px(44.))
+                            .px(px(12.))
+                            .text_size(px(14.))
+                            .text_color(tokens::text_2())
+                            .child(icon(Icon::Lock, px(18.), tokens::text_2()))
+                            .child("The host controls playback"),
+                    )
+                })
                 .child(menu_item(
                     "m-desktop",
                     Some(Icon::More),
@@ -932,7 +1189,7 @@ fn panel(
         Tab::Invite => invite_tab(view, id, cx).into_any_element(),
         Tab::Chat => chat_tab(view, room, window, cx).into_any_element(),
         Tab::Queue => queue_tab().into_any_element(),
-        Tab::People => people_tab(room, cx).into_any_element(),
+        Tab::People => people_tab(view, room, cx).into_any_element(),
         Tab::Logs => logs_tab(view).into_any_element(),
     };
     div()
@@ -1151,21 +1408,24 @@ fn chat_tab(
                                     ),
                             )
                         })
-                        .child(
-                            div()
-                                .max_w_full()
-                                .px(px(12.))
-                                .py(px(7.))
-                                .rounded(px(12.))
-                                .bg(tokens::raised())
-                                .text_size(px(14.))
-                                .line_height(gpui_kit::relative(1.45))
-                                .child(line.text.clone()),
-                        ),
+                        .children(crate::chat::picture_view(view, line, mine, cx))
+                        .when(!line.text.is_empty(), |el| {
+                            el.child(
+                                div()
+                                    .max_w_full()
+                                    .px(px(12.))
+                                    .py(px(7.))
+                                    .rounded(px(12.))
+                                    .bg(tokens::raised())
+                                    .text_size(px(14.))
+                                    .line_height(gpui_kit::relative(1.45))
+                                    .child(line.text.clone()),
+                            )
+                        }),
                 ),
         );
     }
-    let send_active = !view.message.read(cx).value().trim().is_empty();
+    let send_active = !view.message.read(cx).value().trim().is_empty() || view.pending.is_some();
     div()
         .flex_1()
         .min_h_0()
@@ -1213,12 +1473,17 @@ fn chat_tab(
                 .p(px(12.))
                 .border_t_1()
                 .border_color(tokens::raised())
+                .children(crate::chat::pending_card(view, cx))
+                .when(view.emoji_open, |el| {
+                    el.child(crate::chat::emoji_picker(view, cx))
+                })
+                .child(crate::chat::quick_reactions(view, cx))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(4.))
-                        .pl(px(10.))
+                        .pl(px(4.))
                         .pr(px(4.))
                         .py(px(4.))
                         .rounded(px(14.))
@@ -1230,11 +1495,50 @@ fn chat_tab(
                         })
                         .bg(tokens::bg())
                         .child(
-                            div().flex_1().min_w_0().text_size(px(15.)).child(
-                                gpui_kit::component::input::Input::new(&view.message)
-                                    .appearance(false)
-                                    .large(),
-                            ),
+                            div()
+                                .id("emoji-toggle")
+                                .size(px(36.))
+                                .flex_none()
+                                .rounded(px(10.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .bg(if view.emoji_open {
+                                    tokens::raised()
+                                } else {
+                                    tokens::bg()
+                                })
+                                .hover(|s| s.bg(tokens::raised()))
+                                .on_click(cx.listener(|v, _, _, cx| {
+                                    v.emoji_open = !v.emoji_open;
+                                    cx.notify();
+                                }))
+                                .child(icon(Icon::Smile, px(18.), tokens::text_2())),
+                        )
+                        .child(div().flex_1().min_w_0().text_size(px(15.)).child({
+                            let this = cx.entity().downgrade();
+                            gpui_kit::component::input::Input::new(&view.message)
+                                .appearance(false)
+                                .large()
+                                .on_paste(move |item, _, app| {
+                                    this.update(app, |v, cx| v.paste_picture(item, cx))
+                                        .unwrap_or(false)
+                                })
+                        }))
+                        .child(
+                            div()
+                                .id("attach")
+                                .size(px(36.))
+                                .flex_none()
+                                .rounded(px(10.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens::raised()))
+                                .on_click(cx.listener(|v, _, _, cx| v.attach_clicked(cx)))
+                                .child(icon(Icon::Image, px(18.), tokens::text_2())),
                         )
                         .child(
                             div()
@@ -1301,6 +1605,7 @@ fn person_card(
     speaking: bool,
     status: (&'static str, bool),
     make_host: Option<PeerId>,
+    volume: Option<(PeerId, String)>,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
     let chip = |t: &'static str, color: Hsla| {
@@ -1370,21 +1675,36 @@ fn person_card(
                         ),
                 ),
         )
-        .when_some(make_host, |el, peer| {
+        .when(make_host.is_some() || volume.is_some(), |el| {
             el.child(
-                div().flex().justify_end().child(
-                    Button::new(SharedString::from(format!("host-{peer}")), "👑 Make host")
-                        .min_height(px(32.))
-                        .padding_x(px(10.))
-                        .font_size(px(13.))
-                        .on_click(cx.listener(move |v, _, _, _| v.make_host(peer.clone()))),
-                ),
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .when_some(volume, |el, (peer, label)| {
+                        el.child(
+                            Button::new(SharedString::from(format!("volume-{peer}")), label)
+                                .min_height(px(32.))
+                                .padding_x(px(10.))
+                                .font_size(px(13.))
+                                .on_click(cx.listener(move |v, _, _, cx| v.open_volume(peer.clone(), cx))),
+                        )
+                    })
+                    .when_some(make_host, |el, peer| {
+                        el.child(
+                            Button::new(SharedString::from(format!("host-{peer}")), "👑 Make host")
+                                .min_height(px(32.))
+                                .padding_x(px(10.))
+                                .font_size(px(13.))
+                                .on_click(cx.listener(move |v, _, _, _| v.make_host(peer.clone()))),
+                        )
+                    }),
             )
         })
         .into_any_element()
 }
 
-fn people_tab(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+fn people_tab(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
     let me_host = room.host.as_ref() == Some(&room.me);
     let my_status = if room.deafened {
         ("🔇 Sound off", true)
@@ -1453,6 +1773,7 @@ fn people_tab(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoEleme
             room.speaking && !room.muted,
             my_status,
             None,
+            None,
             cx,
         ))
         .when(!room.members.is_empty(), |el| {
@@ -1473,8 +1794,11 @@ fn people_tab(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoEleme
                 .into_iter()
                 .map(|(peer, m)| {
                     let name = m.username.clone().unwrap_or_else(|| "Connecting…".to_owned());
+                    let (volume, muted_for_me) = view.peer_volume(m);
                     let status = if !m.connected {
                         ("Connecting…", false)
+                    } else if muted_for_me {
+                        ("Muted by you", true)
                     } else if m.muted {
                         ("Mic off", true)
                     } else if m.speaking {
@@ -1484,6 +1808,16 @@ fn people_tab(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoEleme
                     };
                     let host = room.host.as_ref() == Some(peer);
                     let make = (me_host && m.connected).then(|| peer.clone());
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let pct = (volume * 100.0).round() as u32;
+                    let vol = (m.connected && view.has_pipeline()).then(|| {
+                        let label = if muted_for_me {
+                            "🔇 Muted".to_owned()
+                        } else {
+                            format!("🔊 {pct}%")
+                        };
+                        (peer.clone(), label)
+                    });
                     person_card(
                         &name,
                         false,
@@ -1492,6 +1826,7 @@ fn people_tab(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoEleme
                         m.speaking && !m.muted,
                         status,
                         make,
+                        vol,
                         cx,
                     )
                 }),

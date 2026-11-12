@@ -83,18 +83,65 @@ pub enum PeerMessage {
         /// The text.
         text: String,
     },
-    /// A floating emoji reaction.
+    /// A floating emoji reaction (`features/reactions/useReactions.ts`).
     Reaction {
         /// Unique id.
+        #[serde(default)]
         id: String,
         /// One emoji.
         emoji: String,
-        /// Which lane it floats up in.
+        /// Where across the stage it floats up, in percent (the web app sends 20–80, with
+        /// fractions).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        lane: Option<u32>,
-        /// Combo count.
+        lane: Option<f64>,
+        /// The same emoji this many times in a row (1 = the first of a burst).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        combo: Option<u32>,
+        combo: Option<f64>,
+    },
+    /// A soundboard clip everyone hears (`features/soundboard/useSoundboard.ts`).
+    #[serde(rename_all = "camelCase")]
+    SoundboardSfx {
+        /// Which clip (`quack`, `airhorn`, …).
+        sound_id: String,
+        /// Its name for people.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sound_name: Option<String>,
+        /// Its emoji.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        emoji: Option<String>,
+    },
+    /// A chat image follows on the bulk channel, as `IMG1` frames ([`crate::image`]).
+    #[serde(rename = "p2p-image-start", rename_all = "camelCase")]
+    P2pImageStart {
+        /// The chat message's id.
+        #[serde(default)]
+        id: String,
+        /// The transfer the frames carry.
+        transfer_id: String,
+        /// The image's file name.
+        #[serde(default)]
+        file_name: String,
+        /// Its size in bytes.
+        #[serde(default)]
+        file_size: f64,
+        /// `image/png`, `image/jpeg`, …
+        #[serde(default)]
+        mime_type: String,
+        /// How many frames.
+        #[serde(default)]
+        total_chunks: f64,
+        /// Sent by the host.
+        #[serde(default)]
+        is_host: bool,
+        /// Text sent with it.
+        #[serde(default)]
+        caption: String,
+    },
+    /// The host locked (or unlocked) playback to themselves.
+    #[serde(rename_all = "camelCase")]
+    RoomSettings {
+        /// Only the host controls playback.
+        playback_lock: bool,
     },
     /// Shared state (games, the open activity): the authority's full state for `key`.
     RoomState {
@@ -301,6 +348,57 @@ mod tests {
             .to_json()
             .is_err()
         );
+    }
+
+    #[test]
+    fn reads_the_web_apps_reactions_sounds_and_images() {
+        // the lane has fractions; older apps add fields we skip
+        let r = Envelope::from_json(
+            r#"{"type":"reaction","id":"r1","emoji":"🔥","lane":47.25,"combo":3,"driftVariant":2,"sender":"Riya"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            r.message,
+            PeerMessage::Reaction {
+                id: "r1".into(),
+                emoji: "🔥".into(),
+                lane: Some(47.25),
+                combo: Some(3.0)
+            }
+        );
+        let s = Envelope::from_json(
+            r#"{"type":"soundboard-sfx","soundId":"quack","soundName":"Quack","emoji":"🦆","timestamp":5}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            s.message,
+            PeerMessage::SoundboardSfx {
+                sound_id: "quack".into(),
+                sound_name: Some("Quack".into()),
+                emoji: Some("🦆".into())
+            }
+        );
+        let i = Envelope::from_json(
+            r#"{"type":"p2p-image-start","id":"m1","transferId":"t1","fileName":"cat.png","fileSize":70000,
+                "mimeType":"image/png","totalChunks":2,"sender":"Riya","isHost":true,"caption":"look","timestamp":9}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            i.message,
+            PeerMessage::P2pImageStart { ref transfer_id, total_chunks, is_host: true, .. }
+                if transfer_id == "t1" && (total_chunks - 2.0).abs() < f64::EPSILON
+        ));
+        let v: Value = serde_json::from_str(
+            &Envelope {
+                sender: None,
+                timestamp: None,
+                message: PeerMessage::RoomSettings { playback_lock: true },
+            }
+            .to_json()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v, json!({"type": "room-settings", "playbackLock": true}));
     }
 
     #[test]

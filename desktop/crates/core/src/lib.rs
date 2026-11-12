@@ -7,10 +7,11 @@
 
 #![deny(missing_docs)]
 
+pub mod fun;
 pub mod recovery;
 mod room;
 
 pub use room::{
-    BLOCKED_MESSAGE, BLOCKED_TOAST, ChatLine, Command, Effect, Identity, Input, LinkState, MAX_CHAT_CHARS,
-    Member, NAME_MAX, Phase, RemoteSignal, Room, UiEvent, clean_name,
+    BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect, Identity, Input, LinkState,
+    MAX_CHAT_CHARS, Member, NAME_MAX, Phase, Reaction, RemoteSignal, Room, Sound, UiEvent, clean_name,
 };

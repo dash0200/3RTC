@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 rtc-protocol.workspace = true
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

@@ -1,26 +1,40 @@
-//! Our voice: one audio track shared by every peer connection.
+//! Our voice: one audio track shared by every peer connection, and everyone else's voice.
 //!
-//! On a real PC it uses libwebrtc's own platform audio device (WASAPI on Windows): capture,
-//! echo cancellation, noise suppression, gain control and playback on one clock, exactly as in
-//! Chrome. Where there is no sound card (CI, tests) it sends a tone or silence instead, so the
-//! rest of the app behaves the same. See `docs/adr/0002-voice.md`.
+//! Three ways, by [`MicSource`]:
+//! - `Pipeline` (the default, ADR 0003): our own audio path (`rtc_audio`). We capture the mic,
+//!   libwebrtc's APM cancels the echo of what we play, RNNoise removes noise, and the frames go
+//!   into a `NativeAudioSource`; each person's decoded voice comes out of a `NativeAudioStream`
+//!   into their own queue, with their own volume, and we mix and play it. libwebrtc's audio
+//!   device stays synthetic (it never opens the sound card).
+//! - `Device` ("classic", ADR 0002, kept as a fallback): libwebrtc's own platform audio device
+//!   does capture and playback, as in Chrome.
+//! - `Tone` / `Silence`: no sound card (CI, tests).
 
 use std::f64::consts::TAU;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use futures_util::StreamExt as _;
 use libwebrtc::audio_frame::AudioFrame;
 use libwebrtc::audio_source::AudioSourceOptions;
 use libwebrtc::audio_source::native::NativeAudioSource;
+use libwebrtc::audio_stream::native::NativeAudioStream;
 use libwebrtc::audio_track::RtcAudioTrack;
 use libwebrtc::media_stream_track::MediaStreamTrack;
+use libwebrtc::native::apm::AudioProcessingModule;
 use libwebrtc::peer_connection_factory::PeerConnectionFactory;
 use libwebrtc::peer_connection_factory::native::PeerConnectionFactoryExt as _;
+use rtc_audio::{Audio, PeerControl};
 
 use crate::factory::Factory;
 
 /// Where our voice comes from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MicSource {
-    /// The PC's microphone and speakers (libwebrtc's platform audio device).
+    /// The PC's microphone and speakers through our own audio path (ADR 0003).
+    Pipeline,
+    /// The PC's microphone and speakers through libwebrtc's platform audio device ("classic").
     Device,
     /// A sine tone at this frequency (tests: the other side can hear something).
     Tone(f64),
@@ -56,6 +70,13 @@ pub struct Voice {
     input: String,
     output: String,
     tone: Option<tokio::task::JoinHandle<()>>,
+    /// Our own audio path (`MicSource::Pipeline`).
+    pipeline: Option<Audio>,
+    /// Each person's voice going into the pipeline: their key and the task feeding it.
+    remote: HashMap<String, (u64, tokio::task::JoinHandle<()>)>,
+    /// Volumes set for people, kept for when their voice (re)arrives.
+    gains: HashMap<String, f32>,
+    next_key: u64,
 }
 
 impl std::fmt::Debug for Voice {
@@ -90,18 +111,25 @@ impl Voice {
                     input: String::new(),
                     output: String::new(),
                     tone: None,
+                    pipeline: None,
+                    remote: HashMap::new(),
+                    gains: HashMap::new(),
+                    next_key: 1,
                 };
             }
             tracing::warn!(
                 "audio: the sound card could not be opened, so others hear silence and you hear nothing"
             );
         }
+        if mic == MicSource::Pipeline {
+            return Self::pipeline(pcf);
+        }
         let source = NativeAudioSource::new(AudioSourceOptions::default(), 48_000, 1, 100);
         let track = pcf.create_audio_track("voice", source.clone());
         track.set_enabled(false);
         let tone = match mic {
             MicSource::Tone(hz) => Some(tokio::spawn(play_tone(source, hz))),
-            MicSource::Device | MicSource::Silence => None,
+            MicSource::Pipeline | MicSource::Device | MicSource::Silence => None,
         };
         Self {
             factory: pcf,
@@ -111,7 +139,180 @@ impl Voice {
             input: String::new(),
             output: String::new(),
             tone,
+            pipeline: None,
+            remote: HashMap::new(),
+            gains: HashMap::new(),
+            next_key: 1,
         }
+    }
+
+    /// Our own audio path: frames we clean ourselves go straight into the track (no processing
+    /// of libwebrtc's own on the way: the source's options are all off).
+    fn pipeline(pcf: PeerConnectionFactory) -> Self {
+        let options = AudioSourceOptions {
+            echo_cancellation: false,
+            noise_suppression: false,
+            auto_gain_control: false,
+        };
+        // queue 0: each 10 ms frame goes to the encoder as it's handed over
+        let source = NativeAudioSource::new(options, 48_000, 1, 0);
+        let track = pcf.create_audio_track("voice", source.clone());
+        track.set_enabled(false);
+        let sink: rtc_audio::Sink = Box::new(move |pcm: &[i16]| {
+            let frame = AudioFrame {
+                data: pcm.into(),
+                sample_rate: 48_000,
+                num_channels: 1,
+                samples_per_channel: u32::try_from(pcm.len()).unwrap_or(0),
+            };
+            // with no queue the frame is taken at once: one poll finishes it
+            let mut done = std::pin::pin!(source.capture_frame(&frame));
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let _ = done.as_mut().poll(&mut cx);
+        });
+        let audio = Audio::start(
+            rtc_audio::Config {
+                isolation: true,
+                ..rtc_audio::Config::default()
+            },
+            Box::new(ApmEcho::new()),
+            sink,
+        );
+        tracing::info!("audio: our own audio path (capture, echo cancelling, RNNoise, mixing)");
+        Self {
+            factory: pcf,
+            track,
+            platform: false,
+            deafened: false,
+            input: String::new(),
+            output: String::new(),
+            tone: None,
+            pipeline: Some(audio),
+            remote: HashMap::new(),
+            gains: HashMap::new(),
+            next_key: 1,
+        }
+    }
+
+    /// Open the sound card (in a room, or while voice settings are open) or close it. Only
+    /// our own audio path opens and closes it; libwebrtc's device stays as it is.
+    pub fn set_active(&self, on: bool) {
+        if let Some(p) = &self.pipeline {
+            p.set_active(on);
+        }
+    }
+
+    /// Plays this person's voice (their incoming audio track) through our mixer.
+    pub fn add_remote(&mut self, peer: &str, track: RtcAudioTrack) {
+        if self.pipeline.is_none() {
+            return;
+        }
+        self.remove_remote(peer);
+        let Some(p) = &self.pipeline else { return };
+        let key = self.next_key;
+        self.next_key += 1;
+        tracing::debug!("audio: {peer} sends voice track {} (key {key})", track.id());
+        let (mut feed, control) = p.add_peer(key);
+        if let Some(g) = self.gains.get(peer) {
+            control.set_gain(*g);
+        }
+        let mut stream = NativeAudioStream::new(track, 48_000, 1);
+        let who = peer.to_owned();
+        let task = tokio::spawn(async move {
+            let mut frames = 0u64;
+            let mut loudest = 0u16;
+            while let Some(frame) = stream.next().await {
+                if frames == 0 {
+                    tracing::info!(
+                        "audio: hearing {who} ({} Hz, {} channels, {} samples a frame)",
+                        frame.sample_rate,
+                        frame.num_channels,
+                        frame.samples_per_channel
+                    );
+                }
+                frames += 1;
+                loudest = loudest.max(frame.data.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0));
+                if frames.is_multiple_of(100) {
+                    // the cross-app test reads this line (RUST_LOG=rtc_webrtc::voice=debug)
+                    tracing::debug!(
+                        "audio: {who} (key {key}): {frames} frames, loudest {loudest} in the last second"
+                    );
+                    loudest = 0;
+                }
+                feed.push(&frame.data);
+            }
+            tracing::info!("audio: {who}'s voice ended after {frames} frames");
+        });
+        self.remote.insert(peer.to_owned(), (key, task));
+    }
+
+    /// Stops playing this person.
+    pub fn remove_remote(&mut self, peer: &str) {
+        if let Some((key, task)) = self.remote.remove(peer) {
+            task.abort();
+            if let Some(p) = &self.pipeline {
+                p.remove_peer(key);
+            }
+        }
+    }
+
+    /// This person's volume (0 = muted for me, 1 = as sent, up to 2).
+    pub fn set_volume(&mut self, peer: &str, gain: f32) {
+        self.gains.insert(peer.to_owned(), gain);
+        if let Some(c) = self.control(peer) {
+            c.set_gain(gain);
+        }
+    }
+
+    fn control(&self, peer: &str) -> Option<Arc<PeerControl>> {
+        let (key, _) = self.remote.get(peer)?;
+        self.pipeline.as_ref()?.peer(*key)
+    }
+
+    /// How loud this person is right now (0..1), from our own mixer.
+    #[must_use]
+    pub fn level(&self, peer: &str) -> Option<f32> {
+        self.control(peer).map(|c| c.level())
+    }
+
+    /// Our microphone's level after cleaning (0..1), for the meter.
+    #[must_use]
+    pub fn mic_level(&self) -> f32 {
+        self.pipeline.as_ref().map_or(0.0, Audio::mic_level)
+    }
+
+    /// A handle to read the microphone's level from the window (our own audio path only).
+    #[must_use]
+    pub fn meter(&self) -> Option<rtc_audio::Meter> {
+        self.pipeline.as_ref().map(Audio::meter)
+    }
+
+    /// RNNoise ("Voice Isolation") on or off.
+    pub fn set_isolation(&self, on: bool) {
+        if let Some(p) = &self.pipeline {
+            p.set_isolation(on);
+        }
+    }
+
+    /// Plays the test sound.
+    pub fn play_test_sound(&self) {
+        if let Some(p) = &self.pipeline {
+            p.play(rtc_audio::test_sound(), 1.0, false);
+        }
+    }
+
+    /// Plays a sound of ours (soundboard, reaction pop) through our mixer; nothing on the
+    /// classic path (the app plays it through Windows there).
+    pub fn play_samples(&self, samples: std::sync::Arc<[f32]>, gain: f32, replace: bool) {
+        if let Some(p) = &self.pipeline {
+            p.play(samples, gain, replace);
+        }
+    }
+
+    /// It's our own audio path.
+    #[must_use]
+    pub const fn is_pipeline(&self) -> bool {
+        self.pipeline.is_some()
     }
 
     /// The track to add to each peer connection.
@@ -120,15 +321,18 @@ impl Voice {
         MediaStreamTrack::Audio(self.track.clone())
     }
 
-    /// It's the real microphone and speakers.
+    /// It's the real microphone and speakers (either way).
     #[must_use]
     pub const fn is_device(&self) -> bool {
-        self.platform
+        self.platform || self.pipeline.is_some()
     }
 
     /// Send our voice (`true`) or silence.
     pub fn set_sending(&self, on: bool) {
         self.track.set_enabled(on);
+        if let Some(p) = &self.pipeline {
+            p.set_live(on);
+        }
         if self.platform {
             tracing::info!(
                 "audio: microphone {} (recording initialised: {})",
@@ -144,6 +348,9 @@ impl Voice {
             return;
         }
         self.deafened = deafened;
+        if let Some(p) = &self.pipeline {
+            p.set_deafened(deafened);
+        }
         if !self.platform {
             return;
         }
@@ -158,6 +365,21 @@ impl Voice {
     /// The PC's microphones and speakers (empty without a real audio device).
     #[must_use]
     pub fn devices(&self) -> Devices {
+        if self.pipeline.is_some() {
+            let d = rtc_audio::devices();
+            let map = |v: Vec<rtc_audio::DeviceInfo>| {
+                v.into_iter()
+                    .map(|d| Device {
+                        id: d.id,
+                        name: d.name,
+                    })
+                    .collect()
+            };
+            return Devices {
+                inputs: map(d.inputs),
+                outputs: map(d.outputs),
+            };
+        }
         if !self.platform {
             return Devices::default();
         }
@@ -181,6 +403,11 @@ impl Voice {
 
     /// Uses this microphone (by [`Device::id`]); `""` means the system default.
     pub fn set_input(&mut self, id: &str) -> bool {
+        if let Some(p) = &self.pipeline {
+            id.clone_into(&mut self.input);
+            p.set_input((!id.is_empty()).then(|| id.to_owned()));
+            return true;
+        }
         if !self.platform {
             return false;
         }
@@ -202,6 +429,11 @@ impl Voice {
 
     /// Plays through this speaker (by [`Device::id`]); `""` means the system default.
     pub fn set_output(&mut self, id: &str) -> bool {
+        if let Some(p) = &self.pipeline {
+            id.clone_into(&mut self.output);
+            p.set_output((!id.is_empty()).then(|| id.to_owned()));
+            return true;
+        }
         if !self.platform {
             return false;
         }
@@ -287,6 +519,9 @@ impl Drop for Voice {
         if let Some(t) = self.tone.take() {
             t.abort();
         }
+        for (_, (_, task)) in self.remote.drain() {
+            task.abort();
+        }
         if self.platform {
             self.factory.release_platform_adm();
         }
@@ -313,5 +548,36 @@ async fn play_tone(source: NativeAudioSource, hz: f64) {
         if source.capture_frame(&frame).await.is_err() {
             return;
         }
+    }
+}
+
+/// libwebrtc's audio processing module as our echo canceller (with its high-pass filter,
+/// gain control and light noise suppression; RNNoise comes after it).
+struct ApmEcho {
+    apm: AudioProcessingModule,
+    delay_ms: i32,
+}
+
+impl ApmEcho {
+    fn new() -> Self {
+        Self {
+            apm: AudioProcessingModule::new(true, true, true, true),
+            delay_ms: -1,
+        }
+    }
+}
+
+impl rtc_audio::Echo for ApmEcho {
+    fn render(&mut self, frame: &mut [i16]) {
+        let _ = self.apm.process_reverse_stream(frame, 48_000, 1);
+    }
+
+    fn capture(&mut self, frame: &mut [i16], delay_ms: i32) {
+        // a hint for its own delay finder; only told when it moves by more than 5 ms
+        if (delay_ms - self.delay_ms).abs() > 5 {
+            self.delay_ms = delay_ms;
+            let _ = self.apm.set_stream_delay_ms(delay_ms.clamp(0, 500));
+        }
+        let _ = self.apm.process_stream(frame, 48_000, 1);
     }
 }

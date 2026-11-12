@@ -16,3 +16,4 @@ pub mod stats;
 pub mod voice;
 
 pub use libwebrtc;
+pub use rtc_audio;

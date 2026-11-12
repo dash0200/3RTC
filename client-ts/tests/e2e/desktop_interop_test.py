@@ -42,7 +42,8 @@ with sync_playwright() as p:
     room = next(m['roomId'] for m in pg.evaluate('window.__sig') if m.get('type') == 'room-created')
 
     proc = subprocess.Popen([str(CLI), SIGNAL, 'Darshan', str(room)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            env={**os.environ, 'RUST_LOG': os.environ.get('RUST_LOG', 'info') + ',rtc_webrtc::voice=debug'})
     threading.Thread(target=read, args=(proc,), daemon=True).start()
     try:
         check('desktop joins the web room', wait(lambda: saw(rf'ROOM {room}'), 15), out[-5:])
@@ -83,6 +84,10 @@ with sync_playwright() as p:
         pg.get_by_role('button', name='Turn microphone on').click()
         check('browser unmutes: the desktop sees it unmuted', wait(lambda: saw(r'members=Riya\+(~)?(,|$)'), 10), out[-3:])
         check('...and hears it speak (Chromium\'s fake mic beeps)', wait(lambda: saw(r'members=Riya\+~'), 15), out[-3:])
+        if os.environ.get('RTC_MIC') == 'pipeline':
+            # our own audio path: the browser's voice must reach our mixer, not just the decoder
+            loud = lambda: max([int(m) for m in re.findall(r'frames, loudest (\d+) in the last second', '\n'.join(out))] or [0])
+            check('...and its voice reaches our own mixer (the step before the speakers)', wait(lambda: loud() > 1000, 8), loud())
         pg.get_by_role('button', name='Turn microphone off').click()
         check('browser mutes: the desktop sees the muted badge', wait(lambda: saw(r'members=Riya\+~?!'), 10), out[-3:])
 
@@ -96,6 +101,9 @@ with sync_playwright() as p:
     finally:
         if proc.poll() is None:
             proc.kill()
+        if os.environ.get('RTC_DUMP_DESKTOP_FILE'):
+            with open(os.environ['RTC_DUMP_DESKTOP_FILE'], 'w', encoding='utf-8') as f:
+                f.write('\n'.join(out))
         if os.environ.get('RTC_DUMP_DESKTOP_LOG'):
             print('\n'.join(l for l in out if 'audio' in l or 'ERROR' in l or 'WARN' in l))
     check('no page errors', not errors, errors[:3])

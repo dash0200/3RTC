@@ -51,6 +51,60 @@ pub(crate) struct Settings {
     pub(crate) open_links: bool,
     /// The room you were last in (the rejoin card).
     pub(crate) last_room: Option<LastRoom>,
+    /// RNNoise on the microphone ("Voice Isolation").
+    pub(crate) voice_isolation: bool,
+    /// libwebrtc's own device path instead of ours (the fallback while ours is new).
+    pub(crate) classic_audio: bool,
+    /// Each person's volume for you (0 = muted for you; 1 = as sent; up to 2), by their app's
+    /// install id, so it sticks across rooms. Only people you changed are here.
+    pub(crate) volumes: std::collections::BTreeMap<String, f32>,
+    /// Your quick reactions, up to 10 emoji (keys 1–9 and 0) (`3rtc_quick_reactions`).
+    pub(crate) quick_reactions: Vec<String>,
+    /// Soundboard volume, 0–1 (`3rtc_soundboard_volume`).
+    pub(crate) soundboard_volume: f32,
+    /// Soundboard muted for you (`3rtc_soundboard_muted`).
+    pub(crate) soundboard_muted: bool,
+    /// Low-power mode: calmer animations, no Voice Isolation, connections checked less often.
+    pub(crate) low_power: bool,
+    /// Download and put in place new versions by itself.
+    pub(crate) auto_update: bool,
+}
+
+/// The settings file's format now. Each change that needs more than new fields with defaults
+/// gets a step in [`Settings::migrate`].
+pub(crate) const SETTINGS_VERSION: u32 = 2;
+
+/// The reactions everyone starts with (`DEFAULT_REACTIONS`).
+pub(crate) const DEFAULT_REACTIONS: [&str; 6] = ["👍", "❤️", "🔥", "👏", "😂", "🎉"];
+/// At most this many quick reactions.
+pub(crate) const MAX_REACTIONS: usize = 10;
+
+/// Up to 10 different single emoji, else the defaults (`clean` in `reactionSet.ts`).
+pub(crate) fn clean_reactions(list: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in list {
+        let e = e.trim();
+        if rtc_core::fun::is_single_emoji(e) && !out.iter().any(|o| o == e) {
+            out.push(e.to_owned());
+        }
+        if out.len() >= MAX_REACTIONS {
+            break;
+        }
+    }
+    if out.is_empty() {
+        DEFAULT_REACTIONS.iter().map(|e| (*e).to_owned()).collect()
+    } else {
+        out
+    }
+}
+
+/// The key that sends the reaction at `index` (1–9, then 0) (`keyForIndex`).
+pub(crate) fn key_for_index(index: usize) -> String {
+    if index == 9 {
+        "0".to_owned()
+    } else {
+        (index + 1).to_string()
+    }
 }
 
 /// How the mic opens.
@@ -89,7 +143,7 @@ impl LastRoom {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            settings_version: 1,
+            settings_version: SETTINGS_VERSION,
             username: String::new(),
             client_id: String::new(),
             signal_url: String::new(),
@@ -110,6 +164,14 @@ impl Default for Settings {
             notifications: true,
             open_links: true,
             last_room: None,
+            voice_isolation: true,
+            classic_audio: false,
+            volumes: std::collections::BTreeMap::new(),
+            quick_reactions: DEFAULT_REACTIONS.iter().map(|e| (*e).to_owned()).collect(),
+            soundboard_volume: 0.75,
+            soundboard_muted: false,
+            low_power: false,
+            auto_update: true,
         }
     }
 }
@@ -130,12 +192,35 @@ fn path() -> Option<PathBuf> {
 }
 
 impl Settings {
+    /// Brings a settings file from an older app up to date; true if anything changed. A file
+    /// from a newer app is left as it is (its extra fields are kept by nobody, but nothing of
+    /// ours is lost).
+    pub(crate) fn migrate(&mut self) -> bool {
+        if self.settings_version >= SETTINGS_VERSION {
+            return false;
+        }
+        // 1 → 2 (M3): new fields only (reactions, soundboard, audio path, volumes, low power),
+        // which their defaults fill in; the push-to-talk delay is kept within the web app's range
+        if self.settings_version < 2 {
+            self.ptt_release_ms = self.ptt_release_ms.clamp(0, 2000);
+        }
+        self.settings_version = SETTINGS_VERSION;
+        true
+    }
+
     /// Saved settings, or new ones (and saved) on first launch.
     pub(crate) fn load() -> Self {
         let saved = path()
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|b| serde_json::from_slice::<Self>(&b).ok());
         let mut s = saved.unwrap_or_default();
+        if s.migrate() {
+            s.save();
+        }
+        s.quick_reactions = clean_reactions(&s.quick_reactions);
+        if !(0.0..=1.0).contains(&s.soundboard_volume) {
+            s.soundboard_volume = 0.75;
+        }
         if rtc_protocol::ClientId::new(&s.client_id).is_err() {
             s.client_id = format!("dk-{:016x}", rand::random::<u64>());
             s.save();
@@ -193,6 +278,39 @@ mod tests {
         assert_eq!(s.ptt_release_ms, 200);
         assert!(s.close_to_tray && s.notifications && s.open_links);
         assert!(s.mute_keys.is_empty());
+        assert!(s.voice_isolation && !s.classic_audio && s.volumes.is_empty());
+        assert_eq!(s.quick_reactions.len(), 6);
+        assert!((s.soundboard_volume - 0.75).abs() < f32::EPSILON && !s.soundboard_muted);
+    }
+
+    #[test]
+    fn old_files_are_migrated_once() {
+        let mut s: Settings =
+            serde_json::from_str(r#"{"settingsVersion":1,"username":"D","pttReleaseMs":99999}"#)
+                .unwrap_or_default();
+        assert!(s.migrate());
+        assert_eq!(s.settings_version, super::SETTINGS_VERSION);
+        assert_eq!(s.ptt_release_ms, 2000);
+        assert!(!s.migrate(), "nothing more to do");
+        let mut newer: Settings = serde_json::from_str(r#"{"settingsVersion":9}"#).unwrap_or_default();
+        assert!(!newer.migrate());
+        assert_eq!(newer.settings_version, 9, "a newer app's file isn't downgraded");
+    }
+
+    #[test]
+    fn quick_reactions_are_cleaned() {
+        let list: Vec<String> = [
+            "🔥", "🔥", "nope", "👍", "1", "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣",
+        ]
+        .iter()
+        .map(|e| (*e).to_owned())
+        .collect();
+        let c = super::clean_reactions(&list);
+        assert_eq!(c.len(), 10);
+        assert_eq!(c[..2], ["🔥".to_owned(), "👍".to_owned()]);
+        assert_eq!(super::clean_reactions(&[]).len(), 6, "empty: the defaults");
+        assert_eq!(super::key_for_index(0), "1");
+        assert_eq!(super::key_for_index(9), "0");
     }
 
     #[test]
