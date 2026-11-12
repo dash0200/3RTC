@@ -570,7 +570,25 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
 - [ ] **M2: desktop essentials.** Push-to-talk and hotkeys, tray, notifications, start with
   Windows, `3rtc://`, rejoin card. `crates/platform-win` (the only crate allowed `unsafe`, each
   block with a `// SAFETY:` note).
-- [ ] **M3: version 1.** Chat images and emoji picker, reactions, soundboard, host controls,
+  *Built 12 Nov; waiting for the owner's Windows run (`docs/checklists/M2.md`).* Done:
+  `crates/platform-win` (clippy `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block`;
+  stand-ins elsewhere; a quick CI job checks it for the Windows target from Linux). Keys are
+  read with `GetAsyncKeyState` from a small thread (~60 times a second): push-to-talk with key,
+  combination or mouse button, release delay and chirps (the web app's); global mute and deafen
+  hotkeys; nothing hooked or swallowed; a warning when the app in front runs as administrator.
+  Tray icon (own thread, `Shell_NotifyIcon`) with Open / Mute / Deafen / Leave / Quit; closing
+  keeps running in the tray (said once); notifications are the tray's balloons, which Windows
+  shows as its own notifications and holds back in Do not disturb (someone joined, an @mention,
+  only while the window isn't in front). Start with Windows (`--tray`, HKCU `Run`, off until
+  turned on), `3rtc://join/12345` links (HKCU `Software\Classes`) and one app per person (a named
+  pipe hands a second launch's link to the running app, which asks before joining); the rejoin
+  card (30 min, takes a hosted room back with its host token: `Command::Resume`). Settings: Voice
+  settings gained the push-to-talk panel and Global Hotkeys; More → Desktop has the rest. Tests:
+  78 Rust, `desktop_window_test.py` 13 checks (push-to-talk by holding the mic button, the
+  link hand-off, the rejoin card).
+- [ ] **M3: version 1.** **Our own audio pipeline (ADR 0003): per-person volume and mute-for-me,
+  RNNoise (Voice Isolation), the mic-test meter and test sound, live device changes, lower delay;
+  libwebrtc's device path kept behind a setting until the checklist passes.** Chat images and emoji picker, reactions, soundboard, host controls,
   connection details (6.12 without stream doctor), low-power mode, portable zip and per-user
   installer, in-place updater (unsigned), settings migration. Exit: the plan's v1 budgets.
 - [ ] **M4: watch party.** Playback core, YouTube/Vimeo/Twitch web view, link sources, queue,
@@ -622,7 +640,8 @@ with `Xvfb` and Mesa's software Vulkan (`mesa-vulkan-drivers`).
 
 | Risk | Check | If it fails |
 |---|---|---|
-| `libwebrtc` crate's audio path on Windows (6.3) | Spike at the start of M1 step 5 | ADR, ask |
+| `libwebrtc` crate's audio path on Windows (6.3) | Spike at the start of M1 step 5 | Done: ADR 0002 (M1), ADR 0003 (M3) |
+| Echo cancellation in our own pipeline (delay, drift) | Fake-device echo test first thing in M3 | Keep the platform-device path as the default; ask |
 | `libwebrtc` crate and static CRT (`+crt-static`) link on MSVC | First Windows CI run | Drop `crt-static`, ship the VC++ runtime DLLs beside the exe; ADR |
 | `gpui-kit` 0.9.1 on Windows 10 (DirectX 11) | M1 step 1 | Ask |
 | Pixel-exact custom components on `gpui-kit` | M1 step 2 | Write on raw GPUI |

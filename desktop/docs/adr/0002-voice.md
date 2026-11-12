@@ -1,6 +1,6 @@
 # 2. Voice through libwebrtc's platform audio device
 
-Date: 2026-11-11 · Status: accepted (per-person volume and RNNoise: open, see below)
+Date: 2026-11-11 · Status: accepted for M1–M2; superseded in M3 by [ADR 0003](0003-own-audio-pipeline.md)
 
 ## Context
 
@@ -32,8 +32,7 @@ Opus's silence detection keeps it tiny).
 - **Not possible on this path:** per-person volume (libwebrtc mixes all voices before we see
   them) and an RNNoise stage (capture never passes through our code). Both need path (2). The
   web app has both (it plays each voice in its own element, and runs RNNoise in an audio
-  worklet). Decision pending with the owner: move to path (2) in M3, or keep (1) and accept
-  WebRTC's own noise suppression and one volume for everyone.
+  worklet). Decided 11 Nov: path (2) in M3, see ADR 0003.
 - The settings dialog's mic meter and test sound need the device outside a call; the platform
   device only records while a call sends audio, so they come with path (2) or a small `cpal`
   side-path.

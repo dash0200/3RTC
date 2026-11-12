@@ -52,6 +52,9 @@ pub struct Voice {
     track: RtcAudioTrack,
     platform: bool,
     deafened: bool,
+    /// The microphone and speaker picked in settings (`""` = the system default).
+    input: String,
+    output: String,
     tone: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -78,15 +81,20 @@ impl Voice {
                 pcf.set_adm_playout_enabled(true);
                 let track = pcf.create_device_audio_track("voice");
                 track.set_enabled(false);
+                log_sound_card(&pcf);
                 return Self {
                     factory: pcf,
                     track,
                     platform: true,
                     deafened: false,
+                    input: String::new(),
+                    output: String::new(),
                     tone: None,
                 };
             }
-            tracing::warn!("no audio device could be opened: sending silence");
+            tracing::warn!(
+                "audio: the sound card could not be opened, so others hear silence and you hear nothing"
+            );
         }
         let source = NativeAudioSource::new(AudioSourceOptions::default(), 48_000, 1, 100);
         let track = pcf.create_audio_track("voice", source.clone());
@@ -100,6 +108,8 @@ impl Voice {
             track,
             platform: false,
             deafened: false,
+            input: String::new(),
+            output: String::new(),
             tone,
         }
     }
@@ -119,6 +129,13 @@ impl Voice {
     /// Send our voice (`true`) or silence.
     pub fn set_sending(&self, on: bool) {
         self.track.set_enabled(on);
+        if self.platform {
+            tracing::info!(
+                "audio: microphone {} (recording initialised: {})",
+                if on { "live" } else { "muted" },
+                self.factory.recording_is_initialized(),
+            );
+        }
     }
 
     /// Stop or start playing everyone's voice.
@@ -163,10 +180,11 @@ impl Voice {
     }
 
     /// Uses this microphone (by [`Device::id`]); `""` means the system default.
-    pub fn set_input(&self, id: &str) -> bool {
+    pub fn set_input(&mut self, id: &str) -> bool {
         if !self.platform {
             return false;
         }
+        id.clone_into(&mut self.input);
         let f = &self.factory;
         let was_recording = f.recording_is_initialized();
         f.stop_recording();
@@ -183,10 +201,11 @@ impl Voice {
     }
 
     /// Plays through this speaker (by [`Device::id`]); `""` means the system default.
-    pub fn set_output(&self, id: &str) -> bool {
+    pub fn set_output(&mut self, id: &str) -> bool {
         if !self.platform {
             return false;
         }
+        id.clone_into(&mut self.output);
         let f = &self.factory;
         f.stop_playout();
         let ok = if id.is_empty() {
@@ -199,6 +218,67 @@ impl Voice {
             f.start_playout();
         }
         ok
+    }
+}
+
+/// Says in the log what the sound card looks like: what we capture from and play to.
+fn log_sound_card(pcf: &PeerConnectionFactory) {
+    let mics = pcf.recording_devices();
+    let speakers = pcf.playout_devices();
+    tracing::info!(
+        "audio: sound card open ({mics} microphones, {speakers} speakers; recording {}, playout {}, active {})",
+        on_off(pcf.adm_recording_enabled()),
+        on_off(pcf.adm_playout_enabled()),
+        pcf.is_platform_adm_active(),
+    );
+    for i in 0..u16::try_from(mics.max(0)).unwrap_or(0) {
+        tracing::info!("audio:   microphone {i}: {}", pcf.recording_device_name(i));
+    }
+    for i in 0..u16::try_from(speakers.max(0)).unwrap_or(0) {
+        tracing::info!("audio:   speaker {i}: {}", pcf.playout_device_name(i));
+    }
+    if mics <= 0 {
+        tracing::warn!("audio: no microphone found, so others will hear silence");
+    }
+    if speakers <= 0 {
+        tracing::warn!("audio: no speakers found, so you won't hear anyone");
+    }
+}
+
+const fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+impl Voice {
+    /// Starts the microphone and speakers again after the device went away (a headset plugged
+    /// in or out, the default device changed): picks the chosen device, or the new default.
+    pub fn restart(&mut self) {
+        if !self.platform {
+            return;
+        }
+        let f = &self.factory;
+        let recording = f.recording_is_initialized();
+        f.stop_recording();
+        f.stop_playout();
+        if !self.input.is_empty() {
+            f.set_recording_device_by_guid(&self.input);
+        }
+        if !self.output.is_empty() {
+            f.set_playout_device_by_guid(&self.output);
+        }
+        if !self.deafened {
+            f.init_playout();
+            f.start_playout();
+        }
+        if recording {
+            f.init_recording();
+            f.start_recording();
+        }
+        tracing::info!(
+            "audio: device changed, restarted (playout {}, recording {})",
+            on_off(f.playout_is_initialized()),
+            on_off(f.recording_is_initialized()),
+        );
     }
 }
 

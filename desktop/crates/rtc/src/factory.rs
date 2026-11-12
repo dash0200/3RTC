@@ -49,6 +49,7 @@ impl Factory {
     /// A factory using these ICE servers.
     #[must_use]
     pub fn new(ice: Vec<IceServerConfig>) -> Self {
+        crate::native_log::forward_audio_logs();
         Self {
             inner: PeerConnectionFactory::default(),
             ice,

@@ -5595,6 +5595,7 @@ dependencies = [
  "rand 0.9.5",
  "rtc-core",
  "rtc-engine",
+ "rtc-platform-win",
  "rtc-protocol",
  "rtc-ui",
  "serde",
@@ -5628,6 +5629,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtc-platform-win"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "tracing",
+ "windows 0.62.2",
+ "windows-registry 0.6.1",
+]
+
+[[package]]
 name = "rtc-protocol"
 version = "0.1.0"
 dependencies = [
@@ -5644,6 +5657,7 @@ dependencies = [
  "futures-util",
  "rand 0.9.5",
  "rtc-protocol",
+ "rustls",
  "tokio",
  "tokio-tungstenite",
  "tracing",
@@ -5668,6 +5682,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "webrtc-sys",
 ]
 
 [[package]]
@@ -7626,8 +7641,6 @@ dependencies = [
 [[package]]
 name = "webrtc-sys"
 version = "0.3.53"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbfe2c11c98bfd4839242abf9a4b8ddb16a7ff3cbf87416f40928a06886eb5c7"
 dependencies = [
  "cc",
  "cxx",

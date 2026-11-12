@@ -6,10 +6,13 @@
 // Release builds have no console window; dev builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod desktop;
 mod dialogs;
 mod home;
+mod links;
 mod room;
 mod settings;
+mod single;
 mod view;
 
 use anyhow::Context as _;
@@ -33,7 +36,23 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("starting the engine runtime")?;
     let handle = runtime.handle().clone();
+
+    // one 3RTC per person: a second launch (or a clicked 3rtc:// link) hands over to the first
+    let open_room = links::room_in_args(std::env::args().skip(1));
+    let message = open_room.map_or_else(|| single::SHOW.to_owned(), |r| format!("link {r}"));
+    let launches = match single::claim(&handle, &message) {
+        single::Instance::Forwarded => return Ok(()),
+        single::Instance::First(rx) => Some(rx),
+    };
+    // started with Windows: wait quietly in the tray
+    let start_hidden = std::env::args().any(|a| a == "--tray");
+
     let settings = Settings::load();
+    if settings.open_links
+        && let Err(e) = register_links()
+    {
+        tracing::warn!("couldn't set up 3rtc:// links: {e}");
+    }
 
     gpui_kit::application()
         .with_assets(rtc_ui::Assets)
@@ -46,18 +65,40 @@ fn main() -> anyhow::Result<()> {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(1024.), px(640.))),
+                show: !start_hidden,
+                focus: !start_hidden,
                 ..WindowOptions::default()
             };
             let opened = gpui_kit::open_window(options, cx, move |window, cx| {
-                cx.new(|cx| RoomView::new(window, cx, &handle, settings))
+                let view = cx.new(|cx| RoomView::new(window, cx, &handle, settings, launches, open_room));
+                // the close button can keep 3RTC running in the tray
+                let weak = view.downgrade();
+                window.on_window_should_close(cx, move |window, cx| {
+                    weak.update(cx, |v, cx| v.should_close(window, cx))
+                        .unwrap_or(true)
+                });
+                view
             });
             if let Err(e) = opened {
                 tracing::error!("couldn't open the window: {e:#}");
                 cx.quit();
             }
             cx.on_window_closed(|cx, _| cx.quit()).detach();
-            cx.activate(true);
+            if !start_hidden {
+                cx.activate(true);
+            }
         });
     drop(runtime);
     Ok(())
+}
+
+/// Makes `3rtc://` links open this exe (the user's own registry key; done at every start so a
+/// moved portable exe still opens them).
+pub(crate) fn register_links() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let command = format!("\"{}\" \"%1\"", exe.display());
+    if rtc_platform_win::links::registered_command().as_deref() == Some(command.as_str()) {
+        return Ok(());
+    }
+    rtc_platform_win::links::register(&command)
 }
