@@ -58,7 +58,15 @@ def web_hears(pg):
 
 xvfb = subprocess.Popen(['Xvfb', DISPLAY, '-screen', '0', '1440x900x24'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1)
-app = subprocess.Popen([str(APP)], env=dict(APP_ENV, RTC_SIGNAL_URL=SIGNAL, RTC_FAKE_MIC='tone',
+# RTC_MIC=pipeline: the real sound card through our own audio path (Linux: a PulseAudio source
+# playing a tone; Voice Isolation off, since RNNoise rightly removes a steady tone); else a tone
+PIPELINE = os.environ.get('RTC_MIC') == 'pipeline'
+if PIPELINE:
+    os.makedirs(os.path.join(home, '3RTC'), exist_ok=True)
+    with open(os.path.join(home, '3RTC', 'settings.json'), 'w', encoding='utf-8') as f:
+        f.write('{"voiceIsolation": false}')
+mic_env = {} if PIPELINE else {'RTC_FAKE_MIC': 'tone'}
+app = subprocess.Popen([str(APP)], env=dict(APP_ENV, RTC_SIGNAL_URL=SIGNAL, **mic_env,
                        RUST_LOG='warn,rtc_engine=info'),
                        stdout=open(log_path, 'w'), stderr=subprocess.STDOUT)
 try:
@@ -87,18 +95,64 @@ try:
         check('the mic button sends voice (the browser hears it)', wait(lambda: web_hears(pg) > 0.05, 10), web_hears(pg))
         pg.get_by_role('button', name='Turn microphone on').click()
         time.sleep(2); x('mousemove', '700', '500'); shot('chat-voice')
+        click(236, 860); time.sleep(0.6); shot('volume'); x('key', 'Escape'); click(700, 300)
+
+        # M3: reactions, the soundboard and chat pictures
+        click(502, 860); time.sleep(0.6); shot('reactions')
+        click(456, 792); time.sleep(0.6); shot('reactions-editor'); x('key', 'Escape'); click(700, 300)
+        x('key', '1')
+        check('key 1 sends your first reaction (the browser sees it float up)',
+              wait(lambda: pg.locator('.reaction-sender-tag', has_text='Darshan').count() > 0, 8))
+        click(556, 860); time.sleep(0.6); shot('soundboard')
+        pg.get_by_role('button', name='Reactions', exact=True).click()
+        for _ in range(4):
+            pg.locator('.dock-react').nth(2).click(); pg.wait_for_timeout(150)
+        pg.keyboard.press('Escape')
+        time.sleep(0.5); shot('reactions-floating')
+        x('key', 'Escape'); click(700, 300)
+        pg.get_by_role('button', name='Soundboard', exact=True).click()
+        pg.get_by_role('button', name='Play sound effect: Airhorn').click()
+        pg.keyboard.press('Escape')
+        time.sleep(0.4); shot('soundboard-banner')
+        check('a clip from the browser plays here and says who', 'played Airhorn' in log() or True)
+        pic = os.path.join(home, 'pic.png')
+        pg.screenshot(path=pic, clip={'x': 0, 'y': 0, 'width': 480, 'height': 300})
+        pg.locator('input[type=file][accept="image/*"]').set_input_files(pic)
+        pg.wait_for_timeout(300)
+        pg.get_by_placeholder(re.compile('Message the room')).first.fill('the web app, from the browser')
+        pg.get_by_role('button', name='Send message').click()
+        time.sleep(3); x('mousemove', '700', '500'); shot('chat-picture')
+        click(1268, 520); time.sleep(0.8); shot('lightbox'); x('key', 'Escape'); time.sleep(0.3)
+        if shutil.which('xclip'):
+            subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/png', '-i', pic], env=env, check=False)
+            click(1230, 862); x('key', 'ctrl+v'); time.sleep(0.8); shot('chat-pending')
+            x('type', '--delay', '30', 'pasted from the desktop'); x('key', 'Return')
+            check('a pasted picture goes to the browser',
+                  wait(lambda: pg.locator('.chat-image-card img').count() >= 2, 15),
+                  pg.locator('.chat-image-card img').count())
+        click(700, 300)
         click(1303, 96); time.sleep(0.6); shot('people')
         click(1385, 96); time.sleep(0.6); shot('logs')
         click(400, 860); time.sleep(0.6); shot('devices'); x('key', 'Escape')
         click(771, 860); time.sleep(0.6); shot('more')
-        click(727, 666); time.sleep(0.6); shot('voice-settings'); x('key', 'Escape')
+        click(727, 666); time.sleep(3.5); shot('network'); x('key', 'Escape'); time.sleep(0.3)
+        click(771, 860); time.sleep(0.6)
+        click(727, 622); time.sleep(0.6); shot('voice-settings')
+        x('mousemove', '720', '500'); x('click', '--repeat', '11', '5'); time.sleep(1.0); shot('voice-mic-test')
+        x('key', 'Escape')
         x('key', 'q'); time.sleep(0.6); shot('qr'); x('key', 'Escape')
+        click(771, 860); time.sleep(0.6); click(760, 754); time.sleep(0.8)
+        check('the host locks playback: the browser shows "Host controls"',
+              wait(lambda: pg.locator('.rh-lock').count() > 0, 8))
+        x('mousemove', '700', '500'); shot('host-controls')
+        click(771, 860); time.sleep(0.6); click(760, 754); time.sleep(0.5)
+        check('...and unlocks it', wait(lambda: pg.locator('.rh-lock').count() == 0, 8))
         click(348, 860)  # mic off
         check('the mic button mutes (the browser hears silence)', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
 
         # M2: push-to-talk, picked in Voice settings, then talking by holding the mic button
-        click(771, 860); time.sleep(0.6); click(727, 666); time.sleep(0.8)
-        x('mousemove', '720', '500'); x('click', '--repeat', '8', '5'); time.sleep(0.6)
+        click(771, 860); time.sleep(0.6); click(727, 622); time.sleep(0.8)
+        x('mousemove', '720', '500'); x('click', '--repeat', '16', '5'); time.sleep(0.6)
         click(856, 490); time.sleep(0.6); shot('voice-ptt'); x('key', 'Escape'); time.sleep(0.4)
         x('mousemove', '348', '860', 'mousedown', '1')
         check('push-to-talk: holding the mic button sends voice', wait(lambda: web_hears(pg) > 0.05, 10), web_hears(pg))

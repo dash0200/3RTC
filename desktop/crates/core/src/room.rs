@@ -8,6 +8,7 @@ use rtc_protocol::sdp::{IceCandidate, SessionDescription};
 use rtc_protocol::signaling::{ClientMessage, ErrorCode, ServerMessage};
 use rtc_protocol::{ClientId, PROTOCOL_VERSION, PeerId, RoomId};
 
+use crate::fun::{Fun, is_single_emoji};
 use crate::recovery::{Action, Health};
 
 /// Who this app is: fixed for a session.
@@ -49,6 +50,9 @@ pub struct Member {
     pub desktop: bool,
     /// Their voice is coming through right now.
     pub speaking: bool,
+    /// Their app's install id, once their identity arrives (stable across rooms and restarts:
+    /// what per-person volumes are saved under).
+    pub client_id: Option<String>,
 }
 
 /// One chat line.
@@ -66,10 +70,57 @@ pub struct ChatLine {
     pub text: String,
     /// When it arrived, ms since 1970.
     pub at: f64,
+    /// A picture sent with it (the text is then its caption); its bytes come separately.
+    pub image: Option<ChatImage>,
+}
+
+/// A chat picture (`p2p-image-start`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatImage {
+    /// The transfer bringing its bytes.
+    pub transfer_id: String,
+    /// Its file name.
+    pub file_name: String,
+    /// Its size in bytes.
+    pub file_size: u64,
+    /// Its type (`image/png`, …).
+    pub mime: String,
+}
+
+/// A floating reaction to show.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reaction {
+    /// Unique id.
+    pub id: String,
+    /// Who (`None`: us).
+    pub from: Option<PeerId>,
+    /// Their name.
+    pub name: String,
+    /// The emoji.
+    pub emoji: String,
+    /// Where across the stage, 10–90 %.
+    pub lane: f64,
+    /// The same emoji this many times in a row.
+    pub combo: u32,
+}
+
+/// A soundboard clip to play.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sound {
+    /// Who (`None`: us).
+    pub from: Option<PeerId>,
+    /// Their name.
+    pub name: String,
+    /// Which clip.
+    pub sound_id: String,
+    /// Its name for people.
+    pub sound_name: String,
+    /// Its emoji.
+    pub emoji: String,
 }
 
 /// Something the user did.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Set the display name (only between rooms: a name doesn't change mid-room).
     SetName(String),
@@ -103,6 +154,35 @@ pub enum Command {
     SetDeafened(bool),
     /// Host only: hand hosting to someone.
     TransferHost(PeerId),
+    /// Send a floating reaction (the shell makes the id and picks the lane, 20–80 %).
+    React {
+        /// Unique id.
+        id: String,
+        /// One emoji.
+        emoji: String,
+        /// Where across the stage, in percent.
+        lane: f64,
+    },
+    /// Play a soundboard clip for everyone.
+    PlaySound {
+        /// Which clip.
+        sound_id: String,
+        /// Its name for people.
+        sound_name: String,
+        /// Its emoji.
+        emoji: String,
+    },
+    /// Host only: lock playback to the host (or unlock it) (`useHostControls`).
+    SetPlaybackLock(bool),
+    /// We started sending a chat picture (the shell sends the bytes on the bulk channels).
+    ImageSent {
+        /// The chat message's id.
+        id: String,
+        /// The picture and its transfer.
+        image: ChatImage,
+        /// Text sent with it.
+        caption: String,
+    },
 }
 
 /// Signaling the peer-connection layer must apply.
@@ -195,6 +275,10 @@ pub enum UiEvent {
     Log(String),
     /// A short toast, or (before a room exists) why a join failed.
     Notice(String),
+    /// Show a floating reaction (and play its pop).
+    Reaction(Reaction),
+    /// Play a soundboard clip (and show who played it).
+    Sound(Sound),
 }
 
 /// One thing for the shell to do.
@@ -233,6 +317,9 @@ pub enum Effect {
     },
     /// Send to every connected peer.
     Broadcast(Envelope),
+    /// Send to every connected peer on the bulk channel (a chat picture's announcement; the
+    /// shell sends its frames after it).
+    BroadcastBulk(Envelope),
     /// Send our voice (true) or silence (false).
     SetMic(bool),
     /// Stop (true) or start playing everyone's voice.
@@ -261,6 +348,14 @@ pub struct Room {
     host_token: Option<String>,
     /// While another server is asked for the room: what to say if none has it.
     not_found: Option<String>,
+    /// Reaction and soundboard limits.
+    fun: Fun,
+    /// Each person's last reaction (older apps also post it as a chat line: skipped).
+    last_reaction: BTreeMap<PeerId, (String, f64)>,
+    /// Only the host controls playback.
+    playback_lock: bool,
+    /// Since when the host has been gone with the lock on (it's lifted after a grace period).
+    host_gone_since: Option<f64>,
 }
 
 impl Room {
@@ -281,7 +376,17 @@ impl Room {
             seat_token: None,
             host_token: None,
             not_found: None,
+            fun: Fun::new(),
+            last_reaction: BTreeMap::new(),
+            playback_lock: false,
+            host_gone_since: None,
         }
+    }
+
+    /// Only the host controls playback.
+    #[must_use]
+    pub const fn playback_lock(&self) -> bool {
+        self.playback_lock
     }
 
     /// Where we are.
@@ -409,7 +514,7 @@ impl Room {
             }
             Input::ChannelOpen(peer) => self.channel_open(peer, now_ms, &mut fx),
             Input::ChannelClosed(peer) => self.channel_closed(&peer, now_ms, &mut fx),
-            Input::Peer { from, envelope } => self.peer(from, envelope, &mut fx),
+            Input::Peer { from, envelope } => self.peer(from, envelope, now_ms, &mut fx),
             Input::Speaking { peer: None, speaking } => {
                 if self.speaking != speaking {
                     self.speaking = speaking;
@@ -438,6 +543,7 @@ impl Room {
                 for (peer, actions) in due {
                     self.recovery(&peer, actions, now_ms, &mut fx);
                 }
+                self.lift_lock_without_host(now_ms, &mut fx);
             }
         }
         fx
@@ -474,6 +580,8 @@ impl Room {
 
     fn drop_member(&mut self, peer: &PeerId, fx: &mut Vec<Effect>) {
         self.health.remove(peer);
+        self.fun.forget(peer);
+        self.last_reaction.remove(peer);
         if self.members.remove(peer).is_some() {
             fx.push(Effect::ClosePeer(peer.clone()));
             fx.push(Effect::Ui(UiEvent::Changed));
@@ -498,7 +606,7 @@ impl Room {
             build: Some(self.me.build.clone()),
             client_id: self.me.client_id.clone(),
             is_reply,
-            playback_lock: None,
+            playback_lock: self.is_host().then_some(self.playback_lock),
             client: Some(rtc_protocol::peer::CLIENT_DESKTOP.to_owned()),
         }
     }
@@ -587,6 +695,7 @@ impl Room {
                     is_host,
                     text,
                     at: now_ms,
+                    image: None,
                 };
                 self.push_chat(line, fx);
             }
@@ -621,6 +730,130 @@ impl Room {
                     fx.push(Effect::Send(ClientMessage::TransferHost { target_peer_id: to }));
                 }
             }
+            Command::React { id, emoji, lane } => {
+                if !matches!(self.phase, Phase::InRoom(_)) {
+                    return;
+                }
+                let emoji = emoji.trim().to_owned();
+                let Some(combo) = self.fun.send(&emoji, now_ms) else {
+                    return;
+                };
+                let lane = lane.clamp(10.0, 90.0);
+                fx.push(Effect::Broadcast(self.envelope(
+                    PeerMessage::Reaction {
+                        id: id.clone(),
+                        emoji: emoji.clone(),
+                        lane: Some(lane),
+                        combo: Some(f64::from(combo)),
+                    },
+                    now_ms,
+                )));
+                fx.push(Effect::Ui(UiEvent::Reaction(Reaction {
+                    id,
+                    from: None,
+                    name: self.me.username.clone(),
+                    emoji,
+                    lane,
+                    combo,
+                })));
+            }
+            Command::PlaySound {
+                sound_id,
+                sound_name,
+                emoji,
+            } => {
+                if !matches!(self.phase, Phase::InRoom(_)) || !self.fun.sound_local(now_ms) {
+                    return;
+                }
+                fx.push(Effect::Broadcast(self.envelope(
+                    PeerMessage::SoundboardSfx {
+                        sound_id: sound_id.clone(),
+                        sound_name: Some(sound_name.clone()),
+                        emoji: Some(emoji.clone()),
+                    },
+                    now_ms,
+                )));
+                fx.push(Effect::Ui(UiEvent::Sound(Sound {
+                    from: None,
+                    name: self.me.username.clone(),
+                    sound_id,
+                    sound_name,
+                    emoji,
+                })));
+            }
+            Command::SetPlaybackLock(on) => {
+                if !self.is_host() || on == self.playback_lock {
+                    return;
+                }
+                self.playback_lock = on;
+                fx.push(Effect::Broadcast(
+                    self.envelope(PeerMessage::RoomSettings { playback_lock: on }, now_ms),
+                ));
+                self.log(
+                    if on {
+                        "🔒 You turned on host controls: only you can control playback."
+                    } else {
+                        "🔓 Everyone can control playback again."
+                    },
+                    fx,
+                );
+                fx.push(Effect::Ui(UiEvent::Notice(
+                    if on {
+                        "🔒 Only you can control playback"
+                    } else {
+                        "🔓 Everyone can control playback"
+                    }
+                    .to_owned(),
+                )));
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
+            Command::ImageSent { id, image, caption } => {
+                if !matches!(self.phase, Phase::InRoom(_)) {
+                    return;
+                }
+                let chunks = image.file_size.div_ceil(rtc_protocol::image::CHUNK as u64).max(1);
+                #[allow(clippy::cast_precision_loss)]
+                let start = PeerMessage::P2pImageStart {
+                    id: id.clone(),
+                    transfer_id: image.transfer_id.clone(),
+                    file_name: image.file_name.clone(),
+                    file_size: image.file_size as f64,
+                    mime_type: image.mime.clone(),
+                    total_chunks: chunks as f64,
+                    is_host: self.is_host(),
+                    caption: caption.clone(),
+                };
+                fx.push(Effect::BroadcastBulk(self.envelope(start, now_ms)));
+                let line = ChatLine {
+                    id,
+                    from: self.me.peer_id.clone(),
+                    name: self.me.username.clone(),
+                    is_host: self.is_host(),
+                    text: caption.chars().take(MAX_CHAT_CHARS).collect(),
+                    at: now_ms,
+                    image: Some(image),
+                };
+                self.push_chat(line, fx);
+            }
+        }
+    }
+
+    /// The host left with the lock on: nobody could control playback, so after a grace period
+    /// (a host only reconnecting is back by then) the lock goes.
+    fn lift_lock_without_host(&mut self, now_ms: f64, fx: &mut Vec<Effect>) {
+        let host_here = self.is_host() || self.host.as_ref().is_some_and(|h| self.members.contains_key(h));
+        if !self.playback_lock || host_here {
+            self.host_gone_since = None;
+            return;
+        }
+        let since = *self.host_gone_since.get_or_insert(now_ms);
+        if now_ms - since >= HOST_RETURN_GRACE_MS {
+            self.playback_lock = false;
+            self.host_gone_since = None;
+            fx.push(Effect::Ui(UiEvent::Notice(
+                "🔓 The host left: everyone can control playback".to_owned(),
+            )));
+            fx.push(Effect::Ui(UiEvent::Changed));
         }
     }
 
@@ -681,6 +914,10 @@ impl Room {
         self.seat_token = None;
         self.host_token = None;
         self.chat.clear();
+        self.fun = Fun::new();
+        self.last_reaction.clear();
+        self.playback_lock = false;
+        self.host_gone_since = None;
         fx.push(Effect::Ui(UiEvent::Changed));
     }
 
@@ -974,7 +1211,7 @@ impl Room {
         fx.push(Effect::Ui(UiEvent::Changed));
     }
 
-    fn peer(&mut self, from: PeerId, envelope: Envelope, fx: &mut Vec<Effect>) {
+    fn peer(&mut self, from: PeerId, envelope: Envelope, now_ms: f64, fx: &mut Vec<Effect>) {
         if !self.members.contains_key(&from) {
             return;
         }
@@ -985,9 +1222,17 @@ impl Room {
                 is_muted,
                 is_reply,
                 client,
+                client_id,
+                is_host,
+                playback_lock,
                 ..
             } => {
+                // the host's identity carries the lock, for people joining later
+                if is_host && let Some(lock) = playback_lock {
+                    self.playback_lock = lock;
+                }
                 if let Some(m) = self.members.get_mut(&from) {
+                    m.client_id = Some(client_id.as_str().to_owned());
                     m.username = Some(clean_name(&username));
                     m.muted = is_muted;
                     m.desktop = client.as_deref() == Some(rtc_protocol::peer::CLIENT_DESKTOP);
@@ -1019,6 +1264,14 @@ impl Room {
                 });
             }
             PeerMessage::Chat { id, text, .. } => {
+                // older apps post each reaction as a chat line too: skip that copy
+                if self
+                    .last_reaction
+                    .get(&from)
+                    .is_some_and(|(e, at)| text.trim() == e && now_ms - at < 2500.0)
+                {
+                    return;
+                }
                 // the name comes from the connection, the host flag from who hosts: messages can lie
                 let name = self.name_of(&from);
                 let is_host = self.host.as_ref() == Some(&from);
@@ -1030,11 +1283,145 @@ impl Room {
                     is_host,
                     text,
                     at: if ts > 0.0 { ts } else { 0.0 },
+                    image: None,
                 };
                 self.push_chat(line, fx);
             }
+            PeerMessage::Reaction {
+                id,
+                emoji,
+                lane,
+                combo,
+            } => {
+                self.last_reaction
+                    .insert(from.clone(), (emoji.trim().to_owned(), now_ms));
+                let Some(combo) = self.fun.receive(&from, &emoji, combo, now_ms) else {
+                    return;
+                };
+                let id: String = id.chars().take(40).collect();
+                let lane = lane.filter(|l| l.is_finite()).map_or_else(
+                    || 20.0 + 60.0 * pseudo_random(&id, now_ms),
+                    |l| l.clamp(10.0, 90.0),
+                );
+                let name: String = self.name_of(&from).chars().take(24).collect();
+                fx.push(Effect::Ui(UiEvent::Reaction(Reaction {
+                    id,
+                    from: Some(from),
+                    name,
+                    emoji: emoji.trim().to_owned(),
+                    lane,
+                    combo,
+                })));
+            }
+            PeerMessage::SoundboardSfx {
+                sound_id,
+                sound_name,
+                emoji,
+            } => {
+                if sound_id.is_empty() {
+                    return;
+                }
+                let Some(say) = self.fun.sound_remote(now_ms) else {
+                    return;
+                };
+                let name = self.name_of(&from);
+                let sound_name: String = sound_name
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| sound_id.clone())
+                    .chars()
+                    .take(40)
+                    .collect();
+                let emoji = emoji
+                    .filter(|e| is_single_emoji(e))
+                    .unwrap_or_else(|| "🎵".to_owned());
+                if say {
+                    fx.push(Effect::Ui(UiEvent::Notice(format!(
+                        "🔊 {name} played {sound_name} {emoji}"
+                    ))));
+                    self.log(format!("🔊 {name} played soundboard clip: \"{sound_name}\""), fx);
+                }
+                fx.push(Effect::Ui(UiEvent::Sound(Sound {
+                    from: Some(from),
+                    name,
+                    sound_id: sound_id.chars().take(40).collect(),
+                    sound_name,
+                    emoji,
+                })));
+            }
+            PeerMessage::P2pImageStart {
+                id,
+                transfer_id,
+                file_name,
+                file_size,
+                mime_type,
+                caption,
+                ..
+            } => {
+                if transfer_id.trim().is_empty() || transfer_id.len() > 64 {
+                    return;
+                }
+                let name = self.name_of(&from);
+                let is_host = self.host.as_ref() == Some(&from);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let file_size = if file_size.is_finite() && file_size > 0.0 {
+                    file_size as u64
+                } else {
+                    0
+                };
+                let file_name: String = if file_name.is_empty() {
+                    "image".to_owned()
+                } else {
+                    file_name.chars().take(120).collect()
+                };
+                let line = ChatLine {
+                    id: if id.is_empty() {
+                        transfer_id.clone()
+                    } else {
+                        id.chars().take(64).collect()
+                    },
+                    from,
+                    name,
+                    is_host,
+                    text: caption.chars().take(MAX_CHAT_CHARS).collect(),
+                    at: if ts > 0.0 {
+                        ts.min(now_ms + 60_000.0)
+                    } else {
+                        now_ms
+                    },
+                    image: Some(ChatImage {
+                        transfer_id,
+                        file_name,
+                        file_size,
+                        mime: rtc_protocol::image::clean_mime(&mime_type).to_owned(),
+                    }),
+                };
+                self.push_chat(line, fx);
+            }
+            PeerMessage::RoomSettings { playback_lock } => {
+                if self.host.as_ref() != Some(&from) || playback_lock == self.playback_lock {
+                    return;
+                }
+                self.playback_lock = playback_lock;
+                let who = self.name_of(&from);
+                self.log(
+                    if playback_lock {
+                        format!("🔒 {who} turned on host controls: only the host can control playback.")
+                    } else {
+                        format!("🔓 {who} turned off host controls.")
+                    },
+                    fx,
+                );
+                fx.push(Effect::Ui(UiEvent::Notice(
+                    if playback_lock {
+                        "🔒 Only the host can control playback"
+                    } else {
+                        "🔓 Everyone can control playback"
+                    }
+                    .to_owned(),
+                )));
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
             PeerMessage::NetPong { .. }
-            | PeerMessage::Reaction { .. }
             | PeerMessage::RoomState { .. }
             | PeerMessage::RoomStateAction { .. }
             | PeerMessage::RoomStateRequest { .. }
@@ -1043,6 +1430,20 @@ impl Room {
         }
     }
 }
+
+/// A number in 0..1 from an id and the time (a lane for reactions that came without one).
+fn pseudo_random(id: &str, now_ms: f64) -> f64 {
+    let mut h: u32 = 2_166_136_261;
+    for b in id.bytes() {
+        h = (h ^ u32::from(b)).wrapping_mul(16_777_619);
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let t = now_ms as u32;
+    f64::from((h ^ t) % 1000) / 1000.0
+}
+
+/// A host that's only reconnecting comes back within this (ms).
+const HOST_RETURN_GRACE_MS: f64 = 4000.0;
 
 /// Longest chat message kept (the web app's input allows 1000).
 pub const MAX_CHAT_CHARS: usize = 1000;

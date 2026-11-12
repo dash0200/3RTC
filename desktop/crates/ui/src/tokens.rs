@@ -62,6 +62,34 @@ colors! {
     focus = 0x6a_a8ff;
     /// White, for text on the accent.
     white = 0xff_ffff;
+    /// Soundboard: its card and banner background (`.soundboard-container`, `.stage-soundboard-hud`).
+    sfx_ground = 0x0e_1019;
+    /// Soundboard: purple (`rgba(168, 85, 247, …)`).
+    sfx_purple = 0xa8_55f7;
+    /// Soundboard: pink highlight, the clip that's playing (`#e879f9`).
+    sfx_pink = 0xe8_79f9;
+    /// Soundboard: light purple, the banner's bars (`#c084fc`).
+    sfx_lilac = 0xc0_84fc;
+    /// Soundboard: muted text (`#94a3b8`).
+    sfx_muted = 0x94_a3b8;
+    /// Floating reactions: the name tag and combo pill (`rgba(14, 14, 18, …)`).
+    reaction_tag = 0x0e_0e12;
+    /// Floating reactions: the combo count's gold (`#ffd166`).
+    combo_gold = 0xff_d166;
+    /// Connection grade: excellent (`#22c55e`).
+    net_excellent = 0x22_c55e;
+    /// Connection grade: good, and the latency graph (`#38bdf8`).
+    net_good = 0x38_bdf8;
+    /// Connection grade: fair (`#f59e0b`).
+    net_fair = 0xf5_9e0b;
+    /// Connection grade: poor (`#ef4444`).
+    net_poor = 0xef_4444;
+}
+
+/// A colour given as `0xRRGGBB` (the soundboard clips' own colours, from the web app's list).
+#[must_use]
+pub fn hex(rgb_hex: u32) -> Hsla {
+    rgb(rgb_hex).into()
 }
 
 /// Black at `alpha` (0–1), for shadows and scrims.

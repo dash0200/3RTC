@@ -25,6 +25,9 @@ use rtc_webrtc::{channels, convert, factory::Factory, sdp};
 
 /// How often each connection's audio levels are read.
 const LEVELS_EVERY: Duration = Duration::from_millis(150);
+
+/// Low-power mode: the levels are read half as often (speaking rings react a little later).
+pub(crate) static LOW_POWER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// How often the voice totals go to the log (in level ticks: about every 10 s).
 const FLOW_EVERY_TICKS: u32 = 67;
 
@@ -43,7 +46,13 @@ pub(crate) enum PeerEvent {
         generation: u64,
         open: bool,
     },
-    /// A message on the main channel.
+    /// Binary data on the bulk channel (chat picture frames).
+    Binary {
+        peer: PeerId,
+        generation: u64,
+        data: Vec<u8>,
+    },
+    /// A message on the main (or bulk) channel.
     Message {
         peer: PeerId,
         generation: u64,
@@ -54,6 +63,12 @@ pub(crate) enum PeerEvent {
         peer: PeerId,
         generation: u64,
         state: PeerConnectionState,
+    },
+    /// Their voice arrived (an incoming audio track).
+    RemoteAudio {
+        peer: PeerId,
+        generation: u64,
+        track: rtc_webrtc::libwebrtc::audio_track::RtcAudioTrack,
     },
     /// Audio levels on this connection.
     Levels {
@@ -70,7 +85,7 @@ struct Link {
     /// Which connection this is: events from a replaced one are ignored.
     generation: u64,
     main: Option<DataChannel>,
-    _bulk: Option<DataChannel>,
+    bulk: Option<DataChannel>,
     has_remote: bool,
     pending: Vec<IceCandidate>,
     levels: tokio::task::JoinHandle<()>,
@@ -157,6 +172,17 @@ impl Peers {
         })));
         let sink = Arc::clone(&self.sink);
         let from = peer.clone();
+        pc.on_track(Some(Box::new(move |event| {
+            if let MediaStreamTrack::Audio(track) = event.track {
+                sink(PeerEvent::RemoteAudio {
+                    peer: from.clone(),
+                    generation,
+                    track,
+                });
+            }
+        })));
+        let sink = Arc::clone(&self.sink);
+        let from = peer.clone();
         pc.on_connection_state_change(Some(Box::new(move |state| {
             sink(PeerEvent::Link {
                 peer: from.clone(),
@@ -184,6 +210,9 @@ impl Peers {
         let bulk = pc
             .create_data_channel(channels::BULK_LABEL, channels::bulk_init())
             .ok();
+        if let Some(dc) = &bulk {
+            Self::watch_bulk(&self.sink, peer, generation, dc);
+        }
         let levels = tokio::spawn(watch_levels(
             pc.clone(),
             peer.clone(),
@@ -194,7 +223,7 @@ impl Peers {
             pc,
             generation,
             main: None,
-            _bulk: bulk,
+            bulk,
             has_remote: false,
             pending: Vec::new(),
             levels,
@@ -230,6 +259,41 @@ impl Peers {
                 text,
             });
         })));
+    }
+
+    /// The bulk channel carries chat pictures: JSON (`p2p-image-start`) and binary frames.
+    fn watch_bulk(sink: &Sink, peer: &PeerId, generation: u64, dc: &DataChannel) {
+        let s = Arc::clone(sink);
+        let p = peer.clone();
+        dc.on_message(Some(Box::new(move |buf| {
+            if buf.binary {
+                s(PeerEvent::Binary {
+                    peer: p.clone(),
+                    generation,
+                    data: buf.data.to_vec(),
+                });
+            } else {
+                s(PeerEvent::Message {
+                    peer: p.clone(),
+                    generation,
+                    text: String::from_utf8_lossy(buf.data).into_owned(),
+                });
+            }
+        })));
+    }
+
+    /// A connection's stats report (for the connection details).
+    pub(crate) async fn stats(&self, peer: &PeerId) -> Option<Vec<rtc_webrtc::libwebrtc::stats::RtcStats>> {
+        let pc = self.links.get(peer)?.pc.clone();
+        pc.get_stats().await.ok()
+    }
+
+    /// The open bulk channels to these peers (chat pictures go on them).
+    pub(crate) fn bulk_channels<'a>(&self, peers: impl Iterator<Item = &'a PeerId>) -> Vec<DataChannel> {
+        peers
+            .filter_map(|p| self.links.get(p)?.bulk.clone())
+            .filter(|dc| dc.state() == DataChannelState::Open)
+            .collect()
     }
 
     /// Starts a connection; the initiator opens `chat-<peer>` and sends the offer.
@@ -416,7 +480,7 @@ impl Peers {
                 };
                 Some(Input::Link { peer, state })
             }
-            PeerEvent::Levels { .. } => None,
+            PeerEvent::Levels { .. } | PeerEvent::RemoteAudio { .. } | PeerEvent::Binary { .. } => None,
         }
     }
 
@@ -448,9 +512,14 @@ impl Peers {
                 dc.on_state_change(None);
                 dc.close();
             }
+            if let Some(dc) = &link.bulk {
+                dc.on_message(None);
+                dc.close();
+            }
             link.pc.on_connection_state_change(None);
             link.pc.on_ice_candidate(None);
             link.pc.on_data_channel(None);
+            link.pc.on_track(None);
             link.pc.close();
         }
     }
@@ -485,8 +554,15 @@ async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: S
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut ticks: u32 = 0;
     let mut last_flow = stats::Flow::default();
+    let mut skip = false;
     loop {
         tick.tick().await;
+        if LOW_POWER.load(std::sync::atomic::Ordering::Relaxed) {
+            skip = !skip;
+            if skip {
+                continue;
+            }
+        }
         if pc.connection_state() != PeerConnectionState::Connected {
             continue;
         }

@@ -37,7 +37,9 @@ pub fn ptt_off() -> Vec<u8> {
     chirp(920.0, 540.0, 0.04, 0.001, 0.05)
 }
 
-fn wav(samples: &[i16]) -> Vec<u8> {
+/// 48 kHz mono 16-bit samples as a WAV file (for [`crate::play_wav`]).
+#[must_use]
+pub fn wav(samples: &[i16]) -> Vec<u8> {
     let data_len = u32::try_from(samples.len() * 2).unwrap_or(u32::MAX);
     let mut out = Vec::with_capacity(44 + samples.len() * 2);
     out.extend_from_slice(b"RIFF");

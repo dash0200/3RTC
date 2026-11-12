@@ -351,8 +351,32 @@ int32_t AdmProxy::RegisterAudioCallback(webrtc::AudioTransport* transport) {
 }
 
 int32_t AdmProxy::Init() {
-  // Init is a no-op - the sub ADMs are initialized at creation time
-  return 0;
+  // 3RTC: the voice engine calls Terminate() when the last peer connection closes and Init()
+  // when the next one opens. Upstream made Init a no-op, so after a moment with no connection
+  // (someone leaves and rejoins as the only other person) the synthetic ADM's 10 ms playout
+  // pump stayed gone: packets arrived, nothing was decoded, nobody was heard. Bring the sub
+  // ADMs back here, with the callback and playout state they had.
+  return RunOnWorker([this] {
+    RTC_DCHECK_RUN_ON(worker_thread_);
+    int32_t result = 0;
+    if (synthetic_adm_ && !synthetic_adm_->Initialized()) {
+      result = synthetic_adm_->Init();
+      if (audio_transport_) {
+        synthetic_adm_->RegisterAudioCallback(audio_transport_);
+      }
+      if (playing_ && !IsPlatformPlayoutActive()) {
+        synthetic_adm_->StartPlayout();
+      }
+    }
+    if (platform_adm_ && !platform_adm_->Initialized()) {
+      int32_t platform_result = platform_adm_->Init();
+      if (result == 0) result = platform_result;
+      if (audio_transport_) {
+        platform_adm_->RegisterAudioCallback(audio_transport_);
+      }
+    }
+    return result;
+  });
 }
 
 int32_t AdmProxy::Terminate() {

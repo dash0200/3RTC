@@ -13,6 +13,7 @@
 #![deny(missing_docs)]
 
 mod ids;
+pub mod image;
 pub mod peer;
 pub mod sdp;
 pub mod signaling;

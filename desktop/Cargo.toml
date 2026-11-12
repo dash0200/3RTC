@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/core", "crates/signaling", "crates/rtc", "crates/engine", "crates/ui", "crates/platform-win", "crates/app"]
+members = ["crates/protocol", "crates/core", "crates/signaling", "crates/rtc", "crates/engine", "crates/ui", "crates/platform-win", "crates/audio", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ rtc-webrtc = { path = "crates/rtc" }
 rtc-engine = { path = "crates/engine" }
 rtc-ui = { path = "crates/ui" }
 rtc-platform-win = { path = "crates/platform-win" }
+rtc-audio = { path = "crates/audio" }
 
 # third party (one version each; cargo-deny checks for duplicates)
 serde = { version = "1", features = ["derive"] }
@@ -31,6 +32,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rand = "0.9"
+unicode-segmentation = "1"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
 proptest = "1"
 
 [workspace.lints.rust]

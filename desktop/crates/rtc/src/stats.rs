@@ -183,6 +183,126 @@ impl std::fmt::Display for Flow {
     }
 }
 
+/// What the connection details show for one connection (`extractPeerConnectionStats`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Net {
+    /// Round trip on the chosen path (ms).
+    pub rtt_ms: Option<f64>,
+    /// Our candidate's type (`host`, `srflx`, `prflx`, `relay`).
+    pub local_type: String,
+    /// Theirs.
+    pub remote_type: String,
+    /// `UDP` or `TCP`.
+    pub protocol: String,
+    /// Audio packets received and lost (for the loss percentage).
+    pub packets_received: u64,
+    /// Audio packets lost.
+    pub packets_lost: u64,
+    /// Audio jitter (ms).
+    pub jitter_ms: f64,
+    /// Bytes on the chosen path so far.
+    pub bytes_received: u64,
+    /// Bytes sent on it so far.
+    pub bytes_sent: u64,
+}
+
+impl Net {
+    /// Lost audio packets in percent, one decimal (`packetLossPercent`).
+    #[must_use]
+    pub fn loss_percent(&self) -> f64 {
+        let total = self.packets_received + self.packets_lost;
+        if total == 0 {
+            return 0.0;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let p = self.packets_lost as f64 / total as f64 * 100.0;
+        (p * 10.0).round() / 10.0
+    }
+
+    /// "Direct LAN (Host)", "Direct P2P (STUN)", "Relay (TURN)" (`parseCandidateConnectionType`).
+    #[must_use]
+    pub fn connection_type(&self) -> &'static str {
+        let (l, r) = (self.local_type.as_str(), self.remote_type.as_str());
+        if l == "relay" || r == "relay" {
+            "Relay (TURN)"
+        } else if l == "host" && r == "host" {
+            "Direct LAN (Host)"
+        } else if ["srflx", "prflx"].contains(&l) || ["srflx", "prflx"].contains(&r) {
+            "Direct P2P (STUN)"
+        } else {
+            "Direct P2P"
+        }
+    }
+}
+
+/// Picks the connection details out of a stats report.
+#[must_use]
+pub fn net(report: &[RtcStats]) -> Net {
+    let mut out = Net::default();
+    let mut selected = None;
+    let mut pairs = HashMap::new();
+    let mut candidates = HashMap::new();
+    let (mut transport_sent, mut transport_received) = (0, 0);
+    for s in report {
+        match s {
+            RtcStats::Transport(t) => {
+                if !t.transport.selected_candidate_pair_id.is_empty() {
+                    selected = Some(t.transport.selected_candidate_pair_id.as_str());
+                }
+                transport_sent = transport_sent.max(t.transport.bytes_sent);
+                transport_received = transport_received.max(t.transport.bytes_received);
+            }
+            RtcStats::CandidatePair(p) => {
+                pairs.insert(p.rtc.id.as_str(), &p.candidate_pair);
+            }
+            RtcStats::LocalCandidate(c) => {
+                candidates.insert(c.rtc.id.as_str(), &c.local_candidate);
+            }
+            RtcStats::RemoteCandidate(c) => {
+                candidates.insert(c.rtc.id.as_str(), &c.remote_candidate);
+            }
+            RtcStats::RemoteInboundRtp(r)
+                if r.stream.kind == "audio" && r.remote_inbound.round_trip_time > 0.0 =>
+            {
+                out.rtt_ms
+                    .get_or_insert(r.remote_inbound.round_trip_time * 1000.0);
+            }
+            RtcStats::InboundRtp(r) if r.stream.kind == "audio" => {
+                out.packets_received += r.received.packets_received;
+                out.packets_lost += u64::try_from(r.received.packets_lost.max(0)).unwrap_or(0);
+                out.jitter_ms = r.received.jitter * 1000.0;
+            }
+            _ => {}
+        }
+    }
+    out.bytes_sent = transport_sent;
+    out.bytes_received = transport_received;
+    let pair = selected
+        .and_then(|id| pairs.get(id))
+        .or_else(|| pairs.values().find(|p| p.nominated));
+    if let Some(p) = pair {
+        if p.current_round_trip_time > 0.0 {
+            out.rtt_ms = Some(p.current_round_trip_time * 1000.0);
+        } else if out.rtt_ms.is_none() && p.responses_received > 0 {
+            // on one machine (or a LAN) the round trip rounds to nothing
+            out.rtt_ms = Some(0.0);
+        }
+        out.bytes_sent = out.bytes_sent.max(p.bytes_sent);
+        out.bytes_received = out.bytes_received.max(p.bytes_received);
+        if let Some(l) = candidates.get(p.local_candidate_id.as_str()) {
+            out.local_type = kind(l.candidate_type).to_owned();
+            out.protocol = l.protocol.to_uppercase();
+        }
+        if let Some(r) = candidates.get(p.remote_candidate_id.as_str()) {
+            out.remote_type = kind(r.candidate_type).to_owned();
+        }
+    }
+    if out.protocol.is_empty() {
+        "UDP".clone_into(&mut out.protocol);
+    }
+    out
+}
+
 /// Level above which someone counts as talking. Chrome's `audioLevel` sits near 0.001–0.01 for
 /// room noise and 0.05–0.3 for speech; the web app's analyser threshold lands about here.
 pub const SPEAKING_LEVEL: f64 = 0.03;

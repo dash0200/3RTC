@@ -722,3 +722,278 @@ fn a_hosted_room_can_be_taken_back_with_its_token() {
         .is_empty()
     );
 }
+
+fn from(peer: &str, message: PeerMessage) -> Input {
+    Input::Peer {
+        from: pid(peer),
+        envelope: Envelope {
+            sender: Some("Liar".into()),
+            timestamp: Some(1.0),
+            message,
+        },
+    }
+}
+
+fn with_riya() -> Room {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: identity_of("riya", "Riya", false),
+        },
+        0.0,
+    );
+    r
+}
+
+#[test]
+fn reactions_go_out_and_come_in_with_limits() {
+    let mut r = with_riya();
+    let fx = r.update(
+        Input::Command(Command::React {
+            id: "r1".into(),
+            emoji: "🔥".into(),
+            lane: 120.0,
+        }),
+        10_000.0,
+    );
+    assert!(fx.iter().any(|e| matches!(e, Effect::Broadcast(Envelope {
+        message: PeerMessage::Reaction { lane: Some(l), combo: Some(c), .. }, .. }) if (*l - 90.0).abs() < 1e-9 && (*c - 1.0).abs() < 1e-9)));
+    assert!(
+        fx.iter().any(
+            |e| matches!(e, Effect::Ui(UiEvent::Reaction(x)) if x.from.is_none() && x.name == "Darshan")
+        )
+    );
+    let again = r.update(
+        Input::Command(Command::React {
+            id: "r2".into(),
+            emoji: "🔥".into(),
+            lane: 50.0,
+        }),
+        10_050.0,
+    );
+    assert!(again.is_empty(), "too soon");
+
+    let shown = |fx: &[Effect]| {
+        fx.iter().find_map(|e| match e {
+            Effect::Ui(UiEvent::Reaction(x)) => Some(x.clone()),
+            _ => None,
+        })
+    };
+    let x = shown(&r.update(
+        from(
+            "riya",
+            PeerMessage::Reaction {
+                id: "a".into(),
+                emoji: "👍".into(),
+                lane: Some(33.5),
+                combo: Some(4.0),
+            },
+        ),
+        20_000.0,
+    ))
+    .unwrap();
+    assert_eq!(
+        (x.name.as_str(), x.combo),
+        ("Riya", 4),
+        "the name comes from the connection"
+    );
+    assert!((x.lane - 33.5).abs() < 1e-9);
+    // older apps post the reaction as chat too: that copy is skipped, other chat isn't
+    let chat = |r: &mut Room, text: &str, at: f64| {
+        r.update(
+            from(
+                "riya",
+                PeerMessage::Chat {
+                    id: format!("c{at}"),
+                    is_host: false,
+                    text: text.into(),
+                },
+            ),
+            at,
+        )
+        .iter()
+        .any(|e| matches!(e, Effect::Ui(UiEvent::Chat(_))))
+    };
+    assert!(!chat(&mut r, "👍", 20_100.0));
+    assert!(chat(&mut r, "👍", 30_000.0));
+    assert!(
+        shown(&r.update(
+            from(
+                "riya",
+                PeerMessage::Reaction {
+                    id: "b".into(),
+                    emoji: "two words".into(),
+                    lane: None,
+                    combo: None
+                }
+            ),
+            40_000.0,
+        ))
+        .is_none()
+    );
+}
+
+#[test]
+fn soundboard_plays_everywhere_and_says_who() {
+    let mut r = with_riya();
+    let fx = r.update(
+        Input::Command(Command::PlaySound {
+            sound_id: "quack".into(),
+            sound_name: "Quack".into(),
+            emoji: "🦆".into(),
+        }),
+        1_000.0,
+    );
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::Broadcast(Envelope {
+            message: PeerMessage::SoundboardSfx { .. },
+            ..
+        })
+    )));
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Ui(UiEvent::Sound(s)) if s.from.is_none()))
+    );
+    let fx = r.update(
+        from(
+            "riya",
+            PeerMessage::SoundboardSfx {
+                sound_id: "airhorn".into(),
+                sound_name: Some("Airhorn".into()),
+                emoji: Some("📢".into()),
+            },
+        ),
+        5_000.0,
+    );
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n == "🔊 Riya played Airhorn 📢"))
+    );
+    assert!(
+        logs(&fx)
+            .iter()
+            .any(|l| l == "🔊 Riya played soundboard clip: \"Airhorn\"")
+    );
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Ui(UiEvent::Sound(s)) if s.sound_id == "airhorn"))
+    );
+}
+
+#[test]
+fn a_chat_picture_becomes_a_chat_line() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    let fx = r.update(
+        from(
+            "riya",
+            PeerMessage::P2pImageStart {
+                id: "m1".into(),
+                transfer_id: "t1".into(),
+                file_name: "cat.png".into(),
+                file_size: 70_000.0,
+                mime_type: "text/html".into(),
+                total_chunks: 2.0,
+                is_host: true,
+                caption: "look".into(),
+            },
+        ),
+        5_000.0,
+    );
+    let line = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::Ui(UiEvent::Chat(l)) => Some(l.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let image = line.image.unwrap();
+    assert_eq!(
+        (line.text.as_str(), line.is_host),
+        ("look", false),
+        "the host flag comes from who hosts"
+    );
+    assert_eq!(
+        (image.transfer_id.as_str(), image.file_size, image.mime.as_str()),
+        ("t1", 70_000, "image/png")
+    );
+}
+
+#[test]
+fn the_host_can_lock_playback_and_guests_learn_it() {
+    let mut r = with_riya();
+    let fx = r.update(Input::Command(Command::SetPlaybackLock(true)), 1.0);
+    assert!(r.playback_lock());
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::Broadcast(Envelope {
+            message: PeerMessage::RoomSettings { playback_lock: true },
+            ..
+        })
+    )));
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n == "🔒 Only you can control playback"))
+    );
+    // our identity tells people who join later
+    let fx = r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: identity_of("riya", "Riya", false),
+        },
+        2.0,
+    );
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::SendToPeer {
+            envelope: Envelope {
+                message: PeerMessage::PeerIdentity {
+                    playback_lock: Some(true),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    )));
+
+    // a guest: only the host's word counts
+    let mut g = me();
+    g.update(Input::Command(Command::Join(room_id())), 0.0);
+    g.update(
+        Input::Server(ServerMessage::Joined {
+            room_id: room_id(),
+            peer_id: pid("me"),
+            host_peer_id: pid("host"),
+            peers: vec![pid("host"), pid("other")],
+            seat_token: "s".into(),
+            host_token: None,
+        }),
+        0.0,
+    );
+    connected_to(&mut g, "host");
+    connected_to(&mut g, "other");
+    g.update(
+        from("other", PeerMessage::RoomSettings { playback_lock: true }),
+        1.0,
+    );
+    assert!(!g.playback_lock(), "not from the host");
+    let fx = g.update(
+        from("host", PeerMessage::RoomSettings { playback_lock: true }),
+        2.0,
+    );
+    assert!(g.playback_lock());
+    assert!(fx.iter().any(
+        |e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n == "🔒 Only the host can control playback")
+    ));
+    // the host leaves: after the grace period the lock goes
+    g.update(from("host", PeerMessage::PeerBye), 3.0);
+    g.update(Input::Tick, 4.0);
+    assert!(g.playback_lock(), "maybe only reconnecting");
+    let fx = g.update(Input::Tick, 4.0 + 4000.0);
+    assert!(!g.playback_lock());
+    assert!(fx.iter().any(|e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n == "🔓 The host left: everyone can control playback")));
+}

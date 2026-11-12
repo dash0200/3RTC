@@ -1,10 +1,11 @@
 //! The window's state and logic: the engine connection, what's open (panel tab, popover,
 //! dialog), toasts, logs and keyboard shortcuts. Drawing is in `home.rs`, `room.rs`, `dialogs.rs`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::{
     AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
     IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task,
@@ -49,6 +50,12 @@ pub(crate) enum Tab {
 pub(crate) enum Pop {
     Devices,
     More,
+    /// A person's volume (who: `RoomView::volume_for`).
+    Volume,
+    /// Your reactions.
+    Reactions,
+    /// The soundboard.
+    Sounds,
 }
 
 /// A dialog over everything.
@@ -62,6 +69,12 @@ pub(crate) enum Dialog {
     Desktop,
     /// A link asks to join this room: ask first.
     Link(RoomId),
+    /// "Your quick reactions".
+    Reactions,
+    /// A chat picture, big (which: `RoomView::lightbox`).
+    Image,
+    /// Connection details.
+    Network,
 }
 
 /// Which key is being recorded in the settings.
@@ -82,7 +95,7 @@ pub(crate) struct LogLine {
 pub(crate) struct RoomView {
     pub(crate) settings: Settings,
     runtime: tokio::runtime::Handle,
-    engine: Option<Handle>,
+    pub(crate) engine: Option<Handle>,
     pub(crate) room: Option<Snapshot>,
     pub(crate) chat: Vec<ChatLine>,
     pub(crate) logs: Vec<LogLine>,
@@ -125,6 +138,34 @@ pub(crate) struct RoomView {
     pub(crate) autostart: bool,
     /// When the last room was last saved (ms since 1970).
     last_room_saved: u64,
+    /// Whose volume popover is open, and its slider.
+    pub(crate) volume_for: Option<PeerId>,
+    pub(crate) volume_slider: Option<Entity<SliderState>>,
+    #[allow(dead_code, reason = "kept alive, never read")]
+    volume_sub: Option<Subscription>,
+    /// The volume last given to the engine for each person this room.
+    volumes_sent: HashMap<PeerId, f32>,
+    /// The voice settings' mic meter (0..1, falls back slowly) and what keeps it moving.
+    pub(crate) mic_meter: f32,
+    meter_task: Option<Task<()>>,
+    /// Floating reactions, the clip banner, the reactions editor.
+    pub(crate) fun: crate::fun::FunState,
+    /// The reactions editor's "type or paste any emoji" box.
+    pub(crate) reaction_input: Entity<InputState>,
+    /// The emoji picker: open, its tab and search box.
+    pub(crate) emoji_open: bool,
+    pub(crate) emoji_tab: usize,
+    pub(crate) emoji_search: Entity<InputState>,
+    /// Chat pictures by transfer id, and the one attached to the next message.
+    pub(crate) pictures: HashMap<String, crate::chat::Picture>,
+    pub(crate) pending: Option<crate::chat::Pending>,
+    /// The picture the lightbox shows.
+    pub(crate) lightbox: Option<String>,
+    /// Connection details.
+    pub(crate) net: crate::net::NetState,
+    /// Updates: where they are, and the task checking for them.
+    pub(crate) update: crate::update::Status,
+    update_task: Option<Task<()>>,
 }
 
 /// Milliseconds since 1970.
@@ -138,6 +179,10 @@ pub(crate) fn now_ms() -> u64 {
 const ADMIN_CHECK: Duration = Duration::from_secs(2);
 /// How often held keys are read while recording one.
 const RECORD_POLL: Duration = Duration::from_millis(25);
+/// Chat lines kept on screen (older ones go, with their pictures) (`MAX_MESSAGES`).
+const CHAT_KEEP: usize = 300;
+/// How often the voice settings' mic meter moves.
+const METER_TICK: Duration = Duration::from_millis(50);
 
 pub(crate) fn time_now() -> String {
     chrono::Local::now().format("%-I:%M %p").to_string()
@@ -162,6 +207,9 @@ impl RoomView {
         let link = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Paste a YouTube, Vimeo, Twitch or video link")
         });
+        let reaction_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Or type / paste any emoji"));
+        let emoji_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search emojis..."));
         let server_url = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("wss://your-server")
@@ -267,7 +315,25 @@ impl RoomView {
             announced: HashSet::new(),
             autostart: false,
             last_room_saved: 0,
+            volume_for: None,
+            volume_slider: None,
+            volume_sub: None,
+            volumes_sent: HashMap::new(),
+            mic_meter: 0.0,
+            meter_task: None,
+            fun: crate::fun::FunState::default(),
+            reaction_input,
+            emoji_open: false,
+            emoji_tab: 0,
+            emoji_search,
+            pictures: HashMap::new(),
+            pending: None,
+            lightbox: None,
+            net: crate::net::NetState::default(),
+            update: crate::update::Status::Idle,
+            update_task: None,
         };
+        this.start_updates(cx);
         this.log("Welcome to 3RTC! Create or join a room to chat and watch YouTube together.".to_owned());
         this.start_engine(cx);
         if let Some(room) = open_room {
@@ -285,7 +351,8 @@ impl RoomView {
         let mic = match std::env::var("RTC_FAKE_MIC").as_deref() {
             Ok("tone") => MicSource::Tone(440.0),
             Ok("silence") => MicSource::Silence,
-            _ => MicSource::Device,
+            _ if self.settings.classic_audio => MicSource::Device,
+            _ => MicSource::Pipeline,
         };
         let config = Config {
             signaling_urls: self.settings.signaling_urls(),
@@ -311,7 +378,10 @@ impl RoomView {
         if !self.settings.output_device_id.is_empty() {
             handle.set_output(self.settings.output_device_id.clone());
         }
+        handle.set_isolation(self.settings.voice_isolation && !self.settings.low_power);
+        handle.set_low_power(self.settings.low_power);
         handle.list_devices();
+        self.volumes_sent.clear();
         self.engine = Some(handle);
     }
 
@@ -367,6 +437,11 @@ impl RoomView {
                     self.unread = 0;
                     self.pop = None;
                     self.dialog = None;
+                    self.fun.clear();
+                    self.pictures.clear();
+                    self.pending = None;
+                    self.lightbox = None;
+                    self.emoji_open = false;
                 }
                 let entered = was_in.is_none() && matches!(snapshot.phase, Phase::InRoom(_));
                 let alone = snapshot.members.is_empty();
@@ -397,8 +472,20 @@ impl RoomView {
                 if !mine && (self.tab != Tab::Chat || !self.panel_open) {
                     self.unread += 1;
                 }
+                self.chat_line_sounds(&line);
                 self.chat.push(line);
+                if self.chat.len() > CHAT_KEEP {
+                    let gone = self.chat.remove(0);
+                    if let Some(i) = gone.image {
+                        self.pictures.remove(&i.transfer_id);
+                    }
+                }
             }
+            Update::Reaction(r) => self.on_reaction(r, cx),
+            Update::Sound(s) => self.on_sound(s, cx),
+            Update::ImageProgress { transfer_id, percent } => self.picture_progress(transfer_id, percent),
+            Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes),
+            Update::Net(peers) => self.on_net(peers),
             Update::Log(text) => self.log(text),
             Update::Notice(n) => {
                 if self.in_room().is_some() {
@@ -452,6 +539,11 @@ impl RoomView {
 
     fn send_chat(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let text = self.message.read(cx).value().to_string();
+        if self.pending.is_some() {
+            self.send_picture(text.trim().to_owned(), cx);
+            self.message.update(cx, |m, cx| m.set_value("", window, cx));
+            return;
+        }
         if text.trim().is_empty() {
             return;
         }
@@ -522,6 +614,16 @@ impl RoomView {
             && let Some(e) = &self.engine
         {
             e.list_devices();
+            // the mic and speakers run while the settings are open, for the meter and the test
+            e.audio_open(true);
+            self.meter_task = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(METER_TICK).await;
+                    let Ok(true) = this.update(cx, Self::meter_tick) else {
+                        break;
+                    };
+                }
+            }));
         }
         if d == Dialog::Desktop {
             self.autostart = rtc_platform_win::autostart::enabled();
@@ -541,6 +643,168 @@ impl RoomView {
         self.dialog = None;
         self.command(Command::Leave);
         cx.notify();
+    }
+
+    /// Moves the voice settings' meter; false once the settings are closed (and lets the mic go).
+    fn meter_tick(&mut self, cx: &mut Context<'_, Self>) -> bool {
+        if self.dialog != Some(Dialog::Voice) {
+            if let Some(e) = &self.engine {
+                e.audio_open(false);
+            }
+            self.mic_meter = 0.0;
+            self.meter_task = None;
+            return false;
+        }
+        let level = self.engine.as_ref().and_then(Handle::mic_level).unwrap_or(0.0);
+        self.mic_meter = level.max(self.mic_meter * 0.85);
+        cx.notify();
+        true
+    }
+
+    /// Our own audio path is running (per-person volume, Voice Isolation, the meter).
+    pub(crate) fn has_pipeline(&self) -> bool {
+        self.engine.as_ref().is_some_and(|e| e.mic_level().is_some())
+    }
+
+    pub(crate) fn set_isolation(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.voice_isolation = on;
+        self.settings.save();
+        if let Some(e) = &self.engine {
+            e.set_isolation(on && !self.settings.low_power);
+        }
+        cx.notify();
+    }
+
+    /// Low-power mode: calmer reactions, no Voice Isolation, connections checked less often.
+    pub(crate) fn set_low_power(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.low_power = on;
+        self.settings.save();
+        if let Some(e) = &self.engine {
+            e.set_low_power(on);
+            e.set_isolation(self.settings.voice_isolation && !on);
+        }
+        cx.notify();
+    }
+
+    /// Switches between our own audio path and libwebrtc's (restarts the engine: not in a room).
+    pub(crate) fn set_classic_audio(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        if self.in_room().is_some() {
+            return;
+        }
+        self.settings.classic_audio = on;
+        self.settings.save();
+        let open = self.dialog;
+        self.restart_engine(cx);
+        // the voice settings are where this was flipped: keep their meter going
+        if open == Some(Dialog::Voice) {
+            self.open_dialog(Dialog::Voice, cx);
+        }
+    }
+
+    pub(crate) fn play_test_sound(&mut self) {
+        if let Some(e) = &self.engine {
+            e.test_sound();
+        }
+    }
+
+    /// A person's volume for you and whether you muted them, as saved.
+    pub(crate) fn peer_volume(&self, m: &rtc_engine::Member) -> (f32, bool) {
+        let Some(id) = &m.client_id else {
+            return (1.0, false);
+        };
+        let v = self.settings.volumes.get(id).copied().unwrap_or(1.0);
+        (v.abs(), v.is_sign_negative())
+    }
+
+    /// Sets a person's volume (0..2) and mute-for-me, saved under their install id.
+    pub(crate) fn set_peer_volume(
+        &mut self,
+        peer: &PeerId,
+        volume: f32,
+        muted: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let volume = ((volume * 20.0).round() / 20.0).clamp(0.0, 2.0);
+        let client_id = self
+            .room
+            .as_ref()
+            .and_then(|r| r.members.iter().find(|(p, _)| p == peer))
+            .and_then(|(_, m)| m.client_id.clone());
+        if let Some(id) = client_id {
+            // saved as one number: the volume, negative when muted for you
+            if muted {
+                self.settings.volumes.insert(id, -volume.max(0.05));
+            } else if (volume - 1.0).abs() < 0.001 {
+                self.settings.volumes.remove(&id);
+            } else {
+                self.settings.volumes.insert(id, volume);
+            }
+            self.settings.save();
+        }
+        let gain = if muted { 0.0 } else { volume };
+        if let Some(e) = &self.engine {
+            e.set_volume(peer.clone(), gain);
+        }
+        if let Some(slider) = &self.volume_slider
+            && self.volume_for.as_ref() == Some(peer)
+        {
+            // a preset or mute moved it: the slider shows the new value
+            let shown = if muted { 0.0 } else { volume };
+            if (slider.read(cx).value().start() - shown).abs() > 0.001 {
+                self.make_volume_slider(shown, cx);
+            }
+        }
+        self.volumes_sent.insert(peer.clone(), gain);
+        cx.notify();
+    }
+
+    /// Gives the engine the saved volume of everyone whose identity has arrived.
+    fn send_saved_volumes(&mut self, snapshot: &Snapshot) {
+        let Some(e) = &self.engine else { return };
+        for (peer, m) in &snapshot.members {
+            let (volume, muted) = self.peer_volume(m);
+            let gain = if muted { 0.0 } else { volume };
+            let sent = self.volumes_sent.get(peer).copied().unwrap_or(1.0);
+            if (gain - sent).abs() > 0.001 {
+                e.set_volume(peer.clone(), gain);
+                self.volumes_sent.insert(peer.clone(), gain);
+            }
+        }
+    }
+
+    pub(crate) fn open_volume(&mut self, peer: PeerId, cx: &mut Context<'_, Self>) {
+        if self.pop == Some(Pop::Volume) && self.volume_for.as_ref() == Some(&peer) {
+            self.pop = None;
+        } else {
+            let (volume, muted) = self
+                .room
+                .as_ref()
+                .and_then(|r| r.members.iter().find(|(p, _)| *p == peer))
+                .map_or((1.0, false), |(_, m)| self.peer_volume(m));
+            self.pop = Some(Pop::Volume);
+            self.volume_for = Some(peer);
+            self.make_volume_slider(if muted { 0.0 } else { volume }, cx);
+        }
+        cx.notify();
+    }
+
+    fn make_volume_slider(&mut self, value: f32, cx: &mut Context<'_, Self>) {
+        let state = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(2.0)
+                .step(0.05)
+                .default_value(value)
+        });
+        self.volume_sub = Some(cx.subscribe(&state, |this, _, e: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = e
+                && let Some(peer) = this.volume_for.clone()
+            {
+                // dragging the slider unmutes, as on the web
+                this.set_peer_volume(&peer, v.start(), false, cx);
+            }
+        }));
+        self.volume_slider = Some(state);
     }
 
     pub(crate) fn make_host(&self, peer: rtc_protocol::PeerId) {
@@ -830,11 +1094,13 @@ impl RoomView {
                     self.settings.save();
                 }
                 self.announced.clear();
+                self.volumes_sent.clear();
                 self.ptt_talking = false;
                 self.ptt_release = None;
             }
             return;
         };
+        self.send_saved_volumes(snapshot);
         let fresh_entry = self.in_room() != Some(id);
         for (peer, m) in &snapshot.members {
             if fresh_entry {
@@ -969,9 +1235,16 @@ impl RoomView {
     }
 
     fn typing(&self, window: &Window, cx: &Context<'_, Self>) -> bool {
-        [&self.name, &self.message, &self.link, &self.server_url]
-            .iter()
-            .any(|i| i.read(cx).focus_handle(cx).is_focused(window))
+        [
+            &self.name,
+            &self.message,
+            &self.link,
+            &self.server_url,
+            &self.reaction_input,
+            &self.emoji_search,
+        ]
+        .iter()
+        .any(|i| i.read(cx).focus_handle(cx).is_focused(window))
             || self.code.read(cx).focus_handle(cx).is_focused(window)
     }
 
@@ -995,7 +1268,9 @@ impl RoomView {
         match ks.key.as_str() {
             "m" => self.toggle_mic(),
             "q" => self.open_dialog(Dialog::Qr, cx),
-            _ => {}
+            k => {
+                self.reaction_key(k);
+            }
         }
     }
 
@@ -1036,6 +1311,7 @@ impl Render for RoomView {
             .id("root")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key))
+            .on_drop(cx.listener(|v, paths: &gpui_kit::ExternalPaths, _, cx| v.dropped(paths, cx)))
             .relative()
             .size_full()
             .bg(tokens::bg())
@@ -1059,5 +1335,145 @@ impl Render for RoomView {
                 )
             })
             .children(dialog)
+    }
+}
+
+// ---- updates ------------------------------------------------------------------------------------
+
+impl RoomView {
+    /// Checks for a new version a little after starting and then every few hours (release
+    /// builds only).
+    fn start_updates(&mut self, cx: &mut Context<'_, Self>) {
+        if !crate::update::is_release(BUILD) {
+            self.update = crate::update::Status::Dev;
+            return;
+        }
+        self.update_task = Some(cx.spawn(async move |this, cx| {
+            let mut wait = crate::update::FIRST;
+            loop {
+                cx.background_executor().timer(wait).await;
+                wait = crate::update::EVERY;
+                let Ok(auto) = this.update(cx, |v, _| v.settings.auto_update) else {
+                    break;
+                };
+                if auto && this.update(cx, |v, cx| v.check_updates(false, cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Looks for a new version and, if there is one, puts it in place (`manual`: the button,
+    /// which also says when there's nothing new).
+    pub(crate) fn check_updates(&mut self, manual: bool, cx: &mut Context<'_, Self>) {
+        use crate::update::Status;
+        if matches!(
+            self.update,
+            Status::Checking | Status::Downloading(..) | Status::Dev
+        ) {
+            return;
+        }
+        if let Status::Ready(_) = self.update {
+            return;
+        }
+        self.update = Status::Checking;
+        cx.notify();
+        let progress = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let seen = std::sync::Arc::clone(&progress);
+        cx.spawn(async move |this, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async { crate::update::check() })
+                .await;
+            let manifest = match found {
+                Ok(m) if crate::update::newer(&m.build, BUILD) => m,
+                Ok(_) => {
+                    let _ = this.update(cx, |v, cx| {
+                        v.update = Status::UpToDate;
+                        if manual {
+                            v.show_toast("You have the latest 3RTC", cx);
+                        }
+                        cx.notify();
+                    });
+                    return;
+                }
+                Err(e) => {
+                    tracing::info!("update check: {e}");
+                    let _ = this.update(cx, |v, cx| {
+                        v.update = Status::Failed(e);
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let build = manifest.build.clone();
+            let notes = manifest.notes.trim().to_owned();
+            let _ = this.update(cx, |v, cx| {
+                v.update = Status::Downloading(build.clone(), 0);
+                cx.notify();
+            });
+            let asset = manifest.exe.clone();
+            let job = cx.background_executor().spawn(async move {
+                crate::update::install(&asset, &|p| seen.store(p, std::sync::atomic::Ordering::Relaxed))
+            });
+            // show the download's progress while it runs
+            let shown = this.clone();
+            let ticker = cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(300)).await;
+                    let pct = progress.load(std::sync::atomic::Ordering::Relaxed);
+                    let Ok(true) = shown.update(cx, |v, cx| {
+                        let Status::Downloading(b, _) = &v.update else {
+                            return false;
+                        };
+                        v.update = Status::Downloading(b.clone(), pct);
+                        cx.notify();
+                        true
+                    }) else {
+                        break;
+                    };
+                }
+            });
+            let result = job.await;
+            drop(ticker);
+            let _ = this.update(cx, |v, cx| {
+                match result {
+                    Ok(()) => {
+                        tracing::info!("update {build} is in place");
+                        v.update = Status::Ready(build.clone());
+                        v.log(format!(
+                            "✨ 3RTC {build} is ready: it starts the next time you open 3RTC."
+                        ));
+                        if !notes.is_empty() {
+                            v.log(format!("What's new in {build}: {notes}"));
+                        }
+                        v.show_toast(format!("✨ 3RTC {build} is ready: it starts next time"), cx);
+                    }
+                    Err(e) => {
+                        tracing::warn!("update {build}: {e}");
+                        v.update = Status::Failed(e);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// "Restart now": start the new version and close this one.
+    pub(crate) fn restart_for_update(&mut self, cx: &mut Context<'_, Self>) {
+        match crate::update::restart() {
+            Ok(()) => {
+                self.command(Command::Leave);
+                cx.quit();
+            }
+            Err(e) => self.show_toast(e, cx),
+        }
+    }
+
+    pub(crate) fn set_auto_update(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.auto_update = on;
+        self.settings.save();
+        cx.notify();
     }
 }

@@ -60,3 +60,19 @@ cargo run -p rtc-app              # the app (RTC_SIGNAL_URL=ws://localhost:8080 
 - Every public item is documented. Clippy pedantic (selected) runs as errors in CI.
 - `cargo deny` checks licences, sources and advisories.
 - Release builds link the C runtime statically (`.cargo/config.toml`): one portable `3rtc.exe`.
+
+## Releases
+
+From `desktop\` on Windows: `.\packaging\package.ps1 -Notes "what's new"` builds everything into
+`target\dist` (needs Inno Setup 6 for the installer: `winget install JRSoftware.InnoSetup`):
+
+| File | What |
+|---|---|
+| `3RTC-Setup.exe` | per-user installer: `%LOCALAPPDATA%\Programs\3RTC`, Start menu, uninstaller, no admin |
+| `3RTC-portable.zip` | a folder to unzip anywhere; settings stay beside the exe |
+| `3rtc-<build>.exe`, `latest.json` | what installed and portable apps download to update themselves |
+
+`-Publish` copies them into `client-ts\public\desktop`, so the next deploy of the web app serves
+them at `https://3rtc.me/desktop/`. Apps check `latest.json` 15 s after starting and every 6 hours
+and update in place (More → Desktop → Updates). The build number is the UTC time of the build,
+`YYMMDD.HHMM`; builds from source (`dev.cmd`, CI) have none and never update.
