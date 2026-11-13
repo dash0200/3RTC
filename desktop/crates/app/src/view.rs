@@ -56,6 +56,8 @@ pub(crate) enum Pop {
     Reactions,
     /// The soundboard.
     Sounds,
+    /// "Play together": the games.
+    Games,
 }
 
 /// A dialog over everything.
@@ -123,9 +125,9 @@ pub(crate) struct RoomView {
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
     /// Keys, tray, notifications.
-    desktop: Desktop,
+    pub(crate) desktop: Desktop,
     /// The window is in front (notifications only when it isn't).
-    active: bool,
+    pub(crate) active: bool,
     /// Push-to-talk has the mic open.
     pub(crate) ptt_talking: bool,
     ptt_release: Option<Task<()>>,
@@ -169,6 +171,8 @@ pub(crate) struct RoomView {
     pub(crate) net: crate::net::NetState,
     /// Updates: where they are, and the task checking for them.
     pub(crate) update: crate::update::Status,
+    /// The graphics card: what Windows offers, what the app started with, what's chosen.
+    pub(crate) gpu: GpuState,
     update_task: Option<Task<()>>,
     /// The watch party on screen: the player, quick picks, the queue's link box.
     pub(crate) watch: crate::watch::WatchUi,
@@ -176,6 +180,8 @@ pub(crate) struct RoomView {
     pub(crate) extras: crate::extras::Extras,
     /// Screen sharing.
     pub(crate) screen: crate::screen::ScreenUi,
+    /// The open game on this device.
+    pub(crate) activity: crate::activity::ActivityUi,
 }
 
 /// Milliseconds since 1970.
@@ -355,10 +361,12 @@ impl RoomView {
             lightbox: None,
             net: crate::net::NetState::default(),
             update: crate::update::Status::Idle,
+            gpu: GpuState::read(),
             update_task: None,
             watch,
             extras: crate::extras::Extras::default(),
             screen: crate::screen::ScreenUi::default(),
+            activity: crate::activity::ActivityUi::default(),
         };
         this.start_updates(cx);
         this.start_watch(player_rx, cx);
@@ -409,10 +417,8 @@ impl RoomView {
         }
         handle.set_isolation(self.settings.voice_isolation && !self.settings.low_power);
         handle.set_low_power(self.settings.low_power);
-        handle.screen_options(rtc_engine::ScreenOptions {
-            max_height: self.settings.screen_max_height,
-            fps: if self.settings.screen_fps == 30 { 30 } else { 60 },
-        });
+        handle.screen_options(self.screen_options());
+        handle.screen_volume(self.settings.screen_volume);
         handle.screen_quality(self.settings.screen_quality);
         handle.list_devices();
         self.volumes_sent.clear();
@@ -481,6 +487,12 @@ impl RoomView {
                 let entered = was_in.is_none() && matches!(snapshot.phase, Phase::InRoom(_));
                 let alone = snapshot.members.is_empty();
                 self.room = Some(snapshot);
+                self.activity_changed();
+                self.chess_after(cx);
+                self.ludo_after(cx);
+                self.games_after(cx);
+                self.tycoon_after(cx);
+                self.whiteboard_after(cx);
                 if entered {
                     self.tab = if alone { Tab::Invite } else { Tab::Chat };
                     if let Some(id) = self.in_room() {
@@ -519,6 +531,7 @@ impl RoomView {
             }
             Update::Reaction(r) => self.on_reaction(r, cx),
             Update::Sound(s) => self.on_sound(s, cx),
+            Update::Board { from, live, body } => self.on_board(from.as_str(), live, &body, cx),
             Update::ImageProgress { transfer_id, percent } => self.picture_progress(transfer_id, percent),
             Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes),
             Update::Net(peers) => self.on_net(peers),
@@ -548,6 +561,7 @@ impl RoomView {
                 active,
             } => self.on_screen_pointer(peer, name, x, y, active),
             Update::ScreenPing { name, x, y } => self.on_screen_ping(name, x, y),
+            Update::Control(c) => self.on_control(c, cx),
             Update::ScreenSending { encoder, viewers } => {
                 self.screen.sending = Some((encoder, viewers));
             }
@@ -1310,7 +1324,9 @@ impl RoomView {
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
         let ks = &event.keystroke;
         if ks.key == "escape" {
-            if self.dialog.is_some() {
+            if self.screen.fullscreen {
+                self.end_screen_fullscreen(window);
+            } else if self.dialog.is_some() {
                 self.dialog = None;
             } else if self.pop.is_some() {
                 self.pop = None;
@@ -1530,6 +1546,16 @@ impl RoomView {
         .detach();
     }
 
+    /// Picks the graphics card for the next start (Settings → Graphics card).
+    pub(crate) fn set_gpu_choice(&mut self, choice: rtc_platform_win::GpuChoice, cx: &mut Context<'_, Self>) {
+        let Some(exe) = GpuState::exe() else { return };
+        match rtc_platform_win::set_gpu_choice(&exe, choice) {
+            Ok(()) => self.gpu.chosen = choice,
+            Err(e) => self.show_toast(format!("Couldn't save the graphics card: {e}"), cx),
+        }
+        cx.notify();
+    }
+
     /// "Restart now": start the new version and close this one.
     pub(crate) fn restart_for_update(&mut self, cx: &mut Context<'_, Self>) {
         match crate::update::restart() {
@@ -1545,5 +1571,29 @@ impl RoomView {
         self.settings.auto_update = on;
         self.settings.save();
         cx.notify();
+    }
+}
+
+/// The graphics card (Settings): the cards Windows would pick, the choice the app started with
+/// (Windows applies a choice when a program starts) and the one saved now.
+#[derive(Debug, Clone)]
+pub(crate) struct GpuState {
+    pub(crate) gpus: rtc_platform_win::Gpus,
+    pub(crate) started: rtc_platform_win::GpuChoice,
+    pub(crate) chosen: rtc_platform_win::GpuChoice,
+}
+
+impl GpuState {
+    fn exe() -> Option<String> {
+        std::env::current_exe().ok().map(|p| p.display().to_string())
+    }
+
+    fn read() -> Self {
+        let choice = Self::exe().map_or_else(Default::default, |e| rtc_platform_win::gpu_choice(&e));
+        Self {
+            gpus: rtc_platform_win::gpus(),
+            started: choice,
+            chosen: choice,
+        }
     }
 }

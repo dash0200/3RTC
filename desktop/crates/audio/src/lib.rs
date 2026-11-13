@@ -6,7 +6,8 @@
 //!     ─► RNNoise (Voice Isolation) ─► noise gate ─► level ─► the call
 //!
 //! person A ─► queue ─► volume A ┐
-//! person B ─► queue ─► volume B ├► mix ─► limiter ─► echo reference ─► render (cpal) ─► speakers
+//! person B ─► queue ─► volume B ├► mix (stereo) ─► limiter ─► echo reference (mono)
+//! screen sound (stereo) ────────┤                          ─► render (cpal) ─► speakers
 //! test sound ───────────────────┘
 //! ```
 //!
@@ -43,8 +44,8 @@ pub trait Echo: Send {
 /// Where the cleaned-up microphone goes (the call), one 10 ms frame at a time.
 pub type Sink = Box<dyn FnMut(&[i16]) + Send>;
 
-/// The speakers stay this far ahead (30 ms): enough to ride out a late wake-up.
-const RENDER_AHEAD: usize = FRAME * 3;
+/// The speakers stay this far ahead (30 ms, stereo samples): enough to ride out a late wake-up.
+const RENDER_AHEAD: usize = mix::OUT * 3;
 /// How often the default devices are checked (to follow Windows when they change).
 const DEFAULT_CHECK: Duration = Duration::from_secs(2);
 /// Speakers whose queue stays full this long have stopped: reopen them.
@@ -242,6 +243,19 @@ impl Audio {
     /// Someone to play: their feed (push their decoded voice into it) and their volume.
     pub fn add_peer(&self, key: u64) -> (PeerFeed, Arc<PeerControl>) {
         let (feed, input) = mix::peer(key);
+        let control = Arc::clone(&input.control);
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, Arc::clone(&control));
+        self.send(Cmd::AddPeer(input));
+        (feed, control)
+    }
+
+    /// A shared screen's sound to play, in stereo: its feed (push left and right interleaved)
+    /// and its volume. Removed with [`Self::remove_peer`].
+    pub fn add_stereo_peer(&self, key: u64) -> (PeerFeed, Arc<PeerControl>) {
+        let (feed, input) = mix::stereo_peer(key);
         let control = Arc::clone(&input.control);
         self.peers
             .lock()
@@ -545,7 +559,7 @@ impl Pipeline {
     fn render_frames(&mut self) {
         // speakers that stopped taking sound (a stuck driver): reopen them, and keep time
         // ourselves meanwhile, so everyone's queue and the echo reference keep moving
-        let full = self.render.as_ref().is_some_and(|r| r.samples.slots() < FRAME);
+        let full = self.render.as_ref().is_some_and(|r| r.samples.slots() < mix::OUT);
         match (full, self.stalled_since) {
             (false, _) => self.stalled_since = None,
             (true, None) => self.stalled_since = Some(Instant::now()),
@@ -558,10 +572,10 @@ impl Pipeline {
             }
             (true, Some(_)) => {}
         }
-        let mut frame = [0.0f32; FRAME];
+        let mut frame = [0.0f32; mix::OUT];
         loop {
             let due = match &self.render {
-                Some(r) => r.samples.slots() >= FRAME && RING_CAP - r.samples.slots() < RENDER_AHEAD,
+                Some(r) => r.samples.slots() >= mix::OUT && RING_CAP - r.samples.slots() < RENDER_AHEAD,
                 None => {
                     let now = Instant::now();
                     if now.duration_since(self.clock) > Duration::from_millis(200) {
@@ -579,9 +593,10 @@ impl Pipeline {
                 return;
             }
             self.mixer.next(self.deafened, &mut frame);
+            // the echo canceller hears what's played, both sides together
             let mut reference = [0i16; FRAME];
-            for (r, s) in reference.iter_mut().zip(&frame) {
-                *r = to_i16(*s);
+            for (r, pair) in reference.iter_mut().zip(frame.chunks_exact(2)) {
+                *r = to_i16((pair[0] + pair[1]) * 0.5);
             }
             self.echo.render(&mut reference);
             if let Some(r) = &mut self.render {
@@ -603,7 +618,7 @@ impl Pipeline {
             .capture
             .as_ref()
             .map_or(0, |c| c.state.latency_us.load(Ordering::Relaxed));
-        let samples_ms = (queued_out + queued_in) / (RATE as usize / 1000);
+        let samples_ms = (queued_out / 2 + queued_in) / (RATE as usize / 1000);
         i32::try_from(samples_ms).unwrap_or(0) + i32::try_from((out_us + in_us) / 1000).unwrap_or(0)
     }
 
@@ -665,8 +680,8 @@ impl Pipeline {
     }
 }
 
-/// The render queue's size (matches `device::RING`).
-const RING_CAP: usize = FRAME * 20;
+/// The render queue's size (matches `device::RENDER_RING`: stereo samples).
+const RING_CAP: usize = FRAME * 20 * 2;
 
 /// A short, friendly test sound (two soft notes), 48 kHz mono.
 #[must_use]

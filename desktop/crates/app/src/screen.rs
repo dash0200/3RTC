@@ -31,6 +31,8 @@ const POINTER_TTL: Duration = Duration::from_secs(4);
 const PING_TTL: Duration = Duration::from_millis(800);
 /// Our pointer goes out at most this often (as the web app: ~30 a second).
 const POINTER_GAP: Duration = Duration::from_millis(33);
+/// In full screen, the bar shows this long after the pointer last moved.
+const FULL_BAR_FOR: Duration = Duration::from_millis(2500);
 
 #[derive(Default)]
 pub(crate) struct ScreenUi {
@@ -46,6 +48,10 @@ pub(crate) struct ScreenUi {
     pump: Option<Task<()>>,
     /// "Hide" was pressed (the share goes on; the dock button brings it back).
     pub(crate) dismissed: bool,
+    /// The shared screen fills the whole monitor (the window goes full screen).
+    pub(crate) fullscreen: bool,
+    /// The pointer last moved over the stage (in full screen the bar shows for a moment).
+    moved: Option<Instant>,
     /// Our laser pointer is on.
     pub(crate) laser: bool,
     /// Our own share: show its picture (off: a card, as the web app, so the picture of the
@@ -69,6 +75,18 @@ pub(crate) struct ScreenUi {
     pub(crate) sending: Option<(Option<String>, Vec<ScreenViewer>)>,
     /// The quality menu is open.
     menu: bool,
+    /// Remote control: where it stands (from the engine).
+    pub(crate) control: rtc_engine::ControlView,
+    /// The stage takes the keys while we control (made on first draw).
+    pub(crate) ctl_focus: Option<gpui_kit::FocusHandle>,
+    /// Our last pointer move sent while in control.
+    pub(crate) ctl_sent: Option<Instant>,
+    /// The modifier keys as last sent.
+    pub(crate) ctl_mods: gpui_kit::Modifiers,
+    /// Keys we hold down (sent as pressed).
+    pub(crate) ctl_keys: Vec<u16>,
+    /// The "Give control" menu is open.
+    pub(crate) ctl_menu: bool,
 }
 
 /// The picture sizes to choose from (0: the screen's own / as sent).
@@ -117,6 +135,56 @@ impl RoomView {
             cx.notify();
         } else {
             self.open_screen_picker(cx);
+        }
+    }
+
+    /// The shared screen fills the monitor (the window goes full screen), or not.
+    pub(crate) fn toggle_screen_fullscreen(
+        &mut self,
+        window: &mut gpui_kit::Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let on = !self.screen.fullscreen;
+        self.screen.fullscreen = on;
+        if window.is_fullscreen() != on {
+            window.toggle_fullscreen();
+        }
+        if on {
+            self.screen_moved(cx);
+        }
+        cx.notify();
+    }
+
+    /// Leaves full screen (the share ended, Esc).
+    pub(crate) fn end_screen_fullscreen(&mut self, window: &mut gpui_kit::Window) {
+        self.screen.fullscreen = false;
+        if window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+    }
+
+    /// The pointer moved in full screen: show the bar, and hide it again once it rests.
+    fn screen_moved(&mut self, cx: &mut Context<'_, Self>) {
+        let first = self.screen.moved.is_none_or(|t| t.elapsed() >= FULL_BAR_FOR);
+        self.screen.moved = Some(Instant::now());
+        if first {
+            cx.notify();
+            cx.spawn(async move |v, cx| {
+                loop {
+                    cx.background_executor().timer(FULL_BAR_FOR).await;
+                    let rest = v.update(cx, |v, cx| {
+                        let rest = v.screen.moved.is_none_or(|t| t.elapsed() >= FULL_BAR_FOR);
+                        if rest {
+                            cx.notify();
+                        }
+                        rest
+                    });
+                    if rest.unwrap_or(true) {
+                        break;
+                    }
+                }
+            })
+            .detach();
         }
     }
 
@@ -250,7 +318,18 @@ impl RoomView {
         ScreenOptions {
             max_height: self.settings.screen_max_height,
             fps: if self.settings.screen_fps == 30 { 30 } else { 60 },
+            sound: self.settings.screen_sound,
         }
+    }
+
+    /// The volume of others' shared screens' sound (remembered).
+    fn set_screen_volume(&mut self, gain: f32, cx: &mut Context<'_, Self>) {
+        self.settings.screen_volume = gain;
+        self.settings.save();
+        if let Some(e) = &self.engine {
+            e.screen_volume(gain);
+        }
+        cx.notify();
     }
 
     /// The largest picture we want of others' shares (remembered).
@@ -261,6 +340,11 @@ impl RoomView {
             e.screen_quality(h);
         }
         cx.notify();
+    }
+
+    /// We control the screen we watch (our input goes to the sharer's computer).
+    pub(crate) const fn controlling(&self) -> bool {
+        !self.screen.mine && self.screen.control.mine
     }
 
     /// The sharer is on the desktop app (only it sends the size we ask for).
@@ -290,8 +374,19 @@ impl RoomView {
         }
     }
 
+    /// Where `p` is on the shared picture, kept on it (0–1).
+    pub(crate) fn on_picture_clamped(&self, p: gpui_kit::Point<Pixels>) -> (f64, f64) {
+        let Some(area) = self.screen.area.get() else {
+            return (0.5, 0.5);
+        };
+        let b = fitted(area, self.screen.size);
+        let x = (f32::from(p.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0);
+        let y = (f32::from(p.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0);
+        (f64::from(x.clamp(0.0, 1.0)), f64::from(y.clamp(0.0, 1.0)))
+    }
+
     /// Where `p` is on the shared picture (0–1), if it's on it.
-    fn on_picture(&self, p: gpui_kit::Point<Pixels>) -> Option<(f64, f64)> {
+    pub(crate) fn on_picture(&self, p: gpui_kit::Point<Pixels>) -> Option<(f64, f64)> {
         let b = fitted(self.screen.area.get()?, self.screen.size);
         let x = (f32::from(p.x) - f32::from(b.origin.x)) / f32::from(b.size.width);
         let y = (f32::from(p.y) - f32::from(b.origin.y)) / f32::from(b.size.height);
@@ -333,7 +428,7 @@ impl RoomView {
     }
 }
 
-fn bar_btn(id: &'static str, label: &str, on: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
+pub(crate) fn bar_btn(id: &'static str, label: &str, on: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
         .h(px(34.))
@@ -361,7 +456,13 @@ fn color_of(name: &str) -> gpui_kit::Hsla {
 
 /// The stage while a screen is shared.
 pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyElement {
+    if view.screen.ctl_focus.is_none() {
+        view.screen.ctl_focus = Some(cx.focus_handle());
+    }
     let s = &view.screen;
+    // we control the sharer's computer: the mouse, wheel and keys over the stage go there
+    let controlling = !s.mine && s.control.mine;
+    let ctl_focus = s.ctl_focus.clone().filter(|_| controlling);
     let name = s.sharer.clone().unwrap_or_default();
     let mine = s.mine;
     let area = Rc::clone(&s.area);
@@ -458,21 +559,95 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
         format!("Quality: {}", size_label(view.settings.screen_quality, "Auto"))
     };
     let menu = menu_open.then(|| quality_menu(view, cx));
+    let ctl_button = crate::control::bar_button(view, cx);
+    let give_menu = crate::control::give_menu(view, cx);
+    let ctl_chip = crate::control::status_chip(view);
+    let ctl_prompts = crate::control::prompts(view, cx);
+    let full = s.fullscreen;
+    // in full screen the bar and the line under the picture show while the pointer moves
+    let chrome = !full || menu_open || s.moved.is_some_and(|t| now.duration_since(t) < FULL_BAR_FOR);
+    let edge = if full { px(0.) } else { px(12.) };
     div()
         .id("screen-stage")
         .absolute()
-        .top(px(12.))
-        .left(px(12.))
-        .right(px(12.))
-        .bottom(px(12.))
-        .rounded(tokens::RADIUS_VIDEO)
+        .top(edge)
+        .left(edge)
+        .right(edge)
+        .bottom(edge)
+        .when(!full, |el| el.rounded(tokens::RADIUS_VIDEO))
         .overflow_hidden()
         .bg(tokens::black(1.0))
-        .when(laser, gpui_kit::Styled::cursor_crosshair)
-        .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, _| v.laser_move(e.position)))
+        .when(laser && !controlling, gpui_kit::Styled::cursor_crosshair)
+        .when_some(ctl_focus, |el, f| el.track_focus(&f))
+        .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| {
+            if v.controlling() {
+                v.ctl_move(e.position);
+            } else {
+                v.laser_move(e.position);
+            }
+            if v.screen.fullscreen {
+                v.screen_moved(cx);
+            }
+        }))
+        .when(controlling, |el| {
+            let down = |b: MouseButton| {
+                cx.listener(move |v: &mut RoomView, e: &MouseDownEvent, window, cx| {
+                    if v.controlling() {
+                        v.ctl_button(b, true, e.position, window, cx);
+                    }
+                })
+            };
+            let up = |b: MouseButton| {
+                cx.listener(move |v: &mut RoomView, e: &gpui_kit::MouseUpEvent, window, cx| {
+                    if v.controlling() {
+                        v.ctl_button(b, false, e.position, window, cx);
+                    }
+                })
+            };
+            el.on_mouse_down(MouseButton::Right, down(MouseButton::Right))
+                .on_mouse_down(MouseButton::Middle, down(MouseButton::Middle))
+                .on_mouse_up(MouseButton::Left, up(MouseButton::Left))
+                .on_mouse_up(MouseButton::Right, up(MouseButton::Right))
+                .on_mouse_up(MouseButton::Middle, up(MouseButton::Middle))
+                .on_mouse_up_out(MouseButton::Left, up(MouseButton::Left))
+                .on_mouse_up_out(MouseButton::Right, up(MouseButton::Right))
+                .on_scroll(cx.listener(|v, e: &gpui_kit::ScrollEvent, _, cx| {
+                    v.ctl_wheel(e);
+                    cx.stop_propagation();
+                }))
+                .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, _, cx| {
+                    if v.controlling() {
+                        v.ctl_key_down(e);
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_key_up(cx.listener(|v, e: &gpui_kit::KeyUpEvent, _, cx| {
+                    if v.controlling() {
+                        v.ctl_key_up(e);
+                        cx.stop_propagation();
+                    }
+                }))
+                .on_modifiers_changed(cx.listener(|v, e: &gpui_kit::ModifiersChangedEvent, _, cx| {
+                    if v.controlling() {
+                        v.ctl_modifiers(e);
+                        cx.stop_propagation();
+                    }
+                }))
+        })
         .on_mouse_down(
             MouseButton::Left,
-            cx.listener(|v, e: &MouseDownEvent, _, cx| v.laser_click(e.position, cx)),
+            cx.listener(|v, e: &MouseDownEvent, window, cx| {
+                if v.controlling() {
+                    v.ctl_button(MouseButton::Left, true, e.position, window, cx);
+                    return;
+                }
+                // a double click on the picture: full screen (not while pointing with the laser)
+                if e.click_count == 2 && !v.screen.laser && !(v.screen.mine && !v.screen.preview) {
+                    v.toggle_screen_fullscreen(window, cx);
+                    return;
+                }
+                v.laser_click(e.position, cx);
+            }),
         )
         .child(
             canvas(
@@ -569,7 +744,7 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
             ),
         })
         .children(marks.into_iter().flatten())
-        .child(
+        .when(chrome, |el| el.child(
             div()
                 .absolute()
                 .top(px(12.))
@@ -599,7 +774,8 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                         cx.notify();
                     })))
                 })
-                .child(
+                .children(ctl_button)
+                .when(!controlling, |el| el.child(
                     bar_btn("screen-laser", "Laser pointer", laser).on_click(cx.listener(|v, _, _, cx| {
                         v.screen.laser = !v.screen.laser;
                         if !v.screen.laser
@@ -609,8 +785,14 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                         }
                         cx.notify();
                     })),
-                )
-                .when(!mine, |el| {
+                ))
+                .when(!slate, |el| {
+                    el.child(
+                        bar_btn("screen-full", if full { "Exit full screen" } else { "Full screen" }, full)
+                            .on_click(cx.listener(|v, _, window, cx| v.toggle_screen_fullscreen(window, cx))),
+                    )
+                })
+                .when(!mine && !full, |el| {
                     el.child(
                         bar_btn("screen-hide", "Hide", false).on_click(cx.listener(|v, _, _, cx| {
                             v.screen.dismissed = true;
@@ -636,8 +818,8 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                             })),
                     )
                 }),
-        )
-        .children(stats.map(|line| {
+        ))
+        .children(stats.filter(|_| chrome).map(|line| {
             div()
                 .absolute()
                 .bottom(px(12.))
@@ -651,7 +833,10 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                 .text_color(tokens::text_2())
                 .child(line)
         }))
+        .children(ctl_chip)
+        .children(ctl_prompts)
         .children(menu)
+        .children(give_menu)
         .into_any_element()
 }
 
@@ -784,6 +969,17 @@ fn quality_menu(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElement {
                 menu_row(("screen-want", n), label, q == h)
                     .on_click(cx.listener(move |v, _, _, cx| v.set_screen_quality(h, cx)))
             }))
+            .child(menu_head("SOUND"))
+            .children(
+                [(0.0f32, "Off"), (0.5, "50%"), (1.0, "100%"), (1.5, "150%")]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, (g, label))| {
+                        let on = (view.settings.screen_volume - g).abs() < 0.01;
+                        menu_row(("screen-volume", n), label.to_owned(), on)
+                            .on_click(cx.listener(move |v, _, _, cx| v.set_screen_volume(g, cx)))
+                    }),
+            )
             .into_any_element()
     }
 }
@@ -951,6 +1147,43 @@ pub(crate) fn picker(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                                 .collect(),
                             cx,
                         )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .w(px(90.))
+                                .text_size(px(13.))
+                                .text_color(tokens::text_2())
+                                .child("Sound"),
+                        )
+                        .child(chips(
+                            "screen-pick-sound",
+                            [(true, "Share PC sound"), (false, "No sound")]
+                                .into_iter()
+                                .map(|(on, label)| {
+                                    let act: Act = Box::new(move |v, cx| {
+                                        v.settings.screen_sound = on;
+                                        v.settings.save();
+                                        if let Some(e) = &v.engine {
+                                            e.screen_options(v.screen_options());
+                                        }
+                                        cx.notify();
+                                    });
+                                    (label.to_owned(), o.sound == on, act)
+                                })
+                                .collect(),
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(tokens::text_3())
+                        .child("Everything playing on this PC except 3RTC itself (so nobody hears the call twice). Desktop-app viewers hear it."),
                 )
         })
         .child(

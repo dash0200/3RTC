@@ -80,6 +80,10 @@ pub(crate) struct Settings {
     pub(crate) screen_fps: u32,
     /// Watching someone's screen: the tallest picture you want (0: as sent).
     pub(crate) screen_quality: u32,
+    /// Sharing your screen: send the computer's sound with it.
+    pub(crate) screen_sound: bool,
+    /// Watching someone's screen: its sound's volume (0–2, 1 as sent).
+    pub(crate) screen_volume: f32,
 }
 
 /// The settings file's format now. Each change that needs more than new fields with defaults
@@ -190,6 +194,8 @@ impl Default for Settings {
             screen_max_height: 0,
             screen_fps: 60,
             screen_quality: 0,
+            screen_sound: true,
+            screen_volume: 1.0,
         }
     }
 }

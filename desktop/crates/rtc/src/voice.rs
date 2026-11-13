@@ -77,6 +77,10 @@ pub struct Voice {
     /// Volumes set for people, kept for when their voice (re)arrives.
     gains: HashMap<String, f32>,
     next_key: u64,
+    /// The sound of someone's shared screen (stereo), by person: key and feeding task.
+    screen_remote: HashMap<String, (u64, tokio::task::JoinHandle<()>)>,
+    /// The volume of shared screens' sound.
+    screen_gain: f32,
 }
 
 impl std::fmt::Debug for Voice {
@@ -115,6 +119,8 @@ impl Voice {
                     remote: HashMap::new(),
                     gains: HashMap::new(),
                     next_key: 1,
+                    screen_remote: HashMap::new(),
+                    screen_gain: 1.0,
                 };
             }
             tracing::warn!(
@@ -143,6 +149,8 @@ impl Voice {
             remote: HashMap::new(),
             gains: HashMap::new(),
             next_key: 1,
+            screen_remote: HashMap::new(),
+            screen_gain: 1.0,
         }
     }
 
@@ -191,6 +199,8 @@ impl Voice {
             remote: HashMap::new(),
             gains: HashMap::new(),
             next_key: 1,
+            screen_remote: HashMap::new(),
+            screen_gain: 1.0,
         }
     }
 
@@ -244,6 +254,65 @@ impl Voice {
             tracing::info!("audio: {who}'s voice ended after {frames} frames");
         });
         self.remote.insert(peer.to_owned(), (key, task));
+    }
+
+    /// Plays the sound of this person's shared screen (their stereo `screen-audio` track).
+    pub fn add_remote_screen(&mut self, peer: &str, track: RtcAudioTrack) {
+        self.remove_remote_screen(peer);
+        let Some(p) = &self.pipeline else { return };
+        let key = self.next_key;
+        self.next_key += 1;
+        let (mut feed, control) = p.add_stereo_peer(key);
+        control.set_gain(self.screen_gain);
+        let mut stream = NativeAudioStream::new(track, 48_000, 2);
+        let who = peer.to_owned();
+        let task = tokio::spawn(async move {
+            let mut frames = 0u64;
+            while let Some(frame) = stream.next().await {
+                if frames == 0 {
+                    tracing::info!(
+                        "audio: hearing {who}'s screen ({} Hz, {} channels)",
+                        frame.sample_rate,
+                        frame.num_channels
+                    );
+                }
+                frames += 1;
+                if frames.is_multiple_of(500) {
+                    // the screen sound test reads this line
+                    let (l, r) = side_levels(&frame.data, frame.num_channels);
+                    tracing::info!("audio: {who}'s screen: {frames} frames, left {l:.2}, right {r:.2}");
+                }
+                if frame.num_channels == 2 {
+                    feed.push(&frame.data);
+                } else {
+                    let both: Vec<i16> = frame.data.iter().flat_map(|s| [*s, *s]).collect();
+                    feed.push(&both);
+                }
+            }
+        });
+        self.screen_remote.insert(peer.to_owned(), (key, task));
+    }
+
+    /// Stops playing this person's shared screen's sound.
+    pub fn remove_remote_screen(&mut self, peer: &str) {
+        if let Some((key, task)) = self.screen_remote.remove(peer) {
+            task.abort();
+            if let Some(p) = &self.pipeline {
+                p.remove_peer(key);
+            }
+        }
+    }
+
+    /// The volume of shared screens' sound (0 mutes it, 1 as sent, up to 2).
+    pub fn set_screen_volume(&mut self, gain: f32) {
+        self.screen_gain = gain;
+        if let Some(p) = &self.pipeline {
+            for (key, _) in self.screen_remote.values() {
+                if let Some(c) = p.peer(*key) {
+                    c.set_gain(gain);
+                }
+            }
+        }
     }
 
     /// Stops playing this person.
@@ -535,6 +604,77 @@ impl Drop for Voice {
 }
 
 /// Pushes a sine tone into `source`, 10 ms at a time, in real time.
+/// The loudest sample on each side (0..1) of an interleaved frame.
+fn side_levels(data: &[i16], channels: u32) -> (f32, f32) {
+    let ch = usize::try_from(channels).unwrap_or(1).max(1);
+    let mut lr = (0u16, 0u16);
+    for f in data.chunks_exact(ch) {
+        lr.0 = lr.0.max(f[0].unsigned_abs());
+        lr.1 = lr.1.max(f[ch - 1].unsigned_abs());
+    }
+    (f32::from(lr.0) / 32_768.0, f32::from(lr.1) / 32_768.0)
+}
+
+/// The sound of our shared screen, sent to desktop viewers: a stereo track of its own (Opus at
+/// up to 256 kbps, `sdp::tune_music`), separate from the microphone and its processing.
+pub struct ScreenSound {
+    source: NativeAudioSource,
+    track: RtcAudioTrack,
+}
+
+impl std::fmt::Debug for ScreenSound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ScreenSound")
+    }
+}
+
+impl ScreenSound {
+    /// The track (added to desktop viewers' connections while we share).
+    #[must_use]
+    pub fn new(factory: &Factory) -> Self {
+        let options = AudioSourceOptions {
+            echo_cancellation: false,
+            noise_suppression: false,
+            auto_gain_control: false,
+        };
+        let source = NativeAudioSource::new(options, 48_000, 2, 0);
+        let track = factory.inner().create_audio_track("screen-audio", source.clone());
+        Self { source, track }
+    }
+
+    /// The track to add to a connection.
+    #[must_use]
+    pub fn track(&self) -> MediaStreamTrack {
+        MediaStreamTrack::Audio(self.track.clone())
+    }
+
+    /// Something to give the computer's sound to (48 kHz stereo, interleaved, any amount at a
+    /// time): it goes out in 10 ms frames.
+    pub fn feeder(&self) -> impl FnMut(&[f32]) + Send + 'static {
+        let source = self.source.clone();
+        let mut pending: Vec<i16> = Vec::with_capacity(FRAME * 4);
+        move |samples: &[f32]| {
+            pending.extend(samples.iter().map(|s| {
+                #[allow(clippy::cast_possible_truncation)]
+                let v = (s.clamp(-1.0, 1.0) * 32_767.0) as i16;
+                v
+            }));
+            while pending.len() >= FRAME * 2 {
+                let piece: Vec<i16> = pending.drain(..FRAME * 2).collect();
+                let frame = AudioFrame {
+                    data: piece.into(),
+                    sample_rate: 48_000,
+                    num_channels: 2,
+                    samples_per_channel: u32::try_from(FRAME).unwrap_or(480),
+                };
+                let mut done = std::pin::pin!(source.capture_frame(&frame));
+                let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+                let _ = done.as_mut().poll(&mut cx);
+            }
+        }
+    }
+}
+
 async fn play_tone(source: NativeAudioSource, hz: f64) {
     let mut phase = 0.0_f64;
     let step = TAU * hz / 48_000.0;

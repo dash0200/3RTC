@@ -470,6 +470,12 @@ impl RoomView {
 
     /// "browse files", "I have this file": the system's file picker.
     pub(crate) fn choose_video_file(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // host control: what plays is the host's to choose
+        if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+            self.watch.link_error = Some("Host controls are on: only the host can start a video.".into());
+            cx.notify();
+            return;
+        }
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -489,6 +495,12 @@ impl RoomView {
 
     /// Files dropped on the stage: a video plays, a subtitle file joins the video playing here.
     pub(crate) fn dropped_paths(&mut self, paths: &[PathBuf], cx: &mut Context<'_, Self>) {
+        // host control: what plays is the host's to choose
+        if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+            self.watch.link_error = Some("Host controls are on: only the host can start a video.".into());
+            cx.notify();
+            return;
+        }
         if let Some(p) = paths.iter().find(|p| is_video(p)) {
             self.play_path(p.clone(), cx);
         } else if let Some(p) = paths.first() {
@@ -586,6 +598,9 @@ impl RoomView {
 
     /// The bar's play/pause: like a click on the video (the room follows).
     fn video_toggle_play(&mut self, cx: &mut Context<'_, Self>) {
+        if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+            return;
+        }
         let playing = self.watch.local.playing;
         let mut done = false;
         self.with_video(|p| {
@@ -757,6 +772,8 @@ fn along(cell: &Rc<Cell<Option<Bounds<Pixels>>>>, x: Pixels) -> Option<f64> {
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElement {
     let l = &view.watch.local;
+    // host control: guests see where the video is, but play, pause and seek are the host's
+    let locked = view.room.as_ref().is_some_and(crate::watch::locked_for_me);
     let frac = if l.duration > 0.0 {
         (l.time / l.duration) as f32
     } else {
@@ -791,15 +808,18 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
         .flex()
         .items_center()
         .gap(px(8.))
-        .child(
-            bar_btn("lv-play")
-                .child(icon(
-                    if l.playing { Icon::Pause } else { Icon::Play },
-                    px(18.),
-                    tokens::text(),
-                ))
-                .on_click(cx.listener(|v, _, _, cx| v.video_toggle_play(cx))),
-        )
+        .when(!locked, |el| {
+            el.child(
+                bar_btn("lv-play")
+                    .child(icon(
+                        if l.playing { Icon::Pause } else { Icon::Play },
+                        px(18.),
+                        tokens::text(),
+                    ))
+                    .on_click(cx.listener(|v, _, _, cx| v.video_toggle_play(cx))),
+            )
+        })
+        .when(locked, |el| el.child(icon(Icon::Lock, px(16.), tokens::text_3())))
         .child(
             div()
                 .flex_none()
@@ -832,12 +852,13 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                 .flex_1()
                 .min_w(px(60.))
                 .h(px(28.))
-                .cursor_pointer()
+                .when(!locked, gpui_kit::Styled::cursor_pointer)
                 .child(level(&scrub, frac, tokens::accent()))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |v, e: &MouseDownEvent, _, cx| {
                         if duration > 0.0
+                            && !locked
                             && let Some(f) = along(&at, e.position.x)
                         {
                             v.video_seek(f * duration, cx);

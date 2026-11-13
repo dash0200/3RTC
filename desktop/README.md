@@ -10,7 +10,8 @@ Plan and decisions: [3RTC desktop plan](https://claude.ai/artifact/CDKXmq58x1GzJ
 | Crate | What it is | I/O? |
 | --- | --- | --- |
 | `protocol` (`rtc-protocol`) | Wire messages shared with the web app: signaling (app ↔ server) and peer (app ↔ app) | no |
-| `core` (`rtc-core`) | Room rules as a state machine: `Input` in, `Effect`s out | no |
+| `games` (`rtc-games`) | Rules of the open activity and each game, as the web app's reducers (JSON in, JSON out) | no |
+| `core` (`rtc-core`) | Room rules as a state machine: `Input` in, `Effect`s out; shared state for games | no |
 | `signaling` (`rtc-signaling`) | WebSocket client actor: reconnects, pings, drops stale sends | yes |
 | `rtc` (`rtc-webrtc`) | Google's libwebrtc (LiveKit bindings) in the web app's shapes: channels, SDP, candidates | yes |
 | `engine` (`rtc-engine`) | The shell: runs `core` with `signaling` and `rtc` on one queue | yes |

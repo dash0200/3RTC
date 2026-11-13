@@ -7,6 +7,7 @@
 
 #![deny(missing_docs)]
 
+mod control;
 mod images;
 mod peers;
 mod screen;
@@ -25,7 +26,9 @@ use rtc_webrtc::stats::Speaking;
 use rtc_webrtc::voice::Voice;
 use tokio::sync::mpsc;
 
+pub use control::{ControlCmd, ControlView};
 pub use rtc_core::{ChatImage, ChatLine, Member, Phase, Reaction, Sound, UiEvent};
+pub use rtc_protocol::stream::{InputKind, ScreenInput};
 pub use rtc_webrtc::factory::IceServerConfig;
 pub use rtc_webrtc::voice::{Device, Devices, MicSource};
 pub use screen::{ScreenFeed, ScreenFrame, ScreenOptions, ScreenSource, ScreenStats, screen_sources};
@@ -66,6 +69,8 @@ pub struct Snapshot {
     pub me: PeerId,
     /// Our name.
     pub username: String,
+    /// Our lasting app id (games give a seat back by it).
+    pub client_id: String,
     /// Who hosts.
     pub host: Option<PeerId>,
     /// Everyone else.
@@ -88,10 +93,17 @@ pub struct Snapshot {
     pub playback_lock: bool,
     /// The watch party: what's playing, the queue, skip votes.
     pub watch: rtc_core::WatchView,
+    /// The open activity (a game), if any.
+    pub activity: Option<rtc_core::ActivityView>,
+    /// The shared states of the activity loaded here (`act:<id>`, …).
+    pub stores: Vec<(String, rtc_core::StoreView)>,
+    /// The development example games are listed.
+    pub dev_activities: bool,
 }
 
 /// What the engine tells the UI.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // rare, and the room snapshot is the one that matters
 pub enum Update {
     /// The room changed: redraw from this.
     Room(Snapshot),
@@ -107,6 +119,15 @@ pub enum Update {
     Reaction(Reaction),
     /// Play a soundboard clip.
     Sound(Sound),
+    /// A whiteboard message from someone (`wb-live` when `live`, else `wb-cursor`), as sent.
+    Board {
+        /// Who.
+        from: rtc_protocol::PeerId,
+        /// A stroke being drawn (else a pointer).
+        live: bool,
+        /// The message's fields.
+        body: serde_json::Value,
+    },
     /// A chat picture is this far along (either way), in percent.
     ImageProgress {
         /// Its transfer.
@@ -182,6 +203,8 @@ pub enum Update {
         /// Each viewer.
         viewers: Vec<ScreenViewer>,
     },
+    /// Remote control of the shared screen changed (asked, offered, who controls).
+    Control(ControlView),
     /// A chat picture arrived whole.
     ImageReady {
         /// Its transfer.
@@ -261,10 +284,13 @@ enum Request {
     ScreenOptions(ScreenOptions),
     /// The tallest picture we want of someone else's screen (0: as sent).
     ScreenQuality(u32),
+    ScreenVolume(f32),
     /// Our laser pointer over the shared screen (0–1; `None`: it left).
     ScreenPointer(Option<(f64, f64)>),
     /// A click on the shared screen.
     ScreenPing(f64, f64),
+    /// Remote control of the shared screen.
+    Control(ControlCmd),
     /// A sound of our own (`replace`: stop the last one with the same flag first).
     PlaySamples {
         samples: Arc<[f32]>,
@@ -370,9 +396,20 @@ impl Handle {
         let _ = self.tx.send(Request::ScreenQuality(max_height));
     }
 
+    /// The volume of someone else's shared screen's sound (0 mutes it, 1 as sent, up to 2).
+    pub fn screen_volume(&self, gain: f32) {
+        let _ = self.tx.send(Request::ScreenVolume(gain));
+    }
+
     /// Our laser pointer over the shared screen, 0–1 across and down (`None`: it left).
     pub fn screen_pointer(&self, at: Option<(f64, f64)>) {
         let _ = self.tx.send(Request::ScreenPointer(at));
+    }
+
+    /// Remote control of the shared screen: ask, answer, offer, take back, or (in control) an
+    /// input (answered with [`Update::Control`]).
+    pub fn control(&self, cmd: ControlCmd) {
+        let _ = self.tx.send(Request::Control(cmd));
     }
 
     /// A click on the shared screen (everyone sees a ripple there).
@@ -430,6 +467,8 @@ enum Msg {
     ImageSending(String, u8),
     /// From the video-sharing module's other threads.
     Stream(stream::Back),
+    /// The sharer took remote control back (from the control thread).
+    TakeBack(rtc_platform_win::TakeBack),
 }
 
 /// A fresh peer id for this launch (the server ties seats to it).
@@ -468,6 +507,7 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
     });
     let factory = Factory::new(config.ice);
     let voice = Voice::new(&factory, config.mic);
+    let screen_sound = rtc_webrtc::voice::ScreenSound::new(&factory);
     let screen_source = screen::new_source();
     let screen_track = rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack::Video(
         factory
@@ -492,7 +532,12 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
     let want_tx = queue_tx.clone();
     let engine = Engine {
-        room: Room::new(me),
+        room: {
+            let mut r = Room::new(me);
+            // the development example games, as the web app's development builds
+            r.set_dev_activities(cfg!(debug_assertions) || std::env::var_os("RTC_DEV_ACTIVITIES").is_some());
+            r
+        },
         signaling,
         urls: config.signaling_urls,
         current_url: None,
@@ -519,12 +564,16 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
             hw: HashMap::new(),
             applied: HashMap::new(),
             sending: None,
+            sound: screen_sound,
+            sound_on: None,
+            shared: None,
             capture: None,
             tracks: HashMap::new(),
             sharer: None,
             watch: None,
         },
         net_before: HashMap::new(),
+        control: control::Control::default(),
         streams: stream::Streams::new(move |b| {
             let _ = want_tx.send(Msg::Stream(b));
         }),
@@ -588,6 +637,8 @@ struct Engine {
     sending: Vec<tokio::task::JoinHandle<()>>,
     /// Each connection's last details and when (for the data rates).
     net_before: HashMap<PeerId, (rtc_webrtc::stats::Net, f64)>,
+    /// Remote control of the shared screen, both ways.
+    control: control::Control,
 }
 
 /// Pause sending picture frames while a channel holds more than this (as the web app).
@@ -614,6 +665,7 @@ impl Engine {
                     self.sending.retain(|t| !t.is_finished());
                     self.stream_ticks = self.stream_ticks.wrapping_add(1);
                     self.route_screen();
+                    self.screen_sound_lines().await;
                     let outs = self.streams.tick(true);
                     self.stream_out(outs);
                     let fx = self.room.update(Input::Tick, now);
@@ -757,6 +809,10 @@ impl Engine {
                 self.route_screen();
                 return;
             }
+            Msg::Ui(Request::ScreenVolume(g)) => {
+                self.voice.set_screen_volume(g);
+                return;
+            }
             Msg::Ui(Request::ScreenQuality(h)) => {
                 self.screen.my_quality = h;
                 self.ask_quality();
@@ -772,6 +828,14 @@ impl Engine {
                     active: at.is_some(),
                 };
                 self.screen_broadcast(&m);
+                return;
+            }
+            Msg::Ui(Request::Control(cmd)) => {
+                self.control_cmd(cmd);
+                return;
+            }
+            Msg::TakeBack(why) => {
+                self.take_back(why);
                 return;
             }
             Msg::Ui(Request::ScreenPing(x, y)) => {
@@ -913,9 +977,14 @@ impl Engine {
                 peer,
                 generation,
                 track,
+                screen,
             }) => {
                 if self.peers.is_current(&peer, generation) {
-                    self.voice.add_remote(peer.as_str(), track);
+                    if screen {
+                        self.voice.add_remote_screen(peer.as_str(), track);
+                    } else {
+                        self.voice.add_remote(peer.as_str(), track);
+                    }
                 }
                 return;
             }
@@ -981,7 +1050,7 @@ impl Engine {
                     let outs = self.streams.peer_open(&p);
                     self.stream_out(outs);
                     if self.screen.capture.is_some() {
-                        let m = self.screen_status(true);
+                        let m = self.screen_status_for(true, &p);
                         self.screen_send(&p, &m);
                     }
                 }
@@ -1168,9 +1237,12 @@ impl Engine {
                         self.screen.sharer = None;
                         self.screen.watch = None;
                         self.publish_screen();
+                        self.control_watch_reset();
                     }
+                    self.control_peer_gone(&peer);
                     self.speaking.remove(&peer);
                     self.voice.remove_remote(peer.as_str());
+                    self.voice.remove_remote_screen(peer.as_str());
                     self.peers.close(&peer);
                 }
                 Effect::SendToPeer { peer, envelope } => self.peers.send(&peer, &envelope),
@@ -1192,6 +1264,7 @@ impl Engine {
                         self.screen.watch = None;
                         self.screen.tracks.clear();
                         self.publish_screen();
+                        self.control_watch_reset();
                         let mut outs = self.streams.share(
                             None,
                             &EngineLinks {
@@ -1210,6 +1283,7 @@ impl Engine {
                     }
                     self.update_audio_open();
                     self.publish_room();
+                    self.publish_control();
                 }
                 Effect::Ui(UiEvent::Chat(line)) => {
                     let _ = self.updates.send(Update::Chat(line));
@@ -1232,6 +1306,9 @@ impl Engine {
                 }
                 Effect::Ui(UiEvent::Pop) => {
                     let _ = self.updates.send(Update::Pop);
+                }
+                Effect::Ui(UiEvent::Board { from, live, body }) => {
+                    let _ = self.updates.send(Update::Board { from, live, body });
                 }
                 Effect::BroadcastBulk(envelope) => self.send_frames(&envelope),
             }
@@ -1323,13 +1400,24 @@ impl Engine {
         }
     }
 
+    /// `screen-share-status`; `has_audio` only for desktop viewers (the web app can't get the
+    /// sound, so it shouldn't show an "Audio" badge).
+    fn screen_status_for(&self, sharing: bool, peer: &PeerId) -> rtc_protocol::stream::ScreenMessage {
+        let desktop = self.room.members().get(peer).is_some_and(|m| m.desktop);
+        let mut m = self.screen_status(sharing);
+        if let rtc_protocol::stream::ScreenMessage::Status { has_audio, .. } = &mut m {
+            *has_audio &= desktop;
+        }
+        m
+    }
+
     fn screen_status(&self, sharing: bool) -> rtc_protocol::stream::ScreenMessage {
         let me = self.room.identity();
         rtc_protocol::stream::ScreenMessage::Status {
             is_sharing: sharing,
             peer_id: Some(me.peer_id.as_str().to_owned()),
             username: sharing.then(|| me.username.clone()),
-            has_audio: false,
+            has_audio: sharing && self.screen.sound_on.is_some(),
         }
     }
 
@@ -1395,7 +1483,32 @@ impl Engine {
         }
         self.screen.applied.clear();
         self.screen.sending = None;
-        self.screen.capture.take().is_some()
+        self.screen.sound_on = None;
+        self.screen.shared = None;
+        let was = self.screen.capture.take().is_some();
+        if was {
+            self.control_share_stopped();
+        }
+        was
+    }
+
+    /// While our screen's sound is captured: each desktop viewer gets its audio line (once per
+    /// connection; the web app doesn't take a second audio line).
+    async fn screen_sound_lines(&mut self) {
+        if self.screen.capture.is_none() || self.screen.sound_on.is_none() {
+            return;
+        }
+        let track = self.screen.sound.track();
+        let desktops: Vec<PeerId> = self
+            .room
+            .members()
+            .iter()
+            .filter(|(_, m)| m.desktop)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for peer in desktops {
+            self.peers.add_screen_sound(&peer, &track).await;
+        }
     }
 
     /// Decides how each viewer gets our screen (hardware or software, size, data) and tells the
@@ -1557,11 +1670,28 @@ impl Engine {
         match started {
             Ok(c) => {
                 self.screen.capture = Some(c);
+                self.screen.shared = Some(what.clone());
+                if options.sound {
+                    // the computer's sound, without the call (desktop viewers get it)
+                    let feed = self.screen.sound.feeder();
+                    match tokio::task::block_in_place(|| rtc_platform_win::AppSound::everything_but_us(feed))
+                    {
+                        Ok(capture) => self.screen.sound_on = Some(capture),
+                        Err(e) => {
+                            tracing::warn!("screen: no sound ({e})");
+                            let _ = self.updates.send(Update::Notice(format!(
+                                "Your screen is shared without its sound: {e}."
+                            )));
+                        }
+                    }
+                }
                 // one screen at a time: ours replaces theirs here
                 self.screen.watch = None;
                 self.screen.sharer = None;
-                let m = self.screen_status(true);
-                self.screen_broadcast(&m);
+                for peer in self.room.members().keys() {
+                    let m = self.screen_status_for(true, peer);
+                    self.screen_send(peer, &m);
+                }
                 let _ = self
                     .updates
                     .send(Update::Log(format!("🖥️ You started sharing \"{}\"", what.title)));
@@ -1573,6 +1703,7 @@ impl Engine {
             }
         }
         self.publish_screen();
+        self.publish_control();
     }
 
     fn screen_message(&mut self, from: &PeerId, m: rtc_protocol::stream::ScreenMessage) {
@@ -1597,6 +1728,7 @@ impl Engine {
                 }
                 self.screen.sharer = Some((from.clone(), name.clone()));
                 self.screen.watch = None;
+                self.control_watch_reset();
                 if self.screen.my_quality > 0 {
                     self.ask_quality();
                 }
@@ -1613,8 +1745,15 @@ impl Engine {
                     self.screen.sharer = None;
                     self.screen.watch = None;
                     self.publish_screen();
+                    self.control_watch_reset();
                 }
             }
+            S::Control {
+                action,
+                peer_id,
+                username,
+            } => self.control_message(from, action, peer_id.as_deref(), username),
+            S::Input(i) => self.control_input(from, &i),
             S::Pointer {
                 x,
                 y,
@@ -1665,6 +1804,7 @@ impl Engine {
             phase: self.room.phase().clone(),
             me: self.room.identity().peer_id.clone(),
             username: self.room.identity().username.clone(),
+            client_id: self.room.identity().client_id.as_str().to_owned(),
             host: self.room.host().cloned(),
             members: self
                 .room
@@ -1681,6 +1821,15 @@ impl Engine {
             host_token: self.room.host_token().map(str::to_owned),
             playback_lock: self.room.playback_lock(),
             watch: self.room.watch(),
+            activity: self.room.activity(),
+            stores: self
+                .room
+                .store_keys()
+                .into_iter()
+                .filter(|k| k.starts_with("act:"))
+                .filter_map(|k| self.room.store(&k).map(|v| (k, v)))
+                .collect(),
+            dev_activities: self.room.dev_activities(),
         };
         let _ = self.updates.send(Update::Room(snapshot));
     }
@@ -1712,6 +1861,12 @@ struct ScreenState {
     applied: HashMap<PeerId, (u32, u32, u64)>,
     /// What the UI was last told about our viewers.
     sending: Option<(Option<String>, Vec<ScreenViewer>)>,
+    /// Our screen's sound: its track (desktop viewers' connections get it).
+    sound: rtc_webrtc::voice::ScreenSound,
+    /// The computer's sound being captured while we share.
+    sound_on: Option<rtc_platform_win::AppSound>,
+    /// What we share (remote control plays input back over it).
+    shared: Option<ScreenSource>,
 }
 
 /// What the video-sharing module sees of the engine.

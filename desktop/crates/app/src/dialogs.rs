@@ -1183,6 +1183,7 @@ fn desktop(
                 ))
                 .when(view.settings.overlay && supported, |el| el.child(crate::extras::corner_picker(view, cx)))
                 .when(!supported, |el| el.child(hint("These work in the Windows app.")))
+                .child(graphics(view, cx))
                 .child(updates(view, cx)),
         )
         .child(
@@ -1203,6 +1204,96 @@ fn desktop(
 }
 
 /// More → Desktop → Updates: this build, what the check found, and its buttons.
+/// Settings → Graphics card: Auto, Power saving or High performance (from the next start).
+fn graphics(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    use rtc_platform_win::GpuChoice;
+    let g = &view.gpu;
+    let name = |n: &Option<String>| n.clone().unwrap_or_else(|| "not found".to_owned());
+    let same = g.gpus.power_saving.is_some() && g.gpus.power_saving == g.gpus.high_performance;
+    let options = [
+        (
+            GpuChoice::Auto,
+            "Auto (recommended)".to_owned(),
+            "Windows decides.".to_owned(),
+        ),
+        (
+            GpuChoice::PowerSaving,
+            "Power saving".to_owned(),
+            name(&g.gpus.power_saving),
+        ),
+        (
+            GpuChoice::HighPerformance,
+            "High performance".to_owned(),
+            name(&g.gpus.high_performance),
+        ),
+    ];
+    let restart = g.chosen != g.started;
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .pt(px(6.))
+        .child(div().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).child("Graphics card"))
+        .child(div().text_size(px(12.)).text_color(tokens::text_3()).child(if same {
+            "This computer has one graphics card, so every choice uses it."
+        } else {
+            "The card that draws 3RTC, plays videos and encodes your screen shares. Windows switches it when 3RTC starts."
+        }))
+        .children(options.into_iter().enumerate().map(|(n, (choice, title, sub))| {
+            let on = g.chosen == choice;
+            div()
+                .id(("d-gpu", n))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .p(px(12.))
+                .rounded(px(12.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(if on { tokens::accent() } else { tokens::line() })
+                .cursor_pointer()
+                .hover(|s| s.border_color(tokens::line_strong()))
+                .on_click(cx.listener(move |v, _, _, cx| v.set_gpu_choice(choice, cx)))
+                .child(
+                    div()
+                        .size(px(16.))
+                        .flex_none()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(tokens::line_strong())
+                        .when(on, |el| el.border_4().border_color(tokens::accent())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_size(px(14.)).child(title))
+                        .child(div().text_size(px(12.)).text_color(tokens::text_3()).child(sub)),
+                )
+        }))
+        .when(restart, |el| {
+            el.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(tokens::focus())
+                            .child("Restart 3RTC to switch the graphics card."),
+                    )
+                    .child(
+                        Button::new("d-gpu-restart", "Restart now")
+                            .variant(Variant::Primary)
+                            .min_height(px(32.))
+                            .on_click(cx.listener(|v, _, _, cx| v.restart_for_update(cx))),
+                    ),
+            )
+        })
+}
+
 fn updates(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
     use crate::update::Status;
     let (text, color) = match &view.update {

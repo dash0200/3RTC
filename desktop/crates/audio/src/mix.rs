@@ -1,10 +1,15 @@
 //! Everyone's voice, mixed: one small queue per person (filled by the network side, emptied by
-//! the mixer at the speakers' pace), each with its own volume, then the limiter.
+//! the mixer at the speakers' pace), each with its own volume, then the limiter. The mix is
+//! stereo (left and right interleaved): voices are mono (the same on both sides); the sound of a
+//! shared screen comes in stereo.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::dsp::{FRAME, Limiter, peak, to_f32};
+
+/// Samples in one 10 ms frame of the mix (stereo, interleaved).
+pub(crate) const OUT: usize = FRAME * 2;
 
 /// Samples a person's queue can hold (200 ms); more is dropped.
 pub(crate) const QUEUE: usize = FRAME * 20;
@@ -48,7 +53,8 @@ impl PeerControl {
     }
 }
 
-/// The network side of a person's queue: decoded 48 kHz mono samples go in here.
+/// The network side of a person's queue: decoded 48 kHz samples go in here (mono for a voice,
+/// left and right interleaved for a shared screen's sound).
 pub struct PeerFeed {
     tx: rtrb::Producer<i16>,
 }
@@ -69,6 +75,8 @@ impl PeerFeed {
 /// The mixer's side of a person's queue.
 pub(crate) struct PeerIn {
     pub(crate) key: u64,
+    /// 1 (a voice) or 2 (a shared screen's sound).
+    channels: usize,
     rx: rtrb::Consumer<i16>,
     pub(crate) control: Arc<PeerControl>,
     playing: bool,
@@ -76,11 +84,21 @@ pub(crate) struct PeerIn {
 
 /// A new person: their feed (for the network side) and their queue (for the mixer).
 pub(crate) fn peer(key: u64) -> (PeerFeed, PeerIn) {
-    let (tx, rx) = rtrb::RingBuffer::new(QUEUE);
+    queue(key, 1)
+}
+
+/// A shared screen's sound (stereo): its feed and its queue.
+pub(crate) fn stereo_peer(key: u64) -> (PeerFeed, PeerIn) {
+    queue(key, 2)
+}
+
+fn queue(key: u64, channels: usize) -> (PeerFeed, PeerIn) {
+    let (tx, rx) = rtrb::RingBuffer::new(QUEUE * channels);
     (
         PeerFeed { tx },
         PeerIn {
             key,
+            channels,
             rx,
             control: Arc::new(PeerControl::new()),
             playing: false,
@@ -89,28 +107,30 @@ pub(crate) fn peer(key: u64) -> (PeerFeed, PeerIn) {
 }
 
 impl PeerIn {
-    /// Adds this person's next frame into `mix`.
-    fn add_to(&mut self, mix: &mut [f32; FRAME], scratch: &mut [f32; FRAME]) {
+    /// Adds this person's next frame into `mix` (stereo).
+    fn add_to(&mut self, mix: &mut [f32; OUT], scratch: &mut [f32; OUT]) {
+        let ch = self.channels;
+        let frame = FRAME * ch;
         let queued = self.rx.slots();
         if !self.playing {
-            if queued < PREBUFFER {
+            if queued < PREBUFFER * ch {
                 self.control.level.store(0, Ordering::Relaxed);
                 return;
             }
             self.playing = true;
         }
-        if queued < FRAME {
+        if queued < frame {
             // ran dry: wait for a fresh prebuffer instead of stuttering
             self.playing = false;
             self.control.level.store(0, Ordering::Relaxed);
             return;
         }
-        if queued > TOO_MUCH
-            && let Ok(skip) = self.rx.read_chunk(FRAME)
+        if queued > TOO_MUCH * ch
+            && let Ok(skip) = self.rx.read_chunk(frame)
         {
             skip.commit_all();
         }
-        let Ok(chunk) = self.rx.read_chunk(FRAME) else {
+        let Ok(chunk) = self.rx.read_chunk(frame) else {
             return;
         };
         let (a, b) = chunk.as_slices();
@@ -120,10 +140,17 @@ impl PeerIn {
         chunk.commit_all();
         self.control
             .level
-            .store(peak(scratch).to_bits(), Ordering::Relaxed);
+            .store(peak(&scratch[..frame]).to_bits(), Ordering::Relaxed);
         let gain = self.control.gain();
-        for (m, s) in mix.iter_mut().zip(scratch.iter()) {
-            *m += s * gain;
+        if ch == 2 {
+            for (m, s) in mix.iter_mut().zip(scratch.iter()) {
+                *m += s * gain;
+            }
+        } else {
+            for (pair, s) in mix.chunks_exact_mut(2).zip(scratch[..FRAME].iter()) {
+                pair[0] += s * gain;
+                pair[1] += s * gain;
+            }
         }
     }
 }
@@ -144,7 +171,7 @@ const MAX_EXTRAS: usize = 8;
 pub(crate) struct Mixer {
     pub(crate) peers: Vec<PeerIn>,
     limiter: Limiter,
-    scratch: [f32; FRAME],
+    scratch: [f32; OUT],
     /// Sounds of our own (test sound, soundboard, reaction pops).
     extras: Vec<Extra>,
 }
@@ -154,7 +181,7 @@ impl Mixer {
         Self {
             peers: Vec::new(),
             limiter: Limiter::default(),
-            scratch: [0.0; FRAME],
+            scratch: [0.0; OUT],
             extras: Vec::with_capacity(MAX_EXTRAS),
         }
     }
@@ -175,13 +202,13 @@ impl Mixer {
         });
     }
 
-    /// The next 10 ms for the speakers (silence when `deafened`, except our own sounds).
-    pub(crate) fn next(&mut self, deafened: bool, out: &mut [f32; FRAME]) {
+    /// The next 10 ms for the speakers, stereo (silence when `deafened`, except our own sounds).
+    pub(crate) fn next(&mut self, deafened: bool, out: &mut [f32; OUT]) {
         out.fill(0.0);
         for p in &mut self.peers {
             // keep emptying the queues while deafened so nothing piles up
             if deafened {
-                let mut sink = [0.0f32; FRAME];
+                let mut sink = [0.0f32; OUT];
                 p.add_to(&mut sink, &mut self.scratch);
             } else {
                 p.add_to(out, &mut self.scratch);
@@ -189,8 +216,9 @@ impl Mixer {
         }
         for e in &mut self.extras {
             let end = (e.at + FRAME).min(e.sound.len());
-            for (o, s) in out.iter_mut().zip(&e.sound[e.at..end]) {
-                *o += *s * e.gain;
+            for (pair, s) in out.chunks_exact_mut(2).zip(&e.sound[e.at..end]) {
+                pair[0] += *s * e.gain;
+                pair[1] += *s * e.gain;
             }
             e.at = end;
         }
@@ -203,7 +231,7 @@ impl Mixer {
 mod tests {
     use std::sync::Arc;
 
-    use super::{FRAME, Mixer, peer};
+    use super::{FRAME, Mixer, OUT, peer, stereo_peer};
 
     fn frames(n: usize, v: i16) -> Vec<i16> {
         vec![v; FRAME * n]
@@ -220,7 +248,7 @@ mod tests {
         fa.push(&frames(3, 8192)); // 0.25
         fb.push(&frames(3, 8192));
         cb.set_gain(0.0); // B muted for me
-        let mut out = [0.0f32; FRAME];
+        let mut out = [0.0f32; OUT];
         m.next(false, &mut out);
         assert!((out[0] - 0.25).abs() < 0.01, "only A: {}", out[0]);
         assert!(
@@ -237,7 +265,7 @@ mod tests {
         let mut m = Mixer::new();
         let (mut f, p) = peer(1);
         m.peers.push(p);
-        let mut out = [0.0f32; FRAME];
+        let mut out = [0.0f32; OUT];
         f.push(&frames(1, 8192));
         m.next(false, &mut out);
         assert!(out[0].abs() < 1e-6, "10 ms isn't enough to start");
@@ -253,7 +281,7 @@ mod tests {
         let (mut f, p) = peer(1);
         m.peers.push(p);
         f.push(&frames(4, 8192));
-        let mut out = [0.0f32; FRAME];
+        let mut out = [0.0f32; OUT];
         m.next(true, &mut out);
         assert!(out[0].abs() < 1e-6);
         assert_eq!(m.peers[0].rx.slots(), FRAME * 3);
@@ -263,9 +291,26 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_screens_sound_keeps_left_and_right() {
+        let mut m = Mixer::new();
+        let (mut fv, v) = peer(1);
+        let (mut fs, st) = stereo_peer(2);
+        m.peers.push(v);
+        m.peers.push(st);
+        fv.push(&frames(3, 3277)); // a voice: 0.1 on both sides
+        let pairs: Vec<i16> = (0..FRAME * 3).flat_map(|_| [8192i16, -8192]).collect();
+        fs.push(&pairs); // the screen: 0.25 left, -0.25 right
+        let mut out = [0.0f32; OUT];
+        m.next(false, &mut out);
+        assert!((out[0] - 0.35).abs() < 0.01, "left: {}", out[0]);
+        assert!((out[1] + 0.15).abs() < 0.01, "right: {}", out[1]);
+        assert_eq!(m.peers[1].rx.slots(), FRAME * 2 * 2, "one stereo frame played");
+    }
+
+    #[test]
     fn our_sounds_overlap_and_a_new_clip_replaces_the_last() {
         let mut m = Mixer::new();
-        let mut out = [0.0f32; FRAME];
+        let mut out = [0.0f32; OUT];
         m.play(Arc::from(vec![0.1f32; FRAME * 4]), 1.0, false); // a reaction pop
         m.play(Arc::from(vec![0.2f32; FRAME * 4]), 0.5, true); // a clip, at half volume
         m.next(false, &mut out);

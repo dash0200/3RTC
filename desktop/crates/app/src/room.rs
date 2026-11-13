@@ -46,6 +46,21 @@ pub(crate) fn render(
         }
         view.end_video_fullscreen(window);
     }
+    if view.screen.fullscreen {
+        if view.screen.showing() {
+            // full screen: the shared screen only
+            view.hide_player();
+            return div()
+                .id("stage-screen-full")
+                .size_full()
+                .relative()
+                .bg(tokens::black(1.0))
+                .child(crate::screen::stage(view, cx))
+                .child(crate::fun::layer(view, false))
+                .into_any_element();
+        }
+        view.end_screen_fullscreen(window);
+    }
     div()
         .size_full()
         .flex()
@@ -278,6 +293,21 @@ fn stage(
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
+    if view.activity_covers() {
+        // the open game takes the stage (the video plays on, hidden)
+        view.hide_player();
+        return div()
+            .id("stage-activity")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .bg(tokens::bg())
+            .child(crate::activity::stage(view, room, cx))
+            .child(crate::fun::layer(view, false))
+            .children(crate::fun::banner(view, false))
+            .into_any_element();
+    }
+    let bubble = crate::activity::bubble(view, room, cx);
     if view.screen.showing() {
         // a shared screen takes the stage (the video plays on, hidden)
         view.hide_player();
@@ -290,12 +320,21 @@ fn stage(
             .child(crate::screen::stage(view, cx))
             .child(crate::fun::layer(view, false))
             .children(crate::fun::banner(view, false))
+            .children(bubble)
             .into_any_element();
     }
     if room.watch.showing.is_some() {
         // a video plays: the player, with floating reactions in a strip beside it (5.9 item 1);
         // a file from this computer fills the stage (its bar is ours, so toasts can show on it)
         let fill = matches!(room.watch.showing, Some(Showing::Local { have: true, .. }));
+        // the game's bubble sits under the video (its window would cover it)
+        let under = if bubble.is_some() {
+            64.
+        } else if fill {
+            12.
+        } else {
+            60.
+        };
         return div()
             .id("stage-playing")
             .relative()
@@ -311,11 +350,12 @@ fn stage(
                     .right(px(if fill { 12. } else { 0. }))
                     // toasts and the soundboard banner show in this edge, under the video (a
                     // file fills the stage: they show over its control bar instead)
-                    .bottom(px(if fill { 12. } else { 60. }))
+                    .bottom(px(under))
                     .child(crate::watch::player_area(view, window, cx)),
             )
             .when(!fill, |el| el.child(crate::fun::layer(view, true)))
             .children(crate::fun::banner(view, true))
+            .children(bubble)
             .into_any_element();
     }
     let host_name = room
@@ -468,6 +508,7 @@ fn stage(
         )
         .child(crate::fun::layer(view, false))
         .children(crate::fun::banner(view, false))
+        .children(bubble)
         .into_any_element()
 }
 
@@ -808,10 +849,12 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                             el.child(crate::fun::sounds_pop(view, cx))
                         }),
                 )
-                .child(
-                    dock_btn("add-video", Icon::VideoAdd, false, false)
-                        .on_click(cx.listener(|v, _, window, cx| v.choose_video_file(window, cx))),
-                )
+                .when(!crate::watch::locked_for_me(room), |el| {
+                    el.child(
+                        dock_btn("add-video", Icon::VideoAdd, false, false)
+                            .on_click(cx.listener(|v, _, window, cx| v.choose_video_file(window, cx))),
+                    )
+                })
                 .child(
                     dock_btn(
                         "screen",
@@ -825,7 +868,20 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                     )
                     .on_click(cx.listener(|v, _, _, cx| v.screen_button(cx))),
                 )
-                .child(later_btn("games", Icon::Games, cx))
+                .child(if rtc_games::activities(room.dev_activities).is_empty() {
+                    later_btn("games", Icon::Games, cx).into_any_element()
+                } else {
+                    div()
+                        .relative()
+                        .child(
+                            dock_btn("games", Icon::Games, view.pop == Some(Pop::Games), false)
+                                .on_click(cx.listener(|v, _, _, cx| v.toggle_pop(Pop::Games, cx))),
+                        )
+                        .when(view.pop == Some(Pop::Games), |el| {
+                            el.child(crate::activity::games_pop(view, room, cx))
+                        })
+                        .into_any_element()
+                })
                 .child(more),
         )
         .child(

@@ -106,7 +106,7 @@ protocol ← core ← engine ← app
 | Crate | Owns | May depend on |
 |---|---|---|
 | `protocol` | Every wire message, ids, limits | serde only |
-| `core` | Room rules, shared-state store, playback/queue/chat state machines, the port traits | `protocol` |
+| `core` | Room rules, shared-state store, playback/queue/chat state machines, the port traits | `protocol`, `games` (the rules the store runs; ADR 0006) |
 | `games` | Rules, bots and state for the five games; builds for `wasm32-unknown-unknown` too | serde only |
 | `signaling`, `rtc`, `audio`, `video`, `platform-win` | One kind of I/O each (adapters) | `protocol`, `core` (for port traits) |
 | `engine` | Wiring: one queue, runs `core`, drives adapters | all of the above except `ui`, `app` |
@@ -668,6 +668,31 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   push), `desktop_files_test.py` (12), `desktop_screen_test.py` (9), `desktop_window_test.py`
   (22), Rust unit tests for the block cache, relay tree, MKV/MP4 parsing and subtitles.
 - [ ] **M6: games.** Shared state, activity shell, the five games (6.11), stream doctor.
+  Progress: shared state (`core/src/shared.rs`, ADR 0006) with the open activity and the
+  activity shell (Games menu, game over the stage, Minimise / Leave / End, Join and minimised
+  bubbles, "Update app" card); rules in `crates/games` checked against golden vectors from
+  `client-ts/tests/vectors/`. Tests: `core/tests/shared.rs` (store between apps, mirroring
+  `sharedRedact` / `sharedRejoin`, host leaving and returning), `core/tests/activity.rs`,
+  `games/tests/vectors.rs`, `desktop_activity_test.py` (19), `desktop_window_test.py` (30).
+  Done: Chess, Ludo, Last Card (secret hands: each app gets only its own; a new deciding app
+  gets the hands back or deals again), Tycoon. What an app does on its own for a game (the
+  computer's turns, seats asked back, hands handed back) is `games/src/driver.rs`, shared by
+  the app and the test client. Interop: `desktop_chess_test.py` (13), `desktop_lastcard_test.py`
+  (28), `desktop_tycoon_test.py` (18); vectors with redaction for Last Card.
+  Whiteboard: the index and chunk rules (`games/src/whiteboard.rs`, vectors for both), the
+  board (saved strokes as one picture, strokes being drawn painted over it), `wb-live` /
+  `wb-cursor` in `rtc-protocol` (already in `docs/PROTOCOL.md`); `desktop_whiteboard_test.py`
+  (18). Not yet: the text tool and "Save as a picture".
+  **Added before the stream doctor (owner's request, 14 Nov; ADR 0007; waiting for the owner's
+  Windows run, `docs/checklists/M6.md`):** host controls hide what others mustn't use (play,
+  pause, seekbar, Skip, Exit, queue play/next/clear, adding a video); the shared screen goes full
+  screen for viewers; the shared screen's sound (all PC sound minus 3RTC, stereo, desktop viewers
+  only, `screen-audio` stream); remote control between desktop apps (`screen-control`,
+  `screen-input`; the sharer allows every time; played back with `SendInput`; banner,
+  Ctrl+Alt+Shift+X or the sharer's own mouse take it back); the graphics card choice (Auto /
+  Power saving / High performance, from the next start). Tests: `desktop_screen_sound_test.py`
+  (10), `desktop_remote_control_test.py` (24), `desktop_screen_hq_test.py` (13).
+  Next: the stream doctor. Where things stand in detail: `docs/STATUS.md`.
 - [ ] **M7: host hub and LAN rooms.** `Topology` trait with `Mesh` and `Hub`; the plan's hub
   design. Needs server and web changes: write a design ADR and ask before starting.
 
