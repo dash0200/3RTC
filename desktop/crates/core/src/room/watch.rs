@@ -38,6 +38,17 @@ pub enum Showing {
     },
     /// A link source.
     Link(Media),
+    /// A video file from someone's computer (`LocalVideoSyncPlayer.tsx`).
+    Local {
+        /// The file's name.
+        name: String,
+        /// Its size in bytes.
+        size: u64,
+        /// Who loaded it (`None`: we did).
+        from: Option<String>,
+        /// We have it here (ours, or our own copy of theirs): the player can show it.
+        have: bool,
+    },
 }
 
 impl Showing {
@@ -47,6 +58,7 @@ impl Showing {
         match self {
             Self::YouTube { id, .. } => format!("yt:{id}"),
             Self::Link(m) => format!("link:{}", m.key()),
+            Self::Local { name, size, .. } => format!("local:{name}:{size}"),
         }
     }
 
@@ -57,6 +69,7 @@ impl Showing {
             Self::YouTube { id, title } if title.is_empty() => format!("YouTube Video ({id})"),
             Self::YouTube { title, .. } => title.clone(),
             Self::Link(m) => m.display_title(),
+            Self::Local { name, .. } => name.clone(),
         }
     }
 
@@ -104,6 +117,13 @@ pub enum PlayerCmd {
     },
     /// Close the player.
     Close,
+    /// Show these subtitles (WebVTT) over the video file.
+    Subtitles {
+        /// Their name.
+        name: String,
+        /// The WebVTT text.
+        vtt: String,
+    },
 }
 
 /// What a person did with the player's own controls.
@@ -158,6 +178,30 @@ pub enum WatchCommand {
     },
     /// Open a link source for everyone.
     PlayLink(Media),
+    /// Play a video file from this computer (its name and size; the app has the path).
+    PlayFile {
+        /// The file's name.
+        name: String,
+        /// Its size in bytes.
+        size: u64,
+    },
+    /// The room's file now streams to us from its owner: play it where the room is.
+    Streaming {
+        /// The file's name.
+        name: String,
+    },
+    /// The stream of the room's file stopped (its owner stopped sharing it): no player here.
+    StreamLost {
+        /// The file's name.
+        name: String,
+    },
+    /// Share subtitles (WebVTT) with everyone watching the file (`subtitle-share`).
+    ShareSubtitles {
+        /// Their name.
+        name: String,
+        /// The WebVTT text.
+        vtt: String,
+    },
     /// Close what's playing for everyone.
     Exit,
     /// Jump everyone to `secs` (a timestamp clicked in chat).
@@ -242,6 +286,8 @@ pub(crate) struct Watch {
     lock_revert_pending: bool,
     last_blocked_toast: f64,
     last_heartbeat: f64,
+    /// Subtitles shared for the file showing (name, WebVTT).
+    subtitles: Option<(String, String)>,
 }
 
 impl Watch {
@@ -262,6 +308,7 @@ impl Watch {
             backoff_until: 0.0,
             lock_revert_pending: false,
             last_blocked_toast: f64::NEG_INFINITY,
+            subtitles: None,
             last_heartbeat: 0.0,
         }
     }
@@ -410,13 +457,26 @@ impl Room {
                 };
             }
             PlayerCmd::Close => *p = Pos::default(),
+            PlayerCmd::Subtitles { .. } => {}
         }
+        let opens_file = matches!(
+            &cmd,
+            PlayerCmd::Open {
+                showing: Showing::Local { .. },
+                ..
+            }
+        );
         fx.push(Effect::Ui(UiEvent::Player(cmd)));
+        // subtitles shared before the file opened here
+        if opens_file && let Some((name, vtt)) = self.watch.subtitles.clone() {
+            fx.push(Effect::Ui(UiEvent::Player(PlayerCmd::Subtitles { name, vtt })));
+        }
     }
 
     /// Something new is showing (or nothing): skip votes start over (`media-changed`).
     fn show(&mut self, showing: Option<Showing>, fx: &mut Vec<Effect>) {
         self.watch.showing = showing;
+        self.watch.subtitles = None;
         self.watch.skip_votes.clear();
         fx.push(Effect::Ui(UiEvent::Changed));
     }
@@ -464,7 +524,96 @@ impl Room {
         match self.watch.showing.as_ref()? {
             Showing::YouTube { .. } => Some(self.yt(action, time)),
             Showing::Link(_) => Some(self.media_msg(action, time)),
+            Showing::Local { .. } => Some(Self::local_msg(action, time, self.is_host())),
         }
+    }
+
+    fn local_msg(action: &str, time: Option<f64>, from_host: bool) -> PeerMessage {
+        PeerMessage::LocalVideoAction {
+            action: action.to_owned(),
+            file_name: None,
+            file_size: None,
+            current_time: time,
+            from_host,
+            vtt_string: None,
+            subtitle_info: None,
+        }
+    }
+
+    /// Plays a video file from this computer (`selectLocalFile`). With the room already
+    /// watching a file of that name (someone else's), this is our own copy of it: it starts
+    /// where the room is.
+    fn play_file(&mut self, name: &str, size: u64, now_ms: f64, fx: &mut Vec<Effect>) {
+        let theirs = matches!(&self.watch.showing,
+            Some(Showing::Local { name: n, have: false, .. }) if *n == name);
+        if theirs {
+            let from = match &self.watch.showing {
+                Some(Showing::Local { from, .. }) => from.clone(),
+                _ => None,
+            };
+            let showing = Showing::Local {
+                name: name.to_owned(),
+                size,
+                from,
+                have: true,
+            };
+            self.watch.showing = Some(showing.clone());
+            let start = self.watch.pos.now(now_ms);
+            let playing = self.watch.pos.playing;
+            self.player(
+                PlayerCmd::Open {
+                    showing,
+                    start,
+                    playing,
+                },
+                now_ms,
+                fx,
+            );
+            fx.push(Effect::Ui(UiEvent::Changed));
+            self.log(format!("📁 You loaded local video: \"{name}\""), fx);
+            Self::notice(fx, format!("Loaded \"{name}\""));
+            if !self.locked_for_me() {
+                self.broadcast_load(name, size, now_ms, fx);
+            }
+            return;
+        }
+        if self.locked_for_me() {
+            self.blocked(now_ms, fx);
+            return;
+        }
+        let showing = Showing::Local {
+            name: name.to_owned(),
+            size,
+            from: None,
+            have: true,
+        };
+        self.show(Some(showing.clone()), fx);
+        self.player(
+            PlayerCmd::Open {
+                showing,
+                start: 0.0,
+                playing: false,
+            },
+            now_ms,
+            fx,
+        );
+        self.log(format!("📁 You loaded local video: \"{name}\""), fx);
+        Self::notice(fx, format!("Loaded \"{name}\""));
+        self.broadcast_load(name, size, now_ms, fx);
+    }
+
+    fn broadcast_load(&mut self, name: &str, size: u64, now_ms: f64, fx: &mut Vec<Effect>) {
+        #[allow(clippy::cast_precision_loss)]
+        let msg = PeerMessage::LocalVideoAction {
+            action: "load".to_owned(),
+            file_name: Some(name.to_owned()),
+            file_size: Some(size as f64),
+            current_time: None,
+            from_host: self.is_host(),
+            vtt_string: None,
+            subtitle_info: None,
+        };
+        self.broadcast_action(msg, now_ms, fx);
     }
 
     /// Plays a YouTube video here and tells the room.
@@ -617,13 +766,83 @@ impl Room {
                     self.log(format!("🎬 You opened: \"{title}\""), fx);
                 }
             }
+            WatchCommand::PlayFile { name, size } => self.play_file(&name, size, now_ms, fx),
+            WatchCommand::Streaming { name } => {
+                let Some(Showing::Local {
+                    name: n,
+                    size,
+                    from,
+                    have: false,
+                }) = &self.watch.showing
+                else {
+                    return;
+                };
+                if *n != name {
+                    return;
+                }
+                let showing = Showing::Local {
+                    name,
+                    size: *size,
+                    from: from.clone(),
+                    have: true,
+                };
+                self.watch.showing = Some(showing.clone());
+                let start = self.watch.pos.now(now_ms);
+                let playing = self.watch.pos.playing;
+                self.player(
+                    PlayerCmd::Open {
+                        showing,
+                        start,
+                        playing,
+                    },
+                    now_ms,
+                    fx,
+                );
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
+            WatchCommand::ShareSubtitles { name, vtt } => {
+                if !matches!(self.watch.showing, Some(Showing::Local { .. })) {
+                    return;
+                }
+                self.watch.subtitles = Some((name.clone(), vtt.clone()));
+                let msg = PeerMessage::LocalVideoAction {
+                    action: "subtitle-share".to_owned(),
+                    file_name: Some(name.clone()),
+                    file_size: None,
+                    current_time: None,
+                    from_host: self.is_host(),
+                    vtt_string: Some(vtt),
+                    subtitle_info: None,
+                };
+                fx.push(Effect::Broadcast(self.envelope(msg, now_ms)));
+                self.log(format!("💬 You shared subtitles: \"{name}\""), fx);
+            }
+            WatchCommand::StreamLost { name } => {
+                let Some(Showing::Local { name: n, have, .. }) = &mut self.watch.showing else {
+                    return;
+                };
+                if *n != name || !*have {
+                    return;
+                }
+                *have = false;
+                self.player(PlayerCmd::Close, now_ms, fx);
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
             WatchCommand::Exit => {
                 let Some(msg) = self.action_for_showing("close", None) else {
                     return;
                 };
+                let local = matches!(self.watch.showing, Some(Showing::Local { .. }));
                 if self.broadcast_action(msg, now_ms, fx) {
                     self.close_here(now_ms, fx);
-                    self.log("🎬 You exited the video", fx);
+                    self.log(
+                        if local {
+                            "📁 You exited the local video"
+                        } else {
+                            "🎬 You exited the video"
+                        },
+                        fx,
+                    );
                 }
             }
             WatchCommand::SeekEveryone(secs) => {
@@ -1052,6 +1271,145 @@ impl Room {
                     _ => {}
                 }
             }
+            PeerMessage::LocalVideoAction {
+                action,
+                file_name,
+                file_size,
+                current_time,
+                from_host,
+                vtt_string,
+                ..
+            } => {
+                if lock && !from_host && locked_action(&action) {
+                    return;
+                }
+                self.watch.last_change = now_ms;
+                let who = self.who(from, sender);
+                let local = matches!(self.watch.showing, Some(Showing::Local { .. }));
+                match action.as_str() {
+                    "load" => {
+                        let name = file_name.unwrap_or_default();
+                        // ours already (the same file): keep playing it
+                        if matches!(&self.watch.showing, Some(Showing::Local { name: n, have: true, .. }) if *n == name)
+                        {
+                            return;
+                        }
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let size = file_size
+                            .filter(|s| s.is_finite() && *s >= 0.0)
+                            .map_or(0, |s| s as u64);
+                        let showing = Showing::Local {
+                            name: name.clone(),
+                            size,
+                            from: Some(who.clone()),
+                            have: false,
+                        };
+                        if self.watch.showing.is_some() {
+                            self.player(PlayerCmd::Close, now_ms, fx);
+                        }
+                        self.show(Some(showing), fx);
+                        self.watch.pos = Pos {
+                            time: 0.0,
+                            at: now_ms,
+                            playing: false,
+                            buffering: false,
+                            reported: false,
+                        };
+                        self.log(format!("📁 {who} loaded local video: \"{name}\""), fx);
+                        Self::notice(fx, format!("{who} loaded: {name}"));
+                    }
+                    "close" | "unload" => {
+                        if local {
+                            self.close_here(now_ms, fx);
+                        }
+                        self.log(format!("📁 {who} exited the local video"), fx);
+                        Self::notice(fx, format!("{who} exited local video"));
+                    }
+                    "subtitle-share" => {
+                        let name = file_name.unwrap_or_else(|| "captions".to_owned());
+                        self.log(format!("💬 {who} shared subtitles: \"{name}\""), fx);
+                        Self::notice(fx, format!("Subtitles loaded from {who}"));
+                        if let Some(vtt) = vtt_string.filter(|v| !v.is_empty() && v.len() < 4_000_000) {
+                            self.watch.subtitles = Some((name.clone(), vtt.clone()));
+                            if matches!(self.watch.showing, Some(Showing::Local { have: true, .. })) {
+                                fx.push(Effect::Ui(UiEvent::Player(PlayerCmd::Subtitles { name, vtt })));
+                            }
+                        }
+                    }
+                    _ if local => self.remote_local(&action, current_time, who, now_ms, fx),
+                    _ => {}
+                }
+            }
+            PeerMessage::LocalVideoSyncState {
+                file_name,
+                file_size,
+                current_time,
+                is_playing,
+                subtitle_info,
+                ..
+            } => {
+                let revert = self.consume_lock_revert();
+                if file_name.is_empty() {
+                    return;
+                }
+                let shared_subs = subtitle_info.as_ref().and_then(|v| {
+                    let vtt = v.get("vttString")?.as_str()?.to_owned();
+                    let name = v
+                        .get("fileName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("captions")
+                        .to_owned();
+                    (!vtt.is_empty()).then_some((name, vtt))
+                });
+                let have_any = matches!(self.watch.showing, Some(Showing::Local { have: true, .. }));
+                let here =
+                    matches!(&self.watch.showing, Some(Showing::Local { name, .. }) if *name == file_name);
+                if (have_any && !revert) || (here && !revert) {
+                    return;
+                }
+                let who = self.who(from, sender);
+                let at = Some(current_time).filter(|t| t.is_finite());
+                if here {
+                    // the host's answer under the lock: back to where they are
+                    let cmd = if is_playing {
+                        PlayerCmd::Play { at, who }
+                    } else {
+                        PlayerCmd::Pause { at, who }
+                    };
+                    self.player(cmd, now_ms, fx);
+                    return;
+                }
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let size = Some(file_size)
+                    .filter(|s| s.is_finite() && *s >= 0.0)
+                    .map_or(0, |s| s as u64);
+                if self.watch.showing.is_some() {
+                    self.player(PlayerCmd::Close, now_ms, fx);
+                }
+                self.show(
+                    Some(Showing::Local {
+                        name: file_name.clone(),
+                        size,
+                        from: Some(who),
+                        have: false,
+                    }),
+                    fx,
+                );
+                self.watch.pos = Pos {
+                    time: at.unwrap_or(0.0),
+                    at: now_ms,
+                    playing: is_playing,
+                    buffering: false,
+                    reported: false,
+                };
+                self.log(
+                    format!("🔄 Synced with room's local video session: \"{file_name}\""),
+                    fx,
+                );
+                if shared_subs.is_some() {
+                    self.watch.subtitles = shared_subs;
+                }
+            }
             PeerMessage::YtRequestSync => self.answer_sync(from, now_ms, fx),
             PeerMessage::YtSyncState {
                 video_id,
@@ -1308,6 +1666,37 @@ impl Room {
         }
     }
 
+    /// Play, pause or seek of a video file: kept as the room's spot even when we don't have the
+    /// file (picking our own copy starts there).
+    fn remote_local(&mut self, action: &str, t: Option<f64>, who: String, now_ms: f64, fx: &mut Vec<Effect>) {
+        match action {
+            "play" => {
+                self.log(format!("▶️ {who} played local video"), fx);
+                self.player(PlayerCmd::Play { at: t, who }, now_ms, fx);
+            }
+            "pause" => {
+                self.log(format!("⏸️ {who} paused local video"), fx);
+                self.player(PlayerCmd::Pause { at: t, who }, now_ms, fx);
+            }
+            "seek" => {
+                let Some(to) = t.filter(|t| t.is_finite()) else {
+                    return;
+                };
+                self.log(format!("⏩ {who} seeked to {}", clock(to)), fx);
+                self.player(
+                    PlayerCmd::Seek {
+                        to,
+                        who,
+                        drift: false,
+                    },
+                    now_ms,
+                    fx,
+                );
+            }
+            _ => {}
+        }
+    }
+
     fn answer_sync(&self, to: &PeerId, now_ms: f64, fx: &mut Vec<Effect>) {
         let queue = Self::queue_values(&self.watch.queue);
         let votes = self.watch.skip_votes.clone();
@@ -1321,6 +1710,22 @@ impl Room {
                     skip_votes: votes,
                     current_time: known.then(|| p.now(now_ms)),
                     is_playing: known.then_some(p.playing),
+                }
+            }
+            Some(Showing::Local { name, size, have, .. }) => {
+                #[allow(clippy::cast_precision_loss)]
+                let file_size = *size as f64;
+                PeerMessage::LocalVideoSyncState {
+                    media_type: "local".to_owned(),
+                    file_name: name.clone(),
+                    file_size,
+                    current_time: if *have { p.now(now_ms) } else { 0.0 },
+                    is_playing: *have && p.playing && !p.buffering,
+                    subtitle_info: self
+                        .watch
+                        .subtitles
+                        .as_ref()
+                        .map(|(n, v)| serde_json::json!({ "fileName": n, "vttString": v })),
                 }
             }
             Some(Showing::YouTube { id, title }) => PeerMessage::YtSyncState {

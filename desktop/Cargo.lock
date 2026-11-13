@@ -6593,6 +6593,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "gpui-kit",
+ "image",
  "qrcode",
  "rand 0.9.5",
  "rtc-core",
@@ -6636,11 +6637,15 @@ name = "rtc-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "rand 0.9.5",
  "rtc-core",
+ "rtc-platform-win",
  "rtc-protocol",
  "rtc-signaling",
  "rtc-webrtc",
+ "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -468,6 +468,15 @@ export interface P2PBlockHashesMessage extends BasePeerMessage {
 }
 
 // File Format Inspection
+/**
+ * Desktop viewer → desktop sharer: the tallest screen-share picture this viewer wants (0: as sent).
+ * Only the desktop app sends or reads it; listed so the shapes stay in one place (docs/PROTOCOL.md).
+ */
+export interface ScreenQualityMessage extends BasePeerMessage {
+  type: 'screen-quality';
+  maxHeight: number;
+}
+
 export interface FileFormatDetails {
   container?: string;
   video?: string;
@@ -564,6 +573,7 @@ export type PeerMessage =
   | P2PBlockHashesMessage
   | FileFormatMessage
   | FileFormatReportMessage
+  | ScreenQualityMessage
   | FileSubtitleRequestMessage
   | FileSubtitleProgressMessage
   | RoomStateMessage

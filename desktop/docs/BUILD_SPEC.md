@@ -437,6 +437,13 @@ Sources: `features/screenshare/useScreenShare.ts`, `room/ScreenShareStage.tsx`,
 encode, send as a video track with optional system or per-app audio; receive and show the web
 app's shares; pointer overlay messages as the web app sends them.
 
+Quality (ADR 0005, owner 13 Nov): each viewer gets their own picture, at the screen's own size
+unless the sharer (Native / 1440p / 1080p / 720p, 60 or 30 fps) or the viewer (`screen-quality`,
+desktop only) asks for less; web viewers get at most 1440p. Desktop viewers are encoded by the
+GPU (Media Foundation H.264, pass-through to libwebrtc) with the rate following the network up to
+a ceiling set by the picture's size; others are encoded in software. Text stays sharp: frames are
+dropped before the picture shrinks.
+
 ### 6.10 Shared state and activities
 
 Sources: `core/sharedState.ts`, `features/activities/` (`useActivities`, `activityState`,
@@ -619,10 +626,12 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   place (`crates/app/src/update.rs`). Tests: 113 Rust, `desktop_fun_test.py` (11: reactions,
   clips and pictures both ways, byte for byte), `desktop_window_test.py` (18).
   Exit: the plan's v1 budgets, measured on Windows (checklist).
-- [ ] **M4: watch party.** Playback core, YouTube/Vimeo/Twitch web view, link sources, queue,
+- [x] **M4: watch party.** Playback core, YouTube/Vimeo/Twitch web view, link sources, queue,
   quick picks, sync pill, people overlay; overlay and per-app sound (features 7, 8).
-  *Built 12 Nov, waiting for the owner's Windows run (`docs/checklists/M4.md`, starting with the
-  web view check).* The rules are in `rtc-core` (`room/watch.rs`: loads, play/pause/seek, late
+  *Done 12 Nov (the owner's Windows run passed).* The web view runs on its own UI thread
+  (`rtc_platform_win::UiThread`): WebView2's start-up message loop re-entered GPUI and panicked
+  when made on GPUI's thread. Per-app sound captures through the `wasapi` crate (MIT): a
+  hand-written process-loopback client corrupted the heap; `app_sound_probe` checks it alone. The rules are in `rtc-core` (`room/watch.rs`: loads, play/pause/seek, late
   join, the 1.5 s re-sync with backoff, host lock with revert, queue, vote skip); links are
   checked and rebuilt in `rtc-protocol` (`media.rs`). The player is `crates/webview` (a WebView2
   child window, `wry` 0.53) loading `assets/player.html` from `https://rtc.localhost/`; it is
@@ -637,6 +646,27 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   at the desktop's spot); 8 core tests (`tests/watch.rs`).
 - [ ] **M5: local video and sharing.** mpv player, block protocol and swarm, format card,
   subtitles, screen share, big files; then (M5b) GPU live stream and QUIC transfers.
+  *Built 13 Nov; waiting for the owner's Windows run (`docs/checklists/M5.md`).* Files play in
+  libmpv (LGPL build, loaded at run time from `libmpv-2.dll`; `packaging/get-mpv.ps1`, ADR 0004)
+  in a child window on its own UI thread, as the web view: the render API into GPUI was not
+  needed for VLC-like playback. Sync is the web app's `local-video-*` messages (`room/watch.rs`).
+  Sharing (`engine/src/stream.rs`, wire in `protocol/src/stream.rs`) is the block protocol as
+  the web app speaks it: as **owner**, range mode served from disk (any size), SHA-256 of every
+  block for swarm viewers (`p2p-hash-request`), the relay tree for the others, the whole-file
+  push for browsers without on-demand playback; as **viewer**, range mode from the owner or the
+  relay it names, blocks cached in memory (700 MB, far ones dropped) and read by mpv through a
+  `stream_cb` protocol. The desktop doesn't swarm or relay as a viewer (it asks with
+  `swarm: false, canRelay: false`). The format card (`core/src/files.rs`: MKV/MP4 headers,
+  `file-format`, reports) tells web viewers what won't play; MKV text subtitle tracks are read
+  out of the file on request and shared as `subtitle-share` (picture subtitles not yet); subtitle
+  files (SRT, VTT, ASS) are shared as WebVTT both ways. No remux for browsers yet (the card tells
+  them). Screen share (`engine/src/screen.rs`): libwebrtc's desktop capturer into a screencast
+  track already in every connection (the web app's video line, so no new offer), received
+  pictures drawn by GPUI (laser pointer and click pings both ways). The updater fetches
+  `libmpv-2.dll` when an install lacks it. Tests: `desktop_local_video_test.py` (15),
+  `desktop_stream_test.py` (15: on demand both ways, byte for byte, seek near the end, whole-file
+  push), `desktop_files_test.py` (12), `desktop_screen_test.py` (9), `desktop_window_test.py`
+  (22), Rust unit tests for the block cache, relay tree, MKV/MP4 parsing and subtitles.
 - [ ] **M6: games.** Shared state, activity shell, the five games (6.11), stream doctor.
 - [ ] **M7: host hub and LAN rooms.** `Topology` trait with `Mesh` and `Hub`; the plan's hub
   design. Needs server and web changes: write a design ADR and ask before starting.

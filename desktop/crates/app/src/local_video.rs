@@ -1,0 +1,1098 @@
+//! A video file from this computer (`LocalVideoSyncPlayer.tsx`): mpv plays it natively in a
+//! child window over the stage (`rtc_platform_win::VideoPlayer`, like VLC or PotPlayer), with
+//! GPUI controls under it. Everyone plays their own copy; the room keeps the copies in sync by
+//! the file's name and size (the rules are in `rtc_core`, `WatchCommand::PlayFile`).
+
+use std::cell::Cell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use gpui_kit::{
+    AnyElement, Bounds, Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ParentElement as _, PathPromptOptions, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, canvas, div, prelude::FluentBuilder as _, px,
+    relative,
+};
+use rtc_core::{PlayerReport, Showing, UserAction, WatchCommand};
+use rtc_engine::{StreamProgress, StreamReader};
+use rtc_platform_win::{
+    ParentWindow, StreamSource, Track, TrackKind, VideoAction, VideoEvent, VideoPlayer, VideoSource,
+};
+use rtc_ui::button::{Button, Variant};
+use rtc_ui::{Icon, icon, tokens};
+
+use crate::view::RoomView;
+use crate::watch::Live;
+
+/// Files the player is offered (what mpv plays well); anything else gets a note.
+const VIDEO_EXT: &[&str] = &[
+    "mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv", "flv", "ts", "m2ts", "mts", "mpg", "mpeg", "ogv",
+    "3gp", "vob", "divx", "rmvb",
+];
+/// Subtitle files (added to the video playing here).
+const SUB_EXT: &[&str] = &["srt", "ass", "ssa", "vtt", "sub", "sup"];
+/// The control bar under the video.
+const BAR_H: f32 = 52.;
+
+fn has_ext(path: &Path, list: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| list.iter().any(|x| x.eq_ignore_ascii_case(e)))
+}
+
+fn is_video(path: &Path) -> bool {
+    has_ext(path, VIDEO_EXT)
+}
+
+fn is_subtitle(path: &Path) -> bool {
+    has_ext(path, SUB_EXT)
+}
+
+/// "1:05", "1:02:09".
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn clock(secs: f64) -> String {
+    let s = if secs.is_finite() { secs.max(0.0) as u64 } else { 0 };
+    let (h, m, s) = (s / 3600, (s / 60) % 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// "700 MB", "1.4 GB".
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn size_text(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1e9 {
+        format!("{:.1} GB", b / 1e9)
+    } else if b >= 1e6 {
+        format!("{:.0} MB", b / 1e6)
+    } else if b >= 1e3 {
+        format!("{:.0} KB", b / 1e3)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+/// How a track is named in the menus.
+fn track_label(t: &Track) -> String {
+    let parts: Vec<&str> = [t.title.as_str(), t.lang.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        format!("Track {}", t.id)
+    } else {
+        parts.join(" · ")
+    }
+}
+
+type Events = (u64, VideoEvent);
+
+/// The local video's state on screen.
+pub(crate) struct LocalUi {
+    /// The file chosen here (played when the room opens it).
+    file: Option<PathBuf>,
+    /// Which player the events are from (an old one's late events are dropped).
+    generation: u64,
+    pub(crate) time: f64,
+    pub(crate) duration: f64,
+    pub(crate) playing: bool,
+    pub(crate) buffering: bool,
+    /// mpv's volume (100: the file's own level).
+    pub(crate) volume: f64,
+    pub(crate) muted: bool,
+    pub(crate) tracks: Vec<Track>,
+    /// The open track menu.
+    pub(crate) menu: Option<TrackKind>,
+    pub(crate) fullscreen: bool,
+    /// The offer card's note (the wrong file was chosen).
+    pub(crate) offer_error: Option<SharedString>,
+    /// The file we offer to viewers (the engine serves it).
+    sharing: bool,
+    /// A stream of the room's file (its name and reader), once it started.
+    stream: Option<(String, StreamReader)>,
+    /// "Stream from …" was pressed: waiting for the owner.
+    pub(crate) asking: Option<String>,
+    /// How the stream is doing.
+    pub(crate) progress: Option<StreamProgress>,
+    /// What's in the file someone shares (its name, one line).
+    pub(crate) remote_format: Option<(String, String)>,
+    /// Viewers who can't play our file properly.
+    pub(crate) problems: Vec<String>,
+    /// Subtitles the room shared, waiting for the player to open.
+    room_subtitles: Option<PathBuf>,
+    tx: tokio::sync::mpsc::UnboundedSender<Events>,
+    rx: Option<tokio::sync::mpsc::UnboundedReceiver<Events>>,
+    scrub: Rc<Cell<Option<Bounds<Pixels>>>>,
+    volume_bar: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+impl LocalUi {
+    pub(crate) fn new() -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            file: None,
+            generation: 0,
+            time: 0.0,
+            duration: 0.0,
+            playing: false,
+            buffering: false,
+            volume: 100.0,
+            muted: false,
+            tracks: Vec::new(),
+            menu: None,
+            fullscreen: false,
+            offer_error: None,
+            sharing: false,
+            stream: None,
+            asking: None,
+            progress: None,
+            remote_format: None,
+            problems: Vec::new(),
+            room_subtitles: None,
+            tx,
+            rx: Some(rx),
+            scrub: Rc::new(Cell::new(None)),
+            volume_bar: Rc::new(Cell::new(None)),
+        }
+    }
+
+    /// The chosen file, if it's the one called `name`.
+    pub(crate) fn path_for(&self, name: &str) -> Option<PathBuf> {
+        self.file
+            .as_ref()
+            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy() == name))
+            .cloned()
+    }
+
+    /// The stream of the room's file, if it's the one called `name`.
+    pub(crate) fn stream_for(&self, name: &str) -> Option<StreamReader> {
+        self.stream
+            .as_ref()
+            .filter(|(n, _)| n == name)
+            .map(|(_, r)| r.clone())
+    }
+
+    /// Streamed (not our own copy).
+    pub(crate) const fn streaming(&self) -> bool {
+        self.stream.is_some()
+    }
+
+    /// A new video (or none): the position and tracks start over.
+    pub(crate) fn reset(&mut self) {
+        self.generation += 1;
+        self.time = 0.0;
+        self.duration = 0.0;
+        self.playing = false;
+        self.buffering = false;
+        self.tracks.clear();
+        self.menu = None;
+        self.offer_error = None;
+    }
+}
+
+/// A shared video as mpv reads it (the engine's block cache).
+pub(crate) struct Streamed(pub(crate) StreamReader);
+
+impl StreamSource for Streamed {
+    fn size(&self) -> u64 {
+        self.0.size()
+    }
+
+    fn read_at(&self, pos: u64, buf: &mut [u8]) -> Result<usize, String> {
+        self.0.read_at(pos, buf)
+    }
+
+    fn close(&self) {
+        self.0.close();
+    }
+}
+
+/// Opens the waiting file in mpv over the stage (called once the stage has a size).
+pub(crate) fn open_player(
+    v: &mut RoomView,
+    window: &Window,
+    bounds: Bounds<Pixels>,
+    source: VideoSource,
+    start: f64,
+    playing: bool,
+) {
+    let Some(parent) = ParentWindow::of(window) else {
+        v.watch.error = Some("Video files play in the Windows app.".into());
+        return;
+    };
+    let generation = v.watch.local.generation;
+    let tx = v.watch.local.tx.clone();
+    match VideoPlayer::open(
+        parent,
+        crate::watch::physical(bounds, window.scale_factor()),
+        v.player_visible(),
+        source,
+        start,
+        playing,
+        move |e| {
+            let _ = tx.send((generation, e));
+        },
+    ) {
+        Ok(p) => {
+            // the volume carries over from the last video
+            if (v.watch.local.volume - 100.0).abs() > f64::EPSILON {
+                p.set_volume(v.watch.local.volume);
+            }
+            if v.watch.local.muted {
+                p.set_mute(true);
+            }
+            if let Some(subs) = v.watch.local.room_subtitles.take() {
+                p.add_subtitle(&subs);
+            }
+            v.watch.local.playing = playing;
+            v.watch.local.time = start;
+            *v.watch.player.borrow_mut() = Some(Live::Video(p));
+        }
+        Err(e) => v.watch.error = Some(e.into()),
+    }
+}
+
+impl RoomView {
+    /// Our own file plays: offer it to viewers who don't have it.
+    pub(crate) fn share_own_file(&mut self, path: &Path) {
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(e) = &self.engine {
+            e.share_file(Some((path.to_path_buf(), name, meta.len())));
+            self.watch.local.sharing = true;
+        }
+    }
+
+    /// Subtitles someone shared: shown over the video file here.
+    pub(crate) fn room_subtitles(&mut self, name: &str, vtt: &str, cx: &mut Context<'_, Self>) {
+        let dir = std::env::temp_dir().join("3RTC").join("subtitles");
+        let _ = std::fs::create_dir_all(&dir);
+        let safe: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || " .-_()".contains(c) {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .take(80)
+            .collect();
+        let stem = safe.trim_end_matches(".vtt");
+        let path = dir.join(format!("{stem}.vtt"));
+        if std::fs::write(&path, vtt).is_err() {
+            return;
+        }
+        let mut added = false;
+        self.with_video(|p| {
+            p.add_subtitle(&path);
+            added = true;
+        });
+        if !added {
+            self.watch.local.room_subtitles = Some(path);
+        }
+        cx.notify();
+    }
+
+    /// The video closed: stop offering our file, or stop the stream we watched.
+    pub(crate) fn end_local_sharing(&mut self) {
+        let l = &mut self.watch.local;
+        if l.sharing {
+            l.sharing = false;
+            if let Some(e) = &self.engine {
+                e.share_file(None);
+            }
+        }
+        if let Some((_, reader)) = self.watch.local.stream.take() {
+            reader.close();
+            if let Some(e) = &self.engine {
+                e.stop_stream();
+            }
+        }
+        self.watch.local.progress = None;
+        self.watch.local.asking = None;
+        self.watch.local.problems.clear();
+        self.watch.local.room_subtitles = None;
+    }
+
+    /// "Stream from …": ask the room for its file.
+    fn ask_stream(&mut self, name: String, cx: &mut Context<'_, Self>) {
+        if let Some(e) = &self.engine {
+            e.stream_from(name.clone());
+            self.watch.local.asking = Some(name);
+            self.watch.local.offer_error = None;
+            cx.notify();
+        }
+    }
+
+    /// The owner started streaming to us: play it where the room is.
+    pub(crate) fn stream_ready(
+        &mut self,
+        name: String,
+        _size: u64,
+        reader: StreamReader,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.watch.local.asking.take().is_none() {
+            reader.close();
+            return;
+        }
+        if let Some((_, old)) = self.watch.local.stream.replace((name.clone(), reader)) {
+            old.close();
+        }
+        self.watch_cmd(WatchCommand::Streaming { name });
+        cx.notify();
+    }
+
+    /// The stream stopped (its owner left or stopped sharing).
+    pub(crate) fn stream_ended(&mut self, why: String, cx: &mut Context<'_, Self>) {
+        self.watch.local.asking = None;
+        if let Some((name, reader)) = self.watch.local.stream.take() {
+            reader.close();
+            self.watch_cmd(WatchCommand::StreamLost { name });
+        }
+        self.watch.local.progress = None;
+        self.show_toast(why, cx);
+    }
+
+    pub(crate) fn stream_progress(&mut self, p: StreamProgress, cx: &mut Context<'_, Self>) {
+        if self.watch.local.stream.is_some() {
+            self.watch.local.progress = Some(p);
+            cx.notify();
+        }
+    }
+
+    /// Listens to the local video player (its events need the window: full screen).
+    pub(crate) fn start_video_events(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(mut rx) = self.watch.local.rx.take() else {
+            return;
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            while let Some((generation, e)) = rx.recv().await {
+                if this
+                    .update_in(cx, |v, window, cx| v.on_video_event(generation, e, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn with_video(&self, f: impl FnOnce(&VideoPlayer)) {
+        if let Some(p) = self.watch.player.borrow().as_ref().and_then(Live::video) {
+            f(p);
+        }
+    }
+
+    fn on_video_event(
+        &mut self,
+        generation: u64,
+        e: VideoEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if generation != self.watch.local.generation {
+            return;
+        }
+        let l = &mut self.watch.local;
+        let report = match e {
+            VideoEvent::Ready { duration } => {
+                l.duration = duration;
+                None
+            }
+            VideoEvent::State {
+                time,
+                playing,
+                buffering,
+                duration,
+            } => {
+                l.time = time;
+                l.playing = playing;
+                l.buffering = buffering;
+                l.duration = duration;
+                Some(PlayerReport::State {
+                    time,
+                    playing,
+                    buffering,
+                    duration,
+                })
+            }
+            VideoEvent::User { action, time } => {
+                l.time = time;
+                let action = match action {
+                    VideoAction::Play => UserAction::Play,
+                    VideoAction::Pause => UserAction::Pause,
+                    VideoAction::Seek => UserAction::Seek,
+                };
+                Some(PlayerReport::User { action, time })
+            }
+            VideoEvent::Tracks(t) => {
+                l.tracks = t;
+                None
+            }
+            VideoEvent::Volume { volume, muted } => {
+                l.volume = volume;
+                l.muted = muted;
+                None
+            }
+            VideoEvent::Ended => Some(PlayerReport::Ended),
+            VideoEvent::Fullscreen => {
+                self.toggle_video_fullscreen(window, cx);
+                None
+            }
+            VideoEvent::Escape => {
+                if l.fullscreen {
+                    self.toggle_video_fullscreen(window, cx);
+                }
+                None
+            }
+            VideoEvent::Error(message) => {
+                tracing::warn!("video: {message}");
+                // its window would cover the message
+                self.watch.player.borrow_mut().take();
+                self.watch.error = Some(message.into());
+                None
+            }
+        };
+        if let Some(r) = report {
+            self.watch_cmd(WatchCommand::Player(r));
+        }
+        cx.notify();
+    }
+
+    /// "browse files", "I have this file": the system's file picker.
+    pub(crate) fn choose_video_file(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Play".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            if let Some(path) = paths.into_iter().next() {
+                let _ = this.update_in(cx, |v, _, cx| v.play_path(path, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Files dropped on the stage: a video plays, a subtitle file joins the video playing here.
+    pub(crate) fn dropped_paths(&mut self, paths: &[PathBuf], cx: &mut Context<'_, Self>) {
+        if let Some(p) = paths.iter().find(|p| is_video(p)) {
+            self.play_path(p.clone(), cx);
+        } else if let Some(p) = paths.first() {
+            self.play_path(p.clone(), cx);
+        }
+    }
+
+    fn play_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        if is_subtitle(&path) {
+            self.add_subtitle(&path, cx);
+            return;
+        }
+        if !is_video(&path) {
+            self.show_toast("That isn't a video file (MP4, MKV, WebM, MOV, AVI…)", cx);
+            return;
+        }
+        let size = match std::fs::metadata(&path) {
+            Ok(m) if m.is_file() => m.len(),
+            _ => {
+                self.show_toast("Couldn't open that file", cx);
+                return;
+            }
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // the room plays someone's file: ours must be that one
+        if let Some(Showing::Local {
+            name: theirs,
+            have: false,
+            ..
+        }) = self.room.as_ref().and_then(|r| r.watch.showing.as_ref())
+            && *theirs != name
+        {
+            self.watch.local.offer_error =
+                Some(format!("That's “{name}”. The room is playing “{theirs}”: choose that file.").into());
+            cx.notify();
+            return;
+        }
+        self.watch.local.offer_error = None;
+        self.watch.local.file = Some(path);
+        self.watch_cmd(WatchCommand::PlayFile { name, size });
+        cx.notify();
+    }
+
+    fn add_subtitle(&mut self, path: &Path, cx: &mut Context<'_, Self>) {
+        let mut added = false;
+        self.with_video(|p| {
+            p.add_subtitle(path);
+            added = true;
+        });
+        if added {
+            self.watch.local.menu = None;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // everyone watching gets them too (as WebVTT, like the web app's `subtitle-share`)
+            let vtt = std::fs::read(path)
+                .ok()
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .and_then(|t| rtc_core::files::to_vtt(&name, &t));
+            if let Some(vtt) = vtt {
+                self.watch_cmd(WatchCommand::ShareSubtitles {
+                    name: name.clone(),
+                    vtt,
+                });
+                self.show_toast(format!("Subtitles shared with the room: {name}"), cx);
+            } else {
+                self.show_toast(format!("Subtitles: {name}"), cx);
+            }
+        } else {
+            self.show_toast("Play a video first, then add its subtitles", cx);
+        }
+    }
+
+    fn choose_subtitle_file(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Add subtitles".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            if let Some(path) = paths.into_iter().next() {
+                let _ = this.update_in(cx, |v, _, cx| v.add_subtitle(&path, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// The bar's play/pause: like a click on the video (the room follows).
+    fn video_toggle_play(&mut self, cx: &mut Context<'_, Self>) {
+        let playing = self.watch.local.playing;
+        let mut done = false;
+        self.with_video(|p| {
+            if playing {
+                p.pause(None);
+            } else {
+                p.play(None);
+            }
+            done = true;
+        });
+        if !done {
+            return;
+        }
+        let l = &mut self.watch.local;
+        l.playing = !playing;
+        let action = if playing {
+            UserAction::Pause
+        } else {
+            UserAction::Play
+        };
+        let time = l.time;
+        self.watch_cmd(WatchCommand::Player(PlayerReport::User { action, time }));
+        cx.notify();
+    }
+
+    fn video_seek(&mut self, to: f64, cx: &mut Context<'_, Self>) {
+        let mut done = false;
+        self.with_video(|p| {
+            p.seek(to);
+            done = true;
+        });
+        if done {
+            self.watch.local.time = to;
+            self.watch_cmd(WatchCommand::Player(PlayerReport::User {
+                action: UserAction::Seek,
+                time: to,
+            }));
+            cx.notify();
+        }
+    }
+
+    fn video_volume(&mut self, volume: f64, cx: &mut Context<'_, Self>) {
+        let muted = self.watch.local.muted;
+        self.with_video(|p| {
+            p.set_volume(volume);
+            if muted && volume > 0.0 {
+                p.set_mute(false);
+            }
+        });
+        self.watch.local.volume = volume;
+        if volume > 0.0 {
+            self.watch.local.muted = false;
+        }
+        cx.notify();
+    }
+
+    fn video_mute(&mut self, cx: &mut Context<'_, Self>) {
+        let muted = !self.watch.local.muted;
+        self.with_video(|p| p.set_mute(muted));
+        self.watch.local.muted = muted;
+        cx.notify();
+    }
+
+    fn video_track(&mut self, kind: TrackKind, id: Option<i64>, cx: &mut Context<'_, Self>) {
+        self.with_video(|p| match (kind, id) {
+            (TrackKind::Subtitle, id) => p.set_subtitle(id),
+            (TrackKind::Audio, Some(id)) => p.set_audio(id),
+            _ => {}
+        });
+        for t in &mut self.watch.local.tracks {
+            if t.kind == kind {
+                t.selected = Some(t.id) == id;
+            }
+        }
+        self.watch.local.menu = None;
+        cx.notify();
+    }
+
+    fn toggle_track_menu(&mut self, kind: TrackKind, cx: &mut Context<'_, Self>) {
+        self.watch.local.menu = if self.watch.local.menu == Some(kind) {
+            None
+        } else {
+            Some(kind)
+        };
+        cx.notify();
+    }
+
+    /// Full screen: only the video and its bar, the window over the whole screen.
+    pub(crate) fn toggle_video_fullscreen(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let on = !self.watch.local.fullscreen;
+        self.watch.local.fullscreen = on;
+        if window.is_fullscreen() != on {
+            window.toggle_fullscreen();
+        }
+        cx.notify();
+    }
+
+    /// Leaves full screen when the video is gone (drawing found it so).
+    pub(crate) fn end_video_fullscreen(&mut self, window: &mut Window) {
+        self.watch.local.fullscreen = false;
+        if window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+    }
+}
+
+// ---- on screen ----------------------------------------------------------------------------------
+
+fn bar_btn(id: &'static str) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .h(px(34.))
+        .min_w(px(34.))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(6.))
+        .rounded(px(8.))
+        .text_size(px(13.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(tokens::text())
+        .cursor_pointer()
+        .hover(|s| s.bg(tokens::raised()))
+}
+
+/// A thin bar with a filled part (`frac` 0–1), its bounds kept in `cell` for clicks.
+fn level(cell: &Rc<Cell<Option<Bounds<Pixels>>>>, frac: f32, fill: gpui_kit::Hsla) -> AnyElement {
+    let cell = Rc::clone(cell);
+    div()
+        .relative()
+        .size_full()
+        .flex()
+        .items_center()
+        .child(
+            canvas(move |b, _, _| cell.set(Some(b)), |_, (), _, _| {})
+                .absolute()
+                .size_full(),
+        )
+        .child(
+            div()
+                .relative()
+                .w_full()
+                .h(px(4.))
+                .rounded_full()
+                .bg(tokens::line_strong())
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .h_full()
+                        .w(relative(frac.clamp(0.0, 1.0)))
+                        .rounded_full()
+                        .bg(fill),
+                ),
+        )
+        .into_any_element()
+}
+
+/// Where along `cell`'s bar `x` is (0–1).
+fn along(cell: &Rc<Cell<Option<Bounds<Pixels>>>>, x: Pixels) -> Option<f64> {
+    let b = cell.get()?;
+    let w = f32::from(b.size.width);
+    (w > 0.0).then(|| f64::from(((f32::from(x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0)))
+}
+
+/// The bar under the video: play, time, scrubber, sound, tracks, full screen.
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElement {
+    let l = &view.watch.local;
+    let frac = if l.duration > 0.0 {
+        (l.time / l.duration) as f32
+    } else {
+        0.0
+    };
+    let vol = if l.muted { 0.0 } else { (l.volume / 100.0) as f32 };
+    let audio: Vec<Track> = l
+        .tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Audio)
+        .cloned()
+        .collect();
+    let subs: Vec<Track> = l
+        .tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Subtitle)
+        .cloned()
+        .collect();
+    let menu = l.menu;
+    let scrub = Rc::clone(&l.scrub);
+    let volume_bar = Rc::clone(&l.volume_bar);
+    let duration = l.duration;
+    let time_text = if l.duration > 0.0 {
+        format!("{} / {}", clock(l.time), clock(l.duration))
+    } else {
+        clock(l.time)
+    };
+    let bar = div()
+        .h(px(BAR_H))
+        .flex_none()
+        .px(px(10.))
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(
+            bar_btn("lv-play")
+                .child(icon(
+                    if l.playing { Icon::Pause } else { Icon::Play },
+                    px(18.),
+                    tokens::text(),
+                ))
+                .on_click(cx.listener(|v, _, _, cx| v.video_toggle_play(cx))),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(13.))
+                .text_color(tokens::text_2())
+                .font_family(tokens::FONT_MONO)
+                .child(time_text),
+        )
+        .children(l.progress.filter(|_| l.streaming()).map(|p| {
+            #[allow(clippy::cast_precision_loss)]
+            let pct = if p.size > 0 {
+                (p.cached as f64 / p.size as f64 * 100.0).round()
+            } else {
+                0.0
+            };
+            div()
+                .flex_none()
+                .text_size(px(12.))
+                .text_color(tokens::text_3())
+                .child(format!(
+                    "Streaming{} · {pct:.0}% here · {:.1} MB/s",
+                    if p.relayed { " (passed along)" } else { "" },
+                    p.speed
+                ))
+        }))
+        .child({
+            let at = Rc::clone(&scrub);
+            div()
+                .id("lv-scrub")
+                .flex_1()
+                .min_w(px(60.))
+                .h(px(28.))
+                .cursor_pointer()
+                .child(level(&scrub, frac, tokens::accent()))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |v, e: &MouseDownEvent, _, cx| {
+                        if duration > 0.0
+                            && let Some(f) = along(&at, e.position.x)
+                        {
+                            v.video_seek(f * duration, cx);
+                        }
+                    }),
+                )
+        })
+        .child(
+            bar_btn("lv-mute")
+                .child(icon(
+                    if l.muted || l.volume <= 0.0 {
+                        Icon::SpeakerOff
+                    } else {
+                        Icon::Speaker
+                    },
+                    px(18.),
+                    tokens::text(),
+                ))
+                .on_click(cx.listener(|v, _, _, cx| v.video_mute(cx))),
+        )
+        .child({
+            let down = Rc::clone(&volume_bar);
+            let drag = Rc::clone(&volume_bar);
+            div()
+                .id("lv-volume")
+                .w(px(80.))
+                .flex_none()
+                .h(px(28.))
+                .cursor_pointer()
+                .child(level(&volume_bar, vol, tokens::text()))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |v, e: &MouseDownEvent, _, cx| {
+                        if let Some(f) = along(&down, e.position.x) {
+                            v.video_volume((f * 100.0).round(), cx);
+                        }
+                    }),
+                )
+                .on_mouse_move(cx.listener(move |v, e: &MouseMoveEvent, _, cx| {
+                    if e.pressed_button == Some(MouseButton::Left)
+                        && let Some(f) = along(&drag, e.position.x)
+                    {
+                        v.video_volume((f * 100.0).round(), cx);
+                    }
+                }))
+        })
+        .when(audio.len() > 1, |el| {
+            el.child(
+                bar_btn("lv-audio")
+                    .when(menu == Some(TrackKind::Audio), |b| b.bg(tokens::raised()))
+                    .child("Audio")
+                    .on_click(cx.listener(|v, _, _, cx| v.toggle_track_menu(TrackKind::Audio, cx))),
+            )
+        })
+        .child(
+            bar_btn("lv-subs")
+                .when(menu == Some(TrackKind::Subtitle), |b| b.bg(tokens::raised()))
+                .child("Subtitles")
+                .on_click(cx.listener(|v, _, _, cx| v.toggle_track_menu(TrackKind::Subtitle, cx))),
+        )
+        .child(
+            bar_btn("lv-full")
+                .child(if l.fullscreen {
+                    "Exit full screen"
+                } else {
+                    "Full screen"
+                })
+                .on_click(cx.listener(|v, _, window, cx| v.toggle_video_fullscreen(window, cx))),
+        );
+    let menu_row = menu.map(|kind| {
+        let list = if kind == TrackKind::Audio { &audio } else { &subs };
+        let none_on = kind == TrackKind::Subtitle && !subs.iter().any(|t| t.selected);
+        div()
+            .flex_none()
+            .px(px(12.))
+            .pb(px(10.))
+            .flex()
+            .flex_wrap()
+            .gap(px(6.))
+            .when(kind == TrackKind::Subtitle, |el| {
+                el.child(
+                    track_chip("lv-sub-off", "Off", none_on)
+                        .on_click(cx.listener(|v, _, _, cx| v.video_track(TrackKind::Subtitle, None, cx))),
+                )
+            })
+            .children(list.iter().map(|t| {
+                let id = t.id;
+                let mut label = track_label(t);
+                if t.external {
+                    label.push_str(" (file)");
+                }
+                track_chip(("lv-track", usize::try_from(id).unwrap_or(0)), label, t.selected)
+                    .on_click(cx.listener(move |v, _, _, cx| v.video_track(kind, Some(id), cx)))
+            }))
+            .when(kind == TrackKind::Subtitle, |el| {
+                el.child(
+                    track_chip("lv-sub-add", "Add a subtitle file…", false)
+                        .on_click(cx.listener(|v, _, window, cx| v.choose_subtitle_file(window, cx))),
+                )
+            })
+    });
+    let problems = l.problems.clone();
+    div()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .bg(tokens::panel())
+        .when(!problems.is_empty(), |el| {
+            el.child(
+                div()
+                    .px(px(14.))
+                    .pt(px(8.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .text_size(px(12.))
+                    .text_color(tokens::warn())
+                    .children(problems.into_iter().map(|p| div().child(format!("⚠ {p}")))),
+            )
+        })
+        .border_t_1()
+        .border_color(tokens::line())
+        .children(menu_row)
+        .child(bar)
+        .into_any_element()
+}
+
+fn track_chip(
+    id: impl Into<gpui_kit::ElementId>,
+    label: impl Into<SharedString>,
+    on: bool,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .h(px(30.))
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(if on { tokens::text() } else { tokens::line() })
+        .bg(if on { tokens::text() } else { tokens::surface() })
+        .text_color(if on { tokens::bg() } else { tokens::text_2() })
+        .text_size(px(13.))
+        .cursor_pointer()
+        .child(label.into())
+}
+
+/// Someone else's file plays and it isn't here: "I have this file" (`LocalVideoSyncPlayer.tsx`'s
+/// prompt for viewers).
+pub(crate) fn offer(
+    view: &RoomView,
+    name: &str,
+    size: u64,
+    from: Option<&str>,
+    cx: &mut Context<'_, RoomView>,
+) -> AnyElement {
+    let who = from.unwrap_or("Someone").to_owned();
+    let asking = view.watch.local.asking.is_some();
+    let file = name.to_owned();
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .bottom(px(0.))
+        .right(px(crate::watch::REACTION_STRIP))
+        .rounded(tokens::RADIUS_VIDEO)
+        .bg(tokens::surface())
+        .border_1()
+        .border_color(tokens::line())
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .max_w(px(520.))
+                .px(px(28.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(12.))
+                .text_center()
+                .child(icon(Icon::Folder, px(36.), tokens::text_2()))
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .text_color(tokens::text_2())
+                        .child(format!("{who} is playing a video file")),
+                )
+                .child(
+                    div()
+                        .text_size(px(20.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(name.to_owned()),
+                )
+                .when(size > 0, |el| {
+                    el.child(
+                        div()
+                            .text_size(px(13.))
+                            .text_color(tokens::text_3())
+                            .child(size_text(size)),
+                    )
+                })
+                .children(
+                    view.watch
+                        .local
+                        .remote_format
+                        .as_ref()
+                        .filter(|(n, d)| n == name && !d.is_empty())
+                        .map(|(_, d)| div().text_size(px(13.)).text_color(tokens::text_3()).child(d.clone())),
+                )
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .text_color(tokens::text_2())
+                        .child(format!(
+                            "Streaming sends the video from {who}’s computer to yours. Have the same file? Pick it and nothing needs to be sent."
+                        )),
+                )
+                .children(view.watch.local.offer_error.clone().map(|e| {
+                    div()
+                        .text_size(px(13.))
+                        .text_color(tokens::danger_text())
+                        .child(e)
+                }))
+                .child(
+                    div()
+                        .pt(px(4.))
+                        .flex()
+                        .gap(px(8.))
+                        .child(
+                            Button::new(
+                                "lv-stream",
+                                if asking {
+                                    format!("Asking {who}…")
+                                } else {
+                                    format!("Stream from {who}")
+                                },
+                            )
+                            .variant(Variant::Primary)
+                            .on_click(cx.listener(move |v, _, _, cx| v.ask_stream(file.clone(), cx))),
+                        )
+                        .child(
+                            Button::new("lv-have", "I have this file")
+                                .variant(Variant::Secondary)
+                                .icon(Icon::Folder)
+                                .on_click(cx.listener(|v, _, window, cx| v.choose_video_file(window, cx))),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .text_color(tokens::text_3())
+                        .child("or drop the file here"),
+                ),
+        )
+        .into_any_element()
+}

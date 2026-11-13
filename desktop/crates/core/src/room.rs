@@ -1452,7 +1452,9 @@ impl Room {
             | PeerMessage::YtSyncState { .. }
             | PeerMessage::MediaSyncState { .. }
             | PeerMessage::MediaHeartbeat { .. }
-            | PeerMessage::QueueAction { .. }) => {
+            | PeerMessage::QueueAction { .. }
+            | PeerMessage::LocalVideoAction { .. }
+            | PeerMessage::LocalVideoSyncState { .. }) => {
                 self.watch_message(&from, envelope.sender.as_deref(), m, now_ms, fx);
             }
             PeerMessage::NetPong { .. }

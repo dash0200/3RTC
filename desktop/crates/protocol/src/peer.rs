@@ -167,6 +167,54 @@ pub enum PeerMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by_vote: Option<bool>,
     },
+    /// A video file from someone's computer: loaded, played, paused, seeked, closed, or its
+    /// subtitles shared (`LocalVideoSyncPlayer.tsx`). Only the name and size travel here; the
+    /// file itself is streamed (`p2p-*`) or picked by each viewer.
+    #[serde(rename_all = "camelCase")]
+    LocalVideoAction {
+        /// `load`, `play`, `pause`, `seek`, `close` or `subtitle-share`.
+        action: String,
+        /// `load`: the file's name (`subtitle-share`: the subtitles' name).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_name: Option<String>,
+        /// `load`: its size in bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_size: Option<f64>,
+        /// Where, seconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_time: Option<f64>,
+        /// Sent by the host.
+        #[serde(default)]
+        from_host: bool,
+        /// `subtitle-share`: the subtitles as WebVTT.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vtt_string: Option<String>,
+        /// Subtitles already showing (late joiners).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subtitle_info: Option<Value>,
+    },
+    /// The answer to `yt-request-sync` while a video file plays.
+    #[serde(rename_all = "camelCase")]
+    LocalVideoSyncState {
+        /// Always `local`.
+        #[serde(default)]
+        media_type: String,
+        /// The file's name.
+        #[serde(default)]
+        file_name: String,
+        /// Its size in bytes.
+        #[serde(default)]
+        file_size: f64,
+        /// Where, seconds.
+        #[serde(default)]
+        current_time: f64,
+        /// Playing.
+        #[serde(default)]
+        is_playing: bool,
+        /// Subtitles showing, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subtitle_info: Option<Value>,
+    },
     /// The same for a link source (Vimeo, Twitch, a video file, HLS).
     #[serde(rename_all = "camelCase")]
     MediaAction {
@@ -524,6 +572,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v, json!({"type": "room-settings", "playbackLock": true}));
+    }
+
+    #[test]
+    fn reads_the_web_apps_local_video_messages() {
+        let e = Envelope::from_json(r#"{"type":"local-video-action","action":"load","fromHost":true,"fileName":"Film.mkv","fileSize":2147483648,"sender":"Riya","timestamp":5}"#).unwrap();
+        assert!(
+            matches!(e.message, PeerMessage::LocalVideoAction { ref action, ref file_name, file_size: Some(s), from_host: true, .. } if action == "load" && file_name.as_deref() == Some("Film.mkv") && (s - 2_147_483_648.0).abs() < 1.0)
+        );
+        let s = Envelope::from_json(r#"{"type":"local-video-sync-state","mediaType":"local","fileName":"Film.mkv","fileSize":10,"currentTime":61.5,"isPlaying":true}"#).unwrap();
+        assert!(
+            matches!(s.message, PeerMessage::LocalVideoSyncState { ref file_name, current_time, is_playing: true, .. } if file_name == "Film.mkv" && (current_time - 61.5).abs() < 1e-9)
+        );
     }
 
     #[test]

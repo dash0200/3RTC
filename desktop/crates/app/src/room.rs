@@ -5,10 +5,11 @@
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::slider::Slider;
 use gpui_kit::{
-    AnyElement, App, Context, Div, Focusable as _, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window,
-    deferred, div, prelude::FluentBuilder as _, px, rgba,
+    AnyElement, App, Context, Div, ExternalPaths, Focusable as _, FontWeight, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
+    Window, deferred, div, prelude::FluentBuilder as _, px, rgba,
 };
+use rtc_core::Showing;
 use rtc_engine::{Member, Snapshot};
 use rtc_protocol::{PeerId, RoomId};
 use rtc_ui::avatar::{self, avatar, muted_badge};
@@ -33,6 +34,18 @@ pub(crate) fn render(
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
+    if view.watch.local.fullscreen {
+        if matches!(room.watch.showing, Some(Showing::Local { have: true, .. })) {
+            // full screen: the video and its bar only
+            return div()
+                .size_full()
+                .relative()
+                .bg(tokens::black(1.0))
+                .child(crate::watch::player_area(view, window, cx))
+                .into_any_element();
+        }
+        view.end_video_fullscreen(window);
+    }
     div()
         .size_full()
         .flex()
@@ -265,24 +278,43 @@ fn stage(
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
-    if room.watch.showing.is_some() {
-        // a video plays: the player, with floating reactions in a strip beside it (5.9 item 1)
+    if view.screen.showing() {
+        // a shared screen takes the stage (the video plays on, hidden)
+        view.hide_player();
         return div()
+            .id("stage-screen")
             .relative()
             .flex_1()
             .min_h_0()
             .bg(tokens::bg())
+            .child(crate::screen::stage(view, cx))
+            .child(crate::fun::layer(view, false))
+            .children(crate::fun::banner(view, false))
+            .into_any_element();
+    }
+    if room.watch.showing.is_some() {
+        // a video plays: the player, with floating reactions in a strip beside it (5.9 item 1);
+        // a file from this computer fills the stage (its bar is ours, so toasts can show on it)
+        let fill = matches!(room.watch.showing, Some(Showing::Local { have: true, .. }));
+        return div()
+            .id("stage-playing")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .bg(tokens::bg())
+            .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| v.dropped_paths(paths.paths(), cx)))
             .child(
                 div()
                     .absolute()
                     .top(px(12.))
                     .left(px(12.))
-                    .right(px(0.))
-                    // toasts and the soundboard banner show in this edge, under the video
-                    .bottom(px(60.))
+                    .right(px(if fill { 12. } else { 0. }))
+                    // toasts and the soundboard banner show in this edge, under the video (a
+                    // file fills the stage: they show over its control bar instead)
+                    .bottom(px(if fill { 12. } else { 60. }))
                     .child(crate::watch::player_area(view, window, cx)),
             )
-            .child(crate::fun::layer(view, true))
+            .when(!fill, |el| el.child(crate::fun::layer(view, true)))
             .children(crate::fun::banner(view, true))
             .into_any_element();
     }
@@ -304,10 +336,12 @@ fn stage(
     let link_error = crate::watch::link_error(view);
     let resolving = view.watch.resolving;
     div()
+        .id("stage-idle")
         .relative()
         .flex_1()
         .min_h_0()
         .bg(tokens::bg())
+        .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| v.dropped_paths(paths.paths(), cx)))
         .child(
             div()
                 .id("stage-scroll")
@@ -443,8 +477,12 @@ fn inline_link(id: &'static str, label: &'static str, cx: &mut Context<'_, RoomV
         .text_color(tokens::text())
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
-        .on_click(cx.listener(|v, _, _, cx| {
-            v.show_toast("Videos and screen sharing come in the next desktop update", cx);
+        .on_click(cx.listener(move |v, _, window, cx| {
+            if id == "browse" {
+                v.choose_video_file(window, cx);
+            } else {
+                v.open_screen_picker(cx);
+            }
         }))
         .child(label)
 }
@@ -770,8 +808,23 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                             el.child(crate::fun::sounds_pop(view, cx))
                         }),
                 )
-                .child(later_btn("add-video", Icon::VideoAdd, cx))
-                .child(later_btn("screen", Icon::ScreenShare, cx))
+                .child(
+                    dock_btn("add-video", Icon::VideoAdd, false, false)
+                        .on_click(cx.listener(|v, _, window, cx| v.choose_video_file(window, cx))),
+                )
+                .child(
+                    dock_btn(
+                        "screen",
+                        if view.screen.mine {
+                            Icon::ScreenShareOff
+                        } else {
+                            Icon::ScreenShare
+                        },
+                        view.screen.sharer.is_some(),
+                        false,
+                    )
+                    .on_click(cx.listener(|v, _, _, cx| v.screen_button(cx))),
+                )
                 .child(later_btn("games", Icon::Games, cx))
                 .child(more),
         )

@@ -127,6 +127,13 @@ impl ParentWindow {
     }
 }
 
+impl ParentWindow {
+    /// As a Win32 handle.
+    pub(crate) fn hwnd(self) -> windows::Win32::Foundation::HWND {
+        windows::Win32::Foundation::HWND(self.0.get() as *mut std::ffi::c_void)
+    }
+}
+
 impl raw_window_handle::HasWindowHandle for ParentWindow {
     fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         let raw =

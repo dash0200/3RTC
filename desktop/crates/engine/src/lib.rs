@@ -9,6 +9,8 @@
 
 mod images;
 mod peers;
+mod screen;
+mod stream;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,8 +28,12 @@ use tokio::sync::mpsc;
 pub use rtc_core::{ChatImage, ChatLine, Member, Phase, Reaction, Sound, UiEvent};
 pub use rtc_webrtc::factory::IceServerConfig;
 pub use rtc_webrtc::voice::{Device, Devices, MicSource};
+pub use screen::{ScreenFeed, ScreenFrame, ScreenOptions, ScreenSource, ScreenStats, screen_sources};
+pub use stream::{StreamProgress, StreamReader};
 
 use crate::peers::{PeerEvent, Peers};
+use rtc_webrtc::libwebrtc::peer_connection_factory::native::PeerConnectionFactoryExt as _;
+use rtc_webrtc::libwebrtc::rtp_sender::VideoEncoderBackend;
 
 /// How often the room logic's timers (connection recovery) run.
 const TICK: Duration = Duration::from_millis(500);
@@ -114,6 +120,68 @@ pub enum Update {
     Player(rtc_core::PlayerCmd),
     /// The queue moved on: play the pop.
     Pop,
+    /// A video stream we asked for started: open the player on `reader`.
+    StreamReady {
+        /// The file's name.
+        name: String,
+        /// Its size in bytes.
+        size: u64,
+        /// What the player reads.
+        reader: StreamReader,
+    },
+    /// The video stream we watch stopped (why).
+    StreamEnded(String),
+    /// How the video stream we watch is doing (twice a second).
+    StreamProgress(StreamProgress),
+    /// What's in the video file someone shares ("MKV · HEVC (H.265) · AAC").
+    FileFormat {
+        /// The file.
+        name: String,
+        /// One line.
+        description: String,
+    },
+    /// Viewers who can't play our file properly (empty: none).
+    FileProblems(Vec<String>),
+    /// A screen share started or stopped.
+    Screen {
+        /// Who shares (`None`: nobody).
+        sharer: Option<String>,
+        /// It's us.
+        mine: bool,
+        /// Its pictures (ours: the preview).
+        feed: Option<ScreenFeed>,
+    },
+    /// A laser pointer over the shared screen (0–1), or gone (`active` false).
+    ScreenPointer {
+        /// Whose.
+        peer: String,
+        /// Their name.
+        name: String,
+        /// Across.
+        x: f64,
+        /// Down.
+        y: f64,
+        /// Still there.
+        active: bool,
+    },
+    /// A click on the shared screen.
+    ScreenPing {
+        /// Whose name.
+        name: String,
+        /// Across.
+        x: f64,
+        /// Down.
+        y: f64,
+    },
+    /// Sharing our screen failed (why).
+    ScreenError(String),
+    /// How our screen goes out: the GPU encoder (if it's used) and each viewer's picture.
+    ScreenSending {
+        /// "NVIDIA H.264 Encoder MFT", when at least one viewer is encoded by the GPU.
+        encoder: Option<String>,
+        /// Each viewer.
+        viewers: Vec<ScreenViewer>,
+    },
     /// A chat picture arrived whole.
     ImageReady {
         /// Its transfer.
@@ -153,6 +221,19 @@ pub struct OutgoingImage {
     pub caption: String,
 }
 
+/// One viewer of our screen share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenViewer {
+    /// Their name.
+    pub name: String,
+    /// The picture's height they get.
+    pub height: u32,
+    /// Encoded by our GPU (else by libwebrtc in software).
+    pub hardware: bool,
+    /// On the web app.
+    pub web: bool,
+}
+
 /// What the UI can ask.
 #[derive(Debug)]
 enum Request {
@@ -168,6 +249,22 @@ enum Request {
     Isolation(bool),
     SendImage(OutgoingImage),
     NetStats,
+    /// Offer this file to viewers who ask (path, name, size); `None`: stop.
+    ShareFile(Option<(std::path::PathBuf, String, u64)>),
+    /// Ask the room for the file playing (by name).
+    StreamFrom(String),
+    /// Stop watching a stream.
+    StopStream,
+    /// Share this screen or window (`None`: stop).
+    ShareScreen(Option<ScreenSource>),
+    /// How we share (now and from now on).
+    ScreenOptions(ScreenOptions),
+    /// The tallest picture we want of someone else's screen (0: as sent).
+    ScreenQuality(u32),
+    /// Our laser pointer over the shared screen (0–1; `None`: it left).
+    ScreenPointer(Option<(f64, f64)>),
+    /// A click on the shared screen.
+    ScreenPing(f64, f64),
     /// A sound of our own (`replace`: stop the last one with the same flag first).
     PlaySamples {
         samples: Arc<[f32]>,
@@ -245,6 +342,49 @@ impl Handle {
         let _ = self.tx.send(Request::SendImage(image));
     }
 
+    /// Offers the video file playing here to viewers who don't have it (`None`: stops, and
+    /// tells the ones watching).
+    pub fn share_file(&self, file: Option<(std::path::PathBuf, String, u64)>) {
+        let _ = self.tx.send(Request::ShareFile(file));
+    }
+
+    /// Asks whoever has the file `name` to stream it to us ([`Update::StreamReady`] follows).
+    pub fn stream_from(&self, name: String) {
+        let _ = self.tx.send(Request::StreamFrom(name));
+    }
+
+    /// Shares a screen or a window with the room (`None`: stops).
+    pub fn share_screen(&self, what: Option<ScreenSource>) {
+        let _ = self.tx.send(Request::ShareScreen(what));
+    }
+
+    /// How we share our screen: the tallest picture and frames a second (now, if sharing, and
+    /// for the next share).
+    pub fn screen_options(&self, options: ScreenOptions) {
+        let _ = self.tx.send(Request::ScreenOptions(options));
+    }
+
+    /// The tallest picture we want of someone else's shared screen (0: as they send it). Desktop
+    /// sharers send it that size; the web app ignores it.
+    pub fn screen_quality(&self, max_height: u32) {
+        let _ = self.tx.send(Request::ScreenQuality(max_height));
+    }
+
+    /// Our laser pointer over the shared screen, 0–1 across and down (`None`: it left).
+    pub fn screen_pointer(&self, at: Option<(f64, f64)>) {
+        let _ = self.tx.send(Request::ScreenPointer(at));
+    }
+
+    /// A click on the shared screen (everyone sees a ripple there).
+    pub fn screen_ping(&self, x: f64, y: f64) {
+        let _ = self.tx.send(Request::ScreenPing(x, y));
+    }
+
+    /// Stops watching the stream (tells its owner).
+    pub fn stop_stream(&self) {
+        let _ = self.tx.send(Request::StopStream);
+    }
+
     /// Plays 48 kHz mono samples through our mixer (our own audio path only) at `gain`; with
     /// `replace`, the last sound played with `replace` stops first (the soundboard's behaviour).
     pub fn play_samples(&self, samples: Arc<[f32]>, gain: f32, replace: bool) {
@@ -288,6 +428,8 @@ enum Msg {
     RoomFound(RoomId, Option<String>),
     /// A picture we send is this far along.
     ImageSending(String, u8),
+    /// From the video-sharing module's other threads.
+    Stream(stream::Back),
 }
 
 /// A fresh peer id for this launch (the server ties seats to it).
@@ -326,15 +468,29 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
     });
     let factory = Factory::new(config.ice);
     let voice = Voice::new(&factory, config.mic);
+    let screen_source = screen::new_source();
+    let screen_track = rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack::Video(
+        factory
+            .inner()
+            .create_video_track("screen", screen_source.clone()),
+    );
     let meter = voice.meter();
     let app = voice.app_feed();
     let peer_tx = queue_tx.clone();
-    let peers = Peers::new(factory, voice.track(), signaling.clone(), move |e| {
-        let _ = peer_tx.send(Msg::Peer(e));
-    });
+    let raw_track = screen_track.clone();
+    let peers = Peers::new(
+        factory,
+        voice.track(),
+        screen_track,
+        signaling.clone(),
+        move |e| {
+            let _ = peer_tx.send(Msg::Peer(e));
+        },
+    );
     // The UI's requests come through their own channel: when every UI handle is gone the engine
     // stops, even though libwebrtc's callbacks still hold senders to the queue.
     let (ui_tx, ui_rx) = mpsc::unbounded_channel();
+    let want_tx = queue_tx.clone();
     let engine = Engine {
         room: Room::new(me),
         signaling,
@@ -353,7 +509,25 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
         audio_open: false,
         audio_restarted_at: 0.0,
         images: images::Receiver::default(),
+        stream_ticks: 0,
+        screen: ScreenState {
+            source: screen_source,
+            raw_track,
+            options: ScreenOptions::default(),
+            wanted: HashMap::new(),
+            my_quality: 0,
+            hw: HashMap::new(),
+            applied: HashMap::new(),
+            sending: None,
+            capture: None,
+            tracks: HashMap::new(),
+            sharer: None,
+            watch: None,
+        },
         net_before: HashMap::new(),
+        streams: stream::Streams::new(move |b| {
+            let _ = want_tx.send(Msg::Stream(b));
+        }),
         outgoing: HashMap::new(),
         sending: Vec::new(),
     };
@@ -402,6 +576,12 @@ struct Engine {
     audio_restarted_at: f64,
     /// Chat pictures on their way in.
     images: images::Receiver,
+    /// Video files shared both ways.
+    streams: stream::Streams,
+    /// Ticks (stream progress goes to the UI on every other one).
+    stream_ticks: u32,
+    /// Screen sharing, both ways.
+    screen: ScreenState,
     /// Our pictures waiting for their announcement to go out, by transfer id.
     outgoing: HashMap<String, Arc<[u8]>>,
     /// Our pictures being sent.
@@ -432,6 +612,10 @@ impl Engine {
                     let now = now_ms();
                     self.images.clean(now);
                     self.sending.retain(|t| !t.is_finished());
+                    self.stream_ticks = self.stream_ticks.wrapping_add(1);
+                    self.route_screen();
+                    let outs = self.streams.tick(true);
+                    self.stream_out(outs);
                     let fx = self.room.update(Input::Tick, now);
                     self.apply(fx).await;
                     continue;
@@ -539,6 +723,161 @@ impl Engine {
                 self.send_image(image).await;
                 return;
             }
+            Msg::Ui(Request::ShareFile(file)) => {
+                let outs = self.streams.share(
+                    file,
+                    &EngineLinks {
+                        peers: &self.peers,
+                        room: &self.room,
+                    },
+                );
+                self.stream_out(outs);
+                return;
+            }
+            Msg::Ui(Request::StreamFrom(name)) => {
+                let outs = self.streams.ask(
+                    &name,
+                    &EngineLinks {
+                        peers: &self.peers,
+                        room: &self.room,
+                    },
+                );
+                self.stream_out(outs);
+                return;
+            }
+            Msg::Ui(Request::ShareScreen(what)) => {
+                self.share_screen(what);
+                return;
+            }
+            Msg::Ui(Request::ScreenOptions(o)) => {
+                self.screen.options = o;
+                if let Some(c) = &self.screen.capture {
+                    screen::lock_shared(&c.shared).options = o;
+                }
+                self.route_screen();
+                return;
+            }
+            Msg::Ui(Request::ScreenQuality(h)) => {
+                self.screen.my_quality = h;
+                self.ask_quality();
+                return;
+            }
+            Msg::Ui(Request::ScreenPointer(at)) => {
+                let me = self.room.identity();
+                let m = rtc_protocol::stream::ScreenMessage::Pointer {
+                    peer_id: Some(me.peer_id.as_str().to_owned()),
+                    x: at.map_or(0.0, |a| a.0),
+                    y: at.map_or(0.0, |a| a.1),
+                    username: Some(me.username.clone()),
+                    active: at.is_some(),
+                };
+                self.screen_broadcast(&m);
+                return;
+            }
+            Msg::Ui(Request::ScreenPing(x, y)) => {
+                let me = self.room.identity();
+                let m = rtc_protocol::stream::ScreenMessage::Ping {
+                    id: format!("ping_{:x}", rand::random::<u64>()),
+                    x,
+                    y,
+                    username: Some(me.username.clone()),
+                    color: None,
+                    peer_id: Some(me.peer_id.as_str().to_owned()),
+                };
+                self.screen_broadcast(&m);
+                return;
+            }
+            Msg::Peer(PeerEvent::RemoteVideo {
+                peer,
+                generation,
+                track,
+            }) => {
+                if self.peers.is_current(&peer, generation) {
+                    self.screen.tracks.insert(peer.clone(), track);
+                    if self.screen.sharer.as_ref().is_some_and(|(p, _)| *p == peer) {
+                        self.watch_screen();
+                    }
+                }
+                return;
+            }
+            Msg::Peer(PeerEvent::Message {
+                peer,
+                generation,
+                text,
+            }) if text.contains("\"screen-") => {
+                if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
+                    return;
+                }
+                if let Some(m) = rtc_protocol::stream::ScreenMessage::from_json(&text) {
+                    self.screen_message(&peer, m);
+                }
+                return;
+            }
+            Msg::Ui(Request::StopStream) => {
+                let outs = self.streams.stop_view(&EngineLinks {
+                    peers: &self.peers,
+                    room: &self.room,
+                });
+                self.stream_out(outs);
+                return;
+            }
+            Msg::Stream(stream::Back::Want(stream_no, block)) => {
+                let outs = self.streams.want(stream_no, block);
+                self.stream_out(outs);
+                return;
+            }
+            Msg::Stream(stream::Back::Broadcast(m)) => {
+                self.stream_out(vec![stream::Out::BroadcastFile(m)]);
+                return;
+            }
+            Msg::Stream(stream::Back::Subtitles { name, vtt }) => {
+                Input::Command(Command::Watch(rtc_core::WatchCommand::ShareSubtitles {
+                    name,
+                    vtt,
+                }))
+            }
+            Msg::Peer(PeerEvent::Message {
+                peer,
+                generation,
+                text,
+            }) if text.contains("\"file-format") || text.contains("\"file-subtitle-") => {
+                if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
+                    return;
+                }
+                if let Some(m) = rtc_protocol::stream::FileMessage::from_json(&text) {
+                    let outs = self.streams.file_message(
+                        &peer,
+                        m,
+                        &EngineLinks {
+                            peers: &self.peers,
+                            room: &self.room,
+                        },
+                    );
+                    self.stream_out(outs);
+                }
+                return;
+            }
+            Msg::Peer(PeerEvent::Message {
+                peer,
+                generation,
+                text,
+            }) if text.contains("\"p2p-") && !text.contains("\"p2p-image-start\"") => {
+                if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
+                    return;
+                }
+                if let Some(m) = rtc_protocol::stream::StreamMessage::from_json(&text) {
+                    let outs = self.streams.message(
+                        &peer,
+                        m,
+                        &EngineLinks {
+                            peers: &self.peers,
+                            room: &self.room,
+                        },
+                    );
+                    self.stream_out(outs);
+                }
+                return;
+            }
             Msg::ImageSending(transfer_id, percent) => {
                 let _ = self.updates.send(Update::ImageProgress { transfer_id, percent });
                 return;
@@ -549,6 +888,11 @@ impl Engine {
                 data,
             }) => {
                 if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
+                    return;
+                }
+                if rtc_protocol::stream::parse_range(&data).is_some() {
+                    let outs = self.streams.binary(&peer, &data);
+                    self.stream_out(outs);
                     return;
                 }
                 match self.images.frame(&data) {
@@ -622,10 +966,30 @@ impl Engine {
                 }
                 return;
             }
-            Msg::Peer(e) => match self.peers.on_event(e) {
-                Some(input) => input,
-                None => return,
-            },
+            Msg::Peer(e) => {
+                let opened = match &e {
+                    PeerEvent::MainState {
+                        peer,
+                        generation,
+                        open: true,
+                    } if self.peers.is_current(peer, *generation) => Some(peer.clone()),
+                    _ => None,
+                };
+                let input = self.peers.on_event(e);
+                if let Some(p) = opened {
+                    // a newcomer learns what's in the file we share, and that we share our screen
+                    let outs = self.streams.peer_open(&p);
+                    self.stream_out(outs);
+                    if self.screen.capture.is_some() {
+                        let m = self.screen_status(true);
+                        self.screen_send(&p, &m);
+                    }
+                }
+                match input {
+                    Some(input) => input,
+                    None => return,
+                }
+            }
         };
         if let Input::Peer {
             from,
@@ -794,6 +1158,17 @@ impl Engine {
                 Effect::Signal { peer, signal } => self.peers.signal(peer, signal).await,
                 Effect::IceRestart(peer) => self.peers.offer(&peer, true).await,
                 Effect::ClosePeer(peer) => {
+                    let outs = self.streams.peer_gone(&peer);
+                    self.stream_out(outs);
+                    self.screen.tracks.remove(&peer);
+                    self.screen.wanted.remove(&peer);
+                    self.screen.hw.remove(&peer);
+                    self.screen.applied.remove(&peer);
+                    if self.screen.sharer.as_ref().is_some_and(|(p, _)| *p == peer) {
+                        self.screen.sharer = None;
+                        self.screen.watch = None;
+                        self.publish_screen();
+                    }
                     self.speaking.remove(&peer);
                     self.voice.remove_remote(peer.as_str());
                     self.peers.close(&peer);
@@ -812,6 +1187,23 @@ impl Engine {
                         // left: pictures half-way in or out are dropped
                         self.images.reset();
                         self.outgoing.clear();
+                        self.stop_capture();
+                        self.screen.sharer = None;
+                        self.screen.watch = None;
+                        self.screen.tracks.clear();
+                        self.publish_screen();
+                        let mut outs = self.streams.share(
+                            None,
+                            &EngineLinks {
+                                peers: &self.peers,
+                                room: &self.room,
+                            },
+                        );
+                        outs.extend(self.streams.stop_view(&EngineLinks {
+                            peers: &self.peers,
+                            room: &self.room,
+                        }));
+                        self.stream_out(outs);
                         for t in self.sending.drain(..) {
                             t.abort();
                         }
@@ -865,6 +1257,394 @@ impl Engine {
         });
     }
 
+    /// Does what the video-sharing module asks.
+    fn stream_out(&self, outs: Vec<stream::Out>) {
+        let me = self.room.identity().username.clone();
+        for o in outs {
+            match o {
+                stream::Out::To(peer, m) => {
+                    let Ok(text) = m.to_json(&me, now_ms()) else {
+                        continue;
+                    };
+                    if let Some(dc) = self.peers.bulk(&peer).or_else(|| self.peers.main(&peer)) {
+                        let _ = dc.send(text.as_bytes(), false);
+                    }
+                }
+                stream::Out::Broadcast(m) => {
+                    let Ok(text) = m.to_json(&me, now_ms()) else {
+                        continue;
+                    };
+                    for peer in self.room.members().keys() {
+                        if let Some(dc) = self.peers.main(peer) {
+                            let _ = dc.send(text.as_bytes(), false);
+                        }
+                    }
+                }
+                stream::Out::ToFile(peer, m) => {
+                    let Ok(text) = m.to_json(&me, now_ms()) else {
+                        continue;
+                    };
+                    if let Some(dc) = self.peers.main(&peer) {
+                        let _ = dc.send(text.as_bytes(), false);
+                    }
+                }
+                stream::Out::BroadcastFile(m) => {
+                    let Ok(text) = m.to_json(&me, now_ms()) else {
+                        continue;
+                    };
+                    for peer in self.room.members().keys() {
+                        if let Some(dc) = self.peers.main(peer) {
+                            let _ = dc.send(text.as_bytes(), false);
+                        }
+                    }
+                }
+                stream::Out::Format { name, description } => {
+                    let _ = self.updates.send(Update::FileFormat { name, description });
+                }
+                stream::Out::Problems(list) => {
+                    let _ = self.updates.send(Update::FileProblems(list));
+                }
+                stream::Out::Log(line) => {
+                    let _ = self.updates.send(Update::Log(line));
+                }
+                stream::Out::Notice(text) => {
+                    let _ = self.updates.send(Update::Notice(text));
+                }
+                stream::Out::Ready { name, size, reader } => {
+                    let _ = self.updates.send(Update::StreamReady { name, size, reader });
+                }
+                stream::Out::Ended(why) => {
+                    let _ = self.updates.send(Update::StreamEnded(why));
+                }
+                stream::Out::Progress(p) => {
+                    let _ = self.updates.send(Update::StreamProgress(p));
+                }
+            }
+        }
+    }
+
+    fn screen_status(&self, sharing: bool) -> rtc_protocol::stream::ScreenMessage {
+        let me = self.room.identity();
+        rtc_protocol::stream::ScreenMessage::Status {
+            is_sharing: sharing,
+            peer_id: Some(me.peer_id.as_str().to_owned()),
+            username: sharing.then(|| me.username.clone()),
+            has_audio: false,
+        }
+    }
+
+    fn screen_send(&self, peer: &PeerId, m: &rtc_protocol::stream::ScreenMessage) {
+        let Ok(text) = m.to_json(&self.room.identity().username, now_ms()) else {
+            return;
+        };
+        if let Some(dc) = self.peers.main(peer) {
+            let _ = dc.send(text.as_bytes(), false);
+        }
+    }
+
+    fn screen_broadcast(&self, m: &rtc_protocol::stream::ScreenMessage) {
+        for peer in self.room.members().keys() {
+            self.screen_send(peer, m);
+        }
+    }
+
+    /// Tells the UI who shares now.
+    fn publish_screen(&self) {
+        let u = if let Some(c) = &self.screen.capture {
+            Update::Screen {
+                sharer: Some(self.room.identity().username.clone()),
+                mine: true,
+                feed: Some(c.preview.clone()),
+            }
+        } else if let Some((_, name)) = &self.screen.sharer {
+            Update::Screen {
+                sharer: Some(name.clone()),
+                mine: false,
+                feed: self.screen.watch.as_ref().map(|(_, f)| f.clone()),
+            }
+        } else {
+            Update::Screen {
+                sharer: None,
+                mine: false,
+                feed: None,
+            }
+        };
+        let _ = self.updates.send(u);
+    }
+
+    /// Starts decoding the sharer's pictures (once their track is here).
+    fn watch_screen(&mut self) {
+        let Some((peer, _)) = &self.screen.sharer else {
+            return;
+        };
+        let Some(track) = self.screen.tracks.get(peer).cloned() else {
+            return;
+        };
+        let feed = ScreenFeed::default();
+        self.screen.watch = Some((screen::Watch::start(track, feed.clone()), feed));
+        self.publish_screen();
+    }
+
+    /// Stops sharing our screen; every viewer's sender goes back to the shared track.
+    fn stop_capture(&mut self) -> bool {
+        for (peer, _) in std::mem::take(&mut self.screen.hw) {
+            if let Some(sender) = self.peers.video_sender(&peer) {
+                let _ = sender.set_track(Some(self.screen.raw_track.clone()));
+                sender.set_video_encoder_backend(VideoEncoderBackend::Auto);
+            }
+        }
+        self.screen.applied.clear();
+        self.screen.sending = None;
+        self.screen.capture.take().is_some()
+    }
+
+    /// Decides how each viewer gets our screen (hardware or software, size, data) and tells the
+    /// capture thread. Called every tick while sharing, and when something changes.
+    #[allow(clippy::too_many_lines)]
+    fn route_screen(&mut self) {
+        use rtc_webrtc::libwebrtc::rtp_parameters::DegradationPreference;
+        let Some(c) = &self.screen.capture else { return };
+        let (options, size, hardware, encoder, failed) = {
+            let s = screen::lock_shared(&c.shared);
+            (s.options, s.size, s.hardware, s.encoder.clone(), s.failed.clone())
+        };
+        let shared = Arc::clone(&c.shared);
+        let mut routes = Vec::new();
+        let mut viewers = Vec::new();
+        let mut hw_count = 0;
+        let members: Vec<(PeerId, bool, String)> = self
+            .room
+            .members()
+            .iter()
+            .map(|(p, m)| {
+                (
+                    p.clone(),
+                    m.desktop,
+                    m.username.clone().unwrap_or_else(|| "Peer".to_owned()),
+                )
+            })
+            .collect();
+        for (peer, desktop, name) in members {
+            let Some(sender) = self.peers.video_sender(&peer) else {
+                continue;
+            };
+            let wanted = if desktop {
+                self.screen.wanted.get(&peer).copied().unwrap_or(0)
+            } else {
+                0
+            };
+            let max_h = screen::viewer_height(options.max_height, desktop, wanted);
+            let (w, h) = if size.0 > 0 {
+                screen::fit(size.0, size.1, 0, max_h)
+            } else {
+                (1920, 1080)
+            };
+            let mut bps = screen::bitrate_for(w, h, options.fps);
+            if !desktop {
+                bps = bps.min(screen::WEB_MAX_BPS);
+            }
+            let h264 = sender
+                .parameters()
+                .codecs
+                .first()
+                .is_some_and(|c| c.mime_type.eq_ignore_ascii_case("video/H264"));
+            let hw = h264
+                && hardware == Some(true)
+                && !failed.contains(peer.as_str())
+                && hw_count < screen::MAX_HW_VIEWERS;
+            if hw {
+                hw_count += 1;
+            }
+            let encoded = if hw {
+                if !self.screen.hw.contains_key(&peer) {
+                    let source = screen::new_encoded_source();
+                    let track = rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack::Video(
+                        self.peers
+                            .factory()
+                            .inner()
+                            .create_video_track(&format!("screen-{peer}"), source.clone()),
+                    );
+                    sender.set_video_encoder_backend(VideoEncoderBackend::PreEncoded);
+                    if let Err(e) = sender.set_track(Some(track)) {
+                        tracing::warn!("screen: hardware track to {peer}: {e:?}");
+                        continue;
+                    }
+                    self.screen.hw.insert(peer.clone(), source);
+                    self.screen.applied.remove(&peer);
+                }
+                self.screen.hw.get(&peer).cloned()
+            } else {
+                if self.screen.hw.remove(&peer).is_some() {
+                    let _ = sender.set_track(Some(self.screen.raw_track.clone()));
+                    sender.set_video_encoder_backend(VideoEncoderBackend::Auto);
+                    self.screen.applied.remove(&peer);
+                }
+                None
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let scale = if !hw && h > 0 && size.1 > h {
+                f64::from(size.1) / f64::from(h)
+            } else {
+                1.0
+            };
+            let want = (bps, options.fps, (scale * 1000.0).round() as u64);
+            if self.screen.applied.get(&peer) != Some(&want) {
+                let mut p = sender.parameters();
+                p.set_degradation_preference(DegradationPreference::MaintainResolution);
+                if let Some(e) = p.encodings.first_mut() {
+                    e.max_bitrate = Some(u64::from(bps));
+                    e.max_framerate = Some(f64::from(options.fps));
+                    e.scale_resolution_down_by = Some(scale);
+                }
+                match sender.set_parameters(p) {
+                    Ok(()) => {
+                        self.screen.applied.insert(peer.clone(), want);
+                    }
+                    Err(e) => tracing::debug!("screen: sender settings for {peer}: {e:?}"),
+                }
+            }
+            viewers.push(ScreenViewer {
+                name,
+                height: h,
+                hardware: hw,
+                web: !desktop,
+            });
+            routes.push(screen::Route {
+                peer: peer.as_str().to_owned(),
+                max_height: max_h,
+                max_bps: bps,
+                encoded,
+            });
+        }
+        screen::lock_shared(&shared).routes = routes;
+        let sending = ((hw_count > 0).then_some(encoder), viewers);
+        if self.screen.sending.as_ref() != Some(&sending) {
+            let _ = self.updates.send(Update::ScreenSending {
+                encoder: sending.0.clone(),
+                viewers: sending.1.clone(),
+            });
+            self.screen.sending = Some(sending);
+        }
+    }
+
+    /// Tells the desktop sharing what size we want (the web app sends what it sends).
+    fn ask_quality(&self) {
+        let Some((peer, _)) = &self.screen.sharer else {
+            return;
+        };
+        if !self.room.members().get(peer).is_some_and(|m| m.desktop) {
+            return;
+        }
+        let m = rtc_protocol::stream::ScreenMessage::Quality {
+            max_height: self.screen.my_quality,
+        };
+        self.screen_send(peer, &m);
+    }
+
+    fn share_screen(&mut self, what: Option<ScreenSource>) {
+        let was = self.stop_capture();
+        let Some(what) = what else {
+            if was {
+                let m = self.screen_status(false);
+                self.screen_broadcast(&m);
+                self.publish_screen();
+            }
+            return;
+        };
+        let source = self.screen.source.clone();
+        let options = self.screen.options;
+        let started = tokio::task::block_in_place(|| screen::Capture::start(&what, source, options));
+        match started {
+            Ok(c) => {
+                self.screen.capture = Some(c);
+                // one screen at a time: ours replaces theirs here
+                self.screen.watch = None;
+                self.screen.sharer = None;
+                let m = self.screen_status(true);
+                self.screen_broadcast(&m);
+                let _ = self
+                    .updates
+                    .send(Update::Log(format!("🖥️ You started sharing \"{}\"", what.title)));
+                self.route_screen();
+            }
+            Err(e) => {
+                tracing::warn!("screen: {e}");
+                let _ = self.updates.send(Update::ScreenError(e));
+            }
+        }
+        self.publish_screen();
+    }
+
+    fn screen_message(&mut self, from: &PeerId, m: rtc_protocol::stream::ScreenMessage) {
+        use rtc_protocol::stream::ScreenMessage as S;
+        let name_of = |p: &PeerId, given: Option<String>| {
+            given
+                .filter(|n| !n.is_empty())
+                .or_else(|| self.room.members().get(p).and_then(|m| m.username.clone()))
+                .unwrap_or_else(|| "Peer".to_owned())
+        };
+        match m {
+            S::Status {
+                is_sharing: true,
+                username,
+                ..
+            } => {
+                let name = name_of(from, username);
+                if self.stop_capture() {
+                    let _ = self
+                        .updates
+                        .send(Update::Notice(format!("{name} is sharing their screen now")));
+                }
+                self.screen.sharer = Some((from.clone(), name.clone()));
+                self.screen.watch = None;
+                if self.screen.my_quality > 0 {
+                    self.ask_quality();
+                }
+                let _ = self
+                    .updates
+                    .send(Update::Log(format!("🖥️ {name} is sharing their screen")));
+                self.watch_screen();
+                self.publish_screen();
+            }
+            S::Status {
+                is_sharing: false, ..
+            } => {
+                if self.screen.sharer.as_ref().is_some_and(|(p, _)| p == from) {
+                    self.screen.sharer = None;
+                    self.screen.watch = None;
+                    self.publish_screen();
+                }
+            }
+            S::Pointer {
+                x,
+                y,
+                username,
+                active,
+                peer_id,
+            } => {
+                let _ = self.updates.send(Update::ScreenPointer {
+                    peer: peer_id.unwrap_or_else(|| from.as_str().to_owned()),
+                    name: name_of(from, username),
+                    x,
+                    y,
+                    active,
+                });
+            }
+            S::Quality { max_height } => {
+                self.screen.wanted.insert(from.clone(), max_height);
+                self.screen.applied.remove(from);
+                self.route_screen();
+            }
+            S::Ping { x, y, username, .. } => {
+                let _ = self.updates.send(Update::ScreenPing {
+                    name: name_of(from, username),
+                    x,
+                    y,
+                });
+            }
+        }
+    }
+
     fn broadcast(&self, envelope: &Envelope) {
         for peer in self.room.members().keys() {
             self.peers.send(peer, envelope);
@@ -903,5 +1683,53 @@ impl Engine {
             watch: self.room.watch(),
         };
         let _ = self.updates.send(Update::Room(snapshot));
+    }
+}
+
+/// Screen sharing, both ways.
+struct ScreenState {
+    /// Our screen's video source (its track is in every connection).
+    source: rtc_webrtc::libwebrtc::video_source::native::NativeVideoSource,
+    /// Our screen being captured.
+    capture: Option<screen::Capture>,
+    /// Each peer's incoming video track.
+    tracks: HashMap<PeerId, rtc_webrtc::libwebrtc::video_track::RtcVideoTrack>,
+    /// Who shares (not us): their id and name.
+    sharer: Option<(PeerId, String)>,
+    /// Their pictures being decoded, and where they go.
+    watch: Option<(screen::Watch, ScreenFeed)>,
+    /// The shared track (software viewers' senders carry it).
+    raw_track: rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack,
+    /// How we share.
+    options: ScreenOptions,
+    /// The size each desktop viewer asked for (`screen-quality`).
+    wanted: HashMap<PeerId, u32>,
+    /// The size we asked for of someone else's screen.
+    my_quality: u32,
+    /// Viewers we encode for with the GPU: their pass-through source.
+    hw: HashMap<PeerId, rtc_webrtc::libwebrtc::video_source::native::NativeVideoSource>,
+    /// Sender settings set per viewer (data, frames, scale ×1000), so they're set once.
+    applied: HashMap<PeerId, (u32, u32, u64)>,
+    /// What the UI was last told about our viewers.
+    sending: Option<(Option<String>, Vec<ScreenViewer>)>,
+}
+
+/// What the video-sharing module sees of the engine.
+struct EngineLinks<'a> {
+    peers: &'a Peers,
+    room: &'a Room,
+}
+
+impl stream::Links for EngineLinks<'_> {
+    fn bulk(&self, peer: &PeerId) -> Option<rtc_webrtc::libwebrtc::data_channel::DataChannel> {
+        self.peers.bulk(peer)
+    }
+
+    fn name(&self, peer: &PeerId) -> Option<String> {
+        self.room.members().get(peer)?.username.clone()
+    }
+
+    fn me(&self) -> String {
+        self.room.identity().username.clone()
     }
 }

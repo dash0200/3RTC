@@ -77,6 +77,8 @@ pub(crate) enum Dialog {
     Network,
     /// Share one app's sound.
     AppSound,
+    /// Pick a screen or window to share.
+    Screen,
 }
 
 /// Which key is being recorded in the settings.
@@ -172,6 +174,8 @@ pub(crate) struct RoomView {
     pub(crate) watch: crate::watch::WatchUi,
     /// The in-game overlay and a shared app's sound.
     pub(crate) extras: crate::extras::Extras,
+    /// Screen sharing.
+    pub(crate) screen: crate::screen::ScreenUi,
 }
 
 /// Milliseconds since 1970.
@@ -354,9 +358,11 @@ impl RoomView {
             update_task: None,
             watch,
             extras: crate::extras::Extras::default(),
+            screen: crate::screen::ScreenUi::default(),
         };
         this.start_updates(cx);
         this.start_watch(player_rx, cx);
+        this.start_video_events(window, cx);
         this.log("Welcome to 3RTC! Create or join a room to chat and watch YouTube together.".to_owned());
         this.start_engine(cx);
         if let Some(room) = open_room {
@@ -403,6 +409,11 @@ impl RoomView {
         }
         handle.set_isolation(self.settings.voice_isolation && !self.settings.low_power);
         handle.set_low_power(self.settings.low_power);
+        handle.screen_options(rtc_engine::ScreenOptions {
+            max_height: self.settings.screen_max_height,
+            fps: if self.settings.screen_fps == 30 { 30 } else { 60 },
+        });
+        handle.screen_quality(self.settings.screen_quality);
         handle.list_devices();
         self.volumes_sent.clear();
         self.engine = Some(handle);
@@ -521,6 +532,29 @@ impl RoomView {
             }
             Update::Devices(d) => self.devices = d,
             Update::Player(c) => self.on_player_cmd(c, cx),
+            Update::StreamReady { name, size, reader } => self.stream_ready(name, size, reader, cx),
+            Update::StreamEnded(why) => self.stream_ended(why, cx),
+            Update::StreamProgress(p) => self.stream_progress(p, cx),
+            Update::FileFormat { name, description } => {
+                self.watch.local.remote_format = Some((name, description));
+            }
+            Update::FileProblems(list) => self.watch.local.problems = list,
+            Update::Screen { sharer, mine, feed } => self.on_screen(sharer, mine, feed, cx),
+            Update::ScreenPointer {
+                peer,
+                name,
+                x,
+                y,
+                active,
+            } => self.on_screen_pointer(peer, name, x, y, active),
+            Update::ScreenPing { name, x, y } => self.on_screen_ping(name, x, y),
+            Update::ScreenSending { encoder, viewers } => {
+                self.screen.sending = Some((encoder, viewers));
+            }
+            Update::ScreenError(e) => {
+                self.screen.error = Some(e.clone());
+                self.show_toast(format!("Couldn't share the screen: {e}"), cx);
+            }
             Update::Pop => self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice()),
         }
         cx.notify();
@@ -1408,6 +1442,19 @@ impl RoomView {
                 .background_executor()
                 .spawn(async { crate::update::check() })
                 .await;
+            // the video player, if this install doesn't have it yet
+            if let Ok(m) = &found {
+                let m = m.clone();
+                let got = cx
+                    .background_executor()
+                    .spawn(async move { crate::update::ensure_player(&m) })
+                    .await;
+                match got {
+                    Ok(true) => tracing::info!("update: video player installed"),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("update: video player: {e}"),
+                }
+            }
             let manifest = match found {
                 Ok(m) if crate::update::newer(&m.build, BUILD) => m,
                 Ok(_) => {

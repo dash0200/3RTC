@@ -144,3 +144,97 @@ impl AppSound {
         Err("sharing an app's sound needs Windows".to_owned())
     }
 }
+
+/// A window to put a player in (none here).
+#[derive(Debug, Clone, Copy)]
+pub struct ParentWindow;
+
+impl ParentWindow {
+    /// No windows here: always `None`.
+    #[must_use]
+    pub const fn of(_window: &impl raw_window_handle::HasWindowHandle) -> Option<Self> {
+        None
+    }
+}
+
+/// The local video player (it needs Windows).
+#[derive(Debug)]
+pub struct VideoPlayer;
+
+#[allow(clippy::unused_self, missing_docs)]
+impl VideoPlayer {
+    /// Not available here.
+    ///
+    /// # Errors
+    /// Always: the player needs Windows.
+    pub fn open(
+        _parent: ParentWindow,
+        _rect: crate::Rect,
+        _visible: bool,
+        _source: crate::VideoSource,
+        _start: f64,
+        _playing: bool,
+        _on_event: impl Fn(crate::VideoEvent) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        Err("the video player needs Windows".to_owned())
+    }
+    pub const fn set_rect(&self, _rect: crate::Rect) {}
+    pub const fn set_visible(&self, _visible: bool) {}
+    pub const fn play(&self, _at: Option<f64>) {}
+    pub const fn pause(&self, _at: Option<f64>) {}
+    pub const fn seek(&self, _secs: f64) {}
+    pub const fn toggle_pause(&self) {}
+    pub const fn set_volume(&self, _volume: f64) {}
+    pub const fn set_mute(&self, _muted: bool) {}
+    pub const fn set_subtitle(&self, _id: Option<i64>) {}
+    pub const fn set_audio(&self, _id: i64) {}
+    pub fn add_subtitle(&self, _path: &std::path::Path) {}
+    pub const fn set_subtitle_delay(&self, _secs: f64) {}
+    pub const fn set_subtitle_scale(&self, _scale: f64) {}
+    pub const fn set_speed(&self, _speed: f64) {}
+}
+
+/// The GPU's H.264 encoder: Windows only (Media Foundation); elsewhere it never opens.
+#[derive(Debug)]
+pub struct H264Encoder;
+
+impl H264Encoder {
+    /// Never opens off Windows.
+    ///
+    /// # Errors
+    /// Always.
+    pub fn new(_width: u32, _height: u32, _fps: u32, _bitrate: u32) -> Result<Self, String> {
+        Err("hardware encoding is Windows only".to_owned())
+    }
+
+    /// Which encoder.
+    #[must_use]
+    pub const fn name(&self) -> &str {
+        ""
+    }
+
+    /// Frame size.
+    #[must_use]
+    pub const fn size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+
+    /// A new target rate.
+    pub const fn set_bitrate(&mut self, _bps: u32) {}
+
+    /// Hands one NV12 frame to the encoder.
+    ///
+    /// # Errors
+    /// Always.
+    pub fn submit(&mut self, _nv12: &[u8], _timestamp_us: i64, _keyframe: bool) -> Result<bool, String> {
+        Err("hardware encoding is Windows only".to_owned())
+    }
+
+    /// What's finished.
+    ///
+    /// # Errors
+    /// Always.
+    pub fn poll(&mut self) -> Result<Vec<crate::EncodedUnit>, String> {
+        Err("hardware encoding is Windows only".to_owned())
+    }
+}

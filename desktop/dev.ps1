@@ -91,6 +91,13 @@ try {
         Write-Host "Web app at $url" -ForegroundColor Green
     }
 
+    # the local video player (libmpv-2.dll) next to the exe
+    $outDir = Join-Path $desktop $(if ($Release) { 'target\release' } else { 'target\debug' })
+    if (-not (Test-Path (Join-Path $outDir 'libmpv-2.dll'))) {
+        try { & (Join-Path $desktop 'packaging\get-mpv.ps1') }
+        catch { Write-Host "No video player yet ($_). Video files won't play; the rest works." -ForegroundColor Yellow }
+    }
+
     if (-not $env:RUST_LOG) { $env:RUST_LOG = 'warn,rtc=debug' }
     $cargoArgs = @('run', '-p', 'rtc-app')
     if ($Release) { $cargoArgs += '--release' }
