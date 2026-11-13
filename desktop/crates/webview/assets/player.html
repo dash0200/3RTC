@@ -7,7 +7,8 @@
      The sync rules are the web app's (features/media/LinkPlayer.tsx, YouTubeSyncPlayer.tsx):
      the page starts the player once it's ready, from what the room is doing (?t=&play=); the
      events our own commands cause are expected for a moment and dropped, so only what a person
-     did with the player's controls goes to the app ({ev:'user', do, t}). -->
+     did with the player's controls goes to the app ({ev:'user', do, t}). With host control on
+     for this person ({do:'lock', on:true}), a see-through cover keeps the controls out of reach. -->
 <html>
 <head>
 <meta charset="utf-8">
@@ -15,10 +16,14 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #p, #p iframe, #p video { width: 100%; height: 100%; border: 0; display: block; background: #000; }
+  /* host control: a guest can watch but not use the player's own controls */
+  #shield { display: none; position: fixed; inset: 0; z-index: 10; cursor: not-allowed; }
+  body.locked #shield { display: block; }
 </style>
 </head>
 <body>
 <div id="p"></div>
+<div id="shield" title="The host controls playback"></div>
 <script>
 (function () {
   const send = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (e) {} };
@@ -103,6 +108,13 @@
 
   window.rtc = {
     cmd(c) {
+      // host control on for us: the player's own controls can't be used (any time, ready or not)
+      if (c.do === 'lock') {
+        document.body.classList.toggle('locked', !!c.on);
+        const v = document.querySelector('#p video');
+        if (v) v.controls = !c.on;
+        return;
+      }
       if (!ready) { pending = c; return; }   // the newest wins
       apply(c);
     }
@@ -212,7 +224,7 @@
   // ---- a direct video file or an HLS stream: the browser's own player ----
   function video(hls) {
     const v = document.createElement('video');
-    v.controls = true; v.playsInline = true; v.preload = 'auto';
+    v.controls = !document.body.classList.contains('locked'); v.playsInline = true; v.preload = 'auto';
     document.getElementById('p').appendChild(v);
     api = {
       play: () => v.play(), pause: () => v.pause(), seek: (s) => { v.currentTime = s; },

@@ -8,6 +8,8 @@
 //!   own notifications and holds them back during Focus Assist / Do not disturb).
 //! - **Registry** entries under the user's own key (no admin rights): start with Windows, and
 //!   `3rtc://` links.
+//! - **Remote control** of a shared screen: the viewer's input played back with `SendInput`,
+//!   a banner, and the sharer taking control back (a hotkey, their own mouse).
 //! - Small things: hiding and showing the window, its icon, a sound, whether the app in front
 //!   runs as administrator (then Windows won't let us see its keys).
 //!
@@ -18,6 +20,10 @@
 pub mod art;
 pub mod keys;
 
+#[cfg(windows)]
+mod control;
+#[cfg(windows)]
+mod gpu;
 #[cfg(windows)]
 mod hwenc;
 
@@ -36,6 +42,10 @@ mod video;
 mod win;
 
 #[cfg(windows)]
+pub use control::RemoteControl;
+#[cfg(windows)]
+pub use gpu::{gpu_choice, gpus, set_gpu_choice};
+#[cfg(windows)]
 pub use hwenc::H264Encoder;
 #[cfg(windows)]
 pub use loopback::{AppSound, audio_apps};
@@ -43,6 +53,8 @@ pub use loopback::{AppSound, audio_apps};
 pub use mpv::VideoPlayer;
 #[cfg(not(windows))]
 pub use other::Overlay;
+#[cfg(not(windows))]
+pub use other::RemoteControl;
 #[cfg(not(windows))]
 pub use other::{AppSound, audio_apps};
 #[cfg(not(windows))]
@@ -52,6 +64,8 @@ pub use other::{
     KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
     set_window_icon, show_window,
 };
+#[cfg(not(windows))]
+pub use other::{gpu_choice, gpus, set_gpu_choice};
 #[cfg(windows)]
 pub use overlay::Overlay;
 #[cfg(windows)]
@@ -62,6 +76,99 @@ pub use win::{
     KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
     set_window_icon, show_window,
 };
+
+/// The graphics card the app asks Windows for (it applies from the next start).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GpuChoice {
+    /// Windows decides.
+    #[default]
+    Auto,
+    /// The card that uses the least power (usually the one in the processor).
+    PowerSaving,
+    /// The fastest card (usually the separate one).
+    HighPerformance,
+}
+
+/// The cards Windows would pick for each choice (their names; `None`: couldn't tell).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Gpus {
+    /// For "Power saving".
+    pub power_saving: Option<String>,
+    /// For "High performance".
+    pub high_performance: Option<String>,
+}
+
+/// What a viewer given remote control acts on: the shared screen or window, by the screen
+/// capturer's id for it (`u64::MAX`: the whole desktop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlArea {
+    /// A whole screen.
+    Screen(u64),
+    /// One window (its handle).
+    Window(u64),
+}
+
+/// A mouse button, for remote control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseKey {
+    /// The left (main) button.
+    Left,
+    /// The wheel's button.
+    Middle,
+    /// The right button.
+    Right,
+}
+
+/// One of the controlling viewer's events, to play back (`x`, `y` 0–1 over the area).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Injection {
+    /// The pointer moves there.
+    Move {
+        /// Across.
+        x: f64,
+        /// Down.
+        y: f64,
+    },
+    /// A button goes down or up there.
+    Button {
+        /// Which.
+        button: MouseKey,
+        /// Pressed (else let go).
+        down: bool,
+        /// Across.
+        x: f64,
+        /// Down.
+        y: f64,
+    },
+    /// The wheel turns there (1/120ths of a notch; up and right positive).
+    Wheel {
+        /// Across.
+        x: f64,
+        /// Down.
+        y: f64,
+        /// Sideways.
+        dx: i32,
+        /// Up and down.
+        dy: i32,
+    },
+    /// A key (Windows virtual-key code) goes down or up.
+    Key {
+        /// The key.
+        vk: u16,
+        /// Pressed (else let go).
+        down: bool,
+    },
+}
+
+/// Why the sharer took control back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TakeBack {
+    /// Ctrl+Alt+Shift+X.
+    Hotkey,
+    /// They used their own mouse.
+    Mouse,
+}
 
 /// Whether the real thing is here (Windows) or the stand-ins.
 pub const SUPPORTED: bool = cfg!(windows);

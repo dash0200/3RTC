@@ -215,6 +215,36 @@ try:
         click(1252, 104); time.sleep(0.5); click(1290, 178); time.sleep(0.5); click(1252, 104)
         click(843, 860)  # the dock button again: stop
         check('...and the dock button stops it', wait(lambda: pg.locator('.screen-share-stage video').count() == 0, 10))
+        # games (M6): the dock's Games menu, the open game, the browser joins and both play
+        click(897, 860); time.sleep(0.8); shot('games-menu')
+        click(897, 790); time.sleep(1.5); shot('game-open')
+        check('the Games menu opens Sample counter: the browser is invited',
+              wait(lambda: pg.locator('.activity-bubble.is-invite').count() == 1, 10))
+        harness.join_activity(pg)
+        check('...the browser joins', wait(lambda: pg.locator('[data-testid=sample-count]').count() == 1, 10))
+        click(710, 508); click(710, 508)  # +1 twice in the window
+        check("...the window's +1 reaches the browser",
+              wait(lambda: pg.locator('[data-testid=sample-count]').inner_text().strip() == '2', 8),
+              pg.locator('[data-testid=sample-count]').inner_text() if pg.locator('[data-testid=sample-count]').count() else None)
+        pg.get_by_role('button', name='+1').click(); time.sleep(1); shot('game-playing')
+        check("...and the browser's reaches the window (3)", wait(lambda: pg.locator('[data-testid=sample-count]').inner_text().strip() == '3', 6))
+        click(1264, 89); time.sleep(0.6); shot('game-minimised')  # Minimise (▶ Video): the bubble
+        click(1401, 790); time.sleep(0.6)  # the bubble opens it again
+        click(1403, 89); time.sleep(0.4); shot('game-end-confirm'); click(1395, 89)  # End, End for all?
+        check('End (twice) closes it for everyone', wait(lambda: pg.locator('.stage-activity').count() == 0, 8))
+        # chess against the computer, in the window (the window decides: it plays the computer)
+        click(897, 860); time.sleep(0.8); click(897, 614); time.sleep(1.5); shot('chess-lobby')
+        click(1083, 477); time.sleep(0.6)   # White: Play
+        click(1160, 425); time.sleep(0.6)   # Black: + Computer
+        click(1076, 535); time.sleep(1.0)   # Start game
+        click(622, 665); time.sleep(0.5); shot('chess-picked'); click(622, 499)  # e2, then e4
+        harness.join_activity(pg)  # the browser watches
+        moves_now = lambda: pg.locator('[data-testid=chess-moves]').inner_text() if pg.locator('[data-testid=chess-moves]').count() else ''
+        check("chess in the window: the move e4, and the computer (played by the window, which decides) answers",
+              wait(lambda: 'e4' in moves_now() and len(moves_now().split()) >= 3, 15), moves_now())
+        time.sleep(1); shot('chess-playing')
+        click(1403, 89); time.sleep(0.4); click(1395, 89)  # End, End for all?
+        check('...End closes it', wait(lambda: pg.locator('.stage-activity').count() == 0, 8))
         click(1366, 31); time.sleep(0.6)  # the panel back
 
         # a second launch with a link hands it to this app, which asks before joining

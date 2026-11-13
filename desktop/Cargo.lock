@@ -6598,6 +6598,7 @@ dependencies = [
  "rand 0.9.5",
  "rtc-core",
  "rtc-engine",
+ "rtc-games",
  "rtc-platform-win",
  "rtc-protocol",
  "rtc-ui",
@@ -6627,6 +6628,7 @@ name = "rtc-core"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "rtc-games",
  "rtc-protocol",
  "serde_json",
  "unicode-segmentation",
@@ -6640,6 +6642,7 @@ dependencies = [
  "futures-util",
  "rand 0.9.5",
  "rtc-core",
+ "rtc-games",
  "rtc-platform-win",
  "rtc-protocol",
  "rtc-signaling",
@@ -6649,6 +6652,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "rtc-games"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

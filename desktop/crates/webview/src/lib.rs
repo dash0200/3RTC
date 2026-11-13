@@ -372,6 +372,14 @@ impl Player {
         self.0.command(&with_time("pause", at));
     }
 
+    /// Host control on for this person: the player's own controls can't be used (a see-through
+    /// cover over the page), or can again.
+    pub fn set_locked(&self, locked: bool) {
+        self.0.command(&format!(
+            "window.rtc && window.rtc.cmd({{do:'lock',on:{locked}}})"
+        ));
+    }
+
     /// Goes to `secs`.
     pub fn seek(&self, secs: f64) {
         if secs.is_finite() {

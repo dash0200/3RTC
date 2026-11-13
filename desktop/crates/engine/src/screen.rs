@@ -72,6 +72,8 @@ pub struct ScreenOptions {
     pub max_height: u32,
     /// 30 or 60.
     pub fps: u32,
+    /// Send the computer's sound with it (to desktop viewers).
+    pub sound: bool,
 }
 
 impl Default for ScreenOptions {
@@ -79,6 +81,7 @@ impl Default for ScreenOptions {
         Self {
             max_height: 0,
             fps: 60,
+            sound: true,
         }
     }
 }

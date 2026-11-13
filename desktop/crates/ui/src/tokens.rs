@@ -84,6 +84,14 @@ colors! {
     net_fair = 0xf5_9e0b;
     /// Connection grade: poor (`#ef4444`).
     net_poor = 0xef_4444;
+    /// Chess: light squares (`--chess-light`).
+    chess_light = 0xee_eed2;
+    /// Chess: dark squares (`--chess-dark`).
+    chess_dark = 0x7a_9f57;
+    /// Chess: last move and selection marks (`rgba(246, 214, 72, …)`).
+    chess_mark = 0xf6_d648;
+    /// Chess: move hints (`rgba(20, 30, 20, …)`).
+    chess_hint = 0x14_1e14;
 }
 
 /// A colour given as `0xRRGGBB` (the soundboard clips' own colours, from the web app's list).

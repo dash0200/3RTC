@@ -127,6 +127,14 @@ pub(crate) struct WatchUi {
     pub(crate) unavailable: HashSet<String>,
     pub(crate) queue_link: Entity<InputState>,
     pub(crate) region_open: bool,
+    /// Host control as last told to the web player (`None`: not yet, e.g. a new player).
+    lock_applied: Cell<Option<bool>>,
+}
+
+/// Host control is on and we aren't the host: playback is the host's (`useHostControls`), so
+/// the controls that change it for everyone are hidden.
+pub(crate) fn locked_for_me(room: &Snapshot) -> bool {
+    room.playback_lock && room.host.as_ref() != Some(&room.me)
 }
 
 impl WatchUi {
@@ -143,6 +151,7 @@ impl WatchUi {
             stage: Rc::new(Cell::new(None)),
             scale: Rc::new(Cell::new(1.0)),
             shown: Rc::new(Cell::new(true)),
+            lock_applied: Cell::new(None),
             local: crate::local_video::LocalUi::new(),
             events,
             link_error: None,
@@ -455,7 +464,13 @@ impl RoomView {
     fn on_player_event(&mut self, e: rtc_webview::Event, cx: &mut Context<'_, Self>) {
         use rtc_webview::Event as E;
         let report = match e {
-            E::Ready { title } => (!title.is_empty()).then_some(PlayerReport::Title(title)),
+            E::Ready { title } => {
+                // the page can take commands now: host controls again (a lock sent while it was
+                // still loading, as when joining a room with them on, went nowhere)
+                self.watch.lock_applied.set(None);
+                cx.notify();
+                (!title.is_empty()).then_some(PlayerReport::Title(title))
+            }
             E::State {
                 playing,
                 buffering,
@@ -541,6 +556,8 @@ impl RoomView {
         if self.watch.resolving {
             return;
         }
+        // host control: a guest's link goes in the queue for the host to play
+        let to_queue = to_queue || self.room.as_ref().is_some_and(locked_for_me);
         let input = if to_queue {
             self.watch.queue_link.clone()
         } else {
@@ -610,6 +627,10 @@ impl RoomView {
     }
 
     fn play_pick(&mut self, v: &Video, cx: &mut Context<'_, Self>) {
+        if self.room.as_ref().is_some_and(locked_for_me) {
+            self.queue_pick(v);
+            return;
+        }
         self.watch.link_error = None;
         self.watch_cmd(WatchCommand::PlayYouTube {
             id: v.id.clone(),
@@ -635,6 +656,7 @@ impl RoomView {
             && !self.emoji_open
             && !self.watch.region_open
             && !self.screen.showing()
+            && !self.activity_covers()
     }
 
     /// A shared screen covers the stage: the player's window hides (it would draw over it).
@@ -668,6 +690,13 @@ pub(crate) fn player_area(
         return crate::local_video::offer(view, &name, size, from.as_deref(), cx);
     }
     let visible = view.player_visible();
+    let locked = view.room.as_ref().is_some_and(locked_for_me);
+    if view.watch.lock_applied.get() != Some(locked)
+        && let Some(Live::Web(p)) = view.watch.player.borrow().as_ref()
+    {
+        p.set_locked(locked);
+        view.watch.lock_applied.set(Some(locked));
+    }
     let ui = &mut view.watch;
     // open a waiting player once the stage has a size (outside drawing)
     if ui.pending.is_some() && !ui.opening && ui.stage.get().is_some() {
@@ -720,6 +749,7 @@ pub(crate) fn player_area(
                 Ok(p) => {
                     p.set_visible(v.player_visible());
                     *v.watch.player.borrow_mut() = Some(Live::Web(p));
+                    v.watch.lock_applied.set(None);
                 }
                 Err(e) => {
                     v.watch.error = Some(
@@ -1001,7 +1031,7 @@ pub(crate) fn browser(view: &mut RoomView, room: &Snapshot, cx: &mut Context<'_,
                         .font_weight(FontWeight::BOLD)
                         .child("Quick picks"),
                 )
-                .when(queue_count > 0, |el| {
+                .when(queue_count > 0 && !locked_for_me(room), |el| {
                     el.child(
                         Button::new("qp-play-queue", format!("Play queue ({queue_count})"))
                             .variant(Variant::Secondary)
@@ -1169,6 +1199,10 @@ pub(crate) fn header_middle(room: &Snapshot) -> AnyElement {
 /// Skip (n/m) and Exit, while something plays.
 pub(crate) fn header_actions(room: &Snapshot, cx: &mut Context<'_, RoomView>) -> Option<AnyElement> {
     room.watch.showing.as_ref()?;
+    // host control: what everyone watches is the host's to change
+    if locked_for_me(room) {
+        return None;
+    }
     let voted = room.watch.skip_votes.contains(&room.username);
     let others = !room.members.is_empty();
     Some(
@@ -1246,6 +1280,8 @@ pub(crate) fn queue_tab(
     let w = &room.watch;
     let voted = w.skip_votes.contains(&room.username);
     let needed = w.votes_needed;
+    // host control: guests can add to the queue, the host plays, skips, orders and clears it
+    let locked = locked_for_me(room);
     let now = w.showing.clone().map(|s| {
         let thumb = match &s {
             Showing::YouTube { id, .. } => view.thumb(id, cx),
@@ -1323,28 +1359,30 @@ pub(crate) fn queue_tab(
                                 .child(div().font_weight(FontWeight::BOLD).child(item.added_by.clone())),
                         ),
                 )
-                .child(small_btn(("q-play", n), "▶", true).on_click(
-                    cx.listener(move |v, _, _, _| v.watch_cmd(WatchCommand::QueuePlay(play.clone()))),
-                ))
-                .child(small_btn(("q-up", n), "▲", n > 0).when(n > 0, |el| {
-                    el.on_click(cx.listener(move |v, _, _, _| {
-                        v.watch_cmd(WatchCommand::QueueMove {
-                            id: up.clone(),
-                            to: n - 1,
-                        });
+                .when(!locked, |el| {
+                    el.child(small_btn(("q-play", n), "▶", true).on_click(
+                        cx.listener(move |v, _, _, _| v.watch_cmd(WatchCommand::QueuePlay(play.clone()))),
+                    ))
+                    .child(small_btn(("q-up", n), "▲", n > 0).when(n > 0, |el| {
+                        el.on_click(cx.listener(move |v, _, _, _| {
+                            v.watch_cmd(WatchCommand::QueueMove {
+                                id: up.clone(),
+                                to: n - 1,
+                            });
+                        }))
                     }))
-                }))
-                .child(small_btn(("q-down", n), "▼", !last).when(!last, |el| {
-                    el.on_click(cx.listener(move |v, _, _, _| {
-                        v.watch_cmd(WatchCommand::QueueMove {
-                            id: down.clone(),
-                            to: n + 1,
-                        });
+                    .child(small_btn(("q-down", n), "▼", !last).when(!last, |el| {
+                        el.on_click(cx.listener(move |v, _, _, _| {
+                            v.watch_cmd(WatchCommand::QueueMove {
+                                id: down.clone(),
+                                to: n + 1,
+                            });
+                        }))
                     }))
-                }))
-                .child(small_btn(("q-rm", n), "✕", true).on_click(
-                    cx.listener(move |v, _, _, _| v.watch_cmd(WatchCommand::QueueRemove(rm.clone()))),
-                ))
+                    .child(small_btn(("q-rm", n), "✕", true).on_click(
+                        cx.listener(move |v, _, _, _| v.watch_cmd(WatchCommand::QueueRemove(rm.clone()))),
+                    ))
+                })
                 .into_any_element()
         })
         .collect();
@@ -1381,7 +1419,7 @@ pub(crate) fn queue_tab(
                                 .text_color(tokens::live_text())
                                 .child("NOW PLAYING"),
                         )
-                        .when(now.is_some(), |el| {
+                        .when(now.is_some() && !locked, |el| {
                             el.child(
                                 div()
                                     .id("q-skip")
@@ -1440,7 +1478,7 @@ pub(crate) fn queue_tab(
                                         .text_color(tokens::text_3())
                                         .child(div().size(px(6.)).rounded_full().bg(tokens::live()))
                                         .child("Synced P2P")
-                                        .when_some(next_title.clone(), |el, t| {
+                                        .when_some(next_title.clone().filter(|_| !locked), |el, t| {
                                             el.child(
                                                 div()
                                                     .id("q-next")
@@ -1522,7 +1560,7 @@ pub(crate) fn queue_tab(
                         .child(w.queue.len().to_string()),
                 )
                 .child(div().flex_1())
-                .when(!w.queue.is_empty(), |el| {
+                .when(!w.queue.is_empty() && !locked, |el| {
                     el.child(
                         div()
                             .id("q-clear")

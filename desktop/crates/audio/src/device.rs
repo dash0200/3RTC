@@ -115,7 +115,8 @@ pub(crate) struct Capture {
     pub(crate) name: String,
 }
 
-/// An open render: the stream (keep it alive) and the queue of 48 kHz mono samples it plays.
+/// An open render: the stream (keep it alive) and the queue of 48 kHz stereo samples it plays
+/// (left and right interleaved).
 pub(crate) struct Render {
     _stream: cpal::Stream,
     pub(crate) samples: rtrb::Producer<f32>,
@@ -148,6 +149,8 @@ fn on_stream_error(which: &str, e: &cpal::Error, state: &StreamState) {
 
 /// Samples the capture and render queues hold (200 ms).
 pub(crate) const RING: usize = FRAME * 20;
+/// The speakers' queue: the same time, in stereo (left and right interleaved).
+pub(crate) const RENDER_RING: usize = RING * 2;
 /// The most frames one callback is converted in at a time (no allocation in the callback).
 const PIECE: usize = 1024;
 
@@ -236,7 +239,7 @@ where
 pub(crate) fn open_render(id: Option<&str>) -> Result<Render, String> {
     let device = pick(id, false).ok_or("no speakers")?;
     let supported = device.default_output_config().map_err(|e| e.to_string())?;
-    let (tx, rx) = rtrb::RingBuffer::new(RING);
+    let (tx, rx) = rtrb::RingBuffer::new(RENDER_RING);
     let state = Arc::new(StreamState::default());
     // Windows converts any rate and format for us; ask for ours (no resampling here)
     let ours = StreamConfig {
@@ -314,12 +317,19 @@ where
         return Err((rx, e.to_string()));
     }
     drop(probe);
-    let mut resampler = (rate != RATE).then(|| Resampler::new(RATE, rate));
-    let mut fifo = Fifo {
-        buf: Vec::with_capacity(FRAME * 4),
-        read: 0,
-    };
-    let mut frame = [0.0f32; FRAME];
+    // one resampler a side
+    let mut resampler = (rate != RATE).then(|| (Resampler::new(RATE, rate), Resampler::new(RATE, rate)));
+    let mut fifo = (
+        Fifo {
+            buf: Vec::with_capacity(FRAME * 4),
+            read: 0,
+        },
+        Fifo {
+            buf: Vec::with_capacity(FRAME * 4),
+            read: 0,
+        },
+    );
+    let (mut left, mut right) = ([0.0f32; FRAME], [0.0f32; FRAME]);
     device
         .build_output_stream::<T, _, _>(
             *config,
@@ -331,27 +341,38 @@ where
                     Ordering::Relaxed,
                 );
                 for out in data.chunks_mut(channels) {
-                    let s = if let Some(r) = &mut resampler {
-                        if fifo.len() == 0 {
+                    let (l, r) = if let Some((rl, rr)) = &mut resampler {
+                        if fifo.0.len() == 0 || fifo.1.len() == 0 {
                             // next 10 ms from the pipeline (silence if it's behind), resampled
-                            for f in &mut frame {
-                                *f = rx.pop().unwrap_or(0.0);
+                            for (a, b) in left.iter_mut().zip(right.iter_mut()) {
+                                *a = rx.pop().unwrap_or(0.0);
+                                *b = rx.pop().unwrap_or(0.0);
                             }
-                            fifo.buf.clear();
-                            fifo.read = 0;
-                            r.process(&frame, |s| {
-                                if fifo.buf.len() < fifo.buf.capacity() {
-                                    fifo.buf.push(s);
-                                }
-                            });
+                            for (f, side, rs) in
+                                [(&mut fifo.0, &left, &mut *rl), (&mut fifo.1, &right, &mut *rr)]
+                            {
+                                f.buf.clear();
+                                f.read = 0;
+                                rs.process(side, |s| {
+                                    if f.buf.len() < f.buf.capacity() {
+                                        f.buf.push(s);
+                                    }
+                                });
+                            }
                         }
-                        fifo.pop()
+                        (fifo.0.pop(), fifo.1.pop())
                     } else {
-                        rx.pop().unwrap_or(0.0)
+                        (rx.pop().unwrap_or(0.0), rx.pop().unwrap_or(0.0))
                     };
-                    let v = T::from_sample(s);
-                    for c in out {
-                        *c = v;
+                    // stereo speakers get left and right; one speaker (or the rest) both
+                    let both = T::from_sample((l + r) * 0.5);
+                    for (c, slot) in out.iter_mut().enumerate() {
+                        *slot = match (channels, c) {
+                            (1, _) => both,
+                            (_, 0) => T::from_sample(l),
+                            (_, 1) => T::from_sample(r),
+                            _ => both,
+                        };
                     }
                 }
             },

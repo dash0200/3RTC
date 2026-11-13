@@ -6,15 +6,20 @@
 // Release builds have no console window; dev builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
 mod chat;
+mod chess;
+mod control;
 mod desktop;
 mod dialogs;
 mod emoji;
 mod extras;
 mod fun;
 mod home;
+mod lastcard;
 mod links;
 mod local_video;
+mod ludo;
 mod net;
 mod quick_picks;
 mod room;
@@ -22,9 +27,11 @@ mod screen;
 mod settings;
 mod single;
 mod sounds;
+mod tycoon;
 mod update;
 mod view;
 mod watch;
+mod whiteboard;
 
 use anyhow::Context as _;
 use gpui_kit::{AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};

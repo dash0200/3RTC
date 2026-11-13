@@ -1,4 +1,5 @@
-//! A headless client on the engine: `cargo run -p rtc-engine --example chat -- <ws url> <name> [room]`.
+//! A headless client on the engine (games: it plays for the computer when it decides, like the
+//! desktop app, `rtc_games::driver`): `cargo run -p rtc-engine --example chat -- <ws url> <name> [room]`.
 //! Without a room code it creates one. Its voice is a 440 Hz tone. Type a line to chat;
 //! `/mute`, `/unmute`, `/deafen`, `/undeafen`, `/restart-audio`, `/quit` do what they say;
 //! `/react 🔥` sends a reaction, `/sound quack` a soundboard clip, `/image <path> [caption]` a
@@ -17,7 +18,7 @@
 #![allow(clippy::print_stdout)]
 
 use anyhow::{Context, bail};
-use rtc_core::{Command, PlayerCmd, PlayerReport, UserAction, WatchCommand};
+use rtc_core::{ActivityCommand, Command, PlayerCmd, PlayerReport, UserAction, WatchCommand};
 use rtc_engine::{Config, Handle, MicSource, OutgoingImage, Phase, Update};
 use rtc_protocol::media::{Link, detect_link};
 use rtc_protocol::{ClientId, RoomId};
@@ -55,9 +56,22 @@ async fn main() -> anyhow::Result<()> {
     engine.set_isolation(std::env::var("RTC_ISOLATION").as_deref() == Ok("1"));
     let mut asked = false;
     let mut last_watch = String::new();
+    let mut last_lock = String::new();
+    let mut last_activity = String::new();
+    let mut last_stores: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // what each game wants us to do on our own (the computer's turns on the deciding app, a
+    // seat asked back, cards handed to a new deciding app), as the desktop app does it
+    let mut drivers: std::collections::HashMap<String, rtc_games::driver::Driver> =
+        std::collections::HashMap::new();
+    let (game_tx, mut game_rx) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+    // remote control: what we were last told (the sharer answers by name)
+    let mut control = rtc_engine::ControlView::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
         tokio::select! {
+            Some((key, action)) = game_rx.recv() => {
+                engine.command(Command::Activity(ActivityCommand::Dispatch { key, action }));
+            }
             u = updates.recv() => {
                 let Some(u) = u else { break };
                 match u {
@@ -81,6 +95,16 @@ async fn main() -> anyhow::Result<()> {
                                 })
                                 .collect();
                             println!("ROOM {id} muted={} speaking={} members={}", s.muted, s.speaking, names.join(","));
+                            // host controls: on, and whether they hold us back (not the host)
+                            let lock = format!(
+                                "LOCK on={} me_locked={}",
+                                s.playback_lock,
+                                s.playback_lock && s.host.as_ref() != Some(&s.me)
+                            );
+                            if lock != last_lock {
+                                println!("{lock}");
+                                last_lock = lock;
+                            }
                             let w = format!(
                                 "WATCH showing={} queue={} votes={}",
                                 s.watch.showing.as_ref().map_or_else(|| "-".to_owned(), rtc_core::Showing::key),
@@ -91,6 +115,45 @@ async fn main() -> anyhow::Result<()> {
                                 println!("{w}");
                                 last_watch = w;
                             }
+                            // the open activity, and the loaded game's states
+                            let a = s.activity.as_ref().map_or_else(
+                                || "ACTIVITY -".to_owned(),
+                                |a| format!(
+                                    "ACTIVITY {} by={} loaded={} known={}",
+                                    a.current.id, a.current.started_by_name, a.loaded, a.known
+                                ),
+                            );
+                            if a != last_activity {
+                                println!("{a}");
+                                last_activity = a;
+                            }
+                            for (key, v) in &s.stores {
+                                let line = format!(
+                                    "STORE {key} v={} authority={} state={}",
+                                    v.version,
+                                    v.presence.authority.as_ref().map_or("-", |p| p.as_str()),
+                                    v.state
+                                );
+                                if last_stores.get(key) != Some(&line) {
+                                    println!("{line}");
+                                    last_stores.insert(key.clone(), line);
+                                }
+                                let present: Vec<String> = v.presence.members.iter().map(|p| p.as_str().to_owned()).collect();
+                                let seen = rtc_games::driver::Seen {
+                                    me: s.me.as_str(),
+                                    client_id: &s.client_id,
+                                    name: &s.username,
+                                    present: &present,
+                                    deciding: v.presence.authority.as_ref() == Some(&s.me),
+                                };
+                                for w in drivers.entry(key.clone()).or_default().update(key, &v.state, &seen) {
+                                    let (tx, key) = (game_tx.clone(), key.clone());
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(std::time::Duration::from_millis(w.delay_ms)).await;
+                                        let _ = tx.send((key, w.action));
+                                    });
+                                }
+                            }
                         }
                     }
                     Update::Chat(c) => match &c.image {
@@ -98,6 +161,9 @@ async fn main() -> anyhow::Result<()> {
                         None => println!("CHAT {}: {}", c.name, c.text),
                     },
                     Update::Reaction(r) => println!("REACTION {} {} x{}", r.name, r.emoji, r.combo),
+                    Update::Board { from, live, body } => {
+                        println!("BOARD {} {} {body}", if live { "live" } else { "cursor" }, from.as_str());
+                    }
                     Update::Sound(s) => println!("SOUND {} {}", s.name, s.sound_id),
                     Update::ImageProgress { transfer_id, percent } => println!("IMAGE_PROGRESS {transfer_id} {percent}"),
                     Update::ImageReady { transfer_id, bytes } => {
@@ -187,6 +253,22 @@ async fn main() -> anyhow::Result<()> {
                             .map(|v| format!("{}:{}:{}:{}", v.name, v.height, if v.hardware { "hw" } else { "sw" }, if v.web { "web" } else { "desktop" }))
                             .collect();
                         println!("SCREEN_SENDING encoder={} viewers={}", encoder.as_deref().unwrap_or("-"), v.join(","));
+                    }
+                    Update::Control(c) => {
+                        let asks: Vec<&str> = c.asks.iter().map(|(_, n)| n.as_str()).collect();
+                        let viewers: Vec<String> =
+                            c.viewers.iter().map(|(_, n, offered)| format!("{n}{}", if *offered { "*" } else { "" })).collect();
+                        println!(
+                            "CONTROL can_ask={} asked={} offered={} mine={} controller={} asks={} viewers={}",
+                            c.can_ask,
+                            c.asked,
+                            c.offered,
+                            c.mine,
+                            c.controller.as_deref().unwrap_or("-"),
+                            asks.join(","),
+                            viewers.join(",")
+                        );
+                        control = c;
                     }
                     Update::StreamProgress(_) | Update::Devices(_) | Update::Net(_) => {}
                 }
@@ -290,12 +372,45 @@ async fn main() -> anyhow::Result<()> {
                         engine.share_screen(first);
                     }
                     Some(l) if l == "/stopscreen" => engine.share_screen(None),
+                    // games: /startgame <id>, /endgame, /joingame, /leavegame, /act <key> <json>
+                    Some(l) if l.starts_with("/startgame ") => {
+                        engine.command(Command::Activity(ActivityCommand::Start(l["/startgame ".len()..].trim().to_owned())));
+                    }
+                    Some(l) if l == "/endgame" => engine.command(Command::Activity(ActivityCommand::End)),
+                    Some(l) if l == "/joingame" => engine.command(Command::Activity(ActivityCommand::Join)),
+                    Some(l) if l == "/leavegame" => engine.command(Command::Activity(ActivityCommand::Leave)),
+                    // another store of the loaded game (whiteboard chunks): /open <key>
+                    Some(l) if l.starts_with("/open ") => {
+                        engine.command(Command::Activity(ActivityCommand::Open(l["/open ".len()..].trim().to_owned())));
+                    }
+                    // whiteboard: /board live|cursor <json>
+                    Some(l) if l.starts_with("/board ") => {
+                        let rest = l["/board ".len()..].trim();
+                        if let Some((kind, json)) = rest.split_once(' ')
+                            && let Ok(body) = serde_json::from_str(json)
+                        {
+                            engine.command(Command::Board { live: kind == "live", body });
+                        } else {
+                            println!("usage: /board live|cursor <json>");
+                        }
+                    }
+                    Some(l) if l.starts_with("/act ") => {
+                        let rest = l["/act ".len()..].trim();
+                        if let Some((key, json)) = rest.split_once(' ')
+                            && let Ok(action) = serde_json::from_str(json)
+                        {
+                            engine.command(Command::Activity(ActivityCommand::Dispatch { key: key.to_owned(), action }));
+                        } else {
+                            println!("usage: /act <key> <json>");
+                        }
+                    }
                     Some(l) if l.starts_with("/screenopts") => {
-                        // /screenopts <max height, 0 = native> <fps>
+                        // /screenopts <max height, 0 = native> <fps> [sound 1|0]
                         let v: Vec<u32> = l["/screenopts".len()..].split_whitespace().filter_map(|x| x.parse().ok()).collect();
                         engine.screen_options(rtc_engine::ScreenOptions {
                             max_height: v.first().copied().unwrap_or(0),
                             fps: v.get(1).copied().unwrap_or(60),
+                            sound: v.get(2).copied().unwrap_or(1) != 0,
                         });
                     }
                     Some(l) if l.starts_with("/quality") => {
@@ -305,6 +420,63 @@ async fn main() -> anyhow::Result<()> {
                         let v: Vec<f64> = l["/pointer".len()..].split_whitespace().filter_map(|x| x.parse().ok()).collect();
                         engine.screen_pointer((v.len() == 2).then(|| (v[0], v[1])));
                     }
+                    // remote control: /control ask|cancel|accept|decline|release|revoke,
+                    // /control allow|deny|offer <name>, /control move|click|rclick <x> <y>,
+                    // /control key <vk>, /control wheel <x> <y> <dy>
+                    Some(l) if l.starts_with("/control ") => {
+                        use rtc_engine::{ControlCmd, InputKind, ScreenInput};
+                        let words: Vec<&str> = l["/control ".len()..].split_whitespace().collect();
+                        let num = |i: usize| words.get(i).and_then(|w| w.parse::<f64>().ok()).unwrap_or(0.0);
+                        let who = |name: Option<&&str>| {
+                            let all = control.asks.iter().map(|(p, n)| (p, n)).chain(control.viewers.iter().map(|(p, n, _)| (p, n)));
+                            all.into_iter().find(|(_, n)| Some(n.as_str()) == name.copied()).map(|(p, _)| p.clone())
+                        };
+                        let input = |e, button: u8, down: bool| ScreenInput { e, x: num(1), y: num(2), button, down, ..ScreenInput::default() };
+                        let cmds: Vec<ControlCmd> = match words.first().copied() {
+                            Some("ask") => vec![ControlCmd::Ask],
+                            Some("cancel") => vec![ControlCmd::Cancel],
+                            Some("accept") => vec![ControlCmd::Accept],
+                            Some("decline") => vec![ControlCmd::Decline],
+                            Some("release") => vec![ControlCmd::Release],
+                            Some("revoke") => vec![ControlCmd::Revoke],
+                            Some("allow") => who(words.get(1)).map(ControlCmd::Allow).into_iter().collect(),
+                            Some("deny") => who(words.get(1)).map(ControlCmd::Deny).into_iter().collect(),
+                            Some("offer") => who(words.get(1)).map(ControlCmd::Offer).into_iter().collect(),
+                            Some("move") => vec![ControlCmd::Input(input(InputKind::Move, 0, false))],
+                            Some(c @ ("click" | "rclick")) => {
+                                let b = if c == "click" { 0 } else { 2 };
+                                vec![
+                                    ControlCmd::Input(input(InputKind::Button, b, true)),
+                                    ControlCmd::Input(input(InputKind::Button, b, false)),
+                                ]
+                            }
+                            Some("wheel") => vec![ControlCmd::Input(ScreenInput {
+                                e: InputKind::Wheel,
+                                x: num(1),
+                                y: num(2),
+                                #[allow(clippy::cast_possible_truncation)]
+                                dy: num(3) as i32,
+                                ..ScreenInput::default()
+                            })],
+                            Some("key") => {
+                                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                                let vk = num(1) as u16;
+                                [true, false]
+                                    .into_iter()
+                                    .map(|down| ControlCmd::Input(ScreenInput { e: InputKind::Key, vk, down, ..ScreenInput::default() }))
+                                    .collect()
+                            }
+                            _ => {
+                                println!("usage: /control ask|cancel|accept|decline|release|revoke|allow <name>|deny <name>|offer <name>|move|click|rclick <x> <y>|wheel <x> <y> <dy>|key <vk>");
+                                Vec::new()
+                            }
+                        };
+                        for c in cmds {
+                            engine.control(c);
+                        }
+                    }
+                    Some(l) if l == "/lock" => engine.command(Command::SetPlaybackLock(true)),
+                    Some(l) if l == "/unlock" => engine.command(Command::SetPlaybackLock(false)),
                     Some(l) if l == "/next" => engine.command(Command::Watch(WatchCommand::QueueNext)),
                     Some(l) if l == "/skip" => engine.command(Command::Watch(WatchCommand::VoteSkip)),
                     Some(l) if l == "/exit" => engine.command(Command::Watch(WatchCommand::Exit)),

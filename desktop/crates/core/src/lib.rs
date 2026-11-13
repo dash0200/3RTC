@@ -11,9 +11,11 @@ pub mod files;
 pub mod fun;
 pub mod recovery;
 mod room;
+pub mod shared;
 
 pub use room::{
-    BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect, HEARTBEAT_MS, Identity, Input,
-    LinkState, MAX_CHAT_CHARS, Member, NAME_MAX, Phase, PlayerCmd, PlayerReport, Reaction, RemoteSignal,
-    Room, Showing, Sound, UiEvent, UserAction, WatchCommand, WatchView, clean_name,
+    ActivityCommand, ActivityView, BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect,
+    HEARTBEAT_MS, Identity, Input, LinkState, MAX_CHAT_CHARS, Member, NAME_MAX, Phase, PlayerCmd,
+    PlayerReport, Reaction, RemoteSignal, Room, Showing, Sound, StoreView, UiEvent, UserAction, WatchCommand,
+    WatchView, clean_name,
 };

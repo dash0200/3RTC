@@ -1,6 +1,7 @@
 # Working on the desktop app
 
-Read [`docs/BUILD_SPEC.md`](docs/BUILD_SPEC.md) first and follow it: it has the rules, the
+Read [`docs/STATUS.md`](docs/STATUS.md) first (where things stand, what's next, how the owner
+works), then [`docs/BUILD_SPEC.md`](docs/BUILD_SPEC.md) and follow it: it has the rules, the
 architecture, the UI spec (the app must look like 3rtc.me; references in `docs/ui-reference/`),
 every feature with its web sources, the milestones and their exit checklists.
 

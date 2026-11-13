@@ -23,6 +23,7 @@ rtc-platform-win.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+rtc-games.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 tracing-subscriber.workspace = true
 

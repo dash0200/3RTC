@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 rtc-protocol.workspace = true
 rtc-core.workspace = true
+rtc-games.workspace = true
 rtc-engine.workspace = true
 rtc-ui.workspace = true
 rtc-platform-win.workspace = true

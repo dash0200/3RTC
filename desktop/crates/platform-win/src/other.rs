@@ -133,7 +133,17 @@ pub fn audio_apps() -> Vec<crate::AudioApp> {
 
 /// One program's sound (not available here).
 #[derive(Debug)]
-pub struct AppSound;
+pub struct AppSound {
+    stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Drop for AppSound {
+    fn drop(&mut self) {
+        if let Some(s) = &self.stop {
+            s.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
 
 impl AppSound {
     /// Not available here.
@@ -142,6 +152,40 @@ impl AppSound {
     /// Always: per-app sound needs Windows.
     pub fn start(_pid: u32, _on_samples: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, String> {
         Err("sharing an app's sound needs Windows".to_owned())
+    }
+
+    /// Not available here, except for tests: with `RTC_TEST_SCREEN_SOUND=tone`, a stereo tone
+    /// (440 Hz left at 0.3, 660 Hz right at 0.1) in 10 ms pieces, until dropped.
+    ///
+    /// # Errors
+    /// Without the test tone: the computer's sound needs Windows.
+    pub fn everything_but_us(mut on_samples: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, String> {
+        if std::env::var("RTC_TEST_SCREEN_SOUND").as_deref() != Ok("tone") {
+            return Err("sharing the computer's sound needs Windows".to_owned());
+        }
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut n = 0u64;
+            let mut piece = vec![0.0f32; 960];
+            let start = std::time::Instant::now();
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                for i in 0..480 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = (n + i) as f32 / 48_000.0;
+                    piece[i as usize * 2] = 0.3 * (std::f32::consts::TAU * 440.0 * t).sin();
+                    piece[i as usize * 2 + 1] = 0.1 * (std::f32::consts::TAU * 660.0 * t).sin();
+                }
+                n += 480;
+                on_samples(&piece);
+                // keep to real time
+                let due = std::time::Duration::from_millis(n / 48);
+                if let Some(wait) = due.checked_sub(start.elapsed()) {
+                    std::thread::sleep(wait);
+                }
+            }
+        });
+        Ok(Self { stop: Some(stop) })
     }
 }
 
@@ -236,5 +280,50 @@ impl H264Encoder {
     /// Always.
     pub fn poll(&mut self) -> Result<Vec<crate::EncodedUnit>, String> {
         Err("hardware encoding is Windows only".to_owned())
+    }
+}
+
+/// No graphics card choice here.
+#[must_use]
+pub fn gpus() -> crate::Gpus {
+    crate::Gpus::default()
+}
+
+/// Always Auto here.
+#[must_use]
+pub fn gpu_choice(_exe: &str) -> crate::GpuChoice {
+    crate::GpuChoice::Auto
+}
+
+/// Nothing to save here.
+///
+/// # Errors
+/// Never.
+pub fn set_gpu_choice(_exe: &str, _choice: crate::GpuChoice) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Remote control's stand-in: nothing is played back (the engine still logs what arrives).
+#[derive(Debug)]
+pub struct RemoteControl {
+    area: crate::ControlArea,
+}
+
+impl RemoteControl {
+    /// Starts (does nothing here).
+    ///
+    /// # Errors
+    /// Never here.
+    pub fn start(
+        area: crate::ControlArea,
+        _name: &str,
+        _on_take_back: impl Fn(crate::TakeBack) + Send + 'static,
+    ) -> Result<Self, String> {
+        Ok(Self { area })
+    }
+
+    /// Plays back nothing here.
+    pub fn input(&self, i: crate::Injection) {
+        tracing::trace!("control: {i:?} over {:?}", self.area);
     }
 }

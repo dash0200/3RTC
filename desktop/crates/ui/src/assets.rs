@@ -6,8 +6,35 @@ use gpui_kit::{AssetSource, Hsla, Pixels, SharedString, Styled as _, Svg, svg};
 
 use crate::icons::Icon;
 
-/// Our own asset files that aren't in the web icon set.
-const OWN: &[(&str, &[u8])] = &[("icons/logo-play.svg", include_bytes!("../assets/logo-play.svg"))];
+/// Our own asset files that aren't in the web icon set (chess pieces: `pieces.tsx`; Last Card
+/// symbols and card back: `lastcard/cards.tsx`; the Tycoon board: `tycoon/BoardView.tsx`), drawn in
+/// colour by `img`.
+const OWN: &[(&str, &[u8])] = &[
+    ("icons/logo-play.svg", include_bytes!("../assets/logo-play.svg")),
+    ("chess/wp.svg", include_bytes!("../assets/chess/wp.svg")),
+    ("chess/wn.svg", include_bytes!("../assets/chess/wn.svg")),
+    ("chess/wb.svg", include_bytes!("../assets/chess/wb.svg")),
+    ("chess/wr.svg", include_bytes!("../assets/chess/wr.svg")),
+    ("chess/wq.svg", include_bytes!("../assets/chess/wq.svg")),
+    ("chess/wk.svg", include_bytes!("../assets/chess/wk.svg")),
+    ("chess/bp.svg", include_bytes!("../assets/chess/bp.svg")),
+    ("chess/bn.svg", include_bytes!("../assets/chess/bn.svg")),
+    ("chess/bb.svg", include_bytes!("../assets/chess/bb.svg")),
+    ("chess/br.svg", include_bytes!("../assets/chess/br.svg")),
+    ("chess/bq.svg", include_bytes!("../assets/chess/bq.svg")),
+    ("chess/bk.svg", include_bytes!("../assets/chess/bk.svg")),
+    ("lastcard/skip.svg", include_bytes!("../assets/lastcard/skip.svg")),
+    (
+        "lastcard/reverse.svg",
+        include_bytes!("../assets/lastcard/reverse.svg"),
+    ),
+    (
+        "lastcard/wheel.svg",
+        include_bytes!("../assets/lastcard/wheel.svg"),
+    ),
+    ("lastcard/back.svg", include_bytes!("../assets/lastcard/back.svg")),
+    ("tycoon/board.svg", include_bytes!("../assets/tycoon/board.svg")),
+];
 
 fn find(path: &str) -> Option<&'static [u8]> {
     OWN.iter()

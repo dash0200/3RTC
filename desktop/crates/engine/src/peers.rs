@@ -70,11 +70,13 @@ pub(crate) enum PeerEvent {
         generation: u64,
         track: rtc_webrtc::libwebrtc::video_track::RtcVideoTrack,
     },
-    /// Their voice arrived (an incoming audio track).
+    /// Their voice arrived (an incoming audio track), or the sound of their shared screen
+    /// (`screen`: its stream is `screen-audio`).
     RemoteAudio {
         peer: PeerId,
         generation: u64,
         track: rtc_webrtc::libwebrtc::audio_track::RtcAudioTrack,
+        screen: bool,
     },
     /// Audio levels on this connection.
     Levels {
@@ -86,6 +88,9 @@ pub(crate) enum PeerEvent {
 
 type Sink = Arc<dyn Fn(PeerEvent) + Send + Sync>;
 
+/// The stream id of a shared screen's sound (its own audio line, between desktops).
+pub(crate) const SCREEN_SOUND_STREAM: &str = "screen-audio";
+
 struct Link {
     pc: PeerConnection,
     /// Which connection this is: events from a replaced one are ignored.
@@ -95,6 +100,8 @@ struct Link {
     has_remote: bool,
     pending: Vec<IceCandidate>,
     levels: tokio::task::JoinHandle<()>,
+    /// Our screen's sound goes on this connection (a desktop viewer: added once, kept).
+    screen_sound: bool,
 }
 
 pub(crate) struct Peers {
@@ -120,7 +127,7 @@ const fn offer_options(ice_restart: bool) -> OfferOptions {
 /// Our description with the web app's Opus settings.
 fn tuned(desc: &RtcDescription) -> Option<RtcDescription> {
     let mut wire = convert::description_out(desc);
-    wire.sdp = sdp::tune_opus(&wire.sdp);
+    wire.sdp = sdp::tune_music(&sdp::tune_opus(&wire.sdp));
     convert::description_in(&wire).ok()
 }
 
@@ -128,7 +135,7 @@ fn tuned(desc: &RtcDescription) -> Option<RtcDescription> {
 fn tuned_in(desc: &SessionDescription) -> Option<RtcDescription> {
     let wire = SessionDescription {
         kind: desc.kind,
-        sdp: sdp::tune_opus(&desc.sdp),
+        sdp: sdp::tune_music(&sdp::tune_opus(&desc.sdp)),
     };
     convert::description_in(&wire).ok()
 }
@@ -187,6 +194,7 @@ impl Peers {
                 peer: from.clone(),
                 generation,
                 track,
+                screen: event.streams.iter().any(|s| s.id() == SCREEN_SOUND_STREAM),
             }),
             MediaStreamTrack::Video(track) => sink(PeerEvent::RemoteVideo {
                 peer: from.clone(),
@@ -244,6 +252,7 @@ impl Peers {
             has_remote: false,
             pending: Vec::new(),
             levels,
+            screen_sound: false,
         };
         Some(self.links.entry(peer.clone()).insert_entry(link).into_mut())
     }
@@ -543,6 +552,32 @@ impl Peers {
             .senders()
             .into_iter()
             .find(|s| matches!(s.track(), Some(MediaStreamTrack::Video(_))))
+    }
+
+    /// Our screen's sound to a desktop viewer: its own audio line, added once to their
+    /// connection and offered again (the web app never gets it: it would take the line for a
+    /// second voice). Returns whether the line is there now; `false` means try again later
+    /// (not connected, or another offer is under way).
+    pub(crate) async fn add_screen_sound(&mut self, peer: &PeerId, track: &MediaStreamTrack) -> bool {
+        let Some(link) = self.links.get_mut(peer) else {
+            return false;
+        };
+        if link.screen_sound {
+            return true;
+        }
+        if link.pc.connection_state() != PeerConnectionState::Connected
+            || link.pc.signaling_state() != rtc_webrtc::libwebrtc::peer_connection::SignalingState::Stable
+        {
+            return false;
+        }
+        if let Err(e) = link.pc.add_track(track.clone(), &[SCREEN_SOUND_STREAM]) {
+            tracing::warn!("screen sound to {peer}: {e:?}");
+            return false;
+        }
+        link.screen_sound = true;
+        tracing::info!("screen: sound line to {peer}; offering it");
+        self.offer(peer, false).await;
+        true
     }
 
     /// The factory (for new tracks).

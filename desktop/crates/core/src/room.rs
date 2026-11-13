@@ -7,6 +7,7 @@ use rtc_protocol::peer::{Envelope, PeerMessage};
 use rtc_protocol::sdp::{IceCandidate, SessionDescription};
 use rtc_protocol::signaling::{ClientMessage, ErrorCode, ServerMessage};
 use rtc_protocol::{ClientId, PROTOCOL_VERSION, PeerId, RoomId};
+use serde_json::Value;
 
 use crate::fun::{Fun, is_single_emoji};
 use crate::recovery::{Action, Health};
@@ -176,6 +177,16 @@ pub enum Command {
     SetPlaybackLock(bool),
     /// The watch party.
     Watch(WatchCommand),
+    /// Activities and games.
+    Activity(ActivityCommand),
+    /// Send a whiteboard message to everyone (`wb-live` when `live`, else `wb-cursor`); `body`
+    /// is its fields.
+    Board {
+        /// A stroke being drawn (else a pointer).
+        live: bool,
+        /// The fields.
+        body: Value,
+    },
     /// We started sending a chat picture (the shell sends the bytes on the bulk channels).
     ImageSent {
         /// The chat message's id.
@@ -285,6 +296,15 @@ pub enum UiEvent {
     Player(PlayerCmd),
     /// The queue moved on: the web app's pop.
     Pop,
+    /// A whiteboard message from someone (`wb-live` when `live`, else `wb-cursor`), as sent.
+    Board {
+        /// Who.
+        from: PeerId,
+        /// A stroke being drawn (else a pointer).
+        live: bool,
+        /// The message's fields.
+        body: Value,
+    },
 }
 
 /// One thing for the shell to do.
@@ -334,7 +354,10 @@ pub enum Effect {
     Ui(UiEvent),
 }
 
+mod activity;
 mod watch;
+
+pub use activity::{ActivityCommand, ActivityView, StoreView};
 
 pub use watch::{HEARTBEAT_MS, PlayerCmd, PlayerReport, Showing, UserAction, WatchCommand, WatchView};
 
@@ -342,7 +365,7 @@ pub use watch::{HEARTBEAT_MS, PlayerCmd, PlayerReport, Showing, UserAction, Watc
 const CHAT_KEEP: usize = 500;
 
 /// The room as this app sees it.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Room {
     me: Identity,
     phase: Phase,
@@ -368,6 +391,8 @@ pub struct Room {
     host_gone_since: Option<f64>,
     /// The watch party.
     watch: watch::Watch,
+    /// Activities and their shared state.
+    activities: activity::Activities,
 }
 
 impl Room {
@@ -393,6 +418,7 @@ impl Room {
             playback_lock: false,
             host_gone_since: None,
             watch: watch::Watch::new(),
+            activities: activity::Activities::new(),
         }
     }
 
@@ -560,6 +586,7 @@ impl Room {
                 self.watch_tick(now_ms, &mut fx);
             }
         }
+        self.activity_after(now_ms, &mut fx);
         fx
     }
 
@@ -826,6 +853,18 @@ impl Room {
                     self.watch_command(w, now_ms, fx);
                 }
             }
+            Command::Activity(a) => self.activity_command(a, now_ms, fx),
+            Command::Board { live, body } => {
+                if !matches!(self.phase, Phase::InRoom(_)) {
+                    return;
+                }
+                let message = if live {
+                    PeerMessage::WbLive(Box::new(serde_json::from_value(body).unwrap_or_default()))
+                } else {
+                    PeerMessage::WbCursor(Box::new(serde_json::from_value(body).unwrap_or_default()))
+                };
+                fx.push(Effect::Broadcast(self.envelope(message, now_ms)));
+            }
             Command::ImageSent { id, image, caption } => {
                 if !matches!(self.phase, Phase::InRoom(_)) {
                     return;
@@ -938,6 +977,7 @@ impl Room {
         self.playback_lock = false;
         self.host_gone_since = None;
         self.watch_reset(fx);
+        self.shared_reset(fx);
         fx.push(Effect::Ui(UiEvent::Changed));
     }
 
@@ -1210,6 +1250,8 @@ impl Room {
             peer: peer.clone(),
             envelope,
         });
+        // our shared states (`sharedState.ts`: everyone with a state sends it)
+        self.shared_channel_open(&peer, now_ms, fx);
         // what are they watching? (`useMediaSync.ts`)
         self.watch_channel_open(peer, now_ms, fx);
         if first {
@@ -1457,12 +1499,27 @@ impl Room {
             | PeerMessage::LocalVideoSyncState { .. }) => {
                 self.watch_message(&from, envelope.sender.as_deref(), m, now_ms, fx);
             }
-            PeerMessage::NetPong { .. }
-            | PeerMessage::RoomState { .. }
+            m @ (PeerMessage::RoomState { .. }
             | PeerMessage::RoomStateAction { .. }
             | PeerMessage::RoomStateRequest { .. }
-            | PeerMessage::RoomStateGone { .. }
-            | PeerMessage::Unknown => {}
+            | PeerMessage::RoomStateGone { .. }) => self.shared_message(&from, &m, now_ms, fx),
+            PeerMessage::WbLive(b) => {
+                let body = serde_json::to_value(*b).unwrap_or(Value::Null);
+                fx.push(Effect::Ui(UiEvent::Board {
+                    from,
+                    live: true,
+                    body,
+                }));
+            }
+            PeerMessage::WbCursor(b) => {
+                let body = serde_json::to_value(*b).unwrap_or(Value::Null);
+                fx.push(Effect::Ui(UiEvent::Board {
+                    from,
+                    live: false,
+                    body,
+                }));
+            }
+            PeerMessage::NetPong { .. } | PeerMessage::Unknown => {}
         }
     }
 }

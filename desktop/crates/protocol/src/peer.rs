@@ -342,9 +342,64 @@ pub enum PeerMessage {
         /// The state cleared.
         key: String,
     },
+    /// Whiteboard: a stroke as it is drawn (`wb-live`), see [`BoardLive`].
+    WbLive(Box<BoardLive>),
+    /// Whiteboard: where someone's pointer is (`wb-cursor`), see [`BoardCursor`].
+    WbCursor(Box<BoardCursor>),
     /// A message type this app doesn't handle: ignored (protocol rule 1).
     #[serde(other, skip_serializing)]
     Unknown,
+}
+
+/// `wb-live`: `e` (board epoch), `id, k, c, w`, `from` (how many numbers were sent before) and
+/// `pts` (the new ones), `name`; or `{ e, id, done: true }` when the stroke ends. Fields are kept
+/// as sent: the board checks them.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct BoardLive {
+    /// The board's epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<Value>,
+    /// The stroke's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    /// The tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<Value>,
+    /// Its colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c: Option<Value>,
+    /// Its width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<Value>,
+    /// How many numbers were sent before these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<Value>,
+    /// The new numbers (x, y, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pts: Option<Value>,
+    /// Who draws.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Value>,
+    /// The stroke ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done: Option<Value>,
+}
+
+/// `wb-cursor`: `x, y, name` in board units, or `gone: true`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct BoardCursor {
+    /// Across.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<Value>,
+    /// Down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<Value>,
+    /// Who.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<Value>,
+    /// The pointer left the board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gone: Option<Value>,
 }
 
 /// A peer message with the fields every message carries: who sent it and when.
@@ -409,6 +464,29 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn whiteboard_messages_keep_what_was_sent() {
+        let text = r##"{"type":"wb-live","sender":"Riya","timestamp":5.5,"e":0,"id":"a1","k":"pen","c":"#1f2329","w":6,"from":4,"pts":[1,2],"name":"Riya"}"##;
+        let e = Envelope::from_json(text).unwrap();
+        let PeerMessage::WbLive(b) = &e.message else {
+            panic!("not wb-live: {:?}", e.message)
+        };
+        assert_eq!(b.pts, Some(json!([1, 2])));
+        assert_eq!(b.from, Some(json!(4)));
+        let back: Value = serde_json::from_str(&e.to_json().unwrap()).unwrap();
+        assert_eq!(back, serde_json::from_str::<Value>(text).unwrap());
+        // odd shapes are kept as sent (the board checks them), not refused
+        let odd = Envelope::from_json(r#"{"type":"wb-cursor","x":"12","gone":1}"#).unwrap();
+        assert_eq!(
+            odd.message,
+            PeerMessage::WbCursor(Box::new(BoardCursor {
+                x: Some(json!("12")),
+                gone: Some(json!(1)),
+                ..BoardCursor::default()
+            }))
+        );
+    }
 
     fn identity() -> PeerMessage {
         PeerMessage::PeerIdentity {

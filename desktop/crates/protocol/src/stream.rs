@@ -486,6 +486,114 @@ pub enum ScreenMessage {
         #[serde(default)]
         max_height: u32,
     },
+    /// Remote control, desktop to desktop only (the web app neither sends nor reads it): asking
+    /// for, offering, giving and taking back control of the shared screen. See [`ControlAction`].
+    #[serde(rename = "screen-control", rename_all = "camelCase")]
+    Control {
+        /// What happens.
+        action: ControlAction,
+        /// `state`: who controls the screen now (absent: nobody).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peer_id: Option<String>,
+        /// `state`: their name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+    },
+    /// Remote control: the controlling viewer's mouse or key, for the sharer to play back.
+    /// Ignored unless the sender was given control.
+    #[serde(rename = "screen-input")]
+    Input(ScreenInput),
+}
+
+/// `screen-control` actions. Viewer → sharer: `request`, `cancel` (the request), `accept` or
+/// `decline` (an offer), `release` (stop controlling). Sharer → viewer: `offer`, `grant`, `deny`,
+/// `revoke` (control taken back, or the offer withdrawn); `state` to every desktop viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControlAction {
+    /// May I control your screen?
+    Request,
+    /// Never mind (the request).
+    Cancel,
+    /// Yes please (to an offer).
+    Accept,
+    /// No thanks (to an offer).
+    Decline,
+    /// I stop controlling.
+    Release,
+    /// Would you like to control my screen?
+    Offer,
+    /// You control my screen now.
+    Grant,
+    /// No (to a request).
+    Deny,
+    /// You don't control my screen any more (or the offer is withdrawn).
+    Revoke,
+    /// Who controls my screen now (`peerId`, `username`; absent: nobody).
+    State,
+    /// An action from a newer app: ignored.
+    #[serde(other)]
+    Other,
+}
+
+/// `screen-input`: one mouse or keyboard event over the shared picture. `x`, `y` are 0–1 across
+/// and down the picture; `button` 0 left, 1 middle, 2 right; wheel `dx`, `dy` in 1/120ths of a
+/// notch (up and right positive); `vk` a Windows virtual-key code.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct ScreenInput {
+    /// `move`, `button`, `wheel` or `key`.
+    pub e: InputKind,
+    /// Across, 0–1.
+    #[serde(default)]
+    pub x: f64,
+    /// Down, 0–1.
+    #[serde(default)]
+    pub y: f64,
+    /// `button`: which.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub button: u8,
+    /// `button`, `key`: pressed (else let go).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub down: bool,
+    /// `wheel`: sideways.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub dx: i32,
+    /// `wheel`: up and down.
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub dy: i32,
+    /// `key`: the key.
+    #[serde(default, skip_serializing_if = "is_zero_u16")]
+    pub vk: u16,
+}
+
+/// What a [`ScreenInput`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum InputKind {
+    /// The pointer moved.
+    #[default]
+    Move,
+    /// A mouse button.
+    Button,
+    /// The wheel.
+    Wheel,
+    /// A key.
+    Key,
+    /// From a newer app: ignored.
+    #[serde(other)]
+    Other,
+}
+
+const fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+const fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
+}
+
+const fn is_zero_i32(v: &i32) -> bool {
+    *v == 0
 }
 
 const fn yes() -> bool {
@@ -521,6 +629,51 @@ impl ScreenMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_control_messages_round_trip() {
+        let m = ScreenMessage::Control {
+            action: ControlAction::State,
+            peer_id: Some("p2".into()),
+            username: Some("Asha".into()),
+        };
+        let json = m.to_json("Darshan", 5.0).unwrap();
+        assert!(
+            json.contains(r#""type":"screen-control""#) && json.contains(r#""action":"state""#),
+            "{json}"
+        );
+        assert_eq!(ScreenMessage::from_json(&json), Some(m));
+        let i = ScreenMessage::Input(ScreenInput {
+            e: InputKind::Button,
+            x: 0.25,
+            y: 0.75,
+            button: 2,
+            down: true,
+            ..ScreenInput::default()
+        });
+        let json = i.to_json("Asha", 6.0).unwrap();
+        assert!(
+            json.contains(r#""type":"screen-input""#) && json.contains(r#""e":"button""#),
+            "{json}"
+        );
+        assert!(!json.contains("\"vk\""), "unused fields are left out: {json}");
+        assert_eq!(ScreenMessage::from_json(&json), Some(i));
+        // from a newer app: still read, the new parts ignored
+        assert!(matches!(
+            ScreenMessage::from_json(r#"{"type":"screen-control","action":"teleport"}"#),
+            Some(ScreenMessage::Control {
+                action: ControlAction::Other,
+                ..
+            })
+        ));
+        assert!(matches!(
+            ScreenMessage::from_json(r#"{"type":"screen-input","e":"pen","x":0.5}"#),
+            Some(ScreenMessage::Input(ScreenInput {
+                e: InputKind::Other,
+                ..
+            }))
+        ));
+    }
 
     #[test]
     fn range_packets_round_trip() {

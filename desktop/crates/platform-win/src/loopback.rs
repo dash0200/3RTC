@@ -4,6 +4,8 @@
 //!
 //! [`audio_apps`] lists the programs that have sound open; [`AppSound::start`] captures one
 //! (with its child processes, as browsers play from helper processes) as 48 kHz mono.
+//! [`AppSound::everything_but_us`] captures the whole computer's sound except 3RTC's own (the
+//! call, our videos), in stereo: the sound that goes with a screen share.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -132,6 +134,8 @@ pub fn audio_apps() -> Vec<AudioApp> {
 /// is the tested one; an earlier hand-written version corrupted the heap on activation).
 fn capture(
     pid: u32,
+    include: bool,
+    stereo: bool,
     stop: &AtomicBool,
     on_samples: &mut dyn FnMut(&[f32]),
     ready: &Sender<Result<(), String>>,
@@ -141,8 +145,11 @@ fn capture(
         tracing::warn!("app sound: {what}: {e}");
         format!("{what} ({e})")
     };
-    tracing::info!("app sound: activating process loopback for pid {pid}");
-    let mut client = AudioClient::new_application_loopback_client(pid, true)
+    tracing::info!(
+        "app sound: activating process loopback {} pid {pid}",
+        if include { "for" } else { "for everything but" }
+    );
+    let mut client = AudioClient::new_application_loopback_client(pid, include)
         .map_err(|e| err("Windows refused to capture that app", &e))?;
     tracing::info!("app sound: activated");
     let format = WaveFormat::new(
@@ -190,7 +197,12 @@ fn capture(
             }
             let l = i16::from_le_bytes([b[0], b[1]]);
             let r = i16::from_le_bytes([b[2], b[3]]);
-            mono.push((f32::from(l) + f32::from(r)) / (2.0 * 32_768.0));
+            if stereo {
+                mono.push(f32::from(l) / 32_768.0);
+                mono.push(f32::from(r) / 32_768.0);
+            } else {
+                mono.push((f32::from(l) + f32::from(r)) / (2.0 * 32_768.0));
+            }
         }
         if mono.is_empty() {
             continue;
@@ -224,6 +236,25 @@ impl AppSound {
     /// # Errors
     /// Windows older than 10 2004, the program is gone, or Windows refused.
     pub fn start(pid: u32, on_samples: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, String> {
+        Self::run(pid, true, false, on_samples)
+    }
+
+    /// Captures everything this computer plays except 3RTC itself (and what it started): the
+    /// sound of a shared screen, without the call. `on_samples` gets 48 kHz stereo, left and
+    /// right interleaved, about every 10 ms, on the capture thread.
+    ///
+    /// # Errors
+    /// Windows older than 10 2004, or Windows refused.
+    pub fn everything_but_us(on_samples: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, String> {
+        Self::run(std::process::id(), false, true, on_samples)
+    }
+
+    fn run(
+        pid: u32,
+        include: bool,
+        stereo: bool,
+        on_samples: impl FnMut(&[f32]) + Send + 'static,
+    ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let (ready, started) = channel();
@@ -232,7 +263,7 @@ impl AppSound {
             .spawn(move || {
                 let _com = Com::init();
                 let mut on_samples = on_samples;
-                if let Err(e) = capture(pid, &flag, &mut on_samples, &ready) {
+                if let Err(e) = capture(pid, include, stereo, &flag, &mut on_samples, &ready) {
                     let _ = ready.send(Err(e));
                 }
             })
