@@ -134,6 +134,19 @@ number (uint32, big-endian).
 The subtitles themselves go out as the usual `local-video-action` `subtitle-share`. Apps rebuild the
 format with `cleanFormat` (known fields, short strings, bounded lists) before using it.
 
+### Screen sharing (`features/screenshare/useScreenShare.ts`, `ScreenPointerOverlay.tsx`)
+The picture is the video line every connection has from the start; these say who shares and point at it.
+| type | direction | fields |
+|---|---|---|
+| `screen-share-status` | sharer → everyone, and to each newcomer | `isSharing, peerId, username, hasAudio` |
+| `screen-pointer` | anyone → everyone | `peerId, x, y` (0–1 across and down the picture), `username`, `active` (false: the pointer left) |
+| `screen-ping` | anyone → everyone | `id, x, y, username, color, peerId`: a click (a ripple there) |
+| `screen-quality` | desktop viewer → desktop sharer | `maxHeight`: the tallest picture this viewer wants (0: whatever is sent) |
+
+`screen-quality` is the desktop app's only: a desktop sharer sends each viewer their own picture (its
+own size and data rate, encoded by the GPU when H.264 is negotiated), and this is the viewer's choice
+of size. The web app neither sends nor reads it; a web viewer gets at most 1440p from a desktop sharer.
+
 ### Shared state (`core/sharedState.js`): games, polls, the open activity
 | type | fields | meaning |
 |---|---|---|

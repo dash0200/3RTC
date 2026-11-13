@@ -61,6 +61,13 @@ pub(crate) fn render(
         Dialog::Network => {
             dialog("net-dialog", px(720.), crate::net::dialog(view, cx), dismiss).into_any_element()
         }
+        Dialog::Screen => dialog(
+            "screen-dialog",
+            px(520.),
+            crate::screen::picker(view, cx),
+            dismiss,
+        )
+        .into_any_element(),
         Dialog::AppSound => dialog(
             "app-sound-dialog",
             px(480.),
@@ -1242,6 +1249,12 @@ fn updates(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement 
                                 .text_size(px(12.))
                                 .text_color(tokens::text_3())
                                 .child(format!("This version: {}", crate::view::BUILD)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(tokens::text_3())
+                                .child("Video files play with mpv (libmpv, LGPL 2.1+, mpv.io; source: github.com/mpv-player/mpv)."),
                         ),
                 )
                 .child(if ready {

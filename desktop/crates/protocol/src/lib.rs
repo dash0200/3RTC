@@ -18,6 +18,7 @@ pub mod media;
 pub mod peer;
 pub mod sdp;
 pub mod signaling;
+pub mod stream;
 
 pub use ids::{ClientId, IdError, PeerId, RoomId};
 

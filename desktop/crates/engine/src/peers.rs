@@ -15,10 +15,10 @@ use rtc_webrtc::libwebrtc::MediaType;
 use rtc_webrtc::libwebrtc::data_channel::{DataChannel, DataChannelState};
 use rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack;
 use rtc_webrtc::libwebrtc::peer_connection::{
-    AnswerOptions, OfferOptions, PeerConnection, PeerConnectionState,
+    AnswerOptions, BitrateSettings, OfferOptions, PeerConnection, PeerConnectionState,
 };
-use rtc_webrtc::libwebrtc::rtp_parameters::Priority;
-use rtc_webrtc::libwebrtc::rtp_transceiver::{RtpTransceiverDirection, RtpTransceiverInit};
+use rtc_webrtc::libwebrtc::rtp_parameters::{Priority, RtpCodecCapability};
+use rtc_webrtc::libwebrtc::rtp_sender::RtpSender;
 use rtc_webrtc::libwebrtc::session_description::SessionDescription as RtcDescription;
 use rtc_webrtc::stats::{self, Levels};
 use rtc_webrtc::{channels, convert, factory::Factory, sdp};
@@ -64,6 +64,12 @@ pub(crate) enum PeerEvent {
         generation: u64,
         state: PeerConnectionState,
     },
+    /// Their video arrived (a shared screen; shown only once they say they share).
+    RemoteVideo {
+        peer: PeerId,
+        generation: u64,
+        track: rtc_webrtc::libwebrtc::video_track::RtcVideoTrack,
+    },
     /// Their voice arrived (an incoming audio track).
     RemoteAudio {
         peer: PeerId,
@@ -94,6 +100,8 @@ struct Link {
 pub(crate) struct Peers {
     factory: Factory,
     voice: MediaStreamTrack,
+    /// Our screen (frames only while sharing).
+    screen: MediaStreamTrack,
     signaling: rtc_signaling::Handle,
     sink: Sink,
     links: HashMap<PeerId, Link>,
@@ -129,12 +137,14 @@ impl Peers {
     pub(crate) fn new(
         factory: Factory,
         voice: MediaStreamTrack,
+        screen: MediaStreamTrack,
         signaling: rtc_signaling::Handle,
         sink: impl Fn(PeerEvent) + Send + Sync + 'static,
     ) -> Self {
         Self {
             factory,
             voice,
+            screen,
             signaling,
             sink: Arc::new(sink),
             links: HashMap::new(),
@@ -172,14 +182,17 @@ impl Peers {
         })));
         let sink = Arc::clone(&self.sink);
         let from = peer.clone();
-        pc.on_track(Some(Box::new(move |event| {
-            if let MediaStreamTrack::Audio(track) = event.track {
-                sink(PeerEvent::RemoteAudio {
-                    peer: from.clone(),
-                    generation,
-                    track,
-                });
-            }
+        pc.on_track(Some(Box::new(move |event| match event.track {
+            MediaStreamTrack::Audio(track) => sink(PeerEvent::RemoteAudio {
+                peer: from.clone(),
+                generation,
+                track,
+            }),
+            MediaStreamTrack::Video(track) => sink(PeerEvent::RemoteVideo {
+                peer: from.clone(),
+                generation,
+                track,
+            }),
         })));
         let sink = Arc::clone(&self.sink);
         let from = peer.clone();
@@ -195,17 +208,21 @@ impl Peers {
         if let Err(e) = pc.add_track(self.voice.clone(), &["voice"]) {
             tracing::error!("voice track to {peer}: {e:?}");
         }
-        if initiator {
-            // as usePeerMesh: a video transceiver up front, so a screen share needs no new offer
-            let init = RtpTransceiverInit {
-                direction: RtpTransceiverDirection::SendRecv,
-                stream_ids: Vec::new(),
-                send_encodings: Vec::new(),
-            };
-            if let Err(e) = pc.add_transceiver_for_media(MediaType::Video, init) {
-                tracing::warn!("video transceiver to {peer}: {e:?}");
-            }
+        // Screen: as usePeerMesh, a video line up front (send and receive) so a screen share
+        // needs no new offer. Our screen track is in it from the start (as the answerer that
+        // keeps the offered line two-way); it carries pictures only while we share.
+        if let Err(e) = pc.add_track(self.screen.clone(), &["screen"]) {
+            tracing::warn!("video line to {peer}: {e:?}");
         }
+        // H.264 first: the GPU encodes it (screen.rs); VP8 and the rest stay as fallbacks
+        self.prefer_h264(&pc);
+        // a fast start and a high ceiling for screens; the estimate decides within them
+        let _ = pc.set_bitrate(BitrateSettings {
+            min_bitrate_bps: None,
+            start_bitrate_bps: Some(4_000_000),
+            max_bitrate_bps: Some(60_000_000),
+        });
+        let _ = initiator;
         // the bulk channel is pre-negotiated: both sides create it
         let bulk = pc
             .create_data_channel(channels::BULK_LABEL, channels::bulk_init())
@@ -480,13 +497,74 @@ impl Peers {
                 };
                 Some(Input::Link { peer, state })
             }
-            PeerEvent::Levels { .. } | PeerEvent::RemoteAudio { .. } | PeerEvent::Binary { .. } => None,
+            PeerEvent::Levels { .. }
+            | PeerEvent::RemoteAudio { .. }
+            | PeerEvent::RemoteVideo { .. }
+            | PeerEvent::Binary { .. } => None,
         }
+    }
+
+    /// Puts H.264 (packetization mode 1) first on the video line.
+    fn prefer_h264(&self, pc: &PeerConnection) {
+        let caps = self
+            .factory
+            .inner()
+            .get_rtp_receiver_capabilities(MediaType::Video)
+            .codecs;
+        let h264 = |c: &RtpCodecCapability| {
+            c.mime_type.eq_ignore_ascii_case("video/H264")
+                && c.sdp_fmtp_line
+                    .as_deref()
+                    .is_some_and(|f| f.contains("packetization-mode=1"))
+        };
+        let (mut first, rest): (Vec<_>, Vec<_>) = caps.into_iter().partition(|c| h264(c));
+        if first.is_empty() {
+            return;
+        }
+        // constrained baseline first (every decoder takes it), then the others
+        first.sort_by_key(|c| !c.sdp_fmtp_line.as_deref().is_some_and(|f| f.contains("42e0")));
+        first.extend(rest);
+        for t in pc.transceivers() {
+            if matches!(t.sender().track(), Some(MediaStreamTrack::Video(_)))
+                && let Err(e) = t.set_codec_preferences(first.clone())
+            {
+                tracing::debug!("video codec order: {e:?}");
+            }
+        }
+    }
+
+    /// The sender of our screen to a peer (its track is the shared picture or their own).
+    pub(crate) fn video_sender(&self, peer: &PeerId) -> Option<RtpSender> {
+        let link = self.links.get(peer)?;
+        if link.pc.connection_state() != PeerConnectionState::Connected {
+            return None;
+        }
+        link.pc
+            .senders()
+            .into_iter()
+            .find(|s| matches!(s.track(), Some(MediaStreamTrack::Video(_))))
+    }
+
+    /// The factory (for new tracks).
+    pub(crate) const fn factory(&self) -> &Factory {
+        &self.factory
     }
 
     /// Whether `generation` is still `peer`'s connection.
     pub(crate) fn is_current(&self, peer: &PeerId, generation: u64) -> bool {
         self.current(peer, generation)
+    }
+
+    /// The open bulk channel to a peer (video blocks go on it).
+    pub(crate) fn bulk(&self, peer: &PeerId) -> Option<DataChannel> {
+        let dc = self.links.get(peer)?.bulk.clone()?;
+        (dc.state() == DataChannelState::Open).then_some(dc)
+    }
+
+    /// The open main channel to a peer.
+    pub(crate) fn main(&self, peer: &PeerId) -> Option<DataChannel> {
+        let dc = self.links.get(peer)?.main.clone()?;
+        (dc.state() == DataChannelState::Open).then_some(dc)
     }
 
     /// Sends on the main channel, if it's open.

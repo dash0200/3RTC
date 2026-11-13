@@ -19,22 +19,34 @@ pub mod art;
 pub mod keys;
 
 #[cfg(windows)]
+mod hwenc;
+
+#[cfg(windows)]
 mod loopback;
+#[cfg(windows)]
+mod mpv;
 #[cfg(not(windows))]
 mod other;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod ui_thread;
+mod video;
 #[cfg(windows)]
 mod win;
 
 #[cfg(windows)]
+pub use hwenc::H264Encoder;
+#[cfg(windows)]
 pub use loopback::{AppSound, audio_apps};
+#[cfg(windows)]
+pub use mpv::VideoPlayer;
 #[cfg(not(windows))]
 pub use other::Overlay;
 #[cfg(not(windows))]
 pub use other::{AppSound, audio_apps};
+#[cfg(not(windows))]
+pub use other::{H264Encoder, ParentWindow, VideoPlayer};
 #[cfg(not(windows))]
 pub use other::{
     KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
@@ -44,6 +56,7 @@ pub use other::{
 pub use overlay::Overlay;
 #[cfg(windows)]
 pub use ui_thread::{ParentWindow, UiThread};
+pub use video::{EncodedUnit, Rect, StreamSource, Track, TrackKind, VideoAction, VideoEvent, VideoSource};
 #[cfg(windows)]
 pub use win::{
     KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,

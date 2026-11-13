@@ -44,6 +44,27 @@ def shot(name):
     subprocess.run(['import', '-window', 'root', str(OUT / f'window-{name}.png')], env=env, check=False)
 
 
+FAKE_SCREEN = """
+navigator.mediaDevices.getDisplayMedia = async () => {
+  const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+  const g = c.getContext('2d'); let n = 0;
+  setInterval(() => { n++; g.fillStyle = `hsl(${(n * 7) % 360}, 90%, 60%)`; g.fillRect(0, 0, 1280, 720);
+    g.fillStyle = '#fff'; g.font = '80px sans-serif'; g.fillText('shared ' + n, 100, 300); }, 50);
+  return c.captureStream(30);
+};
+"""
+
+
+def stage_brightness(name):
+    """Mean brightness (0-1) of the middle of the stage in a screenshot."""
+    out = subprocess.run(['convert', str(OUT / f'window-{name}.png'), '-crop', '700x400+250+250', '-colorspace', 'Gray',
+                          '-format', '%[fx:mean]', 'info:'], capture_output=True, text=True, check=False).stdout
+    try:
+        return float(out.strip())
+    except ValueError:
+        return 0.0
+
+
 def log():
     with open(log_path, encoding='utf-8', errors='replace') as f:
         return f.read()
@@ -169,6 +190,32 @@ try:
               wait(lambda: pg.locator('.yt-fullstage-player, iframe[src*="youtube"], #yt-player').count() > 0
                    or 'Darshan loaded' in pg.locator('body').inner_text(), 10))
         click(1366, 31); time.sleep(0.6); click(1261, 96); time.sleep(0.6); shot('queue')
+
+        # screen sharing: the browser shares (a stand-in picture); the window shows it in the stage
+        click(1366, 31); time.sleep(0.6)  # the full stage again
+        pg.evaluate(FAKE_SCREEN)
+        pg.get_by_role('button', name='Share screen').first.click()
+        time.sleep(7); x('mousemove', '700', '500'); shot('screen-share')
+        check('the browser shares its screen: the window shows it in the stage',
+              stage_brightness('screen-share') > 0.35, stage_brightness('screen-share'))
+        pg.get_by_role('button', name=re.compile('Stop sharing', re.I)).first.click(); time.sleep(1.5)
+        # the desktop shares: the dock button opens the picker
+        click(843, 860); time.sleep(2); shot('screen-picker')
+        click(720, 419)  # the first screen
+        check('the desktop shares its screen from the picker: the browser shows it playing',
+              wait(lambda: pg.evaluate("""(() => { const v = [...document.querySelectorAll('.screen-share-stage video')].find(x => x.srcObject);
+                  return !!v && v.videoWidth > 0 && v.currentTime > 0.5; })()"""), 20))
+        time.sleep(1); x('mousemove', '700', '500'); shot('screen-sharing')
+        # the quality button: 720p for everyone (the screen here is 900 lines), then back to Native
+        click(1252, 104); time.sleep(0.8); shot('screen-quality-menu')
+        click(1290, 274); time.sleep(0.5); click(1252, 104)
+        check('...the quality menu sets 720p: the browser gets 720 lines',
+              wait(lambda: pg.evaluate("""(() => { const v = [...document.querySelectorAll('.screen-share-stage video')].find(x => x.srcObject);
+                  return v ? v.videoHeight : 0; })()""") == 720, 20))
+        click(1252, 104); time.sleep(0.5); click(1290, 178); time.sleep(0.5); click(1252, 104)
+        click(843, 860)  # the dock button again: stop
+        check('...and the dock button stops it', wait(lambda: pg.locator('.screen-share-stage video').count() == 0, 10))
+        click(1366, 31); time.sleep(0.6)  # the panel back
 
         # a second launch with a link hands it to this app, which asks before joining
         started = time.time()

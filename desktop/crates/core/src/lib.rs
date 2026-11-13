@@ -7,6 +7,7 @@
 
 #![deny(missing_docs)]
 
+pub mod files;
 pub mod fun;
 pub mod recovery;
 mod room;

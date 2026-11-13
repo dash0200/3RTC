@@ -45,6 +45,9 @@ pub(crate) struct Manifest {
     #[serde(default)]
     pub(crate) notes: String,
     pub(crate) exe: Asset,
+    /// The video player (`libmpv-2.dll`), for installs that don't have it yet.
+    #[serde(default)]
+    pub(crate) mpv: Option<Asset>,
 }
 
 /// A file to download.
@@ -103,6 +106,25 @@ pub(crate) fn install(asset: &Asset, progress: &dyn Fn(u8)) -> Result<(), String
     std::fs::write(&new, &bytes)
         .map_err(|e| format!("couldn't save the update in {} ({e})", dir.display()))?;
     swap(&exe, &new)
+}
+
+/// The video player beside the exe (`libmpv-2.dll`) when it's missing: installs from before
+/// it shipped, or an exe updated on its own. Blocking.
+pub(crate) fn ensure_player(m: &Manifest) -> Result<bool, String> {
+    let Some(asset) = &m.mpv else { return Ok(false) };
+    if !cfg!(windows) {
+        return Ok(false);
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dll = exe.with_file_name("libmpv-2.dll");
+    if dll.exists() {
+        return Ok(false);
+    }
+    let bytes = download(asset, &|_| {})?;
+    let part = exe.with_file_name("libmpv-2.dll.part");
+    std::fs::write(&part, &bytes).map_err(|e| format!("couldn't save the video player ({e})"))?;
+    std::fs::rename(&part, &dll).map_err(|e| format!("couldn't put the video player in place ({e})"))?;
+    Ok(true)
 }
 
 fn download(asset: &Asset, progress: &dyn Fn(u8)) -> Result<Vec<u8>, String> {
@@ -219,6 +241,12 @@ mod tests {
         )
         .unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!((m.build.as_str(), m.exe.size), ("261112.1430", 9));
+        assert!(m.mpv.is_none(), "older feeds have no video player");
+        let m: Manifest = serde_json::from_str(
+            r#"{"build":"261113.1000","exe":{"url":"https://a/3rtc.exe","sha256":"ab","size":9},"mpv":{"url":"https://a/libmpv-2.dll","sha256":"cd","size":5}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.mpv.map(|a| a.size), Some(5));
         assert_eq!(hex(&[0, 255, 16]), "00ff10");
     }
 

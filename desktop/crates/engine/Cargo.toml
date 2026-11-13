@@ -16,6 +16,10 @@ rtc-webrtc.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 rand.workspace = true
+sha2 = "0.10"
+serde_json.workspace = true
+futures-util.workspace = true
+rtc-platform-win.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

@@ -628,3 +628,218 @@ fn the_queue_and_vote_to_skip() {
             .any(|m| m["type"] == "yt-action" && m["action"] == "close" && m["byVote"] == true)
     );
 }
+
+fn local(action: &str, name: Option<&str>, size: Option<f64>, t: Option<f64>) -> PeerMessage {
+    PeerMessage::LocalVideoAction {
+        action: action.into(),
+        file_name: name.map(Into::into),
+        file_size: size,
+        current_time: t,
+        from_host: false,
+        vtt_string: None,
+        subtitle_info: None,
+    }
+}
+
+#[test]
+fn a_video_file_from_this_computer() {
+    let mut r = hosting_with(&[("riya", "Riya")]);
+    let fx = r.update(
+        watch(WatchCommand::PlayFile {
+            name: "Film.mkv".into(),
+            size: 2_000_000_000,
+        }),
+        1.0,
+    );
+    let load = &sent(&fx)[0];
+    assert_eq!(
+        (
+            load["type"].as_str(),
+            load["action"].as_str(),
+            load["fileName"].as_str(),
+            load["fileSize"].as_f64()
+        ),
+        (
+            Some("local-video-action"),
+            Some("load"),
+            Some("Film.mkv"),
+            Some(2e9)
+        )
+    );
+    assert!(
+        matches!(&player(&fx)[0], PlayerCmd::Open { playing: false, start, showing: Showing::Local { have: true, .. } } if *start == 0.0)
+    );
+    assert!(texts(&fx).contains(&"📁 You loaded local video: \"Film.mkv\"".to_owned()));
+    // we play it with the player's controls: the room hears it as local-video-action
+    let fx = r.update(
+        watch(WatchCommand::Player(PlayerReport::User {
+            action: UserAction::Play,
+            time: 3.0,
+        })),
+        2.0,
+    );
+    assert_eq!(
+        (sent(&fx)[0]["type"].as_str(), sent(&fx)[0]["action"].as_str()),
+        (Some("local-video-action"), Some("play"))
+    );
+    // a late joiner asks
+    r.update(
+        watch(WatchCommand::Player(PlayerReport::State {
+            time: 10.0,
+            playing: true,
+            buffering: false,
+            duration: 100.0,
+        })),
+        1000.0,
+    );
+    let fx = r.update(from("riya", PeerMessage::YtRequestSync), 3000.0);
+    let a = &sent(&fx)[0];
+    assert_eq!(
+        (
+            a["type"].as_str(),
+            a["mediaType"].as_str(),
+            a["fileName"].as_str(),
+            a["isPlaying"].as_bool()
+        ),
+        (
+            Some("local-video-sync-state"),
+            Some("local"),
+            Some("Film.mkv"),
+            Some(true)
+        )
+    );
+    assert!((a["currentTime"].as_f64().unwrap() - 12.0).abs() < 1e-6);
+    // Riya loads the same file (her copy): we keep ours
+    let fx = r.update(
+        from("riya", local("load", Some("Film.mkv"), Some(2e9), None)),
+        3100.0,
+    );
+    assert!(player(&fx).is_empty());
+    // the heartbeat key is the web app's
+    let fx = r.update(Input::Tick, 9000.0);
+    assert_eq!(sent(&fx)[0]["key"], "local:Film.mkv:2000000000");
+    // Exit tells everyone
+    let fx = r.update(watch(WatchCommand::Exit), 9100.0);
+    assert!(
+        sent(&fx)
+            .iter()
+            .any(|m| m["type"] == "local-video-action" && m["action"] == "close")
+    );
+    assert!(texts(&fx).contains(&"📁 You exited the local video".to_owned()));
+}
+
+#[test]
+fn someone_elses_file_then_our_own_copy() {
+    let mut g = guest_of("host");
+    let fx = g.update(
+        from("host", local("load", Some("Film.mp4"), Some(1234.0), None)),
+        1.0,
+    );
+    assert!(
+        matches!(g.watch().showing, Some(Showing::Local { ref name, size: 1234, have: false, ref from }) if name == "Film.mp4" && from.as_deref() == Some("Host"))
+    );
+    assert!(texts(&fx).contains(&"📁 Host loaded local video: \"Film.mp4\"".to_owned()));
+    // they play and seek before we have the file: the spot is kept
+    g.update(from("host", local("play", None, None, Some(0.0))), 1000.0);
+    g.update(from("host", local("seek", None, None, Some(40.0))), 2000.0);
+    // we pick our own copy 3 s later: it opens where the room is, playing
+    let fx = g.update(
+        watch(WatchCommand::PlayFile {
+            name: "Film.mp4".into(),
+            size: 1234,
+        }),
+        5000.0,
+    );
+    assert!(
+        matches!(&player(&fx)[0], PlayerCmd::Open { playing: true, start, .. } if (*start - 43.0).abs() < 1e-6),
+        "{:?}",
+        player(&fx)
+    );
+    // from now on their pause reaches our player
+    let fx = g.update(from("host", local("pause", None, None, Some(44.0))), 6000.0);
+    assert_eq!(
+        player(&fx),
+        vec![PlayerCmd::Pause {
+            at: Some(44.0),
+            who: "Host".into()
+        }]
+    );
+    assert!(texts(&fx).contains(&"⏸️ Host paused local video".to_owned()));
+    // they close it
+    let fx = g.update(from("host", local("close", None, None, None)), 7000.0);
+    assert_eq!(player(&fx), vec![PlayerCmd::Close]);
+    assert!(g.watch().showing.is_none());
+
+    // joining a room that watches a file
+    let mut late = guest_of("host");
+    let fx = late.update(
+        from(
+            "host",
+            PeerMessage::LocalVideoSyncState {
+                media_type: "local".into(),
+                file_name: "Film.mp4".into(),
+                file_size: 1234.0,
+                current_time: 61.0,
+                is_playing: true,
+                subtitle_info: None,
+            },
+        ),
+        1.0,
+    );
+    assert!(matches!(
+        late.watch().showing,
+        Some(Showing::Local { have: false, .. })
+    ));
+    assert!(texts(&fx).contains(&"🔄 Synced with room's local video session: \"Film.mp4\"".to_owned()));
+    assert!((late.watch_position(2001.0) - 63.0).abs() < 1e-6);
+}
+
+#[test]
+fn streaming_someone_elses_file() {
+    let mut g = guest_of("host");
+    g.update(
+        from("host", local("load", Some("Film.mkv"), Some(99.0), None)),
+        1.0,
+    );
+    g.update(from("host", local("play", None, None, Some(10.0))), 1000.0);
+    // a stream of another file changes nothing
+    let fx = g.update(
+        watch(WatchCommand::Streaming {
+            name: "Other.mkv".into(),
+        }),
+        2000.0,
+    );
+    assert!(player(&fx).is_empty());
+    // ours starts 2 s later: the player opens where the room is, playing, and nothing is sent
+    let fx = g.update(
+        watch(WatchCommand::Streaming {
+            name: "Film.mkv".into(),
+        }),
+        3000.0,
+    );
+    assert!(
+        matches!(&player(&fx)[0], PlayerCmd::Open { playing: true, start, .. } if (*start - 12.0).abs() < 1e-6),
+        "{:?}",
+        player(&fx)
+    );
+    assert!(matches!(
+        g.watch().showing,
+        Some(Showing::Local { have: true, .. })
+    ));
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::Broadcast(_))),
+        "no load goes out"
+    );
+    // the owner stops sharing: back to the offer
+    let fx = g.update(
+        watch(WatchCommand::StreamLost {
+            name: "Film.mkv".into(),
+        }),
+        4000.0,
+    );
+    assert_eq!(player(&fx), vec![PlayerCmd::Close]);
+    assert!(matches!(
+        g.watch().showing,
+        Some(Showing::Local { have: false, .. })
+    ));
+}

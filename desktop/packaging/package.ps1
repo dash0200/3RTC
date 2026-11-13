@@ -47,6 +47,10 @@ $dist = Join-Path $desktop 'target\dist'
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory $dist | Out-Null
 $exe = Join-Path $desktop 'target\release\3rtc.exe'
+# the local video player goes beside the exe
+& (Join-Path $PSScriptRoot 'get-mpv.ps1')
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$mpv = Join-Path $desktop 'target\mpv\libmpv-2.dll'
 $versioned = "3rtc-$build.exe"
 Copy-Item $exe (Join-Path $dist $versioned)
 
@@ -54,6 +58,7 @@ Copy-Item $exe (Join-Path $dist $versioned)
 $stage = Join-Path $dist 'portable\3RTC'
 New-Item -ItemType Directory $stage | Out-Null
 Copy-Item $exe (Join-Path $stage '3rtc.exe')
+Copy-Item $mpv (Join-Path $stage 'libmpv-2.dll')
 New-Item -ItemType File (Join-Path $stage 'portable') | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'README-portable.txt') (Join-Path $stage 'README.txt')
 $zip = Join-Path $dist "3RTC-portable-$build.zip"
@@ -69,7 +74,7 @@ $iscc = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
 ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if ($iscc) {
-    & $iscc /Q "/DAppBuild=$build" "/DSourceExe=$exe" "/O$dist" (Join-Path $PSScriptRoot '3rtc.iss')
+    & $iscc /Q "/DAppBuild=$build" "/DSourceExe=$exe" "/DMpvDll=$mpv" "/O$dist" (Join-Path $PSScriptRoot '3rtc.iss')
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
     Copy-Item (Join-Path $dist "3RTC-Setup-$build.exe") (Join-Path $dist '3RTC-Setup.exe')
 } else {
@@ -82,7 +87,10 @@ $manifest = [ordered]@{
     build = $build
     notes = $Notes
     exe   = [ordered]@{ url = "$BaseUrl$versioned"; sha256 = $hash; size = (Get-Item $exe).Length }
+    # the video player, fetched by installs that don't have it yet
+    mpv   = [ordered]@{ url = "${BaseUrl}libmpv-2.dll"; sha256 = (Get-FileHash $mpv -Algorithm SHA256).Hash.ToLowerInvariant(); size = (Get-Item $mpv).Length }
 }
+Copy-Item $mpv (Join-Path $dist 'libmpv-2.dll')
 # UTF-8 without a byte-order mark (Windows PowerShell's -Encoding utf8 would add one)
 [IO.File]::WriteAllText((Join-Path $dist 'latest.json'), ($manifest | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding $false))
 
@@ -90,7 +98,7 @@ if ($Publish) {
     $public = Join-Path $repo 'client-ts\public\desktop'
     New-Item -ItemType Directory $public -Force | Out-Null
     # only the newest version is kept there
-    Get-ChildItem $public -File | Where-Object { $_.Name -like '3rtc-*.exe' -or $_.Name -like '3RTC-*' } | Remove-Item
+    Get-ChildItem $public -File | Where-Object { $_.Name -like '3rtc-*.exe' -or $_.Name -like '3RTC-*' -or $_.Name -eq 'libmpv-2.dll' } | Remove-Item
     Copy-Item (Join-Path $dist '*') $public
     Write-Host "Copied to $public : deploy the web app to publish 3RTC $build." -ForegroundColor Green
 }

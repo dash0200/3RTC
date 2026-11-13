@@ -1,4 +1,5 @@
-//! The watch party on screen: the player (a WebView2 over the stage, `rtc_webview`), the paste
+//! The watch party on screen: the player (a WebView2 over the stage, `rtc_webview`, or mpv for a
+//! file from this computer, `local_video.rs`), the paste
 //! box, quick picks (`QuickPicksBrowser.tsx`), the header's sync pill, "Now playing", Skip and
 //! Exit (`Header.tsx`), and the Queue tab (`LiveChat.tsx`). The rules live in `rtc_core`
 //! (`WatchCommand`, `PlayerCmd`); this file shows them and turns clicks into commands.
@@ -32,23 +33,88 @@ use crate::view::RoomView;
 /// Room left beside the player for floating reactions (5.9 item 1).
 pub(crate) const REACTION_STRIP: f32 = 112.;
 
+/// What opens in the stage: a web player, or a video file in mpv.
+#[derive(Debug, Clone)]
+enum What {
+    Web(rtc_webview::Source),
+    File(std::path::PathBuf),
+    /// Someone's file, streamed to us.
+    Stream(rtc_engine::StreamReader),
+}
+
 /// What the player should open once the stage has a size.
 #[derive(Debug, Clone)]
 struct Open {
-    source: rtc_webview::Source,
+    what: What,
     start: f64,
     playing: bool,
 }
 
+/// The player in the stage: the web view (YouTube, links) or mpv (a file from this computer).
+pub(crate) enum Live {
+    Web(rtc_webview::Player),
+    Video(rtc_platform_win::VideoPlayer),
+}
+
+impl Live {
+    fn play(&self, at: Option<f64>) {
+        match self {
+            Self::Web(p) => p.play(at),
+            Self::Video(p) => p.play(at),
+        }
+    }
+
+    fn pause(&self, at: Option<f64>) {
+        match self {
+            Self::Web(p) => p.pause(at),
+            Self::Video(p) => p.pause(at),
+        }
+    }
+
+    fn seek(&self, to: f64) {
+        match self {
+            Self::Web(p) => p.seek(to),
+            Self::Video(p) => p.seek(to),
+        }
+    }
+
+    fn set_visible(&self, on: bool) {
+        match self {
+            Self::Web(p) => p.set_visible(on),
+            Self::Video(p) => p.set_visible(on),
+        }
+    }
+
+    /// Follows the stage (`scale`: physical pixels per logical one).
+    fn place(&self, b: Bounds<Pixels>, scale: f32) {
+        match self {
+            Self::Web(p) => p.set_bounds(rect(b)),
+            Self::Video(p) => p.set_rect(physical(b, scale)),
+        }
+    }
+
+    /// The local video player, if that's what plays.
+    pub(crate) const fn video(&self) -> Option<&rtc_platform_win::VideoPlayer> {
+        match self {
+            Self::Video(p) => Some(p),
+            Self::Web(_) => None,
+        }
+    }
+}
+
 pub(crate) struct WatchUi {
-    player: Rc<RefCell<Option<rtc_webview::Player>>>,
+    pub(crate) player: Rc<RefCell<Option<Live>>>,
     pending: Option<Open>,
     opening: bool,
     /// Why the player couldn't open (shown on the stage).
     pub(crate) error: Option<SharedString>,
     /// The stage's player rectangle (window coordinates, logical pixels).
     stage: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The window's scale when the stage was last measured.
+    scale: Rc<Cell<f32>>,
     shown: Rc<Cell<bool>>,
+    /// A video file from this computer (`local_video.rs`).
+    pub(crate) local: crate::local_video::LocalUi,
     events: tokio::sync::mpsc::UnboundedSender<rtc_webview::Event>,
     pub(crate) link_error: Option<SharedString>,
     pub(crate) queue_error: Option<SharedString>,
@@ -75,7 +141,9 @@ impl WatchUi {
             opening: false,
             error: None,
             stage: Rc::new(Cell::new(None)),
+            scale: Rc::new(Cell::new(1.0)),
             shown: Rc::new(Cell::new(true)),
+            local: crate::local_video::LocalUi::new(),
             events,
             link_error: None,
             queue_error: None,
@@ -93,8 +161,8 @@ impl WatchUi {
     }
 }
 
-fn source(s: &Showing) -> rtc_webview::Source {
-    match s {
+fn source(s: &Showing) -> Option<rtc_webview::Source> {
+    Some(match s {
         Showing::YouTube { id, .. } => rtc_webview::Source::YouTube(id.clone()),
         Showing::Link(m) => match m.provider {
             Provider::Vimeo => rtc_webview::Source::Vimeo(m.url.clone()),
@@ -104,7 +172,8 @@ fn source(s: &Showing) -> rtc_webview::Source {
             Provider::File => rtc_webview::Source::File(m.url.clone()),
             Provider::Hls => rtc_webview::Source::Hls(m.url.clone()),
         },
-    }
+        Showing::Local { .. } => return None,
+    })
 }
 
 fn web_data_dir() -> std::path::PathBuf {
@@ -112,6 +181,18 @@ fn web_data_dir() -> std::path::PathBuf {
         .map_or_else(std::env::temp_dir, std::path::PathBuf::from)
         .join("3RTC")
         .join("WebView2")
+}
+
+/// Logical bounds to physical pixels (mpv's child window is placed in those).
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn physical(b: Bounds<Pixels>, scale: f32) -> rtc_platform_win::Rect {
+    let px = |v: Pixels| (f32::from(v) * scale).round() as i32;
+    rtc_platform_win::Rect {
+        x: px(b.origin.x),
+        y: px(b.origin.y),
+        width: px(b.size.width),
+        height: px(b.size.height),
+    }
 }
 
 fn rect(b: Bounds<Pixels>) -> rtc_webview::Bounds {
@@ -300,7 +381,7 @@ impl RoomView {
         None
     }
 
-    fn watch_cmd(&self, c: WatchCommand) {
+    pub(crate) fn watch_cmd(&self, c: WatchCommand) {
         self.command(Command::Watch(c));
     }
 
@@ -313,14 +394,28 @@ impl RoomView {
                 start,
                 playing,
             } => {
-                // the old web view goes first (one at a time)
+                // the old player goes first (one at a time)
                 player.borrow_mut().take();
                 self.watch.error = None;
-                self.watch.pending = Some(Open {
-                    source: source(&showing),
-                    start,
-                    playing,
-                });
+                let what = match &showing {
+                    Showing::Local { name, .. } => {
+                        if let Some(path) = self.watch.local.path_for(name) {
+                            What::File(path)
+                        } else if let Some(reader) = self.watch.local.stream_for(name) {
+                            What::Stream(reader)
+                        } else {
+                            self.watch.error = Some("Choose the video file again to play it here.".into());
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    other => match source(other) {
+                        Some(s) => What::Web(s),
+                        None => return,
+                    },
+                };
+                self.watch.local.reset();
+                self.watch.pending = Some(Open { what, start, playing });
             }
             PlayerCmd::Play { at, .. } => {
                 if let Some(p) = player.borrow().as_ref() {
@@ -349,7 +444,10 @@ impl RoomView {
                 player.borrow_mut().take();
                 self.watch.pending = None;
                 self.watch.error = None;
+                self.watch.local.reset();
+                self.end_local_sharing();
             }
+            PlayerCmd::Subtitles { name, vtt } => self.room_subtitles(&name, &vtt, cx),
         }
         cx.notify();
     }
@@ -531,8 +629,22 @@ impl RoomView {
     }
 
     /// Hides the web view while something must show over the stage (5.9 item 1).
-    fn player_visible(&self) -> bool {
-        self.pop.is_none() && self.dialog.is_none() && !self.emoji_open && !self.watch.region_open
+    pub(crate) fn player_visible(&self) -> bool {
+        self.pop.is_none()
+            && self.dialog.is_none()
+            && !self.emoji_open
+            && !self.watch.region_open
+            && !self.screen.showing()
+    }
+
+    /// A shared screen covers the stage: the player's window hides (it would draw over it).
+    pub(crate) fn hide_player(&self) {
+        if self.watch.shown.get() {
+            self.watch.shown.set(false);
+            if let Some(p) = self.watch.player.borrow().as_ref() {
+                p.set_visible(false);
+            }
+        }
     }
 }
 
@@ -544,6 +656,17 @@ pub(crate) fn player_area(
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
+    // someone else's file that isn't here yet: the offer instead of a player
+    if let Some(Showing::Local {
+        name,
+        size,
+        from,
+        have: false,
+    }) = view.room.as_ref().and_then(|r| r.watch.showing.as_ref())
+    {
+        let (name, size, from) = (name.clone(), *size, from.clone());
+        return crate::local_video::offer(view, &name, size, from.as_deref(), cx);
+    }
     let visible = view.player_visible();
     let ui = &mut view.watch;
     // open a waiting player once the stage has a size (outside drawing)
@@ -554,11 +677,39 @@ pub(crate) fn player_area(
             let (Some(open), Some(bounds)) = (v.watch.pending.take(), v.watch.stage.get()) else {
                 return;
             };
+            let source = match open.what {
+                What::Web(source) => source,
+                What::File(path) => {
+                    v.share_own_file(&path);
+                    crate::local_video::open_player(
+                        v,
+                        window,
+                        bounds,
+                        rtc_platform_win::VideoSource::File(path),
+                        open.start,
+                        open.playing,
+                    );
+                    cx.notify();
+                    return;
+                }
+                What::Stream(reader) => {
+                    crate::local_video::open_player(
+                        v,
+                        window,
+                        bounds,
+                        rtc_platform_win::VideoSource::Stream(std::sync::Arc::new(crate::local_video::Streamed(reader))),
+                        open.start,
+                        open.playing,
+                    );
+                    cx.notify();
+                    return;
+                }
+            };
             let tx = v.watch.events.clone();
             match rtc_webview::Player::open(
                 &*window,
                 rect(bounds),
-                &open.source,
+                &source,
                 open.start,
                 open.playing,
                 web_data_dir(),
@@ -568,7 +719,7 @@ pub(crate) fn player_area(
             ) {
                 Ok(p) => {
                     p.set_visible(v.player_visible());
-                    *v.watch.player.borrow_mut() = Some(p);
+                    *v.watch.player.borrow_mut() = Some(Live::Web(p));
                 }
                 Err(e) => {
                     v.watch.error = Some(
@@ -592,31 +743,32 @@ pub(crate) fn player_area(
     }
     let player = Rc::clone(&ui.player);
     let stage = Rc::clone(&ui.stage);
+    let scale = Rc::clone(&ui.scale);
     let error = ui.error.clone();
     let hidden_note = !visible && ui.player.borrow().is_some();
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .bottom(px(0.))
-        .right(px(REACTION_STRIP))
-        .bg(tokens::black(1.0))
-        .rounded(tokens::RADIUS_VIDEO)
-        .overflow_hidden()
+    let showing = view.room.as_ref().and_then(|r| r.watch.showing.clone());
+    let local = matches!(showing, Some(Showing::Local { have: true, .. }));
+    let fullscreen = local && view.watch.local.fullscreen;
+    let video = div()
+        .relative()
+        .flex_1()
+        .min_h_0()
         .flex()
         .items_center()
         .justify_center()
         .child(
             canvas(
                 move |bounds, window, _| {
-                    if stage.get() != Some(bounds) {
+                    let s = window.scale_factor();
+                    if stage.get() != Some(bounds) || scale.get() != s {
                         if stage.get().is_none() {
                             // the first size: draw again so a waiting player opens
                             window.refresh();
                         }
                         stage.set(Some(bounds));
+                        scale.set(s);
                         if let Some(p) = player.borrow().as_ref() {
-                            p.set_bounds(rect(bounds));
+                            p.place(bounds, s);
                         }
                     }
                 },
@@ -643,7 +795,21 @@ pub(crate) fn player_area(
                     .text_color(tokens::text_3())
                     .child("The video is still playing"),
             )
-        })
+        });
+    let controls = local.then(|| crate::local_video::controls(view, cx));
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .bottom(px(0.))
+        .right(px(if local { 0. } else { REACTION_STRIP }))
+        .bg(tokens::black(1.0))
+        .when(!fullscreen, |el| el.rounded(tokens::RADIUS_VIDEO))
+        .overflow_hidden()
+        .flex()
+        .flex_col()
+        .child(video)
+        .children(controls)
         .into_any_element()
 }
 
@@ -1083,7 +1249,7 @@ pub(crate) fn queue_tab(
     let now = w.showing.clone().map(|s| {
         let thumb = match &s {
             Showing::YouTube { id, .. } => view.thumb(id, cx),
-            Showing::Link(_) => None,
+            Showing::Link(_) | Showing::Local { .. } => None,
         };
         (s, thumb)
     });
@@ -1252,6 +1418,7 @@ pub(crate) fn queue_tab(
                                 .justify_center()
                                 .child(match s {
                                     Showing::Link(m) => provider_emoji(Some(m)),
+                                    Showing::Local { .. } => "📁",
                                     Showing::YouTube { .. } => "",
                                 })
                                 .into_any_element(),

@@ -74,6 +74,12 @@ pub(crate) struct Settings {
     pub(crate) overlay: bool,
     /// Where the overlay sits: 0 top left, 1 top right, 2 bottom left, 3 bottom right.
     pub(crate) overlay_corner: u8,
+    /// Sharing your screen: the tallest picture sent (0: the screen's own size).
+    pub(crate) screen_max_height: u32,
+    /// Sharing your screen: frames a second (60 or 30).
+    pub(crate) screen_fps: u32,
+    /// Watching someone's screen: the tallest picture you want (0: as sent).
+    pub(crate) screen_quality: u32,
 }
 
 /// The settings file's format now. Each change that needs more than new fields with defaults
@@ -181,6 +187,9 @@ impl Default for Settings {
             qp_region: String::new(),
             overlay: false,
             overlay_corner: 0,
+            screen_max_height: 0,
+            screen_fps: 60,
+            screen_quality: 0,
         }
     }
 }

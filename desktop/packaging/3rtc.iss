@@ -41,6 +41,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "3rtc.exe"; Flags: ignoreversion
+#ifdef MpvDll
+Source: "{#MpvDll}"; DestDir: "{app}"; DestName: "libmpv-2.dll"; Flags: ignoreversion
+#endif
 
 [Icons]
 Name: "{userprograms}\3RTC"; Filename: "{app}\3rtc.exe"
