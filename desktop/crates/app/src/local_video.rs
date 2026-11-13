@@ -6,6 +6,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::{
     AnyElement, Bounds, Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
@@ -33,6 +34,8 @@ const VIDEO_EXT: &[&str] = &[
 const SUB_EXT: &[&str] = &["srt", "ass", "ssa", "vtt", "sub", "sup"];
 /// The control bar under the video.
 const BAR_H: f32 = 52.;
+/// In full screen, the controls bar stays visible this long after the pointer moved out of it.
+const FULLSCREEN_HIDE_DELAY: Duration = Duration::from_millis(3500);
 
 fn has_ext(path: &Path, list: &[&str]) -> bool {
     path.extension()
@@ -107,6 +110,10 @@ pub(crate) struct LocalUi {
     /// The open track menu.
     pub(crate) menu: Option<TrackKind>,
     pub(crate) fullscreen: bool,
+    /// In full screen, whether the bottom controls panel is currently shown.
+    pub(crate) fullscreen_controls: bool,
+    /// When the cursor moved out of the panel in full screen.
+    pub(crate) controls_left_at: Option<Instant>,
     /// The offer card's note (the wrong file was chosen).
     pub(crate) offer_error: Option<SharedString>,
     /// The file we offer to viewers (the engine serves it).
@@ -144,6 +151,8 @@ impl LocalUi {
             tracks: Vec::new(),
             menu: None,
             fullscreen: false,
+            fullscreen_controls: false,
+            controls_left_at: None,
             offer_error: None,
             sharing: false,
             stream: None,
@@ -189,6 +198,8 @@ impl LocalUi {
         self.buffering = false;
         self.tracks.clear();
         self.menu = None;
+        self.fullscreen_controls = false;
+        self.controls_left_at = None;
         self.offer_error = None;
     }
 }
@@ -692,6 +703,10 @@ impl RoomView {
     pub(crate) fn toggle_video_fullscreen(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let on = !self.watch.local.fullscreen;
         self.watch.local.fullscreen = on;
+        if on {
+            self.watch.local.fullscreen_controls = false;
+            self.watch.local.controls_left_at = None;
+        }
         if window.is_fullscreen() != on {
             window.toggle_fullscreen();
         }
@@ -701,8 +716,45 @@ impl RoomView {
     /// Leaves full screen when the video is gone (drawing found it so).
     pub(crate) fn end_video_fullscreen(&mut self, window: &mut Window) {
         self.watch.local.fullscreen = false;
+        self.watch.local.fullscreen_controls = false;
+        self.watch.local.controls_left_at = None;
         if window.is_fullscreen() {
             window.toggle_fullscreen();
+        }
+    }
+
+    /// Cursor entered or left the controls panel in full screen.
+    pub(crate) fn local_video_controls_hover(&mut self, hovered: bool, cx: &mut Context<'_, Self>) {
+        if !self.watch.local.fullscreen {
+            return;
+        }
+        if hovered {
+            let change = !self.watch.local.fullscreen_controls;
+            self.watch.local.fullscreen_controls = true;
+            self.watch.local.controls_left_at = None;
+            if change {
+                cx.notify();
+            }
+        } else {
+            if !self.watch.local.fullscreen_controls {
+                return;
+            }
+            self.watch.local.controls_left_at = Some(Instant::now());
+            cx.spawn(async move |v, cx| {
+                cx.background_executor().timer(FULLSCREEN_HIDE_DELAY).await;
+                v.update(cx, |v, cx| {
+                    if v.watch.local.fullscreen
+                        && v.watch.local.menu.is_none()
+                        && v.watch.local.controls_left_at.is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
+                    {
+                        v.watch.local.fullscreen_controls = false;
+                        v.watch.local.controls_left_at = None;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
         }
     }
 }
@@ -962,6 +1014,7 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
     });
     let problems = l.problems.clone();
     div()
+        .id("lv-controls")
         .flex_none()
         .flex()
         .flex_col()
@@ -983,6 +1036,16 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
         .border_color(tokens::line())
         .children(menu_row)
         .child(bar)
+        .on_hover(cx.listener(|v, hovered: &bool, _, cx| {
+            if v.watch.local.fullscreen {
+                v.local_video_controls_hover(*hovered, cx);
+            }
+        }))
+        .on_mouse_move(cx.listener(|v, _, _, cx| {
+            if v.watch.local.fullscreen {
+                v.local_video_controls_hover(true, cx);
+            }
+        }))
         .into_any_element()
 }
 

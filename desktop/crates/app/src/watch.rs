@@ -17,7 +17,7 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{
     AnyElement, AppContext as _, Bounds, Context, Entity, FontWeight, Hsla, Image, ImageFormat,
-    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, Pixels, SharedString,
+    InteractiveElement as _, IntoElement, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels, SharedString,
     StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas, div, img,
     prelude::FluentBuilder as _, px,
 };
@@ -826,7 +826,25 @@ pub(crate) fn player_area(
                     .child("The video is still playing"),
             )
         });
-    let controls = local.then(|| crate::local_video::controls(view, cx));
+    let show_controls = local && (!fullscreen || view.watch.local.fullscreen_controls);
+    let controls = show_controls.then(|| crate::local_video::controls(view, cx));
+    let bottom_trigger = (fullscreen && !view.watch.local.fullscreen_controls).then(|| {
+        div()
+            .id("lv-bottom-trigger")
+            .h(px(8.))
+            .flex_none()
+            .bg(tokens::black(1.0))
+            .on_hover(cx.listener(|v, hovered: &bool, _, cx| {
+                if *hovered && v.watch.local.fullscreen {
+                    v.local_video_controls_hover(true, cx);
+                }
+            }))
+            .on_mouse_move(cx.listener(|v, _, _, cx| {
+                if v.watch.local.fullscreen {
+                    v.local_video_controls_hover(true, cx);
+                }
+            }))
+    });
     div()
         .absolute()
         .top_0()
@@ -840,6 +858,20 @@ pub(crate) fn player_area(
         .flex_col()
         .child(video)
         .children(controls)
+        .children(bottom_trigger)
+        .when(fullscreen, |el| {
+            el.on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, window, cx| {
+                if v.watch.local.fullscreen {
+                    let h: f32 = window.viewport_size().height.into();
+                    let y: f32 = e.position.y.into();
+                    if y >= h - 60.0 {
+                        v.local_video_controls_hover(true, cx);
+                    } else if v.watch.local.fullscreen_controls && v.watch.local.controls_left_at.is_none() {
+                        v.local_video_controls_hover(false, cx);
+                    }
+                }
+            }))
+        })
         .into_any_element()
 }
 
