@@ -1,9 +1,9 @@
 {
-    "build":  "261114.0609",
+    "build":  "261114.0738",
     "notes":  "",
     "exe":  {
-                "url":  "https://3rtc.me/desktop/3rtc-261114.0609.exe",
-                "sha256":  "50acca1f0d3bad03299b4fa80e99187842edc82a0f3a7b20c3709fe790ee75f2",
-                "size":  45641728
+                "url":  "https://3rtc.me/desktop/3rtc-261114.0738.exe",
+                "sha256":  "4bca966d4caf4b2a4874ead56f5e926dec27b2a44437b70e986f8c0bde5b730a",
+                "size":  45661184
             }
 }
