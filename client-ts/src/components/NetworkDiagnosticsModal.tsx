@@ -1,7 +1,8 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { getNetworkHealthGrade, generateDiagnosticReport } from '../utils/networkMonitor';
 import { copyToClipboard } from '../utils/clipboard';
-import type { NetworkStatsSummary, PeerNetworkStatsRecord } from '../hooks/useNetworkStats';
+import type { NetworkStatsSummary, PeerNetworkStatsRecord, TopologyDistanceMatrix } from '../hooks/useNetworkStats';
+import NetworkTopologyMap from './NetworkTopologyMap';
 
 export interface NetworkDiagnosticsModalProps {
   isOpen: boolean;
@@ -11,6 +12,13 @@ export interface NetworkDiagnosticsModalProps {
   roomId?: string | null;
   username?: string;
   onTriggerPing?: () => void;
+  hostPeerId?: string | null;
+  myPeerId?: string;
+  peerMetadata?: Record<string, { username?: string; isMuted?: boolean; client?: string }>;
+  topologyMatrix?: TopologyDistanceMatrix;
+  topology?: 'mesh' | 'hub';
+  isHost?: boolean;
+  onSwitchTopology?: (topology: 'mesh' | 'hub') => void;
   /** extra panels at the end (the Stream doctor) */
   children?: ReactNode;
 }
@@ -23,9 +31,17 @@ export default function NetworkDiagnosticsModal({
   roomId = '',
   username = '',
   onTriggerPing,
+  hostPeerId,
+  myPeerId = '',
+  peerMetadata = {},
+  topologyMatrix = {},
+  topology = 'mesh',
+  isHost = false,
+  onSwitchTopology,
   children
 }: NetworkDiagnosticsModalProps) {
   const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState<'hud' | 'topology'>('hud');
 
   // Close on Escape key
   useEffect(() => {
@@ -167,7 +183,57 @@ export default function NetworkDiagnosticsModal({
           </button>
         </div>
 
-        {/* 4 Primary Metric Cards */}
+        {/* Navigation Tabs */}
+        <div style={{ display: 'flex', gap: '8px', padding: '0 20px', borderBottom: '1px solid #1e293b', marginBottom: '16px' }}>
+          <button
+            type="button"
+            onClick={() => setActiveTab('hud')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === 'hud' ? '2px solid #38bdf8' : '2px solid transparent',
+              color: activeTab === 'hud' ? '#38bdf8' : '#94a3b8',
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            📊 Telemetry HUD
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('topology')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              borderBottom: activeTab === 'topology' ? '2px solid #38bdf8' : '2px solid transparent',
+              color: activeTab === 'topology' ? '#38bdf8' : '#94a3b8',
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            🗺️ Topology & Technical Distance Map
+          </button>
+        </div>
+
+        {activeTab === 'topology' ? (
+          <NetworkTopologyMap
+            hostPeerId={hostPeerId}
+            myPeerId={myPeerId}
+            username={username}
+            peerMetadata={peerMetadata}
+            peersStats={peersStats}
+            topologyMatrix={topologyMatrix}
+            topology={topology}
+            isHost={isHost}
+            onSwitchTopology={onSwitchTopology}
+          />
+        ) : (
+          <>
+            {/* 4 Primary Metric Cards */}
         <div className="hud-metrics-grid">
           {/* Tile 1: Ping / Latency */}
           <div className="hud-stat-card">
@@ -341,6 +407,8 @@ export default function NetworkDiagnosticsModal({
             </div>
           )}
         </div>
+        </>
+        )}
 
         {children}
 

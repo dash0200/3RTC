@@ -693,8 +693,9 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   Power saving / High performance, from the next start). Tests: `desktop_screen_sound_test.py`
   (10), `desktop_remote_control_test.py` (24), `desktop_screen_hq_test.py` (13).
   Next: the stream doctor. Where things stand in detail: `docs/STATUS.md`.
-- [ ] **M7: host hub and LAN rooms.** `Topology` trait with `Mesh` and `Hub`; the plan's hub
-  design. Needs server and web changes: write a design ADR and ask before starting.
+- [ ] **M7: host hub, LAN rooms, topology map, hybrid GPU/CPU stream.** `Topology` trait with
+  `Mesh` and `Hub`, LAN local discovery and offline signaling, interactive Topology Distance Map,
+  and single master GPU encode with dual-GPU/CPU fanout (ADR 0008). In progress.
 
 ---
 

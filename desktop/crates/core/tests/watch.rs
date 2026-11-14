@@ -68,6 +68,7 @@ fn hosting_with(peers: &[(&str, &str)]) -> Room {
             host_peer_id: pid("me"),
             seat_token: "seat".into(),
             host_token: "host".into(),
+            topology: None,
         }),
         0.0,
     );
@@ -91,6 +92,7 @@ fn guest_of(host: &str) -> Room {
             peers: vec![pid(host)],
             seat_token: "s".into(),
             host_token: None,
+            topology: None,
         }),
         0.0,
     );

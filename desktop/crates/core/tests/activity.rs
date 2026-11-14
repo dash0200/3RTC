@@ -29,6 +29,7 @@ fn hosting() -> Room {
             host_peer_id: pid("me"),
             seat_token: "seat".into(),
             host_token: "host".into(),
+            topology: None,
         }),
         0.0,
     );
@@ -264,6 +265,7 @@ fn a_guest_follows_the_hosts_state_and_sends_its_moves_there() {
             host_peer_id: pid("riya"),
             seat_token: "seat".into(),
             host_token: None,
+            topology: None,
         }),
         0.0,
     );

@@ -57,13 +57,15 @@ export function attachSignaling(server) {
    * @param {string} roomId
    * @param {string} epoch
    * @param {string | null} hostPeerId
+   * @param {number} [hostGen]
+   * @param {'mesh' | 'hub'} [topology]
    */
-  function openRoom(roomId, epoch, hostPeerId, hostGen = 0) {
+  function openRoom(roomId, epoch, hostPeerId, hostGen = 0, topology = 'mesh') {
     /** @type {Map<string, import('./types/protocol.d.ts').SignalingSocket>} */
     const room = new Map();
     rooms.set(roomId, room);
     // hostGen: how many times the host has handed the room on (host tokens name it; older ones stop working)
-    roomInfo.set(roomId, { epoch, hostPeerId, hostGen });
+    roomInfo.set(roomId, { epoch, hostPeerId, hostGen, topology });
     return room;
   }
 
@@ -261,12 +263,14 @@ export function attachSignaling(server) {
 
             const otherPeers = getOtherPeers(resumeRoomId, peerId);
             log('RESUME', `Peer ${peerId} resumed room "${resumeRoomId}" (Total: ${room.size})`);
+            const topology = currentInfo?.topology || 'mesh';
             safeSend(ws, {
               type: 'room-resumed',
               roomId: resumeRoomId,
               peerId,
               peers: otherPeers.map((p) => p.peerId),
               hostPeerId: peerId,
+              topology,
               ...tokensFor(resumeRoomId, peerId, true)
             });
             for (const peer of otherPeers) {
@@ -305,10 +309,11 @@ export function attachSignaling(server) {
           }
           if (isValidPeerId(data.peerId)) ws.peerId = data.peerId;
 
-          openRoom(generatedRoomId, newEpoch(), ws.peerId).set(ws.peerId, ws);
+          const topology = data.topology === 'hub' ? 'hub' : 'mesh';
+          openRoom(generatedRoomId, newEpoch(), ws.peerId, 0, topology).set(ws.peerId, ws);
           ws.roomId = generatedRoomId;
 
-          log('CREATE', `Peer ${ws.peerId} created room "${generatedRoomId}"`);
+          log('CREATE', `Peer ${ws.peerId} created room "${generatedRoomId}" (topology: ${topology})`);
 
           safeSend(ws, {
             type: 'room-created',
@@ -316,6 +321,7 @@ export function attachSignaling(server) {
             peerId: ws.peerId,
             peers: [],
             hostPeerId: ws.peerId,
+            topology,
             ...tokensFor(generatedRoomId, ws.peerId, true)
           });
           break;
@@ -437,9 +443,16 @@ export function attachSignaling(server) {
           rateLimiter.recordSuccessfulJoin(ws.clientIp);
 
           const otherPeers = getOtherPeers(roomId, ws.peerId);
-          const peerIdsInRoom = otherPeers.map(p => p.peerId);
+          const currentTopology = info?.topology || 'mesh';
+          const isHost = Boolean(isHostSeat && hasValidSeatToken);
+          const hostPeerId = hostOf(roomId);
 
-          log('JOIN', `Peer ${ws.peerId} joined room "${roomId}" (Total: ${room.size})`);
+          // In Hub topology, guests only connect to the host; the host connects to all guests.
+          const peerIdsInRoom = currentTopology === 'hub'
+            ? (isHost ? otherPeers.map((p) => p.peerId) : (hostPeerId ? [hostPeerId] : []))
+            : otherPeers.map((p) => p.peerId);
+
+          log('JOIN', `Peer ${ws.peerId} joined room "${roomId}" (Total: ${room.size}, topology: ${currentTopology})`);
 
           // Acknowledge join to the sender with existing peer IDs
           safeSend(ws, {
@@ -447,12 +460,17 @@ export function attachSignaling(server) {
             roomId,
             peerId: ws.peerId,
             peers: peerIdsInRoom,
-            hostPeerId: hostOf(roomId),
-            ...tokensFor(roomId, ws.peerId, isHostSeat && hasValidSeatToken)
+            hostPeerId,
+            topology: currentTopology,
+            ...tokensFor(roomId, ws.peerId, isHost)
           });
 
           // Notify other peers about the newcomer
           for (const peer of otherPeers) {
+            // In Hub topology, non-hosts do not connect directly to other non-hosts
+            if (currentTopology === 'hub' && !isHost && peer.peerId !== hostPeerId) {
+              continue;
+            }
             safeSend(peer.ws, {
               type: 'peer-joined',
               peerId: ws.peerId
@@ -484,6 +502,28 @@ export function attachSignaling(server) {
           safeSend(target, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
           for (const [, clientWs] of room.entries()) {
             safeSend(clientWs, { type: 'host', hostPeerId: targetId, from: ws.peerId });
+          }
+          break;
+        }
+
+        case 'set-topology': {
+          const roomId = ws.roomId;
+          const info = roomId ? roomInfo.get(roomId) : null;
+          const room = roomId ? rooms.get(roomId) : null;
+          if (!roomId || !info || !room || info.hostPeerId !== ws.peerId || room.get(ws.peerId) !== ws) {
+            safeSend(ws, { type: 'error', code: 'not-host', message: 'Only the host can set room topology' });
+            return;
+          }
+          const nextTopology = data.topology === 'hub' ? 'hub' : 'mesh';
+          if (info.topology === nextTopology) return;
+          info.topology = nextTopology;
+          log('TOPOLOGY', `Host ${ws.peerId} set room "${roomId}" topology to ${nextTopology}`);
+          for (const [, clientWs] of room.entries()) {
+            safeSend(clientWs, {
+              type: 'topology-changed',
+              topology: nextTopology,
+              hostPeerId: ws.peerId
+            });
           }
           break;
         }

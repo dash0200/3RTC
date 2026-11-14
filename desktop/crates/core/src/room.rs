@@ -1225,7 +1225,10 @@ impl Room {
                 }
                 fx.push(Effect::Ui(UiEvent::Notice(text)));
             }
-            ServerMessage::Pong | ServerMessage::RoomFound { .. } | ServerMessage::Unknown => {}
+            ServerMessage::Pong
+            | ServerMessage::RoomFound { .. }
+            | ServerMessage::TopologyChanged { .. }
+            | ServerMessage::Unknown => {}
         }
     }
 
@@ -1519,7 +1522,7 @@ impl Room {
                     body,
                 }));
             }
-            PeerMessage::NetPong { .. } | PeerMessage::Unknown => {}
+            PeerMessage::NetPong { .. } | PeerMessage::NetTopologyReport { .. } | PeerMessage::Unknown => {}
         }
     }
 }

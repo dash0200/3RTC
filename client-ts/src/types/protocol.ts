@@ -80,6 +80,14 @@ export interface TransferHostMessage extends BaseSignalingMessage {
   targetPeerId: string;
 }
 
+export type RoomTopologyKind = 'mesh' | 'hub';
+
+/** The host switches room topology between full mesh and host-hub */
+export interface SetTopologyMessage extends BaseSignalingMessage {
+  type: 'set-topology';
+  topology: RoomTopologyKind;
+}
+
 // Server -> Browser
 export interface RoomCreatedMessage extends BaseSignalingMessage {
   type: 'room-created';
@@ -88,6 +96,7 @@ export interface RoomCreatedMessage extends BaseSignalingMessage {
   hostPeerId: string;
   seatToken: string;
   hostToken: string;
+  topology?: RoomTopologyKind;
 }
 
 export interface RoomResumedMessage extends BaseSignalingMessage {
@@ -98,6 +107,7 @@ export interface RoomResumedMessage extends BaseSignalingMessage {
   hostPeerId: string;
   seatToken: string;
   hostToken: string;
+  topology?: RoomTopologyKind;
 }
 
 export interface JoinedMessage extends BaseSignalingMessage {
@@ -108,6 +118,7 @@ export interface JoinedMessage extends BaseSignalingMessage {
   hostPeerId: string;
   seatToken: string;
   hostToken?: string;
+  topology?: RoomTopologyKind;
 }
 
 export interface HostUpdateMessage extends BaseSignalingMessage {
@@ -122,6 +133,13 @@ export interface HostTokenMessage extends BaseSignalingMessage {
   type: 'host-token';
   roomId: string;
   hostToken: string;
+}
+
+/** Broadcast to all room peers when host changes network topology */
+export interface TopologyChangedMessage extends BaseSignalingMessage {
+  type: 'topology-changed';
+  topology: RoomTopologyKind;
+  hostPeerId: string;
 }
 
 export interface PeerJoinedMessage extends BaseSignalingMessage {
@@ -177,7 +195,8 @@ export type OutgoingSignalingMessage =
   | SendAnswerMessage
   | SendIceCandidateMessage
   | PingMessage
-  | TransferHostMessage;
+  | TransferHostMessage
+  | SetTopologyMessage;
 
 export type IncomingSignalingMessage =
   | RoomCreatedMessage
@@ -185,6 +204,7 @@ export type IncomingSignalingMessage =
   | JoinedMessage
   | HostUpdateMessage
   | HostTokenMessage
+  | TopologyChangedMessage
   | PeerJoinedMessage
   | PeerLeftMessage
   | LeftMessage
@@ -242,6 +262,24 @@ export interface NetPongMessage extends BasePeerMessage {
   type: 'net-pong';
   pingId: string;
   sendTime: number;
+}
+
+export type CandidatePathKind = 'host' | 'srflx' | 'prflx' | 'relay';
+
+export interface PeerLinkMetric {
+  rttMs: number;
+  candidateType: CandidatePathKind;
+  lossPct: number;
+  jitterMs: number;
+  downloadKBps?: number;
+  uploadKBps?: number;
+}
+
+/** Broadcast across DataChannels so every room participant knows the full P2P distance topology */
+export interface NetTopologyReportMessage extends BasePeerMessage {
+  type: 'net-topology-report';
+  from: string;
+  links: Record<string, PeerLinkMetric>;
 }
 
 // Chat, Reactions, Soundboard
@@ -545,6 +583,7 @@ export type PeerMessage =
   | PeerByeMessage
   | NetPingMessage
   | NetPongMessage
+  | NetTopologyReportMessage
   | ChatMessage
   | P2PImageStartMessage
   | ReactionMessage
