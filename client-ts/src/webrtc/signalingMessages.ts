@@ -197,6 +197,7 @@ export async function processSignalingMessage(
 
         if (pc.getTransceivers) {
           const allTransceivers = pc.getTransceivers();
+          let seenAudioTransceiver = false;
           for (const t of allTransceivers) {
             const isVideo =
               t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video';
@@ -207,14 +208,20 @@ export async function processSignalingMessage(
                 t.sender.replaceTrack(currentScreenTrackRef.current).catch(() => {});
               }
             } else {
-              peerEntry.audioTransceiver = t;
-              t.direction = 'sendrecv';
-              if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
-                const audioTrack =
-                  micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
-                if (audioTrack) {
-                  t.sender.replaceTrack(audioTrack).catch(() => {});
+              if (!seenAudioTransceiver) {
+                seenAudioTransceiver = true;
+                peerEntry.audioTransceiver = t;
+                t.direction = 'sendrecv';
+                if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
+                  const audioTrack =
+                    micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
+                  if (audioTrack) {
+                    t.sender.replaceTrack(audioTrack).catch(() => {});
+                  }
                 }
+              } else {
+                // Secondary audio line (e.g. incoming screen-audio)
+                t.direction = 'recvonly';
               }
             }
           }

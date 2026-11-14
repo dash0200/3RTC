@@ -2,7 +2,9 @@ import { routeMediaElement } from '../utils/audioDevices';
 
 export interface PeerAudioEntry {
   audioElement?: HTMLAudioElement | null;
+  screenAudioElement?: HTMLAudioElement | null;
   remoteVideoStream?: MediaStream | null;
+  remoteScreenAudioStream?: MediaStream | null;
   webAudioSource?: MediaStreamAudioSourceNode | null;
   webAudioGain?: GainNode | null;
   analyserNode?: AnalyserNode | null;
@@ -18,6 +20,7 @@ export interface AttachRemoteAudioContext {
   logLocalDebug: (tag: string, detail: string) => void;
   onRemoteVideoStream?: (targetPeerId: string, stream: MediaStream, track: MediaStreamTrack) => void;
   onRemoteVideoStreamEnded?: (targetPeerId: string) => void;
+  onRemoteScreenAudioStream?: (targetPeerId: string, stream: MediaStream, track: MediaStreamTrack) => void;
 }
 
 /**
@@ -40,10 +43,95 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
       const videoStream =
         event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
       peerEntry.remoteVideoStream = videoStream;
+      if (peerEntry.remoteScreenAudioStream) {
+        for (const t of peerEntry.remoteScreenAudioStream.getAudioTracks()) {
+          if (!videoStream.getAudioTracks().includes(t)) {
+            videoStream.addTrack(t);
+          }
+        }
+      }
       ctx.onRemoteVideoStream?.(targetPeerId, videoStream, event.track);
       event.track.onended = () => {
         ctx.onRemoteVideoStreamEnded?.(targetPeerId);
       };
+      return;
+    }
+
+    const isScreenAudio = Boolean(
+      (event.streams && event.streams.some((s) => s.id === 'screen-audio')) ||
+      event.track.id === 'screen-audio' ||
+      event.track.id.startsWith('screen-audio')
+    );
+
+    if (isScreenAudio) {
+      const screenStream =
+        event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+      peerEntry.remoteScreenAudioStream = screenStream;
+
+      if (peerEntry.remoteVideoStream) {
+        if (!peerEntry.remoteVideoStream.getAudioTracks().includes(event.track)) {
+          peerEntry.remoteVideoStream.addTrack(event.track);
+        }
+      }
+
+      ctx.onRemoteScreenAudioStream?.(targetPeerId, screenStream, event.track);
+
+      let screenAudioEl = peerEntry.screenAudioElement;
+      if (!screenAudioEl) {
+        screenAudioEl = document.createElement('audio');
+        screenAudioEl.id = `remote-screen-audio-${targetPeerId}`;
+        screenAudioEl.autoplay = true;
+        screenAudioEl.playsInline = true;
+        screenAudioEl.style.position = 'fixed';
+        screenAudioEl.style.left = '-9999px';
+        screenAudioEl.style.top = '-9999px';
+        screenAudioEl.style.width = '1px';
+        screenAudioEl.style.height = '1px';
+        screenAudioEl.style.opacity = '0.01';
+        document.body.appendChild(screenAudioEl);
+        peerEntry.screenAudioElement = screenAudioEl;
+      }
+
+      const isLocalMutedInit = Boolean(localMutedPeersRef.current[targetPeerId]);
+      const peerVolInit =
+        peerVolumesRef.current[targetPeerId] !== undefined ? peerVolumesRef.current[targetPeerId] : 1.0;
+      const effectiveInit = isAudioBlockedRef.current || isLocalMutedInit ? 0 : peerVolInit;
+
+      screenAudioEl.srcObject = screenStream;
+      screenAudioEl.muted = effectiveInit === 0;
+      screenAudioEl.volume = Math.min(1.0, effectiveInit);
+      routeMediaElement(screenAudioEl);
+
+      event.track.onunmute = () => {
+        if (peerEntry.screenAudioElement && !isAudioBlockedRef.current) {
+          const freshScreenStream = new MediaStream([event.track]);
+          peerEntry.screenAudioElement.srcObject = freshScreenStream;
+          peerEntry.screenAudioElement.play().catch(() => {});
+        }
+      };
+
+      const screenPlayPromise = screenAudioEl.play();
+      if (screenPlayPromise !== undefined) {
+        screenPlayPromise
+          .then(() => {
+            logLocalDebug('SCREEN_AUDIO_PLAY_OK', `Peer: ${targetPeerId} screen audio actively playing!`);
+          })
+          .catch((err: unknown) => {
+            const errStr = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+            logLocalDebug('SCREEN_AUDIO_PLAY_BLOCKED', `Peer: ${targetPeerId} screen audio autoplay blocked: ${errStr}`);
+            const resumeScreenOnInteraction = () => {
+              if (peerEntry.screenAudioElement && !isAudioBlockedRef.current) {
+                peerEntry.screenAudioElement.play().catch(() => {});
+              }
+              window.removeEventListener('click', resumeScreenOnInteraction);
+              window.removeEventListener('keydown', resumeScreenOnInteraction);
+              window.removeEventListener('touchstart', resumeScreenOnInteraction);
+            };
+            window.addEventListener('click', resumeScreenOnInteraction);
+            window.addEventListener('keydown', resumeScreenOnInteraction);
+            window.addEventListener('touchstart', resumeScreenOnInteraction);
+          });
+      }
       return;
     }
 

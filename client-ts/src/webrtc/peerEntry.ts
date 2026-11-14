@@ -10,6 +10,8 @@ export interface PeerEntryRecord {
   isConnected?: boolean;
   candidateQueue?: RTCIceCandidateInit[];
   audioElement?: HTMLAudioElement | null;
+  screenAudioElement?: HTMLAudioElement | null;
+  remoteScreenAudioStream?: MediaStream | null;
   audioTransceiver?: RTCRtpTransceiver | null;
   videoTransceiver?: RTCRtpTransceiver | null;
   isInitiator?: boolean;
@@ -51,6 +53,16 @@ export function teardownPeerEntry(
         // ignore
       }
       entry.audioElement = null;
+    }
+    if (entry.screenAudioElement) {
+      entry.screenAudioElement.pause();
+      entry.screenAudioElement.srcObject = null;
+      try {
+        entry.screenAudioElement.remove();
+      } catch {
+        // ignore
+      }
+      entry.screenAudioElement = null;
     }
   } catch {
     // ignore

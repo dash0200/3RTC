@@ -317,7 +317,7 @@ export default function ScreenShareStage({
           ref={videoRef}
           autoPlay
           playsInline
-          muted={isLocal}
+          muted
           className="screen-share-video-el"
         />
 
