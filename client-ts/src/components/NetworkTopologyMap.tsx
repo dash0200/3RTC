@@ -4,7 +4,7 @@ import {
   calculateTechnicalDistance,
   type TopologyDistanceMatrix,
   type TechnicalDistanceEvaluation
-} from '../hooks/useNetworkStats';
+} from '../utils/networkMonitor';
 import type { PeerLinkMetric } from '../types/protocol';
 
 export interface NetworkTopologyMapProps {
