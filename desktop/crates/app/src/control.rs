@@ -24,6 +24,8 @@ use crate::view::RoomView;
 
 /// Pointer moves go out at most this often while in control (~125 a second).
 const MOVE_GAP: Duration = Duration::from_millis(8);
+/// In Game Mode, pointer deltas go out up to 250 times a second (~4ms) for smooth 360 camera aim.
+const GAME_MOVE_GAP: Duration = Duration::from_millis(4);
 
 /// A GPUI key name as a Windows virtual-key code (US layout for the punctuation).
 pub(crate) fn vk_for(key: &str) -> Option<u16> {
@@ -220,7 +222,7 @@ impl RoomView {
         if self
             .screen
             .ctl_sent
-            .is_none_or(|t| now.duration_since(t) >= MOVE_GAP)
+            .is_none_or(|t| now.duration_since(t) >= GAME_MOVE_GAP)
         {
             let (send_dx, send_dy) = self.screen.ctl_delta;
             if send_dx != 0 || send_dy != 0 {

@@ -48,7 +48,7 @@ const ABS_W: u32 = 4096;
 const ABS_H: u32 = 2304;
 /// Web viewers get at most this tall a picture, and this much data.
 pub(crate) const WEB_MAX_HEIGHT: u32 = 1440;
-pub(crate) const WEB_MAX_BPS: u32 = 12_000_000;
+pub(crate) const WEB_MAX_BPS: u32 = 25_000_000;
 /// The sharer's own preview: about this many frames a second.
 const PREVIEW_FPS: u32 = 10;
 /// At most this many viewers get their own hardware encoder (GPUs limit encoding sessions).
@@ -179,7 +179,7 @@ fn capturer(window: bool) -> Option<DesktopCapturer> {
     } else {
         DesktopCaptureSourceType::Screen
     });
-    o.set_include_cursor(true);
+    o.set_include_cursor(false);
     DesktopCapturer::new(o)
 }
 
@@ -235,13 +235,13 @@ pub(crate) fn viewer_height(sharer: u32, desktop: bool, wanted: u32) -> u32 {
         .unwrap_or(0)
 }
 
-/// The most data a picture this size gets: about 0.1 bit a pixel (screens are mostly still,
-/// but scrolling text needs it), from 2 Mbit/s up to 50.
+/// The most data a picture this size gets: about 0.25 bit a pixel (screens and games need it
+/// for sharp text and fast motion), from 6 Mbit/s up to 60.
 pub(crate) fn bitrate_for(width: u32, height: u32, fps: u32) -> u32 {
-    let bits = f64::from(width) * f64::from(height) * f64::from(fps.max(1)) * 0.1;
+    let bits = f64::from(width) * f64::from(height) * f64::from(fps.max(1)) * 0.25;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let b = bits as u32;
-    b.clamp(2_000_000, 50_000_000)
+    b.clamp(6_000_000, 60_000_000)
 }
 
 /// How one viewer is sent our screen (the engine decides; the capture thread follows).
@@ -924,11 +924,11 @@ mod tests {
 
     #[test]
     fn bigger_pictures_get_more_data() {
-        assert_eq!(bitrate_for(3840, 2160, 60), 49_766_400);
-        assert_eq!(bitrate_for(1920, 1080, 30), 6_220_800);
-        assert_eq!(bitrate_for(1280, 720, 30), 2_764_800);
-        assert_eq!(bitrate_for(640, 360, 30), 2_000_000);
-        assert_eq!(bitrate_for(7680, 4320, 60), 50_000_000);
+        assert_eq!(bitrate_for(3840, 2160, 60), 60_000_000);
+        assert_eq!(bitrate_for(1920, 1080, 30), 15_552_000);
+        assert_eq!(bitrate_for(1280, 720, 30), 6_912_000);
+        assert_eq!(bitrate_for(640, 360, 30), 6_000_000);
+        assert_eq!(bitrate_for(7680, 4320, 60), 60_000_000);
     }
 
     #[test]
