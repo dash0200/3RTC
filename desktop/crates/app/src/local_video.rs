@@ -745,7 +745,10 @@ impl RoomView {
                 v.update(cx, |v, cx| {
                     if v.watch.local.fullscreen
                         && v.watch.local.menu.is_none()
-                        && v.watch.local.controls_left_at.is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
+                        && v.watch
+                            .local
+                            .controls_left_at
+                            .is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
                     {
                         v.watch.local.fullscreen_controls = false;
                         v.watch.local.controls_left_at = None;

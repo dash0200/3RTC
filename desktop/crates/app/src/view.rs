@@ -286,6 +286,16 @@ impl RoomView {
         let mut subscriptions = subscriptions;
         subscriptions.push(cx.observe_window_activation(window, |this, window, _| {
             this.active = window.is_window_active();
+            if !this.active {
+                if this.screen.ctl_game_mode {
+                    this.screen.ctl_game_mode = false;
+                    this.screen.ctl_last_pos = None;
+                    this.screen.ctl_delta = (0, 0);
+                    rtc_platform_win::unlock_pointer();
+                } else {
+                    rtc_platform_win::set_cursor_visible(true);
+                }
+            }
         }));
         let admin_watch = cx.spawn(async move |this, cx| {
             loop {
@@ -711,7 +721,16 @@ impl RoomView {
     }
 
     pub(crate) fn leave(&mut self, cx: &mut Context<'_, Self>) {
+        if self.screen.ctl_game_mode {
+            self.screen.ctl_game_mode = false;
+            self.screen.ctl_last_pos = None;
+            self.screen.ctl_delta = (0, 0);
+            rtc_platform_win::unlock_pointer();
+        } else {
+            rtc_platform_win::set_cursor_visible(true);
+        }
         self.dialog = None;
+        self.extras.share_hud = None;
         self.command(Command::Leave);
         cx.notify();
     }
@@ -955,6 +974,30 @@ impl RoomView {
                     }
                 }
             }
+            DesktopEvent::ShareHud(action) => match action {
+                rtc_platform_win::ShareHudAction::StopSharing => {
+                    if let Some(e) = &self.engine {
+                        e.share_screen(None);
+                    }
+                    self.sync_share_hud();
+                }
+                rtc_platform_win::ShareHudAction::AllowControl(peer_str) => {
+                    if let Ok(peer) = rtc_protocol::PeerId::new(peer_str) {
+                        self.control(rtc_engine::ControlCmd::Allow(peer));
+                    }
+                    self.sync_share_hud();
+                }
+                rtc_platform_win::ShareHudAction::DenyControl(peer_str) => {
+                    if let Ok(peer) = rtc_protocol::PeerId::new(peer_str) {
+                        self.control(rtc_engine::ControlCmd::Deny(peer));
+                    }
+                    self.sync_share_hud();
+                }
+                rtc_platform_win::ShareHudAction::TakeBackControl => {
+                    self.control(rtc_engine::ControlCmd::Revoke);
+                    self.sync_share_hud();
+                }
+            },
         }
         cx.notify();
     }
@@ -1595,5 +1638,11 @@ impl GpuState {
             started: choice,
             chosen: choice,
         }
+    }
+}
+
+impl Drop for RoomView {
+    fn drop(&mut self) {
+        rtc_platform_win::unlock_pointer();
     }
 }

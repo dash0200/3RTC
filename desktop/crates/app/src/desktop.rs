@@ -30,6 +30,8 @@ pub(crate) enum DesktopEvent {
     Tray(TrayEvent),
     /// Another launch handed over a message (`single.rs`).
     Launch(String),
+    /// An action from the screen sharing HUD.
+    ShareHud(rtc_platform_win::ShareHudAction),
 }
 
 /// The keys being watched, the tray icon, and where their events go.

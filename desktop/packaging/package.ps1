@@ -87,8 +87,6 @@ $manifest = [ordered]@{
     build = $build
     notes = $Notes
     exe   = [ordered]@{ url = "$BaseUrl$versioned"; sha256 = $hash; size = (Get-Item $exe).Length }
-    # the video player, fetched by installs that don't have it yet
-    mpv   = [ordered]@{ url = "${BaseUrl}libmpv-2.dll"; sha256 = (Get-FileHash $mpv -Algorithm SHA256).Hash.ToLowerInvariant(); size = (Get-Item $mpv).Length }
 }
 Copy-Item $mpv (Join-Path $dist 'libmpv-2.dll')
 # UTF-8 without a byte-order mark (Windows PowerShell's -Encoding utf8 would add one)
@@ -97,9 +95,16 @@ Copy-Item $mpv (Join-Path $dist 'libmpv-2.dll')
 if ($Publish) {
     $public = Join-Path $repo 'client-ts\public\desktop'
     New-Item -ItemType Directory $public -Force | Out-Null
-    # only the newest version is kept there
-    Get-ChildItem $public -File | Where-Object { $_.Name -like '3rtc-*.exe' -or $_.Name -like '3RTC-*' -or $_.Name -eq 'libmpv-2.dll' } | Remove-Item
-    Copy-Item (Join-Path $dist '*') $public
+    # only the newest version is kept there; libmpv-2.dll (>100MB) is excluded from git/Vercel
+    Get-ChildItem $public -File | Where-Object { $_.Name -like '3rtc-*.exe' -or $_.Name -like '3RTC-*' -or $_.Name -eq 'latest.json' } | Remove-Item
+    Copy-Item (Join-Path $dist 'latest.json') $public
+    Copy-Item (Join-Path $dist $versioned) $public
+    if (Test-Path (Join-Path $dist '3RTC-portable.zip')) {
+        Copy-Item (Join-Path $dist '3RTC-portable.zip') $public
+    }
+    if (Test-Path (Join-Path $dist '3RTC-Setup.exe')) {
+        Copy-Item (Join-Path $dist '3RTC-Setup.exe') $public
+    }
     Write-Host "Copied to $public : deploy the web app to publish 3RTC $build." -ForegroundColor Green
 }
 

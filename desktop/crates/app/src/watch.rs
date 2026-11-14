@@ -17,8 +17,8 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{
     AnyElement, AppContext as _, Bounds, Context, Entity, FontWeight, Hsla, Image, ImageFormat,
-    InteractiveElement as _, IntoElement, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas, div, img,
+    InteractiveElement as _, IntoElement, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas, div, img,
     prelude::FluentBuilder as _, px,
 };
 use rtc_core::{Command, PlayerCmd, PlayerReport, Showing, UserAction, WatchCommand};
