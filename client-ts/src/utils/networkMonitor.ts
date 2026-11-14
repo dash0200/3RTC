@@ -8,10 +8,54 @@
  * - Audio inbound/outbound packet loss, jitter, and throughput tracking.
  * - Rolling ping history for sparkline graphs.
  * - Video synchronization drift tracking.
+ * - Technical distance & network topology scoring.
  */
+import type { PeerLinkMetric, CandidatePathKind } from '../types/protocol';
 
 export const PING_INTERVAL_MS = 2500;
 export const MAX_HISTORY_SAMPLES = 15;
+
+export type TopologyDistanceMatrix = Record<string, Record<string, PeerLinkMetric>>;
+
+export function normalizeCandidateType(localType?: string, remoteType?: string): CandidatePathKind {
+  const loc = (localType || '').toLowerCase();
+  const rem = (remoteType || '').toLowerCase();
+  if (loc === 'relay' || rem === 'relay') return 'relay';
+  if (loc === 'host' && rem === 'host') return 'host';
+  if (loc === 'prflx' || rem === 'prflx') return 'prflx';
+  return 'srflx';
+}
+
+export interface TechnicalDistanceEvaluation {
+  score: number;
+  tier: 'lan' | 'near' | 'medium' | 'far' | 'relayed';
+  tierLabel: string;
+  color: string;
+}
+
+export function calculateTechnicalDistance(metric: PeerLinkMetric): TechnicalDistanceEvaluation {
+  const rtt = metric.rttMs;
+  const isLan = metric.candidateType === 'host' && rtt < 25;
+  const isRelay = metric.candidateType === 'relay';
+
+  const multiplier = isRelay ? 2.5 : isLan ? 0.8 : 1.0;
+  const penalty = (metric.lossPct * 15) + (metric.jitterMs * 0.5);
+  const score = Math.max(1, Math.round(rtt * multiplier + penalty));
+
+  if (isLan || score < 15) {
+    return { score, tier: 'lan', tierLabel: '⚡ LAN (<15ms)', color: '#00e676' };
+  }
+  if (score < 50) {
+    return { score, tier: 'near', tierLabel: '🟢 Near (<50ms)', color: '#10b981' };
+  }
+  if (score < 120) {
+    return { score, tier: 'medium', tierLabel: '🟡 Medium (50-120ms)', color: '#f59e0b' };
+  }
+  if (score < 250 && !isRelay) {
+    return { score, tier: 'far', tierLabel: '🟠 Far (120-250ms)', color: '#f97316' };
+  }
+  return { score, tier: 'relayed', tierLabel: '🔴 Distant / Relay (>250ms)', color: '#ef4444' };
+}
 
 export interface NetworkHealthGrade {
   label: string;

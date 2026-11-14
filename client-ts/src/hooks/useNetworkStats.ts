@@ -3,54 +3,28 @@
  * sync drift, polled from the peer connections while in a room.
  */
 import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 'react';
-import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES, type PeerConnectionStatsData } from '../utils/networkMonitor';
+import {
+  extractPeerConnectionStats,
+  PING_INTERVAL_MS,
+  MAX_HISTORY_SAMPLES,
+  type PeerConnectionStatsData,
+  calculateTechnicalDistance,
+  normalizeCandidateType,
+  type TechnicalDistanceEvaluation,
+  type TopologyDistanceMatrix
+} from '../utils/networkMonitor';
 import { usePeerMessageOn } from '../core/RoomContext';
 import type { RoomBus } from '../types';
 import type { PeerEntryRecord } from '../webrtc/peerEntry';
-import type { PeerLinkMetric, NetTopologyReportMessage, CandidatePathKind } from '../types/protocol';
+import type { PeerLinkMetric, NetTopologyReportMessage } from '../types/protocol';
 import { DRIFT_LIMIT_S } from '../features/playback/drift';
 
-export type TopologyDistanceMatrix = Record<string, Record<string, PeerLinkMetric>>;
-
-export function normalizeCandidateType(localType?: string, remoteType?: string): CandidatePathKind {
-  const loc = (localType || '').toLowerCase();
-  const rem = (remoteType || '').toLowerCase();
-  if (loc === 'relay' || rem === 'relay') return 'relay';
-  if (loc === 'host' && rem === 'host') return 'host';
-  if (loc === 'prflx' || rem === 'prflx') return 'prflx';
-  return 'srflx';
-}
-
-export interface TechnicalDistanceEvaluation {
-  score: number;
-  tier: 'lan' | 'near' | 'medium' | 'far' | 'relayed';
-  tierLabel: string;
-  color: string;
-}
-
-export function calculateTechnicalDistance(metric: PeerLinkMetric): TechnicalDistanceEvaluation {
-  const rtt = metric.rttMs;
-  const isLan = metric.candidateType === 'host' && rtt < 25;
-  const isRelay = metric.candidateType === 'relay';
-
-  const multiplier = isRelay ? 2.5 : isLan ? 0.8 : 1.0;
-  const penalty = (metric.lossPct * 15) + (metric.jitterMs * 0.5);
-  const score = Math.max(1, Math.round(rtt * multiplier + penalty));
-
-  if (isLan || score < 15) {
-    return { score, tier: 'lan', tierLabel: '⚡ LAN (<15ms)', color: '#00e676' };
-  }
-  if (score < 50) {
-    return { score, tier: 'near', tierLabel: '🟢 Near (<50ms)', color: '#10b981' };
-  }
-  if (score < 120) {
-    return { score, tier: 'medium', tierLabel: '🟡 Medium (50-120ms)', color: '#f59e0b' };
-  }
-  if (score < 250 && !isRelay) {
-    return { score, tier: 'far', tierLabel: '🟠 Far (120-250ms)', color: '#f97316' };
-  }
-  return { score, tier: 'relayed', tierLabel: '🔴 Distant / Relay (>250ms)', color: '#ef4444' };
-}
+export {
+  calculateTechnicalDistance,
+  normalizeCandidateType,
+  type TechnicalDistanceEvaluation,
+  type TopologyDistanceMatrix
+};
 
 function keepIfSame<T>(prev: T, next: T): T {
   try {
@@ -378,15 +352,15 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
   }
 
   // Ping probes over the data channel: answer theirs, time ours
-  usePeerMessageOn<NetPingPayload>(bus, 'net-ping', (data, from) => {
+  usePeerMessageOn<NetPingPayload>(bus, 'net-ping', (data: NetPingPayload, from: string) => {
     bus.send(from, 'net-pong', { pingId: data?.pingId, sendTime: data?.sendTime });
   });
-  usePeerMessageOn<NetPingPayload>(bus, 'net-pong', (data, from) => {
+  usePeerMessageOn<NetPingPayload>(bus, 'net-pong', (data: NetPingPayload, from: string) => {
     recordPeerPing(from, Math.max(1, Math.round(performance.now() - (data?.sendTime || 0))));
   });
 
   // Global topology distance report from peers
-  usePeerMessageOn<NetTopologyReportMessage>(bus, 'net-topology-report', (data) => {
+  usePeerMessageOn<NetTopologyReportMessage>(bus, 'net-topology-report', (data: NetTopologyReportMessage) => {
     if (data?.from && data.links) {
       setTopologyMatrix((prev) => ({
         ...prev,

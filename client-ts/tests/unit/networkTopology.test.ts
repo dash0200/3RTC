@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   calculateTechnicalDistance,
   normalizeCandidateType
-} from '../../src/hooks/useNetworkStats';
+} from '../../src/utils/networkMonitor';
 import type { PeerLinkMetric } from '../../src/types/protocol';
 
 describe('Network Topology & Technical Distance (M7)', () => {
