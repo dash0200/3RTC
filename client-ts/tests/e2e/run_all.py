@@ -21,6 +21,9 @@ ORDER = [
     'connection', 'network_blocked', 'devices', 'chat_attach', 'youtube_sync', 'youtube_unavailable', 'host_controls', 'host_transfer', 'queue', 'quick_picks_region',
     'activities', 'ludo', 'ludo_stack', 'ludo_rejoin', 'ludo_video', 'ludo_leave', 'room_basics', 'host_spoof', 'phone_layout', 'phone_reach', 'phone_zoom', 'mouse_zoom', 'game_rejoin', 'tab_title', 'back_button', 'media_links', 'stream', 'stream_uneven',
     'local_video_sync', 'file_format', 'swarm', 'media_session', 'full_room',
+    # the desktop app (skipped unless it's built; the window test also needs Xvfb on Linux)
+    'desktop_interop', 'desktop_activity', 'desktop_chess', 'desktop_lastcard', 'desktop_tycoon', 'desktop_whiteboard', 'desktop_stream', 'desktop_files', 'desktop_screen', 'desktop_screen_hq', 'desktop_screen_sound',
+    'desktop_remote_control', 'desktop_lock_rejoin', 'desktop_window',
 ]
 
 

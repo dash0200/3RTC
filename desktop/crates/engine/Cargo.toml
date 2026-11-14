@@ -1,0 +1,31 @@
+[package]
+name = "rtc-engine"
+description = "3RTC engine: runs the room logic with the signaling socket and peer connections"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rtc-protocol.workspace = true
+rtc-core.workspace = true
+rtc-signaling.workspace = true
+rtc-webrtc.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+rand.workspace = true
+sha2 = "0.10"
+serde_json.workspace = true
+futures-util.workspace = true
+rtc-platform-win.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+rtc-games.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

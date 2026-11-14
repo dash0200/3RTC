@@ -1,0 +1,27 @@
+[package]
+name = "rtc-webrtc"
+description = "3RTC peer connections: Google's libwebrtc (via LiveKit's bindings), in the web app's shapes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rtc-protocol.workspace = true
+libwebrtc = "0.4"
+webrtc-sys = "0.3"
+rtc-audio.workspace = true
+futures-util.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time", "macros"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

@@ -16,6 +16,22 @@ headers) here.
 
 The signaling server has its own tests: `cd server && npm test`.
 
+## Golden vectors for the desktop app's game rules
+
+```
+npx tsx tests/vectors/export.ts          # every game
+npx tsx tests/vectors/export.ts chess    # one
+```
+
+Plays scripted and random games through the web app's own reducers (`players/<game>.ts` says
+which moves a person could send) and writes every step to `desktop/crates/games/vectors/`. The
+desktop app's Rust rules must give the same JSON for each step (`cargo test -p rtc-games`).
+Games with secret cards also record what each person may see (`views`, from the game's
+`redact`); a script can start from a state of its own (`initial`, e.g. a new deciding app that
+has only its own cards). A room can set its own number of random games (`random`) and a
+`flavor` for the player (Tycoon: computers only, to reach bankruptcies and the round limit).
+Re-run it after changing a game's rules, and commit the new vectors with the change.
+
 ## Browser tests (real rooms, real WebRTC)
 
 ```

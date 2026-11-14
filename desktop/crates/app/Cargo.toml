@@ -1,0 +1,39 @@
+[package]
+name = "rtc-app"
+description = "3RTC desktop app: the GPUI window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "3rtc"
+path = "src/main.rs"
+
+[dependencies]
+rtc-protocol.workspace = true
+rtc-core.workspace = true
+rtc-games.workspace = true
+rtc-engine.workspace = true
+rtc-ui.workspace = true
+rtc-platform-win.workspace = true
+rtc-webview.workspace = true
+gpui-kit = "0.9.1"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image = { version = "0.25", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+qrcode = { version = "0.14", default-features = false }
+ureq.workspace = true
+sha2.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

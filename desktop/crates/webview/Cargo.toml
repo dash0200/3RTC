@@ -1,0 +1,20 @@
+[package]
+name = "rtc-webview"
+description = "3RTC: the YouTube, Vimeo and Twitch player as a WebView2 inside the app window (Windows)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+raw-window-handle = "0.6"
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+rtc-platform-win.workspace = true
+wry = { version = "0.53", default-features = false, features = ["os-webview", "protocol"] }
+
+[lints]
+workspace = true

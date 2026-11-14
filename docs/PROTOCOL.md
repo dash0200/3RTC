@@ -134,6 +134,43 @@ number (uint32, big-endian).
 The subtitles themselves go out as the usual `local-video-action` `subtitle-share`. Apps rebuild the
 format with `cleanFormat` (known fields, short strings, bounded lists) before using it.
 
+### Screen sharing (`features/screenshare/useScreenShare.ts`, `ScreenPointerOverlay.tsx`)
+The picture is the video line every connection has from the start; these say who shares and point at it.
+| type | direction | fields |
+|---|---|---|
+| `screen-share-status` | sharer → everyone, and to each newcomer | `isSharing, peerId, username, hasAudio` |
+| `screen-pointer` | anyone → everyone | `peerId, x, y` (0–1 across and down the picture), `username`, `active` (false: the pointer left) |
+| `screen-ping` | anyone → everyone | `id, x, y, username, color, peerId`: a click (a ripple there) |
+| `screen-quality` | desktop viewer → desktop sharer | `maxHeight`: the tallest picture this viewer wants (0: whatever is sent) |
+
+`screen-quality` is the desktop app's only: a desktop sharer sends each viewer their own picture (its
+own size and data rate, encoded by the GPU when H.264 is negotiated), and this is the viewer's choice
+of size. The web app neither sends nor reads it; a web viewer gets at most 1440p from a desktop sharer.
+
+**The shared screen's sound (desktop → desktop only).** A desktop sharer who shares with sound (all of
+the PC's sound except 3RTC's own) adds a second audio line to each *desktop* viewer's connection while
+sharing, in a media stream with id `screen-audio`, and sends a new offer on the open connection for it.
+Its Opus is tuned for music: `stereo=1;sprop-stereo=1;maxaveragebitrate=256000;useinbandfec=1` on every
+audio m-line after the first. The receiver tells it from the voice by that stream id. Web viewers never
+get the line (the web app takes any incoming audio for the person's voice), and `hasAudio` in
+`screen-share-status` is true only in the copy sent to desktop viewers.
+
+**Remote control (desktop → desktop only).** The web app neither sends nor reads these; a desktop app
+offers it only when the sharer is on the desktop app.
+| type | direction | fields |
+|---|---|---|
+| `screen-control` | desktop viewer ↔ desktop sharer | `action`, and for `state`: `peerId, username` (absent: nobody) |
+| `screen-input` | the controlling viewer → the sharer | `e` (`move`, `button`, `wheel`, `key`), `x, y` (0–1 over the picture), `button` (0 left, 1 middle, 2 right), `down`, `dx, dy` (wheel, 1/120 notch, up and right positive), `vk` (Windows virtual-key code) |
+
+`screen-control` actions: the viewer sends `request` (may I?), `cancel` (the request), `accept` or
+`decline` (an offer) and `release` (I stop); the sharer sends `offer`, `grant`, `deny`, `revoke` (control
+taken back, or an offer withdrawn) and `state` (who controls now) to every desktop viewer. The sharer
+decides every time: control starts only with the sharer allowing a request or the viewer accepting the
+sharer's offer, one viewer at a time. The sharer plays back `screen-input` only from the viewer it
+granted control to, and ignores it from anyone else. Control ends when the sharer takes it back (a
+button, Ctrl+Alt+Shift+X, or using their own mouse), the viewer releases it, either leaves, or the share
+stops. Unknown actions and input kinds are ignored (rule 1).
+
 ### Shared state (`core/sharedState.js`): games, polls, the open activity
 | type | fields | meaning |
 |---|---|---|

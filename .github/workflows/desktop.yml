@@ -1,0 +1,78 @@
+# Desktop app (Rust): every push and PR touching desktop/ must pass formatting, lints, tests and
+# the dependency audit, on Windows (the shipping platform). Release builds are uploaded as an
+# artifact: a portable 3rtc.exe, no installer, no admin rights.
+name: desktop
+
+on:
+  push:
+    paths: ["desktop/**", ".github/workflows/desktop.yml", "server/**"]
+  pull_request:
+    paths: ["desktop/**", ".github/workflows/desktop.yml", "server/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: desktop
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo fmt --all -- --check
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: desktop/Cargo.toml
+          command: check licenses sources bans advisories
+
+  windows-check:
+    # Quick: the Windows-only crate checked for Windows from Linux (no C++ or linking needed),
+    # so mistakes in it show up in a minute or two, before the full Windows build finishes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup target add x86_64-pc-windows-msvc
+      - run: cargo clippy -p rtc-platform-win --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Signaling server packages (for the integration test)
+        working-directory: server
+        run: npm ci
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Release build
+        env:
+          RTC_BUILD: ${{ github.run_number }}
+        run: cargo build --release --locked -p rtc-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 3rtc-windows-x64
+          path: desktop/target/release/3rtc.exe
+          if-no-files-found: error

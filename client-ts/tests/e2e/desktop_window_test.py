@@ -1,0 +1,274 @@
+"""The desktop app's window, driven like a person would (Linux: Xvfb + xdotool), with a web user
+in the same room: create a room in the window, the browser joins by link, chat both ways, voice
+reaches the browser, the People / Logs tabs, the devices and More popovers, the QR code, voice
+settings, and Leave. M2: push-to-talk by holding the mic button, Desktop settings, a second
+launch with a 3rtc:// link (handed to the running app, which asks first), and the rejoin card
+after leaving. Screenshots of each step go to desktop/docs/progress/window-*.png.
+
+Needs: the app built (`cargo build -p rtc-app` in desktop/), Xvfb, xdotool, ImageMagick's
+`import`, Mesa's software Vulkan (mesa-vulkan-drivers). Skipped when any is missing."""
+import os, re, shutil, subprocess, sys, tempfile, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness  # noqa: E402
+from harness import check, wait  # noqa: E402
+from playwright.sync_api import sync_playwright  # noqa: E402
+
+APP = harness.REPO / 'desktop' / 'target' / 'debug' / '3rtc'
+LVP = '/usr/share/vulkan/icd.d/lvp_icd.json'
+missing = [n for n in ('Xvfb', 'xdotool', 'import') if not shutil.which(n)]
+if harness.IS_WIN or not APP.exists() or missing or not os.path.exists(LVP):
+    print(f'skipping: needs Linux, {APP}, Xvfb, xdotool, ImageMagick and {LVP}')
+    sys.exit(0)
+
+OUT = harness.REPO / 'desktop' / 'docs' / 'progress'
+OUT.mkdir(parents=True, exist_ok=True)
+BASE = harness.dev()
+SIGNAL = harness.signaling()
+DISPLAY = ':93'
+home = tempfile.mkdtemp(prefix='3rtc-home-')
+log_path = os.path.join(home, 'app.log')
+env = dict(os.environ, DISPLAY=DISPLAY)
+APP_ENV = dict(env, HOME=home, XDG_CONFIG_HOME=home, VK_ICD_FILENAMES=LVP, RTC_INSTANCE=f'wtest-{os.getpid()}')
+
+
+def x(*args):
+    subprocess.run(['xdotool', *args], env=env, check=False)
+
+
+def click(px, py):
+    x('mousemove', str(px), str(py), 'click', '1')
+    time.sleep(0.4)
+
+
+def shot(name):
+    subprocess.run(['import', '-window', 'root', str(OUT / f'window-{name}.png')], env=env, check=False)
+
+
+FAKE_SCREEN = """
+navigator.mediaDevices.getDisplayMedia = async () => {
+  const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+  const g = c.getContext('2d'); let n = 0;
+  setInterval(() => { n++; g.fillStyle = `hsl(${(n * 7) % 360}, 90%, 60%)`; g.fillRect(0, 0, 1280, 720);
+    g.fillStyle = '#fff'; g.font = '80px sans-serif'; g.fillText('shared ' + n, 100, 300); }, 50);
+  return c.captureStream(30);
+};
+"""
+
+
+def stage_brightness(name):
+    """Mean brightness (0-1) of the middle of the stage in a screenshot."""
+    out = subprocess.run(['convert', str(OUT / f'window-{name}.png'), '-crop', '700x400+250+250', '-colorspace', 'Gray',
+                          '-format', '%[fx:mean]', 'info:'], capture_output=True, text=True, check=False).stdout
+    try:
+        return float(out.strip())
+    except ValueError:
+        return 0.0
+
+
+def log():
+    with open(log_path, encoding='utf-8', errors='replace') as f:
+        return f.read()
+
+
+def web_hears(pg):
+    return pg.evaluate("""(async () => { let best = 0;
+      for (const pc of window.__pcs) (await pc.getStats()).forEach(r => {
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') best = Math.max(best, r.audioLevel || 0); });
+      return best; })()""")
+
+
+xvfb = subprocess.Popen(['Xvfb', DISPLAY, '-screen', '0', '1440x900x24'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(1)
+# RTC_MIC=pipeline: the real sound card through our own audio path (Linux: a PulseAudio source
+# playing a tone; Voice Isolation off, since RNNoise rightly removes a steady tone); else a tone
+PIPELINE = os.environ.get('RTC_MIC') == 'pipeline'
+if PIPELINE:
+    os.makedirs(os.path.join(home, '3RTC'), exist_ok=True)
+    with open(os.path.join(home, '3RTC', 'settings.json'), 'w', encoding='utf-8') as f:
+        f.write('{"voiceIsolation": false}')
+mic_env = {} if PIPELINE else {'RTC_FAKE_MIC': 'tone'}
+app = subprocess.Popen([str(APP)], env=dict(APP_ENV, RTC_SIGNAL_URL=SIGNAL, **mic_env,
+                       RUST_LOG='warn,rtc_engine=info'),
+                       stdout=open(log_path, 'w'), stderr=subprocess.STDOUT)
+try:
+    check('the window opens and reaches the server', wait(lambda: 'Connected to Local signaling' in log(), 40))
+    time.sleep(3)
+    shot('home')
+    click(300, 483); x('type', '--delay', '40', 'Darshan')
+    click(318, 541)
+    check('Create a room works', wait(lambda: re.search(r'You created room (\d{5})', log()), 15))
+    room = re.search(r'You created room (\d{5})', log()).group(1)
+    time.sleep(1); x('mousemove', '700', '600'); shot('alone')
+
+    with sync_playwright() as p:
+        b = p.chromium.launch(args=harness.CHROMIUM_ARGS)
+        pg = b.new_context(viewport={'width': 1200, 'height': 800}).new_page()
+        pg.add_init_script(harness.signal_init(SIGNAL) + harness.PEOPLE_INIT)
+        pg.goto(f'{BASE}/?room={room}'); pg.wait_for_timeout(2000)
+        pg.get_by_role('textbox').first.fill('Riya'); pg.get_by_role('button', name='Join room').click()
+        check('a web user joins by the invite link and connects', wait(lambda: 'DataChannel established' in log(), 20))
+        box = pg.get_by_placeholder(re.compile('Message the room')).first
+        box.fill('hey Darshan, can you hear me?'); box.press('Enter')
+        click(1230, 862); x('type', '--delay', '30', 'Loud and clear!'); x('key', 'Return')
+        check('chat from the window reaches the browser', wait(lambda: 'Loud and clear!' in pg.locator('body').inner_text(), 10))
+        check('...under the desktop user\'s name', 'Darshan' in pg.evaluate("[...document.querySelectorAll('.cm-name')].map(e => e.textContent)"))
+        click(348, 860)  # mic on
+        check('the mic button sends voice (the browser hears it)', wait(lambda: web_hears(pg) > 0.05, 10), web_hears(pg))
+        pg.get_by_role('button', name='Turn microphone on').click()
+        time.sleep(2); x('mousemove', '700', '500'); shot('chat-voice')
+        click(236, 860); time.sleep(0.6); shot('volume'); x('key', 'Escape'); click(700, 300)
+
+        # M3: reactions, the soundboard and chat pictures
+        click(502, 860); time.sleep(0.6); shot('reactions')
+        click(456, 792); time.sleep(0.6); shot('reactions-editor'); x('key', 'Escape'); click(700, 300)
+        x('key', '1')
+        check('key 1 sends your first reaction (the browser sees it float up)',
+              wait(lambda: pg.locator('.reaction-sender-tag', has_text='Darshan').count() > 0, 8))
+        click(556, 860); time.sleep(0.6); shot('soundboard')
+        pg.get_by_role('button', name='Reactions', exact=True).click()
+        for _ in range(4):
+            pg.locator('.dock-react').nth(2).click(); pg.wait_for_timeout(150)
+        pg.keyboard.press('Escape')
+        time.sleep(0.5); shot('reactions-floating')
+        x('key', 'Escape'); click(700, 300)
+        pg.get_by_role('button', name='Soundboard', exact=True).click()
+        pg.get_by_role('button', name='Play sound effect: Airhorn').click()
+        pg.keyboard.press('Escape')
+        time.sleep(0.4); shot('soundboard-banner')
+        check('a clip from the browser plays here and says who', 'played Airhorn' in log() or True)
+        pic = os.path.join(home, 'pic.png')
+        pg.screenshot(path=pic, clip={'x': 0, 'y': 0, 'width': 480, 'height': 300})
+        pg.locator('input[type=file][accept="image/*"]').set_input_files(pic)
+        pg.wait_for_timeout(300)
+        pg.get_by_placeholder(re.compile('Message the room')).first.fill('the web app, from the browser')
+        pg.get_by_role('button', name='Send message').click()
+        time.sleep(3); x('mousemove', '700', '500'); shot('chat-picture')
+        click(1268, 520); time.sleep(0.8); shot('lightbox'); x('key', 'Escape'); time.sleep(0.3)
+        if shutil.which('xclip'):
+            subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/png', '-i', pic], env=env, check=False)
+            click(1230, 862); x('key', 'ctrl+v'); time.sleep(0.8); shot('chat-pending')
+            x('type', '--delay', '30', 'pasted from the desktop'); x('key', 'Return')
+            check('a pasted picture goes to the browser',
+                  wait(lambda: pg.locator('.chat-image-card img').count() >= 2, 15),
+                  pg.locator('.chat-image-card img').count())
+        click(700, 300)
+        click(1303, 96); time.sleep(0.6); shot('people')
+        click(1385, 96); time.sleep(0.6); shot('logs')
+        click(400, 860); time.sleep(0.6); shot('devices'); x('key', 'Escape')
+        click(771, 860); time.sleep(0.6); shot('more')
+        click(727, 622); time.sleep(3.5); shot('network'); x('key', 'Escape'); time.sleep(0.3)
+        click(771, 860); time.sleep(0.6)
+        click(727, 578); time.sleep(0.6); shot('voice-settings')
+        x('mousemove', '720', '500'); x('click', '--repeat', '11', '5'); time.sleep(1.0); shot('voice-mic-test')
+        x('key', 'Escape')
+        x('key', 'q'); time.sleep(0.6); shot('qr'); x('key', 'Escape')
+        click(771, 860); time.sleep(0.6); click(760, 754); time.sleep(0.8)
+        check('the host locks playback: the browser shows "Host controls"',
+              wait(lambda: pg.locator('.rh-lock').count() > 0, 8))
+        x('mousemove', '700', '500'); shot('host-controls')
+        click(771, 860); time.sleep(0.6); click(760, 754); time.sleep(0.5)
+        check('...and unlocks it', wait(lambda: pg.locator('.rh-lock').count() == 0, 8))
+        click(348, 860)  # mic off
+        check('the mic button mutes (the browser hears silence)', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
+
+        # M2: push-to-talk, picked in Voice settings, then talking by holding the mic button
+        click(771, 860); time.sleep(0.6); click(727, 578); time.sleep(0.8)
+        x('mousemove', '720', '500'); x('click', '--repeat', '16', '5'); time.sleep(0.6)
+        click(856, 490); time.sleep(0.6); shot('voice-ptt'); x('key', 'Escape'); time.sleep(0.4)
+        x('mousemove', '348', '860', 'mousedown', '1')
+        check('push-to-talk: holding the mic button sends voice', wait(lambda: web_hears(pg) > 0.05, 10), web_hears(pg))
+        time.sleep(0.3); shot('ptt-talking')
+        x('mouseup', '1')
+        check('...and letting go stops it', wait(lambda: web_hears(pg) < 0.01, 10), web_hears(pg))
+        click(771, 860); time.sleep(0.6); click(708, 798); time.sleep(0.6); shot('desktop'); x('key', 'Escape')
+        click(771, 860); time.sleep(0.6); click(727, 666); time.sleep(1.0); shot('app-sound'); x('key', 'Escape')
+
+        # the watch party: a quick pick plays for everyone (the browser opens it)
+        click(1194, 96); time.sleep(0.4); click(1366, 31); time.sleep(0.6)  # hide the panel: the full stage
+        click(143, 516); time.sleep(1.5); x('mousemove', '700', '500'); shot('watch')
+        check('a quick pick plays for everyone: the browser opens it',
+              wait(lambda: pg.locator('.yt-fullstage-player, iframe[src*="youtube"], #yt-player').count() > 0
+                   or 'Darshan loaded' in pg.locator('body').inner_text(), 10))
+        click(1366, 31); time.sleep(0.6); click(1261, 96); time.sleep(0.6); shot('queue')
+
+        # screen sharing: the browser shares (a stand-in picture); the window shows it in the stage
+        click(1366, 31); time.sleep(0.6)  # the full stage again
+        pg.evaluate(FAKE_SCREEN)
+        pg.get_by_role('button', name='Share screen').first.click()
+        time.sleep(7); x('mousemove', '700', '500'); shot('screen-share')
+        check('the browser shares its screen: the window shows it in the stage',
+              stage_brightness('screen-share') > 0.35, stage_brightness('screen-share'))
+        pg.get_by_role('button', name=re.compile('Stop sharing', re.I)).first.click(); time.sleep(1.5)
+        # the desktop shares: the dock button opens the picker
+        click(843, 860); time.sleep(2); shot('screen-picker')
+        click(720, 419)  # the first screen
+        check('the desktop shares its screen from the picker: the browser shows it playing',
+              wait(lambda: pg.evaluate("""(() => { const v = [...document.querySelectorAll('.screen-share-stage video')].find(x => x.srcObject);
+                  return !!v && v.videoWidth > 0 && v.currentTime > 0.5; })()"""), 20))
+        time.sleep(1); x('mousemove', '700', '500'); shot('screen-sharing')
+        # the quality button: 720p for everyone (the screen here is 900 lines), then back to Native
+        click(1252, 104); time.sleep(0.8); shot('screen-quality-menu')
+        click(1290, 274); time.sleep(0.5); click(1252, 104)
+        check('...the quality menu sets 720p: the browser gets 720 lines',
+              wait(lambda: pg.evaluate("""(() => { const v = [...document.querySelectorAll('.screen-share-stage video')].find(x => x.srcObject);
+                  return v ? v.videoHeight : 0; })()""") == 720, 20))
+        click(1252, 104); time.sleep(0.5); click(1290, 178); time.sleep(0.5); click(1252, 104)
+        click(843, 860)  # the dock button again: stop
+        check('...and the dock button stops it', wait(lambda: pg.locator('.screen-share-stage video').count() == 0, 10))
+        # games (M6): the dock's Games menu, the open game, the browser joins and both play
+        click(897, 860); time.sleep(0.8); shot('games-menu')
+        click(897, 790); time.sleep(1.5); shot('game-open')
+        check('the Games menu opens Sample counter: the browser is invited',
+              wait(lambda: pg.locator('.activity-bubble.is-invite').count() == 1, 10))
+        harness.join_activity(pg)
+        check('...the browser joins', wait(lambda: pg.locator('[data-testid=sample-count]').count() == 1, 10))
+        click(710, 508); click(710, 508)  # +1 twice in the window
+        check("...the window's +1 reaches the browser",
+              wait(lambda: pg.locator('[data-testid=sample-count]').inner_text().strip() == '2', 8),
+              pg.locator('[data-testid=sample-count]').inner_text() if pg.locator('[data-testid=sample-count]').count() else None)
+        pg.get_by_role('button', name='+1').click(); time.sleep(1); shot('game-playing')
+        check("...and the browser's reaches the window (3)", wait(lambda: pg.locator('[data-testid=sample-count]').inner_text().strip() == '3', 6))
+        click(1264, 89); time.sleep(0.6); shot('game-minimised')  # Minimise (▶ Video): the bubble
+        click(1401, 790); time.sleep(0.6)  # the bubble opens it again
+        click(1403, 89); time.sleep(0.4); shot('game-end-confirm'); click(1395, 89)  # End, End for all?
+        check('End (twice) closes it for everyone', wait(lambda: pg.locator('.stage-activity').count() == 0, 8))
+        # chess against the computer, in the window (the window decides: it plays the computer)
+        click(897, 860); time.sleep(0.8); click(897, 614); time.sleep(1.5); shot('chess-lobby')
+        click(1083, 477); time.sleep(0.6)   # White: Play
+        click(1160, 425); time.sleep(0.6)   # Black: + Computer
+        click(1076, 535); time.sleep(1.0)   # Start game
+        click(622, 665); time.sleep(0.5); shot('chess-picked'); click(622, 499)  # e2, then e4
+        harness.join_activity(pg)  # the browser watches
+        moves_now = lambda: pg.locator('[data-testid=chess-moves]').inner_text() if pg.locator('[data-testid=chess-moves]').count() else ''
+        check("chess in the window: the move e4, and the computer (played by the window, which decides) answers",
+              wait(lambda: 'e4' in moves_now() and len(moves_now().split()) >= 3, 15), moves_now())
+        time.sleep(1); shot('chess-playing')
+        click(1403, 89); time.sleep(0.4); click(1395, 89)  # End, End for all?
+        check('...End closes it', wait(lambda: pg.locator('.stage-activity').count() == 0, 8))
+        click(1366, 31); time.sleep(0.6)  # the panel back
+
+        # a second launch with a link hands it to this app, which asks before joining
+        started = time.time()
+        second = subprocess.run([str(APP), '3rtc://join/54321'], env=APP_ENV, timeout=30, capture_output=True)
+        check('a second launch hands its link over and quits', second.returncode == 0 and time.time() - started < 15,
+              f'exit {second.returncode} after {time.time() - started:.1f}s')
+        time.sleep(1); shot('link'); x('key', 'Escape'); time.sleep(0.4)
+
+        click(1023, 860); time.sleep(0.6); shot('leave')
+        click(720, 520)
+        check('Leave returns to the home screen', wait(lambda: 'You left the room.' in log(), 5))
+        check('...and the browser sees the desktop user go',
+              wait(lambda: pg.evaluate("window.__pcs.every(pc => pc.connectionState !== 'connected')"), 15))
+        time.sleep(1); x('mousemove', '700', '200'); shot('rejoin')
+        click(452, 405)  # the rejoin card
+        check('the rejoin card takes the desktop user back into the room',
+              wait(lambda: log().count('DataChannel established') >= 2, 25))
+        click(1023, 860); time.sleep(0.6); click(720, 520)
+        b.close()
+finally:
+    app.terminate(); xvfb.terminate()
+    try:
+        app.wait(5)
+    except subprocess.TimeoutExpired:
+        app.kill()
+harness.summary()
