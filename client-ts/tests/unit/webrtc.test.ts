@@ -1,9 +1,11 @@
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { blockedNetworkHint, candidateType } from '../../src/webrtc/networkHint.ts';
 import { addViewer, detachViewer, markDirect, RELAY_FANOUT } from '../../src/webrtc/streamTree.ts';
 import { normalizeSender } from '../../src/webrtc/peerMessages.ts';
 import { tuneSdpForDiscordAudio } from '../../src/webrtc/sdp.ts';
+import { attachRemoteAudio } from '../../src/webrtc/remoteAudio.ts';
+import { teardownPeerEntry } from '../../src/webrtc/peerEntry.ts';
 
 describe('TypeScript networkHint', () => {
   it('identifies local network block when no public candidate exists', () => {
@@ -117,6 +119,101 @@ describe('TypeScript sdp tuning', () => {
     const tuned = tuneSdpForDiscordAudio(rawSdp);
     assert.match(tuned!, /a=fmtp:111.*maxaveragebitrate=128000/);
     assert.match(tuned!, /useinbandfec=1/);
+  });
+});
+
+describe('remote screen audio playback and teardown', () => {
+  class FakeAudioElement {
+    id = '';
+    autoplay = false;
+    playsInline = false;
+    style = { position: '', left: '', top: '', width: '', height: '', opacity: '' };
+    srcObject: unknown = null;
+    muted = false;
+    volume = 1.0;
+    paused = false;
+    async play() {
+      this.paused = false;
+    }
+    pause() {
+      this.paused = true;
+    }
+    remove() {}
+  }
+
+  const oldDoc = (globalThis as unknown as { document?: unknown }).document;
+  const oldWin = (globalThis as unknown as { window?: unknown }).window;
+
+  beforeEach(() => {
+    (globalThis as unknown as { document: unknown }).document = {
+      createElement: (tag: string) => (tag === 'audio' ? new FakeAudioElement() : {}),
+      body: { appendChild: () => {} }
+    };
+    (globalThis as unknown as { window: unknown }).window = {
+      addEventListener: () => {},
+      removeEventListener: () => {}
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as unknown as { document: unknown }).document = oldDoc;
+    (globalThis as unknown as { window: unknown }).window = oldWin;
+  });
+
+  it('routes screen-audio track to screenAudioElement without touching voice audioElement', () => {
+    const pc = {} as RTCPeerConnection;
+    const peerEntry: Record<string, unknown> = {};
+    let screenAudioStreamEmitted = false;
+
+    attachRemoteAudio(pc, {
+      targetPeerId: 'peer-1',
+      peerEntry,
+      peerVolumesRef: { current: { 'peer-1': 1.0 } },
+      localMutedPeersRef: { current: {} },
+      isAudioBlockedRef: { current: false },
+      logLocalDebug: () => {},
+      onRemoteScreenAudioStream: () => {
+        screenAudioStreamEmitted = true;
+      }
+    });
+
+    // 1. Regular voice track arrives (e.g. stream id 'voice')
+    const voiceTrack = { kind: 'audio', id: 'voice-1', onunmute: null, onmute: null };
+    const voiceStream = { id: 'voice', getAudioTracks: () => [voiceTrack] };
+    (pc as { ontrack?: (e: unknown) => void }).ontrack?.({ track: voiceTrack, streams: [voiceStream] });
+
+    assert.ok(peerEntry.audioElement, 'Voice audioElement should be created');
+    assert.equal((peerEntry.audioElement as FakeAudioElement).id, 'remote-audio-peer-1');
+    assert.equal(peerEntry.screenAudioElement, undefined, 'Screen audio element should not be created for voice');
+
+    // 2. Desktop screen-audio track arrives (stream id 'screen-audio')
+    const screenAudioTrack = { kind: 'audio', id: 'screen-audio', onunmute: null, onmute: null };
+    const screenAudioStream = { id: 'screen-audio', getAudioTracks: () => [screenAudioTrack] };
+    (pc as { ontrack?: (e: unknown) => void }).ontrack?.({ track: screenAudioTrack, streams: [screenAudioStream] });
+
+    assert.ok(peerEntry.screenAudioElement, 'Screen audio element should be created');
+    assert.equal((peerEntry.screenAudioElement as FakeAudioElement).id, 'remote-screen-audio-peer-1');
+    assert.equal((peerEntry.audioElement as FakeAudioElement).id, 'remote-audio-peer-1', 'Voice audioElement must not be overwritten');
+    assert.equal(screenAudioStreamEmitted, true, 'onRemoteScreenAudioStream must be called');
+  });
+
+  it('teardownPeerEntry cleans up both audioElement and screenAudioElement', () => {
+    const audioEl = new FakeAudioElement();
+    const screenAudioEl = new FakeAudioElement();
+    const entry: Record<string, unknown> = {
+      audioElement: audioEl,
+      screenAudioElement: screenAudioEl
+    };
+
+    teardownPeerEntry(entry);
+
+    assert.equal(entry.audioElement, null);
+    assert.equal(audioEl.paused, true);
+    assert.equal(audioEl.srcObject, null);
+
+    assert.equal(entry.screenAudioElement, null);
+    assert.equal(screenAudioEl.paused, true);
+    assert.equal(screenAudioEl.srcObject, null);
   });
 });
 

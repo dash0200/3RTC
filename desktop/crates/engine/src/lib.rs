@@ -1400,15 +1400,9 @@ impl Engine {
         }
     }
 
-    /// `screen-share-status`; `has_audio` only for desktop viewers (the web app can't get the
-    /// sound, so it shouldn't show an "Audio" badge).
-    fn screen_status_for(&self, sharing: bool, peer: &PeerId) -> rtc_protocol::stream::ScreenMessage {
-        let desktop = self.room.members().get(peer).is_some_and(|m| m.desktop);
-        let mut m = self.screen_status(sharing);
-        if let rtc_protocol::stream::ScreenMessage::Status { has_audio, .. } = &mut m {
-            *has_audio &= desktop;
-        }
-        m
+    /// `screen-share-status` with `has_audio` reflecting whether audio capture is active.
+    fn screen_status_for(&self, sharing: bool, _peer: &PeerId) -> rtc_protocol::stream::ScreenMessage {
+        self.screen_status(sharing)
     }
 
     fn screen_status(&self, sharing: bool) -> rtc_protocol::stream::ScreenMessage {
@@ -1492,21 +1486,15 @@ impl Engine {
         was
     }
 
-    /// While our screen's sound is captured: each desktop viewer gets its audio line (once per
-    /// connection; the web app doesn't take a second audio line).
+    /// While our screen's sound is captured: each viewer gets its audio line (once per
+    /// connection; desktop, web and mobile all receive the screen sound track).
     async fn screen_sound_lines(&mut self) {
         if self.screen.capture.is_none() || self.screen.sound_on.is_none() {
             return;
         }
         let track = self.screen.sound.track();
-        let desktops: Vec<PeerId> = self
-            .room
-            .members()
-            .iter()
-            .filter(|(_, m)| m.desktop)
-            .map(|(p, _)| p.clone())
-            .collect();
-        for peer in desktops {
+        let viewers: Vec<PeerId> = self.room.members().keys().cloned().collect();
+        for peer in viewers {
             self.peers.add_screen_sound(&peer, &track).await;
         }
     }

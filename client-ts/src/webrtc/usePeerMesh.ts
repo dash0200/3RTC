@@ -306,6 +306,9 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         },
         onRemoteVideoStreamEnded: (peerId) => {
           bus.emitEvent('remote-screen-stream-ended', { peerId });
+        },
+        onRemoteScreenAudioStream: (peerId, stream, track) => {
+          bus.emitEvent('remote-screen-audio', { peerId, stream, track });
         }
       });
 
