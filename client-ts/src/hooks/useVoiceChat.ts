@@ -132,6 +132,9 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
         if (peer.audioElement) {
           peer.audioElement.muted = false;
         }
+        if (peer.screenAudioElement) {
+          peer.screenAudioElement.muted = false;
+        }
         if (peer.webAudioGain) {
           peer.webAudioGain.gain.value = 1.0;
         }
@@ -413,6 +416,10 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
           peer.audioElement.muted = effective === 0;
           peer.audioElement.volume = Math.min(1.0, effective);
         }
+        if (peer.screenAudioElement) {
+          peer.screenAudioElement.muted = effective === 0;
+          peer.screenAudioElement.volume = Math.min(1.0, effective);
+        }
         if (peer.webAudioGain) {
           peer.webAudioGain.gain.value = effective;
         }
@@ -522,6 +529,10 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
         entry.audioElement.volume = Math.min(1.0, effective);
         entry.audioElement.muted = effective === 0;
       }
+      if (entry.screenAudioElement) {
+        entry.screenAudioElement.volume = Math.min(1.0, effective);
+        entry.screenAudioElement.muted = effective === 0;
+      }
     }
   }, [peersRef]);
 
@@ -540,6 +551,10 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
         if (entry.audioElement) {
           entry.audioElement.volume = Math.min(1.0, effective);
           entry.audioElement.muted = effective === 0;
+        }
+        if (entry.screenAudioElement) {
+          entry.screenAudioElement.volume = Math.min(1.0, effective);
+          entry.screenAudioElement.muted = effective === 0;
         }
       }
 

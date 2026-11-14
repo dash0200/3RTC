@@ -3,11 +3,28 @@
  * sync drift, polled from the peer connections while in a room.
  */
 import { useState, useRef, useCallback, useEffect, type MutableRefObject } from 'react';
-import { extractPeerConnectionStats, PING_INTERVAL_MS, MAX_HISTORY_SAMPLES, type PeerConnectionStatsData } from '../utils/networkMonitor';
+import {
+  extractPeerConnectionStats,
+  PING_INTERVAL_MS,
+  MAX_HISTORY_SAMPLES,
+  type PeerConnectionStatsData,
+  calculateTechnicalDistance,
+  normalizeCandidateType,
+  type TechnicalDistanceEvaluation,
+  type TopologyDistanceMatrix
+} from '../utils/networkMonitor';
 import { usePeerMessageOn } from '../core/RoomContext';
 import type { RoomBus } from '../types';
 import type { PeerEntryRecord } from '../webrtc/peerEntry';
+import type { PeerLinkMetric, NetTopologyReportMessage } from '../types/protocol';
 import { DRIFT_LIMIT_S } from '../features/playback/drift';
+
+export {
+  calculateTechnicalDistance,
+  normalizeCandidateType,
+  type TechnicalDistanceEvaluation,
+  type TopologyDistanceMatrix
+};
 
 function keepIfSame<T>(prev: T, next: T): T {
   try {
@@ -60,11 +77,12 @@ export interface UseNetworkStatsContext {
   peerMetadata: Record<string, { username?: string }>;
   peersRef: MutableRefObject<Map<string, PeerEntryRecord>>;
   roomId?: string | null;
+  myPeerId?: string | null;
   showToast: (msg: string) => void;
 }
 
 export function useNetworkStats(ctx: UseNetworkStatsContext) {
-  const { activeVideoId, bus, localVideoFile, mediaActive, peerMetadata, peersRef, roomId, showToast } = ctx;
+  const { activeVideoId, bus, localVideoFile, mediaActive, peerMetadata, peersRef, roomId, myPeerId, showToast } = ctx;
 
   const [networkStats, setNetworkStats] = useState<NetworkStatsSummary>({
     avgPingMs: null,
@@ -77,6 +95,7 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
     syncDriftStatus: 'P2P Mesh Ready'
   });
   const [peersNetworkStats, setPeersNetworkStats] = useState<PeerNetworkStatsRecord[]>([]);
+  const [topologyMatrix, setTopologyMatrix] = useState<TopologyDistanceMatrix>({});
   const peerStatsCacheRef = useRef<Map<string, PeerConnectionStatsData>>(new Map());
   const pingHistoryRef = useRef<Map<string, number[]>>(new Map());
   const lastSyncDriftMsRef = useRef<number | undefined>(undefined);
@@ -146,6 +165,7 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
       if (activePeers.length === 0) return;
 
       const peerStatsList: PeerNetworkStatsRecord[] = [];
+      const localLinks: Record<string, PeerLinkMetric> = {};
       let totalDown = 0;
       let totalUp = 0;
       let sumPing = 0;
@@ -209,6 +229,20 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
           maxLoss = extracted.packetLossPercent;
         }
 
+        const candType = normalizeCandidateType(
+          extracted?.localCandidate.type,
+          extracted?.remoteCandidate.type
+        );
+
+        localLinks[peerId] = {
+          rttMs: rtt ?? 0,
+          candidateType: candType,
+          lossPct: extracted?.packetLossPercent ?? 0,
+          jitterMs: extracted?.jitterMs ?? 0,
+          downloadKBps: downRate,
+          uploadKBps: upRate
+        };
+
         peerStatsList.push({
           peerId,
           username: peerMetadata[peerId]?.username || `User_${peerId.slice(0, 4)}`,
@@ -236,6 +270,29 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
       if (isCancelled) return;
 
       setPeersNetworkStats((prev) => keepIfSame(prev, peerStatsList));
+
+      if (myPeerId) {
+        setTopologyMatrix((prev) => ({
+          ...prev,
+          [myPeerId]: localLinks
+        }));
+
+        if (Object.keys(localLinks).length > 0) {
+          const report: NetTopologyReportMessage = {
+            type: 'net-topology-report',
+            from: myPeerId,
+            links: localLinks
+          };
+          const json = JSON.stringify(report);
+          for (const [, peerEntry] of activePeers) {
+            if (peerEntry.dataChannel && peerEntry.dataChannel.readyState === 'open') {
+              try {
+                peerEntry.dataChannel.send(json);
+              } catch { /* channel send error */ }
+            }
+          }
+        }
+      }
 
       const currentAvg = pingCount > 0 ? Math.round(sumPing / pingCount) : null;
       // Only a measured drift: nothing made up while it hasn't been measured or nothing is playing
@@ -295,11 +352,21 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
   }
 
   // Ping probes over the data channel: answer theirs, time ours
-  usePeerMessageOn<NetPingPayload>(bus, 'net-ping', (data, from) => {
+  usePeerMessageOn<NetPingPayload>(bus, 'net-ping', (data: NetPingPayload, from: string) => {
     bus.send(from, 'net-pong', { pingId: data?.pingId, sendTime: data?.sendTime });
   });
-  usePeerMessageOn<NetPingPayload>(bus, 'net-pong', (data, from) => {
+  usePeerMessageOn<NetPingPayload>(bus, 'net-pong', (data: NetPingPayload, from: string) => {
     recordPeerPing(from, Math.max(1, Math.round(performance.now() - (data?.sendTime || 0))));
+  });
+
+  // Global topology distance report from peers
+  usePeerMessageOn<NetTopologyReportMessage>(bus, 'net-topology-report', (data: NetTopologyReportMessage) => {
+    if (data?.from && data.links) {
+      setTopologyMatrix((prev) => ({
+        ...prev,
+        [data.from]: data.links
+      }));
+    }
   });
 
   return {
@@ -307,6 +374,8 @@ export function useNetworkStats(ctx: UseNetworkStatsContext) {
     setNetworkStats,
     peersNetworkStats,
     setPeersNetworkStats,
+    topologyMatrix,
+    setTopologyMatrix,
     peerStatsCacheRef,
     pingHistoryRef,
     lastSyncDriftMsRef,

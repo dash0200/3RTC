@@ -75,6 +75,8 @@ export interface PeerMeshHookResult {
   peerCount: number;
   isP2PConnected: boolean;
   p2pStatusText: string;
+  topology: 'mesh' | 'hub';
+  switchTopology: (nextTopology: 'mesh' | 'hub') => void;
   createRoom: (resumeRoomId?: string | null, hostToken?: string | null) => void;
   joinRoom: (pin: string) => void;
   leaveRoom: () => void;
@@ -124,6 +126,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   const [peerCount, setPeerCount] = useState<number>(0);
   const [isP2PConnected, setIsP2PConnected] = useState<boolean>(false);
   const [p2pStatusText, setP2pStatusText] = useState<string>(WAITING_TEXT);
+  const [topology, setTopology] = useState<'mesh' | 'hub'>('mesh');
   const [networkHint, setNetworkHint] = useState<NetworkHint | null>(null);
   const dismissNetworkHint = useCallback(() => setNetworkHint(null), []);
 
@@ -162,6 +165,17 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
       pendingSignalsRef.current.push(data as OutgoingSignalingMessage);
     }
   }, []);
+
+  const switchTopology = useCallback(
+    (nextTopology: 'mesh' | 'hub') => {
+      setTopology(nextTopology);
+      sendSignal({
+        type: 'set-topology',
+        topology: nextTopology
+      });
+    },
+    [sendSignal]
+  );
 
   const cleanupPeer = useCallback(
     (targetPeerId: string) => {
@@ -306,6 +320,9 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         },
         onRemoteVideoStreamEnded: (peerId) => {
           bus.emitEvent('remote-screen-stream-ended', { peerId });
+        },
+        onRemoteScreenAudioStream: (peerId, stream, track) => {
+          bus.emitEvent('remote-screen-audio', { peerId, stream, track });
         }
       });
 
@@ -481,6 +498,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         roomTokensRef,
         sendSignal,
         setHostPeerId,
+        setTopology,
         setIsHost,
         setP2pStatusText,
         setPeerCount,
@@ -596,6 +614,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     peerCount,
     isP2PConnected,
     p2pStatusText,
+    topology,
+    switchTopology,
     createRoom,
     joinRoom,
     leaveRoom,

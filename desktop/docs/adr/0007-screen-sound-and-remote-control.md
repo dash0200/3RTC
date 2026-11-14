@@ -14,7 +14,7 @@ person's voice, and a browser can't play input back on a computer anyway).
 **Sound.**
 - The sharer captures all of the PC's sound except 3RTC's own (WASAPI process loopback, excluding
   our process tree, so voices, WebView2 and libmpv aren't sent back), in stereo.
-- It goes out as a separate stereo track (stream id `screen-audio`) added to each *desktop* viewer's
+- It goes out as a separate stereo track (stream id `screen-audio`) added to each viewer's
   connection while sharing, with a fresh offer on the open connection. Its Opus line is tuned for
   music (stereo, 256 kbit/s, in-band FEC).
 - The mixer and speakers are now stereo: voices are mono on both sides, the screen's sound keeps
@@ -48,6 +48,6 @@ between desktop apps only.
 
 ## Consequences
 
-- A web viewer gets the picture without the sound, and can't ask for control.
+- A web viewer gets the picture and the sound, but can't ask for remote control.
 - The app never captures or injects input unless the sharer has allowed this viewer, and it shows
   that it is happening the whole time.

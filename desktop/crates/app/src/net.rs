@@ -41,6 +41,40 @@ pub(crate) fn grade(ping_ms: Option<f64>, loss: f64) -> (&'static str, Hsla, &'s
     }
 }
 
+/// Technical distance evaluation matching the web app.
+pub(crate) fn technical_distance(
+    rtt_ms: f64,
+    conn_type: &str,
+    loss_pct: f64,
+    jitter_ms: f64,
+) -> (u32, &'static str, Hsla) {
+    let is_lan = conn_type.contains("LAN") || conn_type.contains("host");
+    let is_relay = conn_type.contains("Relay") || conn_type.contains("relay");
+
+    let multiplier = if is_relay {
+        2.5
+    } else if is_lan {
+        0.8
+    } else {
+        1.0
+    };
+    let penalty = (loss_pct * 15.0) + (jitter_ms * 0.5);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let score = ((rtt_ms * multiplier + penalty).max(1.0).round()) as u32;
+
+    if is_lan || score < 15 {
+        (score, "⚡ LAN", tokens::net_excellent())
+    } else if score < 50 {
+        (score, "🟢 Near", tokens::net_excellent())
+    } else if score < 120 {
+        (score, "🟡 Medium", tokens::net_good())
+    } else if score < 250 && !is_relay {
+        (score, "🟠 Far", tokens::net_fair())
+    } else {
+        (score, "🔴 Distant", tokens::net_poor())
+    }
+}
+
 /// The summary over everyone: average, min and max round trip, total rates, worst loss.
 struct Summary {
     avg: Option<f64>,
@@ -518,6 +552,12 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                 .children(view.net.peers.iter().map(|p| {
                     let n = &p.net;
                     let (_, pc, _) = grade(n.rtt_ms, n.loss_percent());
+                    let (dist_score, dist_label, dist_col) = technical_distance(
+                        n.rtt_ms.unwrap_or(50.0),
+                        n.connection_type(),
+                        n.loss_percent(),
+                        n.jitter_ms,
+                    );
                     let cell = |k: &'static str, v: String| {
                         div()
                             .flex()
@@ -565,6 +605,17 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                                         .text_color(pc)
                                         .text_size(px(11.))
                                         .child(n.connection_type()),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(7.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(Hsla { a: 0.35, ..dist_col })
+                                        .text_color(dist_col)
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(format!("Dist: {dist_score} ({dist_label})")),
                                 )
                                 .child(div().flex_1())
                                 .child(
@@ -638,7 +689,7 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
 
 #[cfg(test)]
 mod tests {
-    use super::grade;
+    use super::{grade, technical_distance};
 
     #[test]
     fn grades_like_the_web_app() {
@@ -647,5 +698,33 @@ mod tests {
         assert_eq!(grade(Some(40.0), 2.0).2, "A");
         assert_eq!(grade(Some(150.0), 0.0).2, "B");
         assert_eq!(grade(Some(400.0), 0.0).0, "Poor / High Latency");
+    }
+
+    #[test]
+    fn technical_distance_calculates_tiers_and_penalties() {
+        // LAN
+        let (lan_score, lan_label, _) = technical_distance(8.0, "host (LAN)", 0.0, 0.5);
+        assert!(lan_score < 15);
+        assert_eq!(lan_label, "⚡ LAN");
+
+        // Near P2P
+        let (near_score, near_label, _) = technical_distance(32.0, "srflx (P2P)", 0.0, 1.0);
+        assert!((15..50).contains(&near_score));
+        assert_eq!(near_label, "🟢 Near");
+
+        // Medium P2P
+        let (med_score, med_label, _) = technical_distance(75.0, "srflx (P2P)", 0.5, 3.0);
+        assert!((50..120).contains(&med_score));
+        assert_eq!(med_label, "🟡 Medium");
+
+        // Far P2P
+        let (far_score, far_label, _) = technical_distance(160.0, "srflx (P2P)", 1.0, 4.0);
+        assert!((120..250).contains(&far_score));
+        assert_eq!(far_label, "🟠 Far");
+
+        // TURN Relay penalty (2.5x multiplier)
+        let (relay_score, relay_label, _) = technical_distance(120.0, "Relay (TURN)", 0.0, 2.0);
+        assert!(relay_score >= 250);
+        assert_eq!(relay_label, "🔴 Distant");
     }
 }

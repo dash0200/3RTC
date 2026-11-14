@@ -27,6 +27,7 @@ export interface SignalingContext {
   logLocalDebug: (tag: string, detail: string) => void;
   sendSignal: (msg: OutgoingSignalingMessage | Record<string, unknown>) => void;
   setHostPeerId?: (hostPeerId: string | null | undefined) => void;
+  setTopology?: (topology: 'mesh' | 'hub') => void;
   roomTokensRef?: { current: RoomTokens };
   peerIdRef?: { current: string | null };
   /** "Room not found" here: look for it on the other servers. True if a search started (it tells
@@ -79,6 +80,9 @@ export async function processSignalingMessage(
       host: typeof msg.hostToken === 'string' ? msg.hostToken : null
     };
     setHostPeerId?.('hostPeerId' in msg && typeof msg.hostPeerId === 'string' ? msg.hostPeerId : null);
+    if ('topology' in msg && msg.topology) {
+      ctx.setTopology?.(msg.topology);
+    }
   }
 
   switch (msg.type) {
@@ -197,6 +201,7 @@ export async function processSignalingMessage(
 
         if (pc.getTransceivers) {
           const allTransceivers = pc.getTransceivers();
+          let seenAudioTransceiver = false;
           for (const t of allTransceivers) {
             const isVideo =
               t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video';
@@ -207,14 +212,20 @@ export async function processSignalingMessage(
                 t.sender.replaceTrack(currentScreenTrackRef.current).catch(() => {});
               }
             } else {
-              peerEntry.audioTransceiver = t;
-              t.direction = 'sendrecv';
-              if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
-                const audioTrack =
-                  micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
-                if (audioTrack) {
-                  t.sender.replaceTrack(audioTrack).catch(() => {});
+              if (!seenAudioTransceiver) {
+                seenAudioTransceiver = true;
+                peerEntry.audioTransceiver = t;
+                t.direction = 'sendrecv';
+                if (localStreamRef.current && !isMicMutedRef.current && t.sender) {
+                  const audioTrack =
+                    micPipeline.getOutputTrack() || localStreamRef.current.getAudioTracks()[0];
+                  if (audioTrack) {
+                    t.sender.replaceTrack(audioTrack).catch(() => {});
+                  }
                 }
+              } else {
+                // Secondary audio line (e.g. incoming screen-audio)
+                t.direction = 'recvonly';
               }
             }
           }
@@ -373,6 +384,18 @@ export async function processSignalingMessage(
       cleanupPeer(msg.peerId);
       setPeerCount(peersRef.current.size + 1);
       addSystemMessage('A peer disconnected from the room.');
+      break;
+    }
+
+    case 'topology-changed': {
+      ctx.setTopology?.(msg.topology);
+      setHostPeerId?.(msg.hostPeerId);
+      addSystemMessage(
+        msg.topology === 'hub'
+          ? 'Network topology switched to Host-Hub mode.'
+          : 'Network topology switched to Full Mesh mode.'
+      );
+      showToast(msg.topology === 'hub' ? 'Topology: Host Hub' : 'Topology: Full Mesh');
       break;
     }
 

@@ -186,7 +186,16 @@ export function useScreenShare(
         // Never assume a peer is sharing just because WebRTC negotiated a video transceiver!
         if (screenSharerRef.current?.peerId === peerId) {
           setRemoteScreenStream(stream);
-          setHasAudio(stream.getAudioTracks().length > 0);
+          setHasAudio(stream.getAudioTracks().length > 0 || Boolean(screenSharerRef.current?.hasAudio));
+        }
+      }
+    );
+
+    const offAudio = bus.onEvent<{ peerId: string; stream: MediaStream; track?: MediaStreamTrack }>(
+      'remote-screen-audio',
+      ({ peerId }) => {
+        if (screenSharerRef.current?.peerId === peerId) {
+          setHasAudio(true);
         }
       }
     );
@@ -232,6 +241,7 @@ export function useScreenShare(
 
     return () => {
       offStream();
+      offAudio();
       offStreamEnded();
       offPeerClose();
       offRoomLeft();

@@ -35,6 +35,7 @@ fn hosting() -> Room {
             host_peer_id: pid("me"),
             seat_token: "seat".into(),
             host_token: "host".into(),
+            topology: None,
         }),
         0.0,
     );
@@ -99,6 +100,7 @@ fn a_joiner_waits_for_offers() {
             host_peer_id: pid("host"),
             seat_token: "s".into(),
             host_token: None,
+            topology: None,
         }),
         0.0,
     );
@@ -414,6 +416,7 @@ fn room_events_go_to_the_logs_in_the_web_apps_words() {
             host_peer_id: pid("me"),
             seat_token: "s".into(),
             host_token: "h".into(),
+            topology: None,
         }),
         0.0,
     );
@@ -971,6 +974,7 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
             peers: vec![pid("host"), pid("other")],
             seat_token: "s".into(),
             host_token: None,
+            topology: None,
         }),
         0.0,
     );

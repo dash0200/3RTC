@@ -88,7 +88,7 @@ pub(crate) enum PeerEvent {
 
 type Sink = Arc<dyn Fn(PeerEvent) + Send + Sync>;
 
-/// The stream id of a shared screen's sound (its own audio line, between desktops).
+/// The stream id of a shared screen's sound (its own audio line).
 pub(crate) const SCREEN_SOUND_STREAM: &str = "screen-audio";
 
 struct Link {
@@ -100,7 +100,7 @@ struct Link {
     has_remote: bool,
     pending: Vec<IceCandidate>,
     levels: tokio::task::JoinHandle<()>,
-    /// Our screen's sound goes on this connection (a desktop viewer: added once, kept).
+    /// Our screen's sound goes on this connection (added once, kept).
     screen_sound: bool,
 }
 
@@ -554,9 +554,8 @@ impl Peers {
             .find(|s| matches!(s.track(), Some(MediaStreamTrack::Video(_))))
     }
 
-    /// Our screen's sound to a desktop viewer: its own audio line, added once to their
-    /// connection and offered again (the web app never gets it: it would take the line for a
-    /// second voice). Returns whether the line is there now; `false` means try again later
+    /// Our screen's sound to a viewer: its own audio line, added once to their
+    /// connection and offered again. Returns whether the line is there now; `false` means try again later
     /// (not connected, or another offer is under way).
     pub(crate) async fn add_screen_sound(&mut self, peer: &PeerId, track: &MediaStreamTrack) -> bool {
         let Some(link) = self.links.get_mut(peer) else {

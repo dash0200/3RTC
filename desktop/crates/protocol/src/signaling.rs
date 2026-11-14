@@ -82,6 +82,12 @@ pub enum ClientMessage {
         /// The new host.
         target_peer_id: PeerId,
     },
+    /// The host changes room topology between mesh and hub.
+    #[serde(rename_all = "camelCase")]
+    SetTopology {
+        /// "mesh" or "hub".
+        topology: String,
+    },
     /// Ask whether a room exists on this server (answered by [`ServerMessage::RoomFound`]).
     #[serde(rename_all = "camelCase")]
     FindRoom {
@@ -142,6 +148,9 @@ pub enum ServerMessage {
         seat_token: String,
         /// Keep: proves you host the room.
         host_token: String,
+        /// Room topology ("mesh" or "hub").
+        #[serde(default)]
+        topology: Option<String>,
     },
     /// You got your room back as its host.
     #[serde(rename_all = "camelCase")]
@@ -158,6 +167,9 @@ pub enum ServerMessage {
         seat_token: String,
         /// Keep: proves you host the room.
         host_token: String,
+        /// Room topology ("mesh" or "hub").
+        #[serde(default)]
+        topology: Option<String>,
     },
     /// You're in.
     #[serde(rename_all = "camelCase")]
@@ -175,6 +187,9 @@ pub enum ServerMessage {
         /// Present when you are the host (after a host handover).
         #[serde(default)]
         host_token: Option<String>,
+        /// Room topology ("mesh" or "hub").
+        #[serde(default)]
+        topology: Option<String>,
     },
     /// The host changed.
     #[serde(rename_all = "camelCase")]
@@ -192,6 +207,14 @@ pub enum ServerMessage {
         room_id: RoomId,
         /// Keep: proves you host the room.
         host_token: String,
+    },
+    /// Room topology changed between mesh and hub.
+    #[serde(rename_all = "camelCase")]
+    TopologyChanged {
+        /// "mesh" or "hub".
+        topology: String,
+        /// The host's peer id.
+        host_peer_id: PeerId,
     },
     /// Someone joined: offer to them.
     #[serde(rename_all = "camelCase")]
@@ -359,6 +382,28 @@ mod tests {
     }
 
     #[test]
+    fn topology_messages_round_trip() {
+        let set = ClientMessage::SetTopology {
+            topology: "hub".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&set).unwrap(),
+            json!({"type": "set-topology", "topology": "hub"})
+        );
+
+        let changed =
+            ServerMessage::from_json(r#"{"type":"topology-changed","topology":"hub","hostPeerId":"host-1"}"#)
+                .unwrap();
+        assert_eq!(
+            changed,
+            ServerMessage::TopologyChanged {
+                topology: "hub".to_owned(),
+                host_peer_id: pid("host-1"),
+            }
+        );
+    }
+
+    #[test]
     fn reads_what_the_server_sends() {
         let m = ServerMessage::from_json(
             r#"{"type":"joined","roomId":"54321","peerId":"me","peers":["a","b"],"hostPeerId":"a","seatToken":"s"}"#,
@@ -373,6 +418,7 @@ mod tests {
                 host_peer_id: pid("a"),
                 seat_token: "s".into(),
                 host_token: None,
+                topology: None,
             }
         );
         let h = ServerMessage::from_json(r#"{"type":"host","hostPeerId":"b","from":"a"}"#).unwrap();
