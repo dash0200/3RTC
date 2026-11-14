@@ -36,6 +36,8 @@ mod other;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
+mod share_hud;
+#[cfg(windows)]
 mod ui_thread;
 mod video;
 #[cfg(windows)]
@@ -56,25 +58,29 @@ pub use other::Overlay;
 #[cfg(not(windows))]
 pub use other::RemoteControl;
 #[cfg(not(windows))]
+pub use other::ShareHud;
+#[cfg(not(windows))]
 pub use other::{AppSound, audio_apps};
 #[cfg(not(windows))]
 pub use other::{H264Encoder, ParentWindow, VideoPlayer};
 #[cfg(not(windows))]
 pub use other::{
-    KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
-    set_window_icon, show_window,
+    KeyWatcher, Tray, autostart, center_cursor, foreground_admin_app, hide_window, keys_down, links,
+    lock_pointer, play_wav, set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };
 #[cfg(not(windows))]
 pub use other::{gpu_choice, gpus, set_gpu_choice};
 #[cfg(windows)]
 pub use overlay::Overlay;
 #[cfg(windows)]
+pub use share_hud::ShareHud;
+#[cfg(windows)]
 pub use ui_thread::{ParentWindow, UiThread};
 pub use video::{EncodedUnit, Rect, StreamSource, Track, TrackKind, VideoAction, VideoEvent, VideoSource};
 #[cfg(windows)]
 pub use win::{
-    KeyWatcher, Tray, autostart, foreground_admin_app, hide_window, keys_down, links, play_wav,
-    set_window_icon, show_window,
+    KeyWatcher, Tray, autostart, center_cursor, foreground_admin_app, hide_window, keys_down, links,
+    lock_pointer, play_wav, set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };
 
 /// The graphics card the app asks Windows for (it applies from the next start).
@@ -129,6 +135,13 @@ pub enum Injection {
         x: f64,
         /// Down.
         y: f64,
+    },
+    /// The pointer moves relatively by (dx, dy) pixels (e.g. for gaming camera look).
+    MoveDelta {
+        /// Across pixels.
+        dx: i32,
+        /// Down pixels.
+        dy: i32,
     },
     /// A button goes down or up there.
     Button {
@@ -280,4 +293,39 @@ pub struct AudioApp {
     pub name: String,
     /// Playing sound right now.
     pub playing: bool,
+}
+
+/// What the screen sharing HUD can display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShareHudState {
+    /// Screen is being shared to `viewers` count.
+    Sharing {
+        /// Number of viewers watching.
+        viewers: usize,
+    },
+    /// A peer requested remote control.
+    ControlRequested {
+        /// Peer ID.
+        peer: String,
+        /// Peer display name.
+        name: String,
+    },
+    /// A peer currently controls the screen.
+    Controlling {
+        /// Controller display name.
+        name: String,
+    },
+}
+
+/// An action triggered by user clicking the screen sharing HUD buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShareHudAction {
+    /// Stop screen sharing.
+    StopSharing,
+    /// Allow the peer to control.
+    AllowControl(String),
+    /// Deny the peer's control request.
+    DenyControl(String),
+    /// Sharer takes back control.
+    TakeBackControl,
 }

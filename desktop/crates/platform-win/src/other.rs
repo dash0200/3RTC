@@ -41,6 +41,20 @@ pub fn hide_window(_window: &impl HasWindowHandle) {}
 /// Shows the window and brings it to the front (not here).
 pub fn show_window(_window: &impl HasWindowHandle) {}
 
+/// Shows or hides the OS cursor for the current thread (not here).
+pub fn set_cursor_visible(_visible: bool) {}
+
+/// Confines the cursor for gaming mode (not here).
+pub fn lock_pointer(_window: &impl HasWindowHandle) {}
+
+/// Releases cursor confinement (not here).
+pub fn unlock_pointer() {}
+
+/// Centers the cursor (not here).
+pub fn center_cursor(_window: &impl HasWindowHandle) -> Option<(i32, i32)> {
+    None
+}
+
 /// Gives the window the 3RTC icon (not here).
 pub fn set_window_icon(_window: &impl HasWindowHandle) {}
 
@@ -326,4 +340,19 @@ impl RemoteControl {
     pub fn input(&self, i: crate::Injection) {
         tracing::trace!("control: {i:?} over {:?}", self.area);
     }
+}
+
+/// Screen sharing HUD stand-in: does nothing here.
+#[derive(Debug)]
+pub struct ShareHud;
+
+impl ShareHud {
+    /// Starts (does nothing, returns None here).
+    #[must_use]
+    pub fn start(_on_action: impl Fn(crate::ShareHudAction) + Send + 'static) -> Option<Self> {
+        None
+    }
+
+    /// Updates (does nothing here).
+    pub fn update(&self, _state: Option<crate::ShareHudState>) {}
 }

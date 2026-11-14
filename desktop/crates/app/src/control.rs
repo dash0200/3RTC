@@ -22,8 +22,8 @@ use rtc_ui::tokens;
 
 use crate::view::RoomView;
 
-/// Pointer moves go out at most this often while in control (~60 a second).
-const MOVE_GAP: Duration = Duration::from_millis(16);
+/// Pointer moves go out at most this often while in control (~125 a second).
+const MOVE_GAP: Duration = Duration::from_millis(8);
 
 /// A GPUI key name as a Windows virtual-key code (US layout for the punctuation).
 pub(crate) fn vk_for(key: &str) -> Option<u16> {
@@ -66,9 +66,17 @@ pub(crate) fn vk_for(key: &str) -> Option<u16> {
     {
         return Some(0x6F + n);
     }
+    if let Some(digit) = k
+        .strip_prefix("numpad")
+        .or_else(|| k.strip_prefix("kp_"))
+        .and_then(|d| d.parse::<u16>().ok())
+        && digit <= 9
+    {
+        return Some(0x60 + digit);
+    }
     Some(match k.as_str() {
         "space" => 0x20,
-        "enter" | "return" => 0x0D,
+        "enter" | "return" | "numpadenter" => 0x0D,
         "escape" => 0x1B,
         "backspace" => 0x08,
         "tab" => 0x09,
@@ -85,6 +93,16 @@ pub(crate) fn vk_for(key: &str) -> Option<u16> {
         "capslock" => 0x14,
         "printscreen" => 0x2C,
         "menu" | "contextmenu" => 0x5D,
+        "numpadadd" | "add" => 0x6B,
+        "numpadsubtract" | "subtract" => 0x6D,
+        "numpadmultiply" | "multiply" => 0x6A,
+        "numpaddivide" | "divide" => 0x6F,
+        "numpaddecimal" | "decimal" => 0x6E,
+        "numlock" => 0x90,
+        "scrolllock" => 0x91,
+        "pause" => 0x13,
+        "back" | "browserback" => 0xA6,
+        "forward" | "browserforward" => 0xA7,
         _ => return None,
     })
 }
@@ -142,11 +160,20 @@ impl RoomView {
         if !c.mine {
             s.ctl_mods = Modifiers::default();
             s.ctl_keys.clear();
+            if s.ctl_game_mode {
+                s.ctl_game_mode = false;
+                s.ctl_last_pos = None;
+                s.ctl_delta = (0, 0);
+                rtc_platform_win::unlock_pointer();
+            } else {
+                rtc_platform_win::set_cursor_visible(true);
+            }
         }
         if c.viewers.is_empty() || c.controller.is_some() {
             s.ctl_menu = false;
         }
         s.control = c;
+        self.sync_share_hud();
         cx.notify();
     }
 
@@ -156,7 +183,7 @@ impl RoomView {
 
     /// While in control: the pointer moved over the stage.
     pub(crate) fn ctl_move(&mut self, p: gpui_kit::Point<Pixels>) {
-        let Some((x, y)) = self.on_picture(p) else { return };
+        let (x, y) = self.on_picture_clamped(p);
         let now = Instant::now();
         if self
             .screen
@@ -172,6 +199,52 @@ impl RoomView {
             y,
             ..ScreenInput::default()
         });
+    }
+
+    /// While in control and Game Mode is on: accumulate mouse delta for relative motion and
+    /// re-center the cursor before it hits the window boundary.
+    pub(crate) fn ctl_move_delta(&mut self, p: gpui_kit::Point<Pixels>, window: &mut Window) {
+        let Some(last) = self.screen.ctl_last_pos else {
+            self.screen.ctl_last_pos = Some(p);
+            return;
+        };
+
+        let dx = (f32::from(p.x - last.x)).round() as i32;
+        let dy = (f32::from(p.y - last.y)).round() as i32;
+        self.screen.ctl_last_pos = Some(p);
+
+        self.screen.ctl_delta.0 += dx;
+        self.screen.ctl_delta.1 += dy;
+
+        let now = Instant::now();
+        if self
+            .screen
+            .ctl_sent
+            .is_none_or(|t| now.duration_since(t) >= MOVE_GAP)
+        {
+            let (send_dx, send_dy) = self.screen.ctl_delta;
+            if send_dx != 0 || send_dy != 0 {
+                self.screen.ctl_sent = Some(now);
+                self.screen.ctl_delta = (0, 0);
+                self.ctl_input(ScreenInput {
+                    e: InputKind::MoveDelta,
+                    dx: send_dx,
+                    dy: send_dy,
+                    ..ScreenInput::default()
+                });
+            }
+        }
+
+        let size = window.viewport_size();
+        let w: f32 = size.width.into();
+        let h: f32 = size.height.into();
+        let px_f: f32 = p.x.into();
+        let py_f: f32 = p.y.into();
+
+        if px_f < 120.0 || px_f > (w - 120.0).max(120.0) || py_f < 120.0 || py_f > (h - 120.0).max(120.0) {
+            rtc_platform_win::center_cursor(window);
+            self.screen.ctl_last_pos = None;
+        }
     }
 
     /// While in control: a button went down (on the picture) or up (anywhere).
@@ -190,12 +263,11 @@ impl RoomView {
             MouseButton::Navigate(_) => return,
         };
         let at = if down {
-            let Some(at) = self.on_picture(p) else { return };
             // the keys come here from now on (not to the chat box)
             if let Some(f) = &self.screen.ctl_focus {
                 window.focus(f, cx);
             }
-            at
+            self.on_picture_clamped(p)
         } else {
             self.on_picture_clamped(p)
         };
@@ -245,12 +317,40 @@ impl RoomView {
         });
     }
 
-    pub(crate) fn ctl_key_down(&mut self, e: &KeyDownEvent) {
+    pub(crate) fn ctl_key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.screen.ctl_game_mode && e.keystroke.key == "escape" && e.keystroke.modifiers.shift {
+            self.set_game_mode(false, window, cx);
+            return;
+        }
         if let Some(vk) = vk_for(&e.keystroke.key) {
             // held keys repeat as more presses (as on the sharer's own keyboard)
             self.screen.ctl_keys.retain(|&k| k != vk);
             self.ctl_key(vk, true);
         }
+    }
+
+    pub(crate) fn toggle_game_mode(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let next = !self.screen.ctl_game_mode;
+        self.set_game_mode(next, window, cx);
+    }
+
+    pub(crate) fn set_game_mode(&mut self, on: bool, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.screen.ctl_game_mode == on {
+            return;
+        }
+        self.screen.ctl_game_mode = on;
+        self.screen.ctl_last_pos = None;
+        self.screen.ctl_delta = (0, 0);
+        if on {
+            if let Some(f) = &self.screen.ctl_focus {
+                window.focus(f, cx);
+            }
+            rtc_platform_win::lock_pointer(window);
+            rtc_platform_win::center_cursor(window);
+        } else {
+            rtc_platform_win::unlock_pointer();
+        }
+        cx.notify();
     }
 
     pub(crate) fn ctl_key_up(&mut self, e: &KeyUpEvent) {
@@ -270,12 +370,12 @@ impl RoomView {
     }
 }
 
-/// The bar's remote-control button: ask / waiting / stop (viewer), give / take back (sharer).
-pub(crate) fn bar_button(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Option<AnyElement> {
+/// The bar's remote-control buttons: ask / waiting / game mode / stop (viewer), give / take back (sharer).
+pub(crate) fn bar_button(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Vec<AnyElement> {
     let c = &view.screen.control;
     if view.screen.mine {
         if c.controller.is_some() {
-            return Some(
+            return vec![
                 Button::new("ctl-take-back", "Take back control")
                     .variant(Variant::Inverse)
                     .on_click(cx.listener(|v, _, _, cx| {
@@ -283,38 +383,61 @@ pub(crate) fn bar_button(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Opt
                         cx.notify();
                     }))
                     .into_any_element(),
-            );
+            ];
         }
         if c.viewers.is_empty() {
-            return None;
+            return Vec::new();
         }
         let open = view.screen.ctl_menu;
-        return Some(
+        return vec![
             crate::screen::bar_btn("ctl-give", "Give control", open)
                 .on_click(cx.listener(|v, _, _, cx| {
                     v.screen.ctl_menu = !v.screen.ctl_menu;
                     cx.notify();
                 }))
                 .into_any_element(),
-        );
+        ];
     }
-    let (label, on, cmd) = if c.mine {
-        ("Stop controlling", true, ControlCmd::Release)
-    } else if c.asked {
+    if c.mine {
+        let game_mode = view.screen.ctl_game_mode;
+        return vec![
+            crate::screen::bar_btn(
+                "ctl-game-mode",
+                if game_mode { "Exit Game Mode" } else { "Game Mode" },
+                game_mode,
+            )
+            .on_click(cx.listener(|v, _, window, cx| {
+                v.toggle_game_mode(window, cx);
+            }))
+            .into_any_element(),
+            crate::screen::bar_btn("ctl-ask", "Stop controlling", true)
+                .on_click(cx.listener(|v, _, window, cx| {
+                    if v.screen.ctl_game_mode {
+                        v.set_game_mode(false, window, cx);
+                    } else {
+                        rtc_platform_win::set_cursor_visible(true);
+                    }
+                    v.control(ControlCmd::Release);
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ];
+    }
+    let (label, on, cmd) = if c.asked {
         ("Asked… (cancel)", false, ControlCmd::Cancel)
     } else if c.can_ask && c.controller.is_none() {
         ("Request control", false, ControlCmd::Ask)
     } else {
-        return None;
+        return Vec::new();
     };
-    Some(
+    vec![
         crate::screen::bar_btn("ctl-ask", label, on)
             .on_click(cx.listener(move |v, _, _, cx| {
                 v.control(cmd.clone());
                 cx.notify();
             }))
             .into_any_element(),
-    )
+    ]
 }
 
 /// "Give control": the desktop viewers, to offer control to.
@@ -401,8 +524,8 @@ pub(crate) fn give_menu(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Opti
                     .text_size(px(11.))
                     .text_color(tokens::text_3())
                     .child(
-                        "They can use your mouse and keyboard on what you share. Take it back any time: move your \
-                         mouse, or press Ctrl+Alt+Shift+X.",
+                        "They can use your mouse and keyboard on what you share. Take it back any time: press \
+                         Ctrl+Alt+Shift+X, or click Take back control.",
                     ),
             )
             .into_any_element(),
@@ -412,11 +535,14 @@ pub(crate) fn give_menu(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Opti
 /// Who is in control (a chip under the bar).
 pub(crate) fn status_chip(view: &RoomView) -> Option<AnyElement> {
     let c = &view.screen.control;
+    if c.mine && view.screen.ctl_game_mode {
+        return None;
+    }
     let who = c.controller.as_ref()?;
     let sharer = view.screen.sharer.clone().unwrap_or_default();
     let text = if view.screen.mine {
         format!(
-            "{who} is controlling your screen · move your mouse or press Ctrl+Alt+Shift+X to take it back"
+            "{who} is controlling your screen · press Ctrl+Alt+Shift+X or click Take back control to take it back"
         )
     } else if c.mine {
         format!("You are controlling {sharer}'s screen · click the picture, then your keys go there too")
@@ -478,7 +604,7 @@ pub(crate) fn prompts(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Option
                 prompt_card(
                     ("ctl-ask-card", n),
                     format!("{name} asks to control your screen"),
-                    "They'll use your mouse and keyboard on what you share. Take it back any time: move your mouse, or press Ctrl+Alt+Shift+X.",
+                    "They'll use your mouse and keyboard on what you share. Take it back any time: press Ctrl+Alt+Shift+X, or click Take back control.",
                 )
                 .child(
                     div()
@@ -564,6 +690,14 @@ mod tests {
         assert_eq!(vk_for("left"), Some(0x25));
         assert_eq!(vk_for("/"), Some(0xBF));
         assert_eq!(vk_for("space"), Some(0x20));
+        assert_eq!(vk_for("numpad0"), Some(0x60));
+        assert_eq!(vk_for("numpad9"), Some(0x69));
+        assert_eq!(vk_for("kp_5"), Some(0x65));
+        assert_eq!(vk_for("numpadadd"), Some(0x6B));
+        assert_eq!(vk_for("numpadenter"), Some(0x0D));
+        assert_eq!(vk_for("pause"), Some(0x13));
+        assert_eq!(vk_for("back"), Some(0xA6));
+        assert_eq!(vk_for("forward"), Some(0xA7));
         assert_eq!(vk_for("shift"), None);
         assert_eq!(vk_for("f99"), None);
     }

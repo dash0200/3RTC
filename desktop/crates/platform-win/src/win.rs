@@ -9,7 +9,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, E_ACCESSDENIED, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -24,13 +27,14 @@ use windows::Win32::UI::Shell::{
     NOTIFYICON_VERSION_4, NOTIFYICONDATAW, NOTIFYICONDATAW_0, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, GetCursorPos, GetForegroundWindow, GetMessageW, GetSystemMetrics,
-    GetWindowThreadProcessId, HICON, ICON_BIG, ICON_SMALL, IsIconic, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_CXICON,
-    SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetForegroundWindow, ShowWindowAsync,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_SETICON, WNDCLASSEXW, WS_OVERLAPPED,
+    AppendMenuW, ClipCursor, CreateIcon, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+    DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos, GetForegroundWindow, GetMessageW,
+    GetSystemMetrics, GetWindowThreadProcessId, HICON, ICON_BIG, ICON_SMALL, IsIconic, MF_CHECKED, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
+    SM_CXICON, SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SendMessageW, SetCursorPos, SetForegroundWindow,
+    ShowCursor, ShowWindowAsync, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_SETICON,
+    WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -269,6 +273,76 @@ pub fn show_window(window: &impl HasWindowHandle) {
             // closed meanwhile, Windows just returns false.
             let _ = unsafe { SetForegroundWindow(HWND(raw as *mut c_void)) };
         });
+}
+
+/// Shows or hides the OS cursor for the current thread.
+///
+/// Keeps an internal flag so `ShowCursor`'s display counter is decremented when hidden
+/// and incremented back when shown, avoiding unbounded counter drift.
+pub fn set_cursor_visible(visible: bool) {
+    static HIDDEN: AtomicBool = AtomicBool::new(false);
+    if visible {
+        if HIDDEN.swap(false, Ordering::SeqCst) {
+            // SAFETY: increments the current thread's cursor display counter back.
+            unsafe { ShowCursor(true) };
+        }
+    } else if !HIDDEN.swap(true, Ordering::SeqCst) {
+        // SAFETY: decrements the current thread's cursor display counter to hide it.
+        unsafe { ShowCursor(false) };
+    }
+}
+
+/// Confines the cursor to `window`'s client area and hides it for gaming mode.
+pub fn lock_pointer(window: &impl HasWindowHandle) {
+    if let Some(h) = hwnd_of(window) {
+        let mut rect = RECT::default();
+        // SAFETY: rect is a valid pointer; h is live.
+        if unsafe { GetClientRect(h, &raw mut rect) }.is_ok() {
+            let mut top_left = POINT {
+                x: rect.left,
+                y: rect.top,
+            };
+            let mut bottom_right = POINT {
+                x: rect.right,
+                y: rect.bottom,
+            };
+            // SAFETY: converts client coordinates to screen coordinates.
+            let _ = unsafe { ClientToScreen(h, &raw mut top_left) };
+            let _ = unsafe { ClientToScreen(h, &raw mut bottom_right) };
+            let screen_rect = RECT {
+                left: top_left.x,
+                top: top_left.y,
+                right: bottom_right.x,
+                bottom: bottom_right.y,
+            };
+            // SAFETY: confines cursor to screen_rect.
+            let _ = unsafe { ClipCursor(Some(&raw const screen_rect)) };
+        }
+    }
+    set_cursor_visible(false);
+}
+
+/// Releases cursor confinement and restores cursor visibility.
+pub fn unlock_pointer() {
+    // SAFETY: releases any cursor clipping.
+    let _ = unsafe { ClipCursor(None) };
+    set_cursor_visible(true);
+}
+
+/// Centers the cursor in `window`'s client area and returns the screen coordinates.
+pub fn center_cursor(window: &impl HasWindowHandle) -> Option<(i32, i32)> {
+    let h = hwnd_of(window)?;
+    let mut rect = RECT::default();
+    // SAFETY: rect is valid.
+    unsafe { GetClientRect(h, &raw mut rect) }.ok()?;
+    let cx = rect.left + (rect.right - rect.left) / 2;
+    let cy = rect.top + (rect.bottom - rect.top) / 2;
+    let mut pt = POINT { x: cx, y: cy };
+    // SAFETY: converts client point to screen point.
+    let _ = unsafe { ClientToScreen(h, &raw mut pt) };
+    // SAFETY: sets cursor position.
+    let _ = unsafe { SetCursorPos(pt.x, pt.y) };
+    Some((pt.x, pt.y))
 }
 
 /// The logo as an icon `size` pixels square (made once per size and kept for the app's life).

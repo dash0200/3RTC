@@ -111,6 +111,10 @@ pub(crate) fn injection(i: &ScreenInput) -> Option<Injection> {
     }
     Some(match i.e {
         InputKind::Move => Injection::Move { x, y },
+        InputKind::MoveDelta => Injection::MoveDelta {
+            dx: i.dx.clamp(-10000, 10000),
+            dy: i.dy.clamp(-10000, 10000),
+        },
         InputKind::Button => Injection::Button {
             button: match i.button {
                 0 => MouseKey::Left,
@@ -542,6 +546,10 @@ mod tests {
         assert_eq!(injection(&i(InputKind::Key, 0, 0)), None);
         assert_eq!(injection(&i(InputKind::Key, 0, 0x1FF)), None);
         assert_eq!(injection(&i(InputKind::Other, 0, 0)), None);
+        let mut delta = i(InputKind::MoveDelta, 0, 0);
+        delta.dx = 12;
+        delta.dy = -5;
+        assert_eq!(injection(&delta), Some(Injection::MoveDelta { dx: 12, dy: -5 }));
         let mut nan = i(InputKind::Move, 0, 0);
         nan.x = f64::NAN;
         assert_eq!(injection(&nan), None);

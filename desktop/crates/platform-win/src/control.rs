@@ -5,21 +5,19 @@
 //! - a banner sits at the top of the shared area ("Asha is controlling this screen …"); it lets
 //!   the mouse through, never takes focus, and is left out of the shared picture;
 //! - **Ctrl+Alt+Shift+X** takes control back (a hotkey on the banner's window);
-//! - so does the sharer's own mouse: a click, or moving it a fair way, as told apart from the
-//!   played-back input by a low-level mouse hook (Windows marks input we inject). The hook
-//!   only watches; every event goes on unchanged.
+//! - control stays active until explicitly canceled from either user (the hotkey, the Take back
+//!   button, or stopping the share), just like AnyDesk.
 //!
 //! Dropping the [`RemoteControl`] lets go of any key or button the viewer still held, removes
-//! the hook and the hotkey, and closes the banner. Positions are physical pixels (this thread
+//! the hotkey, and closes the banner. Positions are physical pixels (this thread
 //! asks for per-monitor DPI while it works them out).
 
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::{Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DEVMODEW,
@@ -39,13 +37,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, SendInput, UnregisterHotKey, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    GetSystemMetrics, GetWindowRect, HWND_TOPMOST, KillTimer, LLMHF_INJECTED, LWA_ALPHA, MSG, MSLLHOOKSTRUCT,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SetLayeredWindowAttributes,
-    SetTimer, SetWindowDisplayAffinity, SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage,
-    UnhookWindowsHookEx, WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WM_CLOSE, WM_DESTROY, WM_HOTKEY,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WM_TIMER, WM_XBUTTONDOWN,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, GetSystemMetrics,
+    GetWindowRect, HWND_TOPMOST, KillTimer, LWA_ALPHA, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOWNOACTIVATE,
+    SWP_NOACTIVATE, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity, SetWindowPos, ShowWindow,
+    TranslateMessage, WDA_EXCLUDEFROMCAPTURE, WM_CLOSE, WM_DESTROY, WM_HOTKEY, WM_PAINT, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     WS_POPUP,
 };
@@ -57,10 +53,6 @@ const BANNER_W: i32 = 760;
 const BANNER_H: i32 = 40;
 /// The banner is put back on top (and over the area, if it moved) this often.
 const PLACE_TIMER_MS: u32 = 1000;
-/// The sharer's mouse moving this far (physical pixels) …
-const TAKE_BACK_PX: f64 = 200.0;
-/// … within this long takes control back.
-const TAKE_BACK_WINDOW: Duration = Duration::from_millis(700);
 const HOTKEY_ID: i32 = 0x3C7;
 
 /// `0xRRGGBB` → `COLORREF` (`0x00BBGGRR`).
@@ -68,14 +60,9 @@ const fn rgb(c: u32) -> COLORREF {
     COLORREF(((c & 0xFF) << 16) | (c & 0xFF00) | ((c >> 16) & 0xFF))
 }
 
-/// The control thread's own state (its window procedure and mouse hook read it).
+/// The control thread's own state (its window procedure reads it).
 struct Watch {
     on_take_back: Box<dyn Fn(TakeBack) + Send>,
-    /// Where the pointer last was (any event).
-    last: Option<POINT>,
-    /// How far the sharer's own mouse moved since `since`.
-    moved: f64,
-    since: Instant,
     /// Taken back already (told once).
     fired: bool,
     /// The banner's text.
@@ -297,51 +284,6 @@ fn take_back(why: TakeBack) {
     });
 }
 
-/// The sharer's own mouse (not ours): a click, or moving it a fair way, takes control back.
-fn noticed(msg: u32, pt: POINT, injected: bool) {
-    let mut fire = false;
-    WATCH.with_borrow_mut(|w| {
-        let Some(w) = w else { return };
-        let last = w.last.replace(pt);
-        if injected || w.fired {
-            return;
-        }
-        if matches!(
-            msg,
-            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
-        ) {
-            fire = true;
-        } else if msg == WM_MOUSEMOVE
-            && let Some(l) = last
-        {
-            if w.since.elapsed() > TAKE_BACK_WINDOW {
-                w.since = Instant::now();
-                w.moved = 0.0;
-            }
-            w.moved += f64::from(pt.x - l.x).hypot(f64::from(pt.y - l.y));
-            fire = w.moved >= TAKE_BACK_PX;
-        }
-    });
-    if fire {
-        take_back(TakeBack::Mouse);
-    }
-}
-
-unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 {
-        // SAFETY: for WH_MOUSE_LL with a code of 0 or more, `lparam` points at this event's
-        // MSLLHOOKSTRUCT for the length of the call.
-        let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-        noticed(
-            u32::try_from(wparam.0).unwrap_or(0),
-            info.pt,
-            info.flags & LLMHF_INJECTED != 0,
-        );
-    }
-    // SAFETY: passes the event on unchanged.
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
-}
-
 /// Puts the banner at the top middle of the shared area, on top.
 fn place(hwnd: HWND) {
     let Some(area) = WATCH.with_borrow(|w| w.as_ref().map(|w| w.area)) else {
@@ -517,12 +459,6 @@ fn control_thread(watch: Watch, ready: &std::sync::mpsc::Sender<Result<isize, St
     } {
         tracing::warn!("control: Ctrl+Alt+Shift+X is taken by another app ({e})");
     }
-    // SAFETY: a low-level mouse hook run on this thread's message loop (removed below); it
-    // only reads events and passes every one on.
-    let hook = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), Some(module.into()), 0) };
-    if let Err(e) = &hook {
-        tracing::warn!("control: can't watch the mouse to take control back ({e})");
-    }
     let _ = ready.send(Ok(hwnd.0 as isize));
     let mut msg = MSG::default();
     loop {
@@ -535,10 +471,6 @@ fn control_thread(watch: Watch, ready: &std::sync::mpsc::Sender<Result<isize, St
         let _ = unsafe { TranslateMessage(&raw const msg) };
         // SAFETY: as above.
         unsafe { DispatchMessageW(&raw const msg) };
-    }
-    if let Ok(h) = hook {
-        // SAFETY: the hook set above, on this thread.
-        let _ = unsafe { UnhookWindowsHookEx(h) };
     }
     WATCH.with_borrow_mut(|w| *w = None);
 }
@@ -572,12 +504,9 @@ impl RemoteControl {
     ) -> Result<Self, String> {
         let watch = Watch {
             on_take_back: Box::new(on_take_back),
-            last: None,
-            moved: 0.0,
-            since: Instant::now(),
             fired: false,
             text: wide(&format!(
-                "{name} is controlling this screen  ·  move your mouse or press Ctrl+Alt+Shift+X to take it back"
+                "{name} is controlling this screen  ·  press Ctrl+Alt+Shift+X to take it back"
             )),
             area,
         };
@@ -622,6 +551,9 @@ impl RemoteControl {
                     MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
                     0,
                 )]);
+            }
+            Injection::MoveDelta { dx, dy } => {
+                send(&[mouse((dx, dy), MOUSEEVENTF_MOVE, 0)]);
             }
             Injection::Button { button, down, x, y } => {
                 let Some(r) = area_rect(self.area) else { return };

@@ -573,6 +573,8 @@ pub enum InputKind {
     /// The pointer moved.
     #[default]
     Move,
+    /// The pointer moved relatively (dx, dy).
+    MoveDelta,
     /// A mouse button.
     Button,
     /// The wheel.

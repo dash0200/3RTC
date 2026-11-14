@@ -21,6 +21,7 @@ pub(crate) const CORNERS: [&str; 4] = ["Top left", "Top right", "Bottom left", "
 #[derive(Default)]
 pub(crate) struct Extras {
     overlay: Option<Overlay>,
+    pub(crate) share_hud: Option<rtc_platform_win::ShareHud>,
     /// Being shared: the program's name and its capture.
     pub(crate) sharing: Option<(String, AppSound)>,
     /// Programs with sound open (`None`: still looking).
@@ -29,6 +30,42 @@ pub(crate) struct Extras {
 }
 
 impl RoomView {
+    /// Syncs the screen sharing HUD (Teams-like floating pill excluded from capture).
+    pub(crate) fn sync_share_hud(&mut self) {
+        if !self.screen.mine {
+            self.extras.share_hud = None;
+            return;
+        }
+
+        if self.extras.share_hud.is_none() {
+            let tx = self.desktop.sender();
+            self.extras.share_hud = rtc_platform_win::ShareHud::start(move |act| {
+                let _ = tx.send(crate::desktop::DesktopEvent::ShareHud(act));
+            });
+        }
+
+        let hud_state = if let Some(controller) = &self.screen.control.controller {
+            Some(rtc_platform_win::ShareHudState::Controlling {
+                name: controller.clone(),
+            })
+        } else if let Some((peer, name)) = self.screen.control.asks.first() {
+            Some(rtc_platform_win::ShareHudState::ControlRequested {
+                peer: peer.as_str().to_owned(),
+                name: name.clone(),
+            })
+        } else {
+            let viewers = self
+                .room
+                .as_ref()
+                .map_or(0, |r| r.members.iter().filter(|(_, m)| m.connected).count());
+            Some(rtc_platform_win::ShareHudState::Sharing { viewers })
+        };
+
+        if let Some(hud) = &self.extras.share_hud {
+            hud.update(hud_state);
+        }
+    }
+
     /// Shows who's in the call over games (on, in a room), or hides it.
     pub(crate) fn sync_overlay(&mut self) {
         let in_room = self

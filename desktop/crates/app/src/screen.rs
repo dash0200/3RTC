@@ -87,6 +87,12 @@ pub(crate) struct ScreenUi {
     pub(crate) ctl_keys: Vec<u16>,
     /// The "Give control" menu is open.
     pub(crate) ctl_menu: bool,
+    /// Game Mode: pointer locked to window, relative delta motion for 360° camera look.
+    pub(crate) ctl_game_mode: bool,
+    /// Last mouse position recorded for delta calculation in Game Mode.
+    pub(crate) ctl_last_pos: Option<gpui_kit::Point<Pixels>>,
+    /// Accumulated sub-frame mouse deltas for smooth low-latency transmission.
+    pub(crate) ctl_delta: (i32, i32),
 }
 
 /// The picture sizes to choose from (0: the screen's own / as sent).
@@ -235,6 +241,12 @@ impl RoomView {
             }
         }
         if s.sharer.is_none() {
+            if s.ctl_game_mode {
+                s.ctl_game_mode = false;
+                s.ctl_last_pos = None;
+                s.ctl_delta = (0, 0);
+                rtc_platform_win::unlock_pointer();
+            }
             s.sending = None;
             s.menu = false;
             s.target = (0, 0);
@@ -254,6 +266,7 @@ impl RoomView {
                 }
             }));
         }
+        self.sync_share_hud();
         cx.notify();
     }
 
@@ -578,10 +591,26 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
         .overflow_hidden()
         .bg(tokens::black(1.0))
         .when(laser && !controlling, gpui_kit::Styled::cursor_crosshair)
+        .when(controlling, |el| {
+            el.on_hover(cx.listener(|v, hovered: &bool, _, _| {
+                if v.controlling() {
+                    if v.screen.ctl_game_mode {
+                        rtc_platform_win::set_cursor_visible(false);
+                    } else {
+                        rtc_platform_win::set_cursor_visible(!*hovered);
+                    }
+                }
+            }))
+        })
         .when_some(ctl_focus, |el, f| el.track_focus(&f))
-        .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| {
+        .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, window, cx| {
             if v.controlling() {
-                v.ctl_move(e.position);
+                if v.screen.ctl_game_mode {
+                    v.ctl_move_delta(e.position, window);
+                } else {
+                    rtc_platform_win::set_cursor_visible(false);
+                    v.ctl_move(e.position);
+                }
             } else {
                 v.laser_move(e.position);
             }
@@ -611,13 +640,14 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                 .on_mouse_up(MouseButton::Middle, up(MouseButton::Middle))
                 .on_mouse_up_out(MouseButton::Left, up(MouseButton::Left))
                 .on_mouse_up_out(MouseButton::Right, up(MouseButton::Right))
+                .on_mouse_up_out(MouseButton::Middle, up(MouseButton::Middle))
                 .on_scroll(cx.listener(|v, e: &gpui_kit::ScrollEvent, _, cx| {
                     v.ctl_wheel(e);
                     cx.stop_propagation();
                 }))
-                .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, _, cx| {
+                .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, window, cx| {
                     if v.controlling() {
-                        v.ctl_key_down(e);
+                        v.ctl_key_down(e, window, cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -746,6 +776,7 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
         .children(marks.into_iter().flatten())
         .when(chrome, |el| el.child(
             div()
+                .id("screen-bar")
                 .absolute()
                 .top(px(12.))
                 .left(px(12.))
@@ -753,6 +784,11 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                 .flex()
                 .items_center()
                 .gap(px(8.))
+                .on_hover(cx.listener(|v, hovered: &bool, _, _| {
+                    if v.controlling() && *hovered && !v.screen.ctl_game_mode {
+                        rtc_platform_win::set_cursor_visible(true);
+                    }
+                }))
                 .child(
                     div()
                         .h(px(34.))
@@ -833,6 +869,53 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                 .text_color(tokens::text_2())
                 .child(line)
         }))
+        .when(controlling && s.ctl_game_mode, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .top(px(16.))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .id("ctl-game-mode-hud")
+                            .px(px(14.))
+                            .py(px(6.))
+                            .rounded_full()
+                            .bg(tokens::black(0.85))
+                            .border_1()
+                            .border_color(tokens::line())
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .text_size(px(12.))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(tokens::live())
+                                    .child("Game Mode Active · 360° Look · Press Shift+Esc to exit"),
+                            )
+                            .child(
+                                div()
+                                    .id("ctl-hud-exit")
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded(px(6.))
+                                    .bg(tokens::raised())
+                                    .hover(|st| st.bg(tokens::surface()))
+                                    .cursor_pointer()
+                                    .text_color(tokens::text())
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("Exit")
+                                    .on_click(cx.listener(|v, _, window, cx| {
+                                        v.set_game_mode(false, window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+        })
         .children(ctl_chip)
         .children(ctl_prompts)
         .children(menu)
