@@ -4,10 +4,12 @@
 name: desktop
 
 on:
-  push:
-    paths: ["desktop/**", ".github/workflows/desktop.yml", "server/**"]
-  pull_request:
-    paths: ["desktop/**", ".github/workflows/desktop.yml", "server/**"]
+  # Trigger manually via GitHub Actions UI / CLI when required.
+  # (Automatic push and PR triggers disabled; run local ./check-all before pushing).
+  # push:
+  #   paths: ["desktop/**", ".github/workflows/desktop.yml", "server/**"]
+  # pull_request:
+  #   paths: ["desktop/**", ".github/workflows/desktop.yml", "server/**"]
   workflow_dispatch:
 
 concurrency:
