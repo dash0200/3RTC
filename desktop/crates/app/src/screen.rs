@@ -591,13 +591,14 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
         .overflow_hidden()
         .bg(tokens::black(1.0))
         .when(laser && !controlling, gpui_kit::Styled::cursor_crosshair)
+        .when(controlling && !s.ctl_game_mode, gpui_kit::Styled::cursor_default)
         .when(controlling, |el| {
             el.on_hover(cx.listener(|v, hovered: &bool, _, _| {
                 if v.controlling() {
                     if v.screen.ctl_game_mode {
                         rtc_platform_win::set_cursor_visible(false);
                     } else {
-                        rtc_platform_win::set_cursor_visible(!*hovered);
+                        rtc_platform_win::set_cursor_visible(true);
                     }
                 }
             }))
@@ -608,7 +609,7 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
                 if v.screen.ctl_game_mode {
                     v.ctl_move_delta(e.position, window);
                 } else {
-                    rtc_platform_win::set_cursor_visible(false);
+                    rtc_platform_win::set_cursor_visible(true);
                     v.ctl_move(e.position);
                 }
             } else {
