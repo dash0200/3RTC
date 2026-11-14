@@ -35,7 +35,8 @@ $desktop = Split-Path $PSScriptRoot -Parent
 $repo = Split-Path $desktop -Parent
 Set-Location $desktop
 
-$build = (Get-Date).ToUniversalTime().ToString('yyMMdd.HHmm')
+# Build number: India Standard Time (UTC+5:30), YYMMDD.HHMM (matches client-ts/vite.config.ts)
+$build = (Get-Date).ToUniversalTime().AddMinutes(330).ToString('yyMMdd.HHmm')
 if (-not $BaseUrl.EndsWith('/')) { $BaseUrl += '/' }
 Write-Host "Building 3RTC $build (release; this takes a few minutes) ..." -ForegroundColor Cyan
 $env:RTC_BUILD = $build
