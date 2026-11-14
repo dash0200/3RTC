@@ -769,6 +769,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn net_topology_report_round_trips() {
+        let mut links = std::collections::HashMap::new();
+        links.insert(
+            "peer-bob".to_owned(),
+            PeerLinkMetric {
+                rtt_ms: 45.2,
+                candidate_type: "srflx".to_owned(),
+                loss_pct: 0.1,
+                jitter_ms: 1.5,
+                download_kbps: Some(120.0),
+                upload_kbps: Some(60.0),
+            },
+        );
+        let e = Envelope {
+            sender: Some("Alice".to_owned()),
+            timestamp: Some(10.0),
+            message: PeerMessage::NetTopologyReport {
+                from: Some(PeerId::new("alice").unwrap()),
+                links,
+            },
+        };
+        let json_str = e.to_json().unwrap();
+        let back = Envelope::from_json(&json_str).unwrap();
+        assert_eq!(back, e);
+    }
+
     proptest::proptest! {
         /// Whatever arrives, reading it never panics.
         #[test]

@@ -382,6 +382,28 @@ mod tests {
     }
 
     #[test]
+    fn topology_messages_round_trip() {
+        let set = ClientMessage::SetTopology {
+            topology: "hub".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(&set).unwrap(),
+            json!({"type": "set-topology", "topology": "hub"})
+        );
+
+        let changed =
+            ServerMessage::from_json(r#"{"type":"topology-changed","topology":"hub","hostPeerId":"host-1"}"#)
+                .unwrap();
+        assert_eq!(
+            changed,
+            ServerMessage::TopologyChanged {
+                topology: "hub".to_owned(),
+                host_peer_id: pid("host-1"),
+            }
+        );
+    }
+
+    #[test]
     fn reads_what_the_server_sends() {
         let m = ServerMessage::from_json(
             r#"{"type":"joined","roomId":"54321","peerId":"me","peers":["a","b"],"hostPeerId":"a","seatToken":"s"}"#,

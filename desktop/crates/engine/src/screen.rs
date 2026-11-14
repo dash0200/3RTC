@@ -984,6 +984,28 @@ mod tests {
     }
 
     #[test]
+    fn shared_encoder_resolution_pooling_groups_viewers() {
+        let capture_w = 1920;
+        let capture_h = 1080;
+
+        // Viewer 1 and Viewer 2 both request native (1080p)
+        let v1_height = viewer_height(0, true, 0);
+        let v2_height = viewer_height(1080, true, 0);
+        let want1 = fit(capture_w, capture_h, 0, v1_height);
+        let want2 = fit(capture_w, capture_h, 0, v2_height);
+        // Both share the identical master encoder key:
+        assert_eq!(want1, (1920, 1080));
+        assert_eq!(want2, (1920, 1080));
+        assert_eq!(want1, want2);
+
+        // Viewer 3 requests 720p: maps to separate pooled encoder key:
+        let v3_height = viewer_height(0, true, 720);
+        let want3 = fit(capture_w, capture_h, 0, v3_height);
+        assert_eq!(want3, (1280, 720));
+        assert_ne!(want1, want3);
+    }
+
+    #[test]
     fn annex_b_splits_into_access_units() {
         let aud = [0u8, 0, 0, 1, 9, 0xf0];
         let sps = [0u8, 0, 0, 1, 0x67, 1, 2];

@@ -689,7 +689,7 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
 
 #[cfg(test)]
 mod tests {
-    use super::grade;
+    use super::{grade, technical_distance};
 
     #[test]
     fn grades_like_the_web_app() {
@@ -698,5 +698,33 @@ mod tests {
         assert_eq!(grade(Some(40.0), 2.0).2, "A");
         assert_eq!(grade(Some(150.0), 0.0).2, "B");
         assert_eq!(grade(Some(400.0), 0.0).0, "Poor / High Latency");
+    }
+
+    #[test]
+    fn technical_distance_calculates_tiers_and_penalties() {
+        // LAN
+        let (lan_score, lan_label, _) = technical_distance(8.0, "host (LAN)", 0.0, 0.5);
+        assert!(lan_score < 15);
+        assert_eq!(lan_label, "⚡ LAN");
+
+        // Near P2P
+        let (near_score, near_label, _) = technical_distance(32.0, "srflx (P2P)", 0.0, 1.0);
+        assert!((15..50).contains(&near_score));
+        assert_eq!(near_label, "🟢 Near");
+
+        // Medium P2P
+        let (med_score, med_label, _) = technical_distance(75.0, "srflx (P2P)", 0.5, 3.0);
+        assert!((50..120).contains(&med_score));
+        assert_eq!(med_label, "🟡 Medium");
+
+        // Far P2P
+        let (far_score, far_label, _) = technical_distance(160.0, "srflx (P2P)", 1.0, 4.0);
+        assert!((120..250).contains(&far_score));
+        assert_eq!(far_label, "🟠 Far");
+
+        // TURN Relay penalty (2.5x multiplier)
+        let (relay_score, relay_label, _) = technical_distance(120.0, "Relay (TURN)", 0.0, 2.0);
+        assert!(relay_score >= 250);
+        assert_eq!(relay_label, "🔴 Distant");
     }
 }
