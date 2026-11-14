@@ -130,6 +130,7 @@ fn place(hwnd: HWND) {
     // SAFETY: our own window; always on top of everything without taking focus.
     let _ = unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, width, height, SWP_NOACTIVATE) };
     // SAFETY: repaint the window.
+    // SAFETY: repaint HUD on timer/hover.
     let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
     // SAFETY: show without activating so full-screen games don't lose focus.
     let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
@@ -146,7 +147,7 @@ fn paint(hwnd: HWND) {
     let (width, height) = dimensions(&Some(state.clone()));
 
     let mut ps = PAINTSTRUCT::default();
-    // SAFETY: WM_PAINT for our own window; ended below.
+    // SAFETY: BeginPaint for our own window, paired with EndPaint below.
     let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };
 
     let all = RECT {
@@ -157,7 +158,7 @@ fn paint(hwnd: HWND) {
     };
 
     // 1. Fill entire window rect with transparent magenta key.
-    // SAFETY: plain solid brush, deleted below.
+    // SAFETY: solid brush for color keying.
     let key_brush = unsafe { CreateSolidBrush(COLORREF(KEY)) };
     // SAFETY: fills DC with key color.
     let _ = unsafe { FillRect(hdc, &raw const all, key_brush) };
@@ -202,49 +203,64 @@ fn paint(hwnd: HWND) {
         )
     };
 
-    // SAFETY: text drawing settings.
+    // SAFETY: transparent text background.
     let _ = unsafe { SetBkMode(hdc, TRANSPARENT) };
 
     match state {
         ShareHudState::Sharing { viewers } => {
-            // Main card background
-            // SAFETY: card brush and pen.
+            // SAFETY: card brush.
             let card_brush = unsafe { CreateSolidBrush(rgb(0x14_1419)) };
+            // SAFETY: card border pen.
             let border_pen = unsafe { CreatePen(PS_SOLID, 1, rgb(0x3a_3a45)) };
+            // SAFETY: select card brush into DC.
             let old_brush = unsafe { SelectObject(hdc, HGDIOBJ(card_brush.0)) };
+            // SAFETY: select border pen into DC.
             let old_pen = unsafe { SelectObject(hdc, HGDIOBJ(border_pen.0)) };
-            // SAFETY: rounded capsule pill.
+            // SAFETY: draw rounded pill card.
             let _ = unsafe { RoundRect(hdc, 0, 0, width, height, height, height) };
 
-            // Animated pulsing live indicator dot (left side)
             let cy = height / 2;
             if pulse {
-                // Outer subtle glow
+                // SAFETY: halo outer glow brush.
                 let halo_brush = unsafe { CreateSolidBrush(rgb(0x16_4e33)) };
+                // SAFETY: null pen for borderless halo.
                 let null_pen = unsafe { CreatePen(PS_SOLID, 0, COLORREF(0)) };
+                // SAFETY: select halo brush into DC.
                 let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(halo_brush.0)) };
+                // SAFETY: select null pen into DC.
                 let prev_p = unsafe { SelectObject(hdc, HGDIOBJ(null_pen.0)) };
+                // SAFETY: draw halo ellipse.
                 let _ = unsafe { Ellipse(hdc, 10, cy - 8, 26, cy + 8) };
+                // SAFETY: restore brush.
                 let _ = unsafe { SelectObject(hdc, prev_b) };
+                // SAFETY: restore pen.
                 let _ = unsafe { SelectObject(hdc, prev_p) };
+                // SAFETY: delete halo brush.
                 let _ = unsafe { DeleteObject(HGDIOBJ(halo_brush.0)) };
+                // SAFETY: delete null pen.
                 let _ = unsafe { DeleteObject(HGDIOBJ(null_pen.0)) };
             }
             let dot_color = if pulse { 0x36_d399 } else { 0x1e_8255 };
+            // SAFETY: green dot solid brush.
             let dot_brush = unsafe { CreateSolidBrush(rgb(dot_color)) };
+            // SAFETY: select dot brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(dot_brush.0)) };
+            // SAFETY: draw live dot.
             let _ = unsafe { Ellipse(hdc, 13, cy - 5, 23, cy + 5) };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: delete dot brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(dot_brush.0)) };
 
-            // Text: "Sharing screen"
             let text_str = if viewers > 1 {
                 format!("Sharing screen ({viewers})")
             } else {
                 "Sharing screen".to_owned()
             };
             let mut text = wide(&text_str);
+            // SAFETY: set text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0xf4_f4f6)) };
+            // SAFETY: select normal font.
             let prev_f = unsafe { SelectObject(hdc, HGDIOBJ(font_normal.0)) };
             let mut text_rect = RECT {
                 left: 30,
@@ -252,6 +268,7 @@ fn paint(hwnd: HWND) {
                 right: width - 68,
                 bottom: height,
             };
+            // SAFETY: draw text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -260,9 +277,9 @@ fn paint(hwnd: HWND) {
                     DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
                 )
             };
+            // SAFETY: restore previous font.
             let _ = unsafe { SelectObject(hdc, prev_f) };
 
-            // Stop button
             let btn_r = RECT {
                 left: width - 62,
                 top: 5,
@@ -279,21 +296,32 @@ fn paint(hwnd: HWND) {
             } else {
                 rgb(0x26_161d)
             };
+            // SAFETY: stop button brush.
             let btn_brush = unsafe { CreateSolidBrush(btn_bg) };
+            // SAFETY: stop button pen.
             let btn_pen = unsafe { CreatePen(PS_SOLID, 1, rgb(0x60_2230)) };
+            // SAFETY: select stop brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(btn_brush.0)) };
+            // SAFETY: select stop pen into DC.
             let prev_p = unsafe { SelectObject(hdc, HGDIOBJ(btn_pen.0)) };
+            // SAFETY: draw stop button rect.
             let _ = unsafe { RoundRect(hdc, btn_r.left, btn_r.top, btn_r.right, btn_r.bottom, 8, 8) };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: restore previous pen.
             let _ = unsafe { SelectObject(hdc, prev_p) };
+            // SAFETY: delete stop brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(btn_brush.0)) };
+            // SAFETY: delete stop pen.
             let _ = unsafe { DeleteObject(HGDIOBJ(btn_pen.0)) };
 
-            // Button text
             let mut btn_text = wide("Stop");
+            // SAFETY: stop text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0xff_8a9c)) };
+            // SAFETY: select bold font.
             let prev_f = unsafe { SelectObject(hdc, HGDIOBJ(font_bold.0)) };
             let mut draw_r = btn_r;
+            // SAFETY: draw stop text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -302,33 +330,46 @@ fn paint(hwnd: HWND) {
                     DT_CENTER | DT_SINGLELINE | DT_VCENTER,
                 )
             };
+            // SAFETY: restore previous font.
             let _ = unsafe { SelectObject(hdc, prev_f) };
 
-            // Restore objects
+            // SAFETY: restore old brush.
             let _ = unsafe { SelectObject(hdc, old_brush) };
+            // SAFETY: restore old pen.
             let _ = unsafe { SelectObject(hdc, old_pen) };
+            // SAFETY: delete card brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(card_brush.0)) };
+            // SAFETY: delete border pen.
             let _ = unsafe { DeleteObject(HGDIOBJ(border_pen.0)) };
         }
         ShareHudState::ControlRequested { name, .. } => {
-            // Main alert card background
+            // SAFETY: control request alert card brush.
             let card_brush = unsafe { CreateSolidBrush(rgb(0x1c_1c23)) };
+            // SAFETY: control request alert border pen.
             let border_pen = unsafe { CreatePen(PS_SOLID, 1, rgb(0x36_d399)) };
+            // SAFETY: select alert card brush into DC.
             let old_brush = unsafe { SelectObject(hdc, HGDIOBJ(card_brush.0)) };
+            // SAFETY: select alert border pen into DC.
             let old_pen = unsafe { SelectObject(hdc, HGDIOBJ(border_pen.0)) };
+            // SAFETY: draw alert rounded card.
             let _ = unsafe { RoundRect(hdc, 0, 0, width, height, 12, 12) };
 
-            // Alert indicator dot (left side)
             let cy = height / 2;
+            // SAFETY: alert green dot brush.
             let dot_brush = unsafe { CreateSolidBrush(rgb(0x36_d399)) };
+            // SAFETY: select alert dot brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(dot_brush.0)) };
+            // SAFETY: draw alert dot.
             let _ = unsafe { Ellipse(hdc, 12, cy - 5, 22, cy + 5) };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: delete alert dot brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(dot_brush.0)) };
 
-            // Text: "{name} asks for control"
             let mut text = wide(&format!("{name} asks for control"));
+            // SAFETY: set text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0xf4_f4f6)) };
+            // SAFETY: select normal font.
             let prev_f = unsafe { SelectObject(hdc, HGDIOBJ(font_normal.0)) };
             let mut text_rect = RECT {
                 left: 30,
@@ -336,6 +377,7 @@ fn paint(hwnd: HWND) {
                 right: width - 140,
                 bottom: height,
             };
+            // SAFETY: draw alert text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -344,9 +386,9 @@ fn paint(hwnd: HWND) {
                     DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
                 )
             };
+            // SAFETY: restore previous font.
             let _ = unsafe { SelectObject(hdc, prev_f) };
 
-            // [ Allow ] button
             let allow_r = RECT {
                 left: width - 132,
                 top: 6,
@@ -363,8 +405,11 @@ fn paint(hwnd: HWND) {
             } else {
                 rgb(0x36_d399)
             };
+            // SAFETY: allow button brush.
             let allow_brush = unsafe { CreateSolidBrush(allow_bg) };
+            // SAFETY: select allow brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(allow_brush.0)) };
+            // SAFETY: draw allow button rect.
             let _ = unsafe {
                 RoundRect(
                     hdc,
@@ -376,13 +421,18 @@ fn paint(hwnd: HWND) {
                     8,
                 )
             };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: delete allow brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(allow_brush.0)) };
 
             let mut allow_text = wide("Allow");
+            // SAFETY: allow text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0x0a_0a0d)) };
+            // SAFETY: select bold font.
             let prev_f = unsafe { SelectObject(hdc, HGDIOBJ(font_bold.0)) };
             let mut draw_allow = allow_r;
+            // SAFETY: draw allow text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -392,7 +442,6 @@ fn paint(hwnd: HWND) {
                 )
             };
 
-            // [ Deny ] button
             let deny_r = RECT {
                 left: width - 66,
                 top: 6,
@@ -409,15 +458,22 @@ fn paint(hwnd: HWND) {
             } else {
                 rgb(0x2a_2a33)
             };
+            // SAFETY: deny button brush.
             let deny_brush = unsafe { CreateSolidBrush(deny_bg) };
+            // SAFETY: select deny brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(deny_brush.0)) };
+            // SAFETY: draw deny button rect.
             let _ = unsafe { RoundRect(hdc, deny_r.left, deny_r.top, deny_r.right, deny_r.bottom, 8, 8) };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: delete deny brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(deny_brush.0)) };
 
             let mut deny_text = wide("Deny");
+            // SAFETY: deny text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0xa9_a9b5)) };
             let mut draw_deny = deny_r;
+            // SAFETY: draw deny text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -426,33 +482,46 @@ fn paint(hwnd: HWND) {
                     DT_CENTER | DT_SINGLELINE | DT_VCENTER,
                 )
             };
+            // SAFETY: restore previous font.
             let _ = unsafe { SelectObject(hdc, prev_f) };
 
-            // Restore objects
+            // SAFETY: restore old brush.
             let _ = unsafe { SelectObject(hdc, old_brush) };
+            // SAFETY: restore old pen.
             let _ = unsafe { SelectObject(hdc, old_pen) };
+            // SAFETY: delete card brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(card_brush.0)) };
+            // SAFETY: delete border pen.
             let _ = unsafe { DeleteObject(HGDIOBJ(border_pen.0)) };
         }
         ShareHudState::Controlling { name } => {
-            // Main controlled card background
+            // SAFETY: controlling card brush.
             let card_brush = unsafe { CreateSolidBrush(rgb(0x20_1016)) };
+            // SAFETY: controlling border pen.
             let border_pen = unsafe { CreatePen(PS_SOLID, 1, rgb(0x5a_1e2a)) };
+            // SAFETY: select controlling card brush into DC.
             let old_brush = unsafe { SelectObject(hdc, HGDIOBJ(card_brush.0)) };
+            // SAFETY: select controlling border pen into DC.
             let old_pen = unsafe { SelectObject(hdc, HGDIOBJ(border_pen.0)) };
+            // SAFETY: draw controlling rounded card.
             let _ = unsafe { RoundRect(hdc, 0, 0, width, height, 12, 12) };
 
-            // Red active control dot
             let cy = height / 2;
+            // SAFETY: red dot brush.
             let dot_brush = unsafe { CreateSolidBrush(rgb(0xff_8a9c)) };
+            // SAFETY: select red dot brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(dot_brush.0)) };
+            // SAFETY: draw red active control dot.
             let _ = unsafe { Ellipse(hdc, 12, cy - 5, 22, cy + 5) };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: delete red dot brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(dot_brush.0)) };
 
-            // Text: "{name} is controlling"
             let mut text = wide(&format!("{name} is controlling"));
+            // SAFETY: set text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0xf4_f4f6)) };
+            // SAFETY: select normal font.
             let prev_f = unsafe { SelectObject(hdc, HGDIOBJ(font_normal.0)) };
             let mut text_rect = RECT {
                 left: 30,
@@ -460,6 +529,7 @@ fn paint(hwnd: HWND) {
                 right: width - 106,
                 bottom: height,
             };
+            // SAFETY: draw controlling text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -468,9 +538,9 @@ fn paint(hwnd: HWND) {
                     DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
                 )
             };
+            // SAFETY: restore previous font.
             let _ = unsafe { SelectObject(hdc, prev_f) };
 
-            // [ Take back ] button
             let tb_r = RECT {
                 left: width - 100,
                 top: 5,
@@ -487,16 +557,24 @@ fn paint(hwnd: HWND) {
             } else {
                 rgb(0xe5_143d)
             };
+            // SAFETY: take back button brush.
             let tb_brush = unsafe { CreateSolidBrush(tb_bg) };
+            // SAFETY: select take back brush into DC.
             let prev_b = unsafe { SelectObject(hdc, HGDIOBJ(tb_brush.0)) };
+            // SAFETY: draw take back button rect.
             let _ = unsafe { RoundRect(hdc, tb_r.left, tb_r.top, tb_r.right, tb_r.bottom, 8, 8) };
+            // SAFETY: restore previous brush.
             let _ = unsafe { SelectObject(hdc, prev_b) };
+            // SAFETY: delete take back brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(tb_brush.0)) };
 
             let mut tb_text = wide("Take back");
+            // SAFETY: take back text color.
             let _ = unsafe { SetTextColor(hdc, rgb(0xff_ffff)) };
+            // SAFETY: select bold font.
             let prev_f = unsafe { SelectObject(hdc, HGDIOBJ(font_bold.0)) };
             let mut draw_tb = tb_r;
+            // SAFETY: draw take back text.
             let _ = unsafe {
                 DrawTextW(
                     hdc,
@@ -505,22 +583,25 @@ fn paint(hwnd: HWND) {
                     DT_CENTER | DT_SINGLELINE | DT_VCENTER,
                 )
             };
+            // SAFETY: restore previous font.
             let _ = unsafe { SelectObject(hdc, prev_f) };
 
-            // Restore objects
+            // SAFETY: restore old brush.
             let _ = unsafe { SelectObject(hdc, old_brush) };
+            // SAFETY: restore old pen.
             let _ = unsafe { SelectObject(hdc, old_pen) };
+            // SAFETY: delete card brush.
             let _ = unsafe { DeleteObject(HGDIOBJ(card_brush.0)) };
+            // SAFETY: delete border pen.
             let _ = unsafe { DeleteObject(HGDIOBJ(border_pen.0)) };
         }
     }
 
-    // Clean up fonts and key brush
     for obj in [HGDIOBJ(font_normal.0), HGDIOBJ(font_bold.0), HGDIOBJ(key_brush.0)] {
-        // SAFETY: our own GDI objects, no longer selected.
+        // SAFETY: delete font or brush object.
         let _ = unsafe { DeleteObject(obj) };
     }
-    // SAFETY: ends BeginPaint.
+    // SAFETY: end paint for our window.
     let _ = unsafe { EndPaint(hwnd, &raw const ps) };
 }
 
@@ -542,6 +623,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         w.pulse = !w.pulse;
                     }
                 });
+                // SAFETY: repaint HUD on timer/hover.
                 let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
             } else if wparam.0 == 2 {
                 // Topmost assert timer
@@ -572,6 +654,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             });
             if changed {
                 // SAFETY: repaint hover states.
+                // SAFETY: repaint HUD on timer/hover.
                 let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
             }
             LRESULT(0)
@@ -588,6 +671,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             });
             if changed {
                 // SAFETY: repaint hover states.
+                // SAFETY: repaint HUD on timer/hover.
                 let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
             }
             LRESULT(0)
@@ -596,7 +680,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let x = (lparam.0 & 0xFFFF) as i16 as i32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
             let action = WATCH.with_borrow(|w| {
-                let Some(w) = w.as_ref() else { return None };
+                let w = w.as_ref()?;
                 match hit_test(w, x, y) {
                     HoverBtn::Stop => Some(ShareHudAction::StopSharing),
                     HoverBtn::Allow => {
@@ -635,10 +719,13 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     unsafe { SetCursor(Some(cursor)) };
                     return LRESULT(1);
                 }
-            } else if let Ok(cursor) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+            } else {
                 // SAFETY: default arrow cursor.
-                unsafe { SetCursor(Some(cursor)) };
-                return LRESULT(1);
+                if let Ok(cursor) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                    // SAFETY: set cursor.
+                    unsafe { SetCursor(Some(cursor)) };
+                    return LRESULT(1);
+                }
             }
             // SAFETY: default proc.
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -646,6 +733,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_CLOSE => {
             // SAFETY: cleanup timers.
             let _ = unsafe { KillTimer(Some(hwnd), 1) };
+            // SAFETY: cleanup timers.
             let _ = unsafe { KillTimer(Some(hwnd), 2) };
             // SAFETY: destroy window.
             let _ = unsafe { DestroyWindow(hwnd) };
@@ -662,7 +750,7 @@ unsafe extern "system" fn hud_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 }
 
 fn hud_thread(
-    shared: Arc<Mutex<Option<ShareHudState>>>,
+    shared: &Arc<Mutex<Option<ShareHudState>>>,
     on_action: Box<dyn Fn(ShareHudAction) + Send>,
     ready: &std::sync::mpsc::Sender<Option<isize>>,
 ) {
@@ -697,6 +785,7 @@ fn hud_thread(
 
     // Create layered, topmost popup window.
     // WS_EX_NOACTIVATE ensures clicking it NEVER steals focus from full-screen games.
+    // SAFETY: creates top-most layered window.
     let created = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -724,6 +813,7 @@ fn hud_thread(
 
     // SAFETY: Exclude from screen captures (Windows 10 2004+).
     // Viewers NEVER see this HUD in the shared picture; ONLY the host sees it physically on their monitor!
+    // SAFETY: excludes window from screen capture.
     if unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }.is_err() {
         tracing::debug!("share_hud: HUD may appear in captured picture");
     }
@@ -733,6 +823,7 @@ fn hud_thread(
     // Timers: 1 = pulse indicator (500ms), 2 = keep on top of games (2000ms)
     // SAFETY: window timers.
     let _ = unsafe { SetTimer(Some(hwnd), 1, PULSE_TIMER_MS, None) };
+    // SAFETY: timer to re-assert topmost window order.
     let _ = unsafe { SetTimer(Some(hwnd), 2, TOP_TIMER_MS, None) };
 
     let _ = ready.send(Some(hwnd.0 as isize));
@@ -757,6 +848,7 @@ fn hud_thread(
         }
         // SAFETY: message dispatching.
         let _ = unsafe { TranslateMessage(&raw const msg) };
+        // SAFETY: dispatch window message.
         unsafe { DispatchMessageW(&raw const msg) };
     }
     WATCH.with_borrow_mut(|w| *w = None);
@@ -784,7 +876,7 @@ impl ShareHud {
         let (ready, started) = std::sync::mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("3rtc-share-hud".to_owned())
-            .spawn(move || hud_thread(thread_shared, Box::new(on_action), &ready))
+            .spawn(move || hud_thread(&thread_shared, Box::new(on_action), &ready))
             .ok()?;
         let hwnd = started.recv().ok().flatten()?;
         Some(Self {

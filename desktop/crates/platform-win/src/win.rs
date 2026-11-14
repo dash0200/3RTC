@@ -308,6 +308,7 @@ pub fn lock_pointer(window: &impl HasWindowHandle) {
             };
             // SAFETY: converts client coordinates to screen coordinates.
             let _ = unsafe { ClientToScreen(h, &raw mut top_left) };
+            // SAFETY: converts client coordinates to screen coordinates.
             let _ = unsafe { ClientToScreen(h, &raw mut bottom_right) };
             let screen_rect = RECT {
                 left: top_left.x,
@@ -350,7 +351,7 @@ fn logo_icon(size: i32) -> Option<HICON> {
     let side = u32::try_from(size).ok()?;
     let mut bgra = art::logo_rgba(side);
     let mut mask = Vec::with_capacity(bgra.len() / 4);
-    for p in bgra.chunks_exact_mut(4) {
+    for p in bgra.as_chunks_mut::<4>().0 {
         mask.push(p[3].wrapping_sub(u8::MAX));
         p.swap(0, 2);
     }
