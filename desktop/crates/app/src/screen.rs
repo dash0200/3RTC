@@ -593,7 +593,7 @@ pub(crate) fn stage(view: &mut RoomView, cx: &mut Context<'_, RoomView>) -> AnyE
         .when(laser && !controlling, gpui_kit::Styled::cursor_crosshair)
         .when(controlling && !s.ctl_game_mode, gpui_kit::Styled::cursor_default)
         .when(controlling, |el| {
-            el.on_hover(cx.listener(|v, hovered: &bool, _, _| {
+            el.on_hover(cx.listener(|v, _hovered: &bool, _, _| {
                 if v.controlling() {
                     if v.screen.ctl_game_mode {
                         rtc_platform_win::set_cursor_visible(false);
