@@ -9,11 +9,9 @@
       4. Server packages install (for integration tests)
       5. Full workspace clippy (-D warnings)
       6. Full workspace tests
-      7. Release binary build (unless -SkipRelease or -Quick is passed)
-.PARAMETER Quick
-    Skips the long release build (LTO) and only runs formatting, lints, and tests.
-.PARAMETER SkipRelease
-    Alias/same as -Quick.
+      7. Release binary build (OPTIONAL: pass -Release to include the ~5-minute LTO build)
+.PARAMETER Release
+    Includes the final release binary build (cargo build --release -p rtc-app). Skipped by default.
 .PARAMETER Web
     Also runs client-ts typecheck and unit tests.
 .PARAMETER Fix
@@ -21,6 +19,7 @@
 #>
 [CmdletBinding()]
 param(
+    [switch]$Release,
     [switch]$Quick,
     [switch]$SkipRelease,
     [switch]$Web,
@@ -61,7 +60,7 @@ function Run-Step($name, [scriptblock]$action) {
 $TotalTime = [System.Diagnostics.Stopwatch]::StartNew()
 
 # 1. Format check
-Run-Step "1/7: Rust Format Check (cargo fmt)" {
+Run-Step "1/6: Rust Format Check (cargo fmt)" {
     Push-Location $DesktopDir
     try {
         if ($Fix) {
@@ -79,7 +78,7 @@ Run-Step "1/7: Rust Format Check (cargo fmt)" {
 }
 
 # 2. Dependency Audit (cargo deny)
-Run-Step "2/7: Dependency Audit (cargo-deny)" {
+Run-Step "2/6: Dependency Audit (cargo-deny)" {
     if (Get-Command cargo-deny -ErrorAction SilentlyContinue) {
         Push-Location $DesktopDir
         try {
@@ -95,7 +94,7 @@ Run-Step "2/7: Dependency Audit (cargo-deny)" {
 }
 
 # 3. Windows-only crate check
-Run-Step "3/7: Windows Platform Clippy (rtc-platform-win)" {
+Run-Step "3/6: Windows Platform Clippy (rtc-platform-win)" {
     Push-Location $DesktopDir
     try {
         cargo clippy -p rtc-platform-win --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
@@ -106,7 +105,7 @@ Run-Step "3/7: Windows Platform Clippy (rtc-platform-win)" {
 }
 
 # 4. Signaling server packages
-Run-Step "4/7: Signaling Server Dependencies (server)" {
+Run-Step "4/6: Signaling Server Dependencies (server)" {
     Push-Location $ServerDir
     try {
         if (-not (Test-Path "node_modules")) {
@@ -125,7 +124,7 @@ Run-Step "4/7: Signaling Server Dependencies (server)" {
 }
 
 # 5. Full workspace Clippy
-Run-Step "5/7: Workspace Clippy (all warnings are errors)" {
+Run-Step "5/6: Workspace Clippy (all warnings are errors)" {
     Push-Location $DesktopDir
     try {
         cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -136,7 +135,7 @@ Run-Step "5/7: Workspace Clippy (all warnings are errors)" {
 }
 
 # 6. Workspace tests
-Run-Step "6/7: Workspace Tests (all units, loopback, integration)" {
+Run-Step "6/6: Workspace Tests (all units, loopback, integration)" {
     Push-Location $DesktopDir
     try {
         cargo test --workspace --locked
@@ -146,11 +145,8 @@ Run-Step "6/7: Workspace Tests (all units, loopback, integration)" {
     }
 }
 
-# 7. Release build
-if ($Quick -or $SkipRelease) {
-    Step-Header "7/7: Release Build (Skipped via -Quick)"
-    Write-Host " Skipping release build (-Quick / -SkipRelease specified)." -ForegroundColor Yellow
-} else {
+# 7. Release build (Only if -Release is explicitly requested)
+if ($Release -and -not ($Quick -or $SkipRelease)) {
     Run-Step "7/7: Release Build (3rtc.exe)" {
         Push-Location $DesktopDir
         try {
@@ -167,6 +163,9 @@ if ($Quick -or $SkipRelease) {
             Pop-Location
         }
     }
+} else {
+    Write-Host ""
+    Write-Host " [INFO] Release Build (3rtc.exe) skipped by default (add -Release to build it)." -ForegroundColor DarkGray
 }
 
 # Optional: Web checks
