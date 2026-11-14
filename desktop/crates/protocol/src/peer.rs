@@ -72,6 +72,16 @@ pub enum PeerMessage {
         /// The probe's `send_time`, echoed.
         send_time: f64,
     },
+    /// Periodic link distance & quality telemetry shared across all peers.
+    #[serde(rename_all = "camelCase")]
+    NetTopologyReport {
+        /// Sender's peer id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<PeerId>,
+        /// Link metrics to other peers: target peer id -> metric.
+        #[serde(default)]
+        links: std::collections::HashMap<String, PeerLinkMetric>,
+    },
     /// A chat message.
     #[serde(rename_all = "camelCase")]
     Chat {
@@ -349,6 +359,28 @@ pub enum PeerMessage {
     /// A message type this app doesn't handle: ignored (protocol rule 1).
     #[serde(other, skip_serializing)]
     Unknown,
+}
+
+/// Measurements of one WebRTC connection to a peer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerLinkMetric {
+    /// RTT latency in milliseconds.
+    pub rtt_ms: f64,
+    /// Candidate path type: "host" (LAN), "srflx" (P2P), "prflx", or "relay" (TURN).
+    pub candidate_type: String,
+    /// Observed packet loss percentage (0-100).
+    #[serde(default)]
+    pub loss_pct: f64,
+    /// Audio / video packet arrival jitter in milliseconds.
+    #[serde(default)]
+    pub jitter_ms: f64,
+    /// Inbound throughput in KB/s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_kbps: Option<f64>,
+    /// Outbound throughput in KB/s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_kbps: Option<f64>,
 }
 
 /// `wb-live`: `e` (board epoch), `id, k, c, w`, `from` (how many numbers were sent before) and

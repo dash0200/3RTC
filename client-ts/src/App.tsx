@@ -253,7 +253,7 @@ export default function App() {
     identityFields: () => identityFieldsRef.current(),
     signalUrl, fallbackUrls, setSignalStatus, logLocalDebug, onRoomError: handleRoomError, onHostChanged: handleHostChanged
   });
-  const { roomId, isHost, peerCount, isP2PConnected } = mesh;
+  const { roomId, isHost, peerCount, isP2PConnected, topology, switchTopology } = mesh;
 
   const localUser = useMemo(() => (roomId ? {
     id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
@@ -352,7 +352,17 @@ export default function App() {
   const chat = useChat({ room, isChatOpen: isPhone ? phoneChatOnScreen : isChatOpen });
   const reactions = useReactions({ room, isAudioBlockedRef, inRoom: Boolean(roomId) });
   const soundboard = useSoundboard({ room, isAudioBlockedRef });
-  const { networkStats, peersNetworkStats, handleTriggerPing } = useNetworkStats({ activeVideoId, bus, localVideoFile, mediaActive: isMediaActive, peerMetadata, peersRef, roomId, showToast });
+  const { networkStats, peersNetworkStats, topologyMatrix, handleTriggerPing } = useNetworkStats({
+    activeVideoId,
+    bus,
+    localVideoFile,
+    mediaActive: isMediaActive,
+    peerMetadata,
+    peersRef,
+    roomId,
+    myPeerId: peerIdRef.current,
+    showToast
+  });
   useDiagResponder(bus, peersRef);
 
   // ---- screens and dialogs -----------------------------------------------------------------
@@ -1005,6 +1015,13 @@ export default function App() {
           roomId={roomId}
           username={username}
           onTriggerPing={handleTriggerPing}
+          hostPeerId={hostPeerId}
+          myPeerId={peerIdRef.current}
+          peerMetadata={peerMetadata}
+          topologyMatrix={topologyMatrix}
+          topology={topology}
+          isHost={isHost}
+          onSwitchTopology={switchTopology}
         >
           <Suspense fallback={null}>
             <StreamDoctor bus={bus} peersRef={peersRef} peerNames={peerMetadata} selfName={username} />

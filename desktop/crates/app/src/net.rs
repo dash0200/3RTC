@@ -41,6 +41,40 @@ pub(crate) fn grade(ping_ms: Option<f64>, loss: f64) -> (&'static str, Hsla, &'s
     }
 }
 
+/// Technical distance evaluation matching the web app.
+pub(crate) fn technical_distance(
+    rtt_ms: f64,
+    conn_type: &str,
+    loss_pct: f64,
+    jitter_ms: f64,
+) -> (u32, &'static str, Hsla) {
+    let is_lan = conn_type.contains("LAN") || conn_type.contains("host");
+    let is_relay = conn_type.contains("Relay") || conn_type.contains("relay");
+
+    let multiplier = if is_relay {
+        2.5
+    } else if is_lan {
+        0.8
+    } else {
+        1.0
+    };
+    let penalty = (loss_pct * 15.0) + (jitter_ms * 0.5);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let score = ((rtt_ms * multiplier + penalty).max(1.0).round()) as u32;
+
+    if is_lan || score < 15 {
+        (score, "⚡ LAN", tokens::net_excellent())
+    } else if score < 50 {
+        (score, "🟢 Near", tokens::net_excellent())
+    } else if score < 120 {
+        (score, "🟡 Medium", tokens::net_good())
+    } else if score < 250 && !is_relay {
+        (score, "🟠 Far", tokens::net_fair())
+    } else {
+        (score, "🔴 Distant", tokens::net_poor())
+    }
+}
+
 /// The summary over everyone: average, min and max round trip, total rates, worst loss.
 struct Summary {
     avg: Option<f64>,
@@ -518,6 +552,12 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                 .children(view.net.peers.iter().map(|p| {
                     let n = &p.net;
                     let (_, pc, _) = grade(n.rtt_ms, n.loss_percent());
+                    let (dist_score, dist_label, dist_col) = technical_distance(
+                        n.rtt_ms.unwrap_or(50.0),
+                        n.connection_type(),
+                        n.loss_percent(),
+                        n.jitter_ms,
+                    );
                     let cell = |k: &'static str, v: String| {
                         div()
                             .flex()
@@ -565,6 +605,17 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                                         .text_color(pc)
                                         .text_size(px(11.))
                                         .child(n.connection_type()),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(7.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(Hsla { a: 0.35, ..dist_col })
+                                        .text_color(dist_col)
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(format!("Dist: {dist_score} ({dist_label})")),
                                 )
                                 .child(div().flex_1())
                                 .child(

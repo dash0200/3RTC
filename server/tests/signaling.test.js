@@ -493,6 +493,44 @@ describe('signaling server', () => {
         const ping = await fetch(`http://localhost:${PORT}/api/quick-picks`);
         assert.ok(ping.status === 200 || ping.status === 503);
     });
+
+    it('supports host switching topology between mesh and hub (M7)', async () => {
+        const host = await connected('host-top');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId } = await host.next('room-created');
+
+        const guest1 = await connected('guest-1');
+        guest1.send({ type: 'join', roomId, peerId: 'guest-1' });
+        await guest1.next('joined');
+        await host.next('peer-joined');
+
+        // Host switches to hub mode
+        host.send({ type: 'set-topology', topology: 'hub' });
+        const hostTopo = await host.next('topology-changed');
+        const guestTopo = await guest1.next('topology-changed');
+        assert.equal(hostTopo.topology, 'hub');
+        assert.equal(guestTopo.topology, 'hub');
+
+        // New guest joining in hub mode only connects to host
+        const guest2 = await connected('guest-2');
+        guest2.send({ type: 'join', roomId, peerId: 'guest-2' });
+        const guest2Joined = await guest2.next('joined');
+        assert.equal(guest2Joined.topology, 'hub');
+        assert.deepEqual(guest2Joined.peers, [host.peerId]); // Only sees host in hub mode!
+
+        // Host receives peer-joined for guest2
+        const hostGotJoin = await host.next('peer-joined');
+        assert.equal(hostGotJoin.peerId, 'guest-2');
+
+        // Non-host cannot switch topology
+        guest1.send({ type: 'set-topology', topology: 'mesh' });
+        const err = await guest1.next('error');
+        assert.equal(err.code, 'not-host');
+
+        host.close();
+        guest1.close();
+        guest2.close();
+    });
 });
 
 describe('isOriginAllowed (H-05)', () => {

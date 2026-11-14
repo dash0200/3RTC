@@ -67,6 +67,11 @@ export interface TransferHostMessage extends SignalingMessageBase {
   targetPeerId: string;
 }
 
+export interface SetTopologyMessage extends SignalingMessageBase {
+  type: 'set-topology';
+  topology: 'mesh' | 'hub';
+}
+
 /** "Is room X on this server?" (answered with { type: 'room-found', roomId, exists }) */
 export interface FindRoomMessage extends SignalingMessageBase {
   type: 'find-room';
@@ -78,6 +83,8 @@ export interface RoomInfo {
   hostPeerId: string | null;
   /** Times the host handed the room on; host tokens of an earlier generation no longer work */
   hostGen?: number;
+  /** Network topology: 'mesh' (default full P2P) or 'hub' (host star relay) */
+  topology?: 'mesh' | 'hub';
 }
 
 export interface TokensResult {

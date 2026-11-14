@@ -451,18 +451,22 @@ fn open_encoder(width: u32, height: u32, fps: u32, bps: u32) -> Result<(Box<dyn 
     Ok((Box::new(e), name))
 }
 
-/// One viewer's hardware encoder.
-struct Out {
-    enc: Box<dyn Encoder>,
+/// One viewer receiving hardware-encoded frames.
+struct ViewerOut {
     source: NativeVideoSource,
-    /// The size asked for (the encoder's may differ: the test file).
-    want: (u32, u32),
-    fps: u32,
     cap: u32,
+    rate: u32,
+}
+
+/// A hardware encoder instance for one resolution, shared across all viewers wanting it (ADR 0008).
+struct SharedEncoder {
+    enc: Box<dyn Encoder>,
+    fps: u32,
     rate: u32,
     key: bool,
     /// The last parameter sets (SPS and PPS) the encoder gave, for keyframes without them.
     params: Vec<u8>,
+    viewers: HashMap<String, ViewerOut>,
 }
 
 /// Our screen being captured (dropping it stops).
@@ -633,7 +637,7 @@ fn capture_loop(
     }
     let _ = ready.send(Ok(()));
     let started = Instant::now();
-    let mut outs: HashMap<String, Out> = HashMap::new();
+    let mut encoders: HashMap<(u32, u32), SharedEncoder> = HashMap::new();
     let mut count: u64 = 0;
     let (mut second, mut in_second) = (Instant::now(), 0u32);
     while !stop.load(Ordering::Relaxed) && !failed.load(Ordering::Relaxed) {
@@ -675,32 +679,54 @@ fn capture_loop(
             preview.put(p);
         }
 
-        // ---- hardware viewers: each encoded at their size ----
-        outs.retain(|peer, _| routes.iter().any(|r| r.encoded.is_some() && r.peer == *peer));
-        let mut nv12_by_size: HashMap<(u32, u32), Vec<u8>> = HashMap::new();
-        let mut gave: Vec<String> = Vec::new();
+        // ---- hardware viewers: share an encoder per resolution (ADR 0008) ----
+        let active_hw: HashSet<String> = routes
+            .iter()
+            .filter(|r| r.encoded.is_some())
+            .map(|r| r.peer.clone())
+            .collect();
+        for enc in encoders.values_mut() {
+            enc.viewers.retain(|peer, _| active_hw.contains(peer));
+        }
+        encoders.retain(|_, enc| !enc.viewers.is_empty());
+
         for r in routes.iter().filter(|r| r.encoded.is_some()) {
             let want = fit(fw, fh, 0, r.max_height);
             let fps = options.fps;
-            let rebuild = outs.get(&r.peer).is_none_or(|o| o.want != want || o.fps != fps);
-            if rebuild {
-                outs.remove(&r.peer);
+            let Some(src) = r.encoded.clone() else { continue };
+
+            // If this peer was previously attached to a different resolution, remove them:
+            for (&sz, enc) in &mut encoders {
+                if sz != want {
+                    enc.viewers.remove(&r.peer);
+                }
+            }
+            encoders.retain(|_, enc| !enc.viewers.is_empty());
+
+            let needs_rebuild = encoders.get(&want).is_some_and(|e| e.fps != fps);
+            if needs_rebuild {
+                encoders.remove(&want);
+            }
+
+            if !encoders.contains_key(&want) {
+                if encoders.len() >= 2 {
+                    tracing::info!("screen: max hardware encoders reached; software for {}", r.peer);
+                    lock(shared).failed.insert(r.peer.clone());
+                    continue;
+                }
                 let rate = r.max_bps.min(6_000_000);
                 match open_encoder(want.0, want.1, fps, rate) {
                     Ok((enc, name)) => {
                         lock(shared).encoder = name;
-                        let Some(src) = r.encoded.clone() else { continue };
-                        outs.insert(
-                            r.peer.clone(),
-                            Out {
+                        encoders.insert(
+                            want,
+                            SharedEncoder {
                                 enc,
-                                source: src,
-                                want,
                                 fps,
-                                cap: r.max_bps,
                                 rate,
                                 key: true,
                                 params: Vec::new(),
+                                viewers: HashMap::new(),
                             },
                         );
                     }
@@ -711,25 +737,44 @@ fn capture_loop(
                     }
                 }
             }
-            let Some(o) = outs.get_mut(&r.peer) else { continue };
-            if o.cap != r.max_bps {
-                o.cap = r.max_bps;
-                o.rate = o.rate.min(o.cap);
-                o.enc.set_bitrate(o.rate);
+
+            if let Some(enc) = encoders.get_mut(&want) {
+                let current_rate = enc.rate;
+                enc.viewers
+                    .entry(r.peer.clone())
+                    .and_modify(|v| {
+                        v.source = src.clone();
+                        v.cap = r.max_bps;
+                    })
+                    .or_insert_with(|| ViewerOut {
+                        source: src,
+                        cap: r.max_bps,
+                        rate: r.max_bps.min(current_rate),
+                    });
             }
-            if o.source.take_keyframe_request() {
-                o.key = true;
-            }
-            if let Some(rc) = o.source.take_rate_control_request() {
-                #[allow(clippy::cast_possible_truncation)]
-                let target = u32::try_from(rc.target_bitrate_bps)
-                    .unwrap_or(u32::MAX)
-                    .min(o.cap)
-                    .max(300_000);
-                if target.abs_diff(o.rate) > o.rate / 20 {
-                    o.rate = target;
-                    o.enc.set_bitrate(target);
+        }
+
+        let mut nv12_by_size: HashMap<(u32, u32), Vec<u8>> = HashMap::new();
+        let mut gave: Vec<(u32, u32)> = Vec::new();
+        for (&want, enc) in &mut encoders {
+            let mut min_rate = u32::MAX;
+            for v in enc.viewers.values_mut() {
+                if v.source.take_keyframe_request() {
+                    enc.key = true;
                 }
+                if let Some(rc) = v.source.take_rate_control_request() {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let target = u32::try_from(rc.target_bitrate_bps)
+                        .unwrap_or(u32::MAX)
+                        .min(v.cap)
+                        .max(300_000);
+                    v.rate = target;
+                }
+                min_rate = min_rate.min(v.rate);
+            }
+            if min_rate != u32::MAX && min_rate.abs_diff(enc.rate) > enc.rate / 20 {
+                enc.rate = min_rate;
+                enc.enc.set_bitrate(min_rate);
             }
             let nv12 = nv12_by_size.entry(want).or_insert_with(|| {
                 if want == (fw, fh) {
@@ -741,16 +786,17 @@ fn capture_loop(
                     ))
                 }
             });
-            match o.enc.submit(nv12, ts, o.key) {
+            match enc.enc.submit(nv12, ts, enc.key) {
                 Ok(true) => {
-                    o.key = false;
-                    gave.push(r.peer.clone());
+                    enc.key = false;
+                    gave.push(want);
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    tracing::warn!("screen: hardware encoder failed for {}: {e}", r.peer);
-                    lock(shared).failed.insert(r.peer.clone());
-                    outs.remove(&r.peer);
+                    tracing::warn!("screen: hardware encoder failed for {want:?}: {e}");
+                    for p in enc.viewers.keys() {
+                        lock(shared).failed.insert(p.clone());
+                    }
                 }
             }
         }
@@ -758,16 +804,16 @@ fn capture_loop(
         let wait_from = Instant::now();
         loop {
             let mut broken = Vec::new();
-            for (peer, o) in &mut outs {
-                match o.enc.poll() {
+            for (&want, enc) in &mut encoders {
+                match enc.enc.poll() {
                     Ok(units) => {
                         if !units.is_empty() {
-                            gave.retain(|p| p != peer);
+                            gave.retain(|&w| w != want);
                         }
-                        let (w, h) = o.enc.size();
+                        let (w, h) = enc.enc.size();
                         for u in units {
-                            let u = with_parameter_sets(u, &mut o.params);
-                            o.source.capture_encoded_frame(&EncodedVideoFrame {
+                            let u = with_parameter_sets(u, &mut enc.params);
+                            let evf = EncodedVideoFrame {
                                 codec: EncodedVideoCodec::H264,
                                 payload: &u.data,
                                 timestamp_us: ts,
@@ -778,19 +824,25 @@ fn capture_loop(
                                 },
                                 resolution: VideoResolution { width: w, height: h },
                                 frame_metadata: None,
-                            });
+                            };
+                            for v in enc.viewers.values() {
+                                v.source.capture_encoded_frame(&evf);
+                            }
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("screen: hardware encoder failed for {peer}: {e}");
-                        broken.push(peer.clone());
+                        tracing::warn!("screen: hardware encoder failed for {want:?}: {e}");
+                        broken.push(want);
                     }
                 }
             }
-            for p in broken {
-                outs.remove(&p);
-                gave.retain(|g| *g != p);
-                lock(shared).failed.insert(p);
+            for b in broken {
+                if let Some(enc) = encoders.remove(&b) {
+                    for p in enc.viewers.keys() {
+                        lock(shared).failed.insert(p.clone());
+                    }
+                }
+                gave.retain(|&w| w != b);
             }
             if gave.is_empty() || wait_from.elapsed() >= ENCODE_WAIT {
                 break;

@@ -27,6 +27,7 @@ export interface SignalingContext {
   logLocalDebug: (tag: string, detail: string) => void;
   sendSignal: (msg: OutgoingSignalingMessage | Record<string, unknown>) => void;
   setHostPeerId?: (hostPeerId: string | null | undefined) => void;
+  setTopology?: (topology: 'mesh' | 'hub') => void;
   roomTokensRef?: { current: RoomTokens };
   peerIdRef?: { current: string | null };
   /** "Room not found" here: look for it on the other servers. True if a search started (it tells
@@ -79,6 +80,9 @@ export async function processSignalingMessage(
       host: typeof msg.hostToken === 'string' ? msg.hostToken : null
     };
     setHostPeerId?.('hostPeerId' in msg && typeof msg.hostPeerId === 'string' ? msg.hostPeerId : null);
+    if ('topology' in msg && msg.topology) {
+      ctx.setTopology?.(msg.topology);
+    }
   }
 
   switch (msg.type) {
@@ -380,6 +384,18 @@ export async function processSignalingMessage(
       cleanupPeer(msg.peerId);
       setPeerCount(peersRef.current.size + 1);
       addSystemMessage('A peer disconnected from the room.');
+      break;
+    }
+
+    case 'topology-changed': {
+      ctx.setTopology?.(msg.topology);
+      setHostPeerId?.(msg.hostPeerId);
+      addSystemMessage(
+        msg.topology === 'hub'
+          ? 'Network topology switched to Host-Hub mode.'
+          : 'Network topology switched to Full Mesh mode.'
+      );
+      showToast(msg.topology === 'hub' ? 'Topology: Host Hub' : 'Topology: Full Mesh');
       break;
     }
 
