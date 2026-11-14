@@ -91,7 +91,21 @@ function buildInfo(command: string): BuildInfo {
   const now = new Date();
   const ist = new Date(now.getTime() + 330 * 60 * 1000);
   const two = (n: number) => String(n).padStart(2, '0');
-  const number = `${String(ist.getUTCFullYear()).slice(2)}${two(ist.getUTCMonth() + 1)}${two(ist.getUTCDate())}.${two(ist.getUTCHours())}${two(ist.getUTCMinutes())}`;
+  let number = `${String(ist.getUTCFullYear()).slice(2)}${two(ist.getUTCMonth() + 1)}${two(ist.getUTCDate())}.${two(ist.getUTCHours())}${two(ist.getUTCMinutes())}`;
+
+  // Unify with packaged desktop version if client-ts/public/desktop/latest.json exists
+  try {
+    const latestPath = path.resolve(import.meta.dirname || process.cwd(), 'public/desktop/latest.json');
+    if (fs.existsSync(latestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(latestPath, 'utf-8'));
+      if (typeof manifest.build === 'string' && /^\d{6}\.\d{4}$/.test(manifest.build)) {
+        number = manifest.build;
+      }
+    }
+  } catch {
+    // fallback to computed IST timestamp
+  }
+
   return {
     number,
     sha: (process.env.VERCEL_GIT_COMMIT_SHA || git('rev-parse HEAD')).slice(0, 7),

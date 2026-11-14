@@ -150,7 +150,7 @@ if ($Release -and -not ($Quick -or $SkipRelease)) {
     Run-Step "7/7: Release Build (3rtc.exe)" {
         Push-Location $DesktopDir
         try {
-            $env:RTC_BUILD = "local"
+            $env:RTC_BUILD = (Get-Date).ToUniversalTime().AddMinutes(330).ToString('yyMMdd.HHmm')
             cargo build --release --locked -p rtc-app
             if ($LASTEXITCODE -ne 0) { throw "cargo build --release failed" }
             $exePath = Join-Path $DesktopDir "target\release\3rtc.exe"
