@@ -15,15 +15,15 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BLACK_BRUSH, GetStockObject, HBRUSH};
+use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{BLACK_BRUSH, CreateRectRgn, GetStockObject, HBRUSH, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LoadLibraryW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
-    SWP_NOZORDER, SetWindowPos, ShowWindow, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOPARENTNOTIFY,
+    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, RegisterClassExW, SW_HIDE,
+    SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow, WNDCLASSEXW, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY,
 };
 use windows::core::{HSTRING, PCSTR, PCWSTR, w};
 
@@ -447,9 +447,35 @@ impl Shared {
 thread_local! {
     /// The video's child window, on its UI thread.
     static HOST: Cell<Option<isize>> = const { Cell::new(None) };
+    static BOTTOM_CLIP: Cell<i32> = const { Cell::new(0) };
 }
 
+fn apply_clip(h: HWND, clip_px: i32) {
+    if clip_px > 0 {
+        let mut r = RECT::default();
+        // SAFETY: `h` is our live child window on its own thread.
+        let _ = unsafe { GetClientRect(h, &mut r) };
+        let w = r.right - r.left;
+        let h_clipped = (r.bottom - r.top - clip_px).max(0);
+        // SAFETY: GDI region created with non-negative bounds; SetWindowRgn takes ownership.
+        let rgn = unsafe { CreateRectRgn(0, 0, w, h_clipped) };
+        if !rgn.is_invalid() {
+            // SAFETY: `h` is our live window; the OS takes ownership of `rgn`.
+            let _ = unsafe { SetWindowRgn(h, Some(rgn), true) };
+        }
+    } else {
+        // SAFETY: None removes the clipping region, restoring the whole window.
+        let _ = unsafe { SetWindowRgn(h, None, true) };
+    }
+}
+
+const WM_MOUSEACTIVATE: u32 = 0x0021;
+const MA_NOACTIVATE: isize = 3;
+
 unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_MOUSEACTIVATE {
+        return LRESULT(MA_NOACTIVATE);
+    }
     // SAFETY: the default handling, with the arguments we were given.
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
@@ -464,6 +490,7 @@ fn make_host(parent: ParentWindow, rect: Rect) -> Result<HWND, String> {
     let class = w!("3RTC.Video");
     let wc = WNDCLASSEXW {
         cbSize: u32::try_from(std::mem::size_of::<WNDCLASSEXW>()).unwrap_or(0),
+        style: CS_DBLCLKS,
         lpfnWndProc: Some(host_proc),
         hInstance: module.into(),
         // SAFETY: a stock object, never freed.
@@ -498,21 +525,24 @@ fn make_host(parent: ParentWindow, rect: Rect) -> Result<HWND, String> {
 
 /// mpv's keys and clicks: the web player's shortcuts; full screen and Esc come to the app.
 const INPUT_CONF: &str = "\
-SPACE cycle pause
-k cycle pause
-MBTN_LEFT cycle pause
-MBTN_LEFT_DBL script-message 3rtc fullscreen
+SPACE script-message 3rtc play_pause
+k script-message 3rtc play_pause
+MBTN_LEFT script-message 3rtc click
+MBTN_LEFT_DBL script-message 3rtc dblclick
 f script-message 3rtc fullscreen
 ESC script-message 3rtc escape
-LEFT seek -5
-RIGHT seek 5
-j seek -10
-l seek 10
-UP add volume 5
-DOWN add volume -5
-WHEEL_UP add volume 5
-WHEEL_DOWN add volume -5
-m cycle mute
+LEFT script-message 3rtc seek_back
+RIGHT script-message 3rtc seek_fwd
+j script-message 3rtc seek_back
+l script-message 3rtc seek_fwd
+UP script-message 3rtc vol_up
+DOWN script-message 3rtc vol_down
+WHEEL_UP script-message 3rtc wheel_up
+WHEEL_DOWN script-message 3rtc wheel_down
+m script-message 3rtc mute
+s script-message 3rtc subs
+MBTN_BACK script-message 3rtc mouse_back
+MBTN_FORWARD script-message 3rtc mouse_fwd
 ";
 
 fn input_conf() -> Option<String> {
@@ -560,6 +590,8 @@ fn setup(
         ("osc", "no"),
         ("input-default-bindings", "no"),
         ("input-vo-keyboard", "yes"),
+        ("input-cursor", "yes"),
+        ("window-dragging", "no"),
         ("keep-open", "yes"),
         ("idle", "yes"),
         ("force-window", "yes"),
@@ -755,6 +787,19 @@ fn event_loop(shared: &Arc<Shared>, mpv: Mpv) {
                     match args.get(1).map(String::as_str) {
                         Some("fullscreen") => shared.emit(VideoEvent::Fullscreen),
                         Some("escape") => shared.emit(VideoEvent::Escape),
+                        Some("click") => shared.emit(VideoEvent::Click),
+                        Some("dblclick") => shared.emit(VideoEvent::DblClick),
+                        Some("play_pause") => shared.emit(VideoEvent::PlayPause),
+                        Some("seek_back") => shared.emit(VideoEvent::SeekBack),
+                        Some("seek_fwd") => shared.emit(VideoEvent::SeekForward),
+                        Some("vol_up") => shared.emit(VideoEvent::VolumeUp),
+                        Some("vol_down") => shared.emit(VideoEvent::VolumeDown),
+                        Some("wheel_up") => shared.emit(VideoEvent::WheelUp),
+                        Some("wheel_down") => shared.emit(VideoEvent::WheelDown),
+                        Some("mute") => shared.emit(VideoEvent::Mute),
+                        Some("subs") => shared.emit(VideoEvent::Subtitles),
+                        Some("mouse_back") => shared.emit(VideoEvent::MouseBack),
+                        Some("mouse_fwd") => shared.emit(VideoEvent::MouseForward),
                         _ => {}
                     }
                 }
@@ -919,6 +964,19 @@ impl VideoPlayer {
                             SWP_NOZORDER | SWP_NOACTIVATE,
                         )
                     };
+                    apply_clip(h, BOTTOM_CLIP.get());
+                }
+            });
+        }
+    }
+
+    /// Clips the bottom margin (physical pixels) so controls can overlay without resizing the video frame.
+    pub fn set_bottom_clip(&self, clip_px: i32) {
+        if let Some(ui) = &self.ui {
+            ui.run(move || {
+                BOTTOM_CLIP.set(clip_px);
+                if let Some(h) = host() {
+                    apply_clip(h, clip_px);
                 }
             });
         }
@@ -931,6 +989,9 @@ impl VideoPlayer {
                 if let Some(h) = host() {
                     // SAFETY: our own window, on the thread that made it.
                     let _ = unsafe { ShowWindow(h, if visible { SW_SHOWNA } else { SW_HIDE }) };
+                    if visible {
+                        apply_clip(h, BOTTOM_CLIP.get());
+                    }
                 }
             });
         }

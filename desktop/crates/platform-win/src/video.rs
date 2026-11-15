@@ -84,6 +84,32 @@ pub enum VideoEvent {
     Escape,
     /// It can't play (no libmpv, a broken file…).
     Error(String),
+    /// Single click on the video.
+    Click,
+    /// Double click on the video.
+    DblClick,
+    /// Play / pause shortcut.
+    PlayPause,
+    /// Seek backward.
+    SeekBack,
+    /// Seek forward.
+    SeekForward,
+    /// Volume up.
+    VolumeUp,
+    /// Volume down.
+    VolumeDown,
+    /// Mouse wheel up over video.
+    WheelUp,
+    /// Mouse wheel down over video.
+    WheelDown,
+    /// Mute audio.
+    Mute,
+    /// Cycle subtitles.
+    Subtitles,
+    /// Mouse back button.
+    MouseBack,
+    /// Mouse forward button.
+    MouseForward,
 }
 
 /// Where the player sits, in physical pixels from the parent's top left.

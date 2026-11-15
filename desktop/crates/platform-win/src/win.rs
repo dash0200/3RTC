@@ -12,7 +12,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::{
     CloseHandle, E_ACCESSDENIED, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
-use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 use windows::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -241,6 +241,39 @@ fn hwnd_of(window: &impl HasWindowHandle) -> Option<HWND> {
         RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as *mut c_void)),
         _ => None,
     }
+}
+
+/// Returns the raw window handle (`HWND` as `isize`) of `window`.
+pub fn raw_hwnd(window: &impl HasWindowHandle) -> isize {
+    hwnd_of(window).map_or(0, |h| h.0 as isize)
+}
+
+/// Returns whether the cursor is currently in the bottom strip (`threshold_px` high) of the window's client area.
+pub fn cursor_in_bottom_hwnd(raw_hwnd: isize, threshold_px: i32) -> bool {
+    cursor_window_state(raw_hwnd, threshold_px).is_some_and(|(_, _, at_bottom)| at_bottom)
+}
+
+/// Returns `(pt.x, pt.y, at_bottom)` in client coordinates if the window handle is valid.
+pub fn cursor_window_state(raw_hwnd: isize, threshold_px: i32) -> Option<(i32, i32, bool)> {
+    if raw_hwnd == 0 {
+        return None;
+    }
+    let h = HWND(raw_hwnd as *mut c_void);
+    let mut rect = RECT::default();
+    // SAFETY: rect is valid.
+    if unsafe { GetClientRect(h, &raw mut rect) }.is_err() {
+        return None;
+    }
+    let mut pt = POINT::default();
+    // SAFETY: pt is valid.
+    if unsafe { GetCursorPos(&raw mut pt) }.is_err() {
+        return None;
+    }
+    // SAFETY: converts screen coordinates to client coordinates.
+    let _ = unsafe { ScreenToClient(h, &raw mut pt) };
+    let inside = pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom;
+    let at_bottom = inside && pt.y >= (rect.bottom - threshold_px);
+    Some((pt.x, pt.y, at_bottom))
 }
 
 /// Hides the window (it stays open; the tray brings it back).

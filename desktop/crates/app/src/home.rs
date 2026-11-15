@@ -147,13 +147,19 @@ impl Home<'_> {
             .bg(tokens::bg())
             .text_color(tokens::text())
             .font_family(tokens::FONT_MAIN)
-            .child(self.header(window, pad_x))
+            .child(self.header(window, cx, pad_x))
             .child(self.main(window, cx, pad_x))
             .child(self.footer(window, cx, pad_x))
             .into_any_element()
     }
 
-    fn header(&self, window: &Window, pad_x: gpui_kit::Pixels) -> impl IntoElement {
+    fn header(
+        &self,
+        window: &Window,
+        cx: &mut Context<'_, RoomView>,
+        pad_x: gpui_kit::Pixels,
+    ) -> impl IntoElement {
+        let is_fs = window.is_fullscreen();
         div()
             .flex()
             .flex_none()
@@ -181,6 +187,35 @@ impl Home<'_> {
                             .text_size(px(14.))
                             .child(dot(self.online))
                             .child(if self.online { "Ready" } else { "Connecting…" }),
+                    )
+                    .child(
+                        div()
+                            .id("home-fullscreen-toggle")
+                            .h(px(34.))
+                            .px(px(12.))
+                            .flex()
+                            .items_center()
+                            .rounded(px(9.))
+                            .border_1()
+                            .border_color(if is_fs {
+                                gpui_kit::Hsla {
+                                    a: 0.4,
+                                    ..tokens::accent()
+                                }
+                            } else {
+                                tokens::line()
+                            })
+                            .bg(if is_fs {
+                                tokens::raised()
+                            } else {
+                                tokens::surface()
+                            })
+                            .text_size(px(13.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .hover(|s| s.border_color(tokens::line_strong()).bg(tokens::raised()))
+                            .on_click(cx.listener(|v, _, window, cx| v.toggle_app_fullscreen(window, cx)))
+                            .child(if is_fs { "Exit Full Screen" } else { "Full Screen" }),
                     ),
             )
     }

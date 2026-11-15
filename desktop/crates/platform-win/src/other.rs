@@ -237,6 +237,7 @@ impl VideoPlayer {
         Err("the video player needs Windows".to_owned())
     }
     pub const fn set_rect(&self, _rect: crate::Rect) {}
+    pub const fn set_bottom_clip(&self, _clip_px: i32) {}
     pub const fn set_visible(&self, _visible: bool) {}
     pub const fn play(&self, _at: Option<f64>) {}
     pub const fn pause(&self, _at: Option<f64>) {}
@@ -355,4 +356,22 @@ impl ShareHud {
 
     /// Updates (does nothing here).
     pub fn update(&self, _state: Option<crate::ShareHudState>) {}
+}
+
+/// Stand-in for raw window handle.
+#[must_use]
+pub fn raw_hwnd(_window: &impl raw_window_handle::HasWindowHandle) -> isize {
+    0
+}
+
+/// Stand-in for cursor check.
+#[must_use]
+pub fn cursor_in_bottom_hwnd(_raw_hwnd: isize, _threshold_px: i32) -> bool {
+    false
+}
+
+/// Stand-in for cursor state check.
+#[must_use]
+pub fn cursor_window_state(_raw_hwnd: isize, _threshold_px: i32) -> Option<(i32, i32, bool)> {
+    None
 }

@@ -17,9 +17,9 @@ use gpui_kit::component::Sizable as _;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{
     AnyElement, AppContext as _, Bounds, Context, Entity, FontWeight, Hsla, Image, ImageFormat,
-    InteractiveElement as _, IntoElement, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels,
-    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, canvas, div, img,
-    prelude::FluentBuilder as _, px,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, NavigationDirection, ObjectFit,
+    ParentElement as _, Pixels, ScrollDelta, ScrollEvent, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledImage as _, Window, canvas, div, img, prelude::FluentBuilder as _, px,
 };
 use rtc_core::{Command, PlayerCmd, PlayerReport, Showing, UserAction, WatchCommand};
 use rtc_engine::Snapshot;
@@ -29,9 +29,6 @@ use rtc_ui::{Icon, icon, tokens};
 
 use crate::quick_picks::{self, Picks, Video};
 use crate::view::RoomView;
-
-/// Room left beside the player for floating reactions (5.9 item 1).
-pub(crate) const REACTION_STRIP: f32 = 112.;
 
 /// What opens in the stage: a web player, or a video file in mpv.
 #[derive(Debug, Clone)]
@@ -57,21 +54,21 @@ pub(crate) enum Live {
 }
 
 impl Live {
-    fn play(&self, at: Option<f64>) {
+    pub(crate) fn play(&self, at: Option<f64>) {
         match self {
             Self::Web(p) => p.play(at),
             Self::Video(p) => p.play(at),
         }
     }
 
-    fn pause(&self, at: Option<f64>) {
+    pub(crate) fn pause(&self, at: Option<f64>) {
         match self {
             Self::Web(p) => p.pause(at),
             Self::Video(p) => p.pause(at),
         }
     }
 
-    fn seek(&self, to: f64) {
+    pub(crate) fn seek(&self, to: f64) {
         match self {
             Self::Web(p) => p.seek(to),
             Self::Video(p) => p.seek(to),
@@ -82,6 +79,18 @@ impl Live {
         match self {
             Self::Web(p) => p.set_visible(on),
             Self::Video(p) => p.set_visible(on),
+        }
+    }
+
+    fn set_fullscreen(&self, on: bool) {
+        if let Self::Web(p) = self {
+            p.set_fullscreen(on);
+        }
+    }
+
+    fn set_bottom_clip(&self, clip_px: i32) {
+        if let Self::Video(p) = self {
+            p.set_bottom_clip(clip_px);
         }
     }
 
@@ -394,6 +403,13 @@ impl RoomView {
         self.command(Command::Watch(c));
     }
 
+    /// Tells the web player (YouTube/Vimeo/Twitch) to enter or exit fullscreen.
+    pub(crate) fn set_web_player_fullscreen(&self, on: bool) {
+        if let Some(p) = self.watch.player.borrow().as_ref() {
+            p.set_fullscreen(on);
+        }
+    }
+
     /// What the room told the player to do.
     pub(crate) fn on_player_cmd(&mut self, c: PlayerCmd, cx: &mut Context<'_, Self>) {
         let player = Rc::clone(&self.watch.player);
@@ -504,6 +520,15 @@ impl RoomView {
             }
             E::Unavailable(reason) => {
                 self.video_unavailable(&reason, cx);
+                None
+            }
+            E::Fullscreen(on) => {
+                self.watch.local.fullscreen = on;
+                if !on {
+                    self.watch.local.fullscreen_controls = false;
+                    self.watch.local.controls_left_at = None;
+                }
+                cx.notify();
                 None
             }
         };
@@ -649,14 +674,9 @@ impl RoomView {
         });
     }
 
-    /// Hides the web view while something must show over the stage (5.9 item 1).
+    /// Hides the web view while a dialog or activity covers the stage (5.9 item 1).
     pub(crate) fn player_visible(&self) -> bool {
-        self.pop.is_none()
-            && self.dialog.is_none()
-            && !self.emoji_open
-            && !self.watch.region_open
-            && !self.screen.showing()
-            && !self.activity_covers()
+        self.dialog.is_none() && !self.watch.region_open && !self.screen.showing() && !self.activity_covers()
     }
 
     /// A shared screen covers the stage: the player's window hides (it would draw over it).
@@ -778,14 +798,72 @@ pub(crate) fn player_area(
     let hidden_note = !visible && ui.player.borrow().is_some();
     let showing = view.room.as_ref().and_then(|r| r.watch.showing.clone());
     let local = matches!(showing, Some(Showing::Local { have: true, .. }));
-    let fullscreen = local && view.watch.local.fullscreen;
+    let fullscreen = ui.local.fullscreen;
+    if let Some(p) = ui.player.borrow().as_ref() {
+        let clip = if fullscreen && ui.local.fullscreen_controls {
+            (crate::local_video::FULLSCREEN_BOTTOM_ZONE * ui.scale.get()).round() as i32
+        } else {
+            0
+        };
+        p.set_bottom_clip(clip);
+    }
     let video = div()
         .relative()
-        .flex_1()
-        .min_h_0()
+        .when(fullscreen, gpui_kit::Styled::size_full)
+        .when(!fullscreen, |el| el.flex_1().min_h_0())
         .flex()
         .items_center()
         .justify_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|v, e: &MouseDownEvent, window, cx| {
+                if v.pop.is_some() {
+                    v.pop = None;
+                    cx.notify();
+                    return;
+                }
+                if e.click_count == 2 {
+                    if v.settings.player_double_click_fullscreen {
+                        v.toggle_video_fullscreen(window, cx);
+                    }
+                } else if e.click_count == 1
+                    && v.settings.player_click_play
+                    && !v.room.as_ref().is_some_and(crate::watch::locked_for_me)
+                {
+                    v.video_toggle_play(cx);
+                }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(|v, _, _, cx| {
+                if v.settings.player_mouse_nav_seek {
+                    v.video_backward_5(cx);
+                }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(|v, _, _, cx| {
+                if v.settings.player_mouse_nav_seek {
+                    v.video_forward_5(cx);
+                }
+            }),
+        )
+        .on_scroll(cx.listener(|v, e: &ScrollEvent, _, cx| {
+            if !v.settings.player_scroll_volume {
+                return;
+            }
+            let dy = match e.delta {
+                ScrollDelta::Lines(p) => p.y,
+                ScrollDelta::Pixels(p) => f32::from(p.y),
+            };
+            if dy.abs() > 0.01 {
+                let delta = if dy > 0.0 { 5.0 } else { -5.0 };
+                let new_vol = (v.watch.local.volume + delta).clamp(0.0, 100.0);
+                v.video_volume(new_vol, cx);
+            }
+        }))
         .child(
             canvas(
                 move |bounds, window, _| {
@@ -826,51 +904,68 @@ pub(crate) fn player_area(
                     .child("The video is still playing"),
             )
         });
-    let show_controls = local && (!fullscreen || view.watch.local.fullscreen_controls);
-    let controls = show_controls.then(|| crate::local_video::controls(view, cx));
-    let bottom_trigger = (fullscreen && !view.watch.local.fullscreen_controls).then(|| {
+    let show_controls = local && (!fullscreen || ui.local.fullscreen_controls);
+    let controls = show_controls.then(|| {
         div()
-            .id("lv-bottom-trigger")
-            .h(px(8.))
-            .flex_none()
-            .bg(tokens::black(1.0))
+            .id("lv-controls-bar")
+            .when(fullscreen, |el| el.absolute().bottom_0().left_0().right_0())
             .on_hover(cx.listener(|v, hovered: &bool, _, cx| {
-                if *hovered && v.watch.local.fullscreen {
-                    v.local_video_controls_hover(true, cx);
-                }
-            }))
-            .on_mouse_move(cx.listener(|v, _, _, cx| {
                 if v.watch.local.fullscreen {
-                    v.local_video_controls_hover(true, cx);
+                    v.local_video_controls_hover(*hovered, cx);
                 }
             }))
+            .child(crate::local_video::controls(view, cx))
     });
     div()
         .absolute()
         .top_0()
         .left_0()
         .bottom(px(0.))
-        .right(px(if local { 0. } else { REACTION_STRIP }))
+        .right(px(0.))
         .bg(tokens::black(1.0))
-        .when(!fullscreen, |el| el.rounded(tokens::RADIUS_VIDEO))
         .overflow_hidden()
-        .flex()
-        .flex_col()
+        .when(!fullscreen, |el| el.flex().flex_col())
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Back),
+            cx.listener(|v, _, _, cx| {
+                if v.settings.player_mouse_nav_seek {
+                    v.video_backward_5(cx);
+                }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Navigate(NavigationDirection::Forward),
+            cx.listener(|v, _, _, cx| {
+                if v.settings.player_mouse_nav_seek {
+                    v.video_forward_5(cx);
+                }
+            }),
+        )
+        .on_scroll(cx.listener(|v, e: &ScrollEvent, _, cx| {
+            if !v.settings.player_scroll_volume {
+                return;
+            }
+            let dy = match e.delta {
+                ScrollDelta::Lines(p) => p.y,
+                ScrollDelta::Pixels(p) => f32::from(p.y),
+            };
+            if dy.abs() > 0.01 {
+                let delta = if dy > 0.0 { 5.0 } else { -5.0 };
+                let new_vol = (v.watch.local.volume + delta).clamp(0.0, 100.0);
+                v.video_volume(new_vol, cx);
+            }
+        }))
         .child(video)
         .children(controls)
-        .children(bottom_trigger)
-        .when(fullscreen, |el| {
-            el.on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, window, cx| {
-                if v.watch.local.fullscreen {
-                    let h: f32 = window.viewport_size().height.into();
-                    let y: f32 = e.position.y.into();
-                    if y >= h - 60.0 {
-                        v.local_video_controls_hover(true, cx);
-                    } else if v.watch.local.fullscreen_controls && v.watch.local.controls_left_at.is_none() {
-                        v.local_video_controls_hover(false, cx);
-                    }
-                }
-            }))
+        .when(fullscreen && !local, |el| {
+            el.child(
+                div().absolute().top(px(16.)).right(px(20.)).child(
+                    Button::new("exit-video-fullscreen", "Exit full screen")
+                        .variant(Variant::Secondary)
+                        .min_height(px(32.))
+                        .on_click(cx.listener(|v, _, window, cx| v.toggle_video_fullscreen(window, cx))),
+                ),
+            )
         })
         .into_any_element()
 }

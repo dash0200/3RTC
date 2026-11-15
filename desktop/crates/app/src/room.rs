@@ -9,7 +9,6 @@ use gpui_kit::{
     IntoElement, ParentElement as _, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _,
     Window, deferred, div, prelude::FluentBuilder as _, px, rgba,
 };
-use rtc_core::Showing;
 use rtc_engine::{Member, Snapshot};
 use rtc_protocol::{PeerId, RoomId};
 use rtc_ui::avatar::{self, avatar, muted_badge};
@@ -35,8 +34,14 @@ pub(crate) fn render(
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
     if view.watch.local.fullscreen {
-        if matches!(room.watch.showing, Some(Showing::Local { have: true, .. })) {
-            // full screen: the video and its bar only
+        if room.watch.showing.is_some() {
+            if !window.is_fullscreen() {
+                view.watch.local.video_fullscreen_window = true;
+                window.toggle_fullscreen();
+            }
+            view.watch.local.hwnd = rtc_platform_win::raw_hwnd(window);
+            view.ensure_fullscreen_watch(cx);
+            // full screen: the video (and its bar if local)
             return div()
                 .size_full()
                 .relative()
@@ -45,6 +50,11 @@ pub(crate) fn render(
                 .into_any_element();
         }
         view.end_video_fullscreen(window);
+    } else if view.watch.local.video_fullscreen_window {
+        view.watch.local.video_fullscreen_window = false;
+        if window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
     }
     if view.screen.fullscreen {
         if view.screen.showing() {
@@ -61,12 +71,13 @@ pub(crate) fn render(
         }
         view.end_screen_fullscreen(window);
     }
+    let is_fs = window.is_fullscreen();
     div()
         .size_full()
         .flex()
         .flex_col()
         .overflow_hidden()
-        .child(header(view, room, id, cx))
+        .child(header(view, room, id, is_fs, cx))
         .child(
             div()
                 .flex_1()
@@ -80,7 +91,7 @@ pub(crate) fn render(
                         .flex()
                         .flex_col()
                         .child(stage(view, room, window, cx))
-                        .child(dock(view, room, cx)),
+                        .child(dock(view, room, is_fs, cx)),
                 )
                 .when(view.panel_open, |el| el.child(panel(view, room, id, window, cx))),
         )
@@ -89,7 +100,13 @@ pub(crate) fn render(
 
 // ---- header -------------------------------------------------------------------------------------
 
-fn header(view: &RoomView, room: &Snapshot, id: RoomId, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+fn header(
+    view: &RoomView,
+    room: &Snapshot,
+    id: RoomId,
+    is_fullscreen: bool,
+    cx: &mut Context<'_, RoomView>,
+) -> impl IntoElement {
     let alone = room.members.is_empty();
     let connected = room.members.iter().any(|(_, m)| m.connected);
     let (tone_bg, tone_fg, text) = if connected {
@@ -255,6 +272,34 @@ fn header(view: &RoomView, room: &Snapshot, id: RoomId, cx: &mut Context<'_, Roo
                     el.child(badge(view.unread.to_string(), true))
                 }),
         )
+        .child({
+            let is_fs = is_fullscreen;
+            div()
+                .id("room-fullscreen-toggle")
+                .h(px(40.))
+                .px(px(14.))
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(if is_fs {
+                    alpha(tokens::accent(), 0.4)
+                } else {
+                    tokens::line()
+                })
+                .bg(if is_fs {
+                    tokens::raised()
+                } else {
+                    tokens::surface()
+                })
+                .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .hover(|s| s.border_color(tokens::line_strong()).bg(tokens::raised()))
+                .on_click(cx.listener(|v, _, window, cx| v.toggle_app_fullscreen(window, cx)))
+                .child(if is_fs { "Exit Full Screen" } else { "Full Screen" })
+        })
 }
 
 /// Letters spaced out a little (CSS `letter-spacing: 0.08em` on room codes).
@@ -324,37 +369,25 @@ fn stage(
             .into_any_element();
     }
     if room.watch.showing.is_some() {
-        // a video plays: the player, with floating reactions in a strip beside it (5.9 item 1);
-        // a file from this computer fills the stage (its bar is ours, so toasts can show on it)
-        let fill = matches!(room.watch.showing, Some(Showing::Local { have: true, .. }));
+        // a video plays: the player fills the stage flush edge-to-edge
         // the game's bubble sits under the video (its window would cover it)
-        let under = if bubble.is_some() {
-            64.
-        } else if fill {
-            12.
-        } else {
-            60.
-        };
+        let under = if bubble.is_some() { 52. } else { 0. };
         return div()
             .id("stage-playing")
             .relative()
             .flex_1()
             .min_h_0()
-            .bg(tokens::bg())
+            .bg(tokens::black(1.0))
             .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| v.dropped_paths(paths.paths(), cx)))
             .child(
                 div()
                     .absolute()
-                    .top(px(12.))
-                    .left(px(12.))
-                    .right(px(if fill { 12. } else { 0. }))
-                    // toasts and the soundboard banner show in this edge, under the video (a
-                    // file fills the stage: they show over its control bar instead)
+                    .top_0()
+                    .left_0()
+                    .right_0()
                     .bottom(px(under))
                     .child(crate::watch::player_area(view, window, cx)),
             )
-            .when(!fill, |el| el.child(crate::fun::layer(view, true)))
-            .children(crate::fun::banner(view, true))
             .children(bubble)
             .into_any_element();
     }
@@ -566,7 +599,747 @@ fn later_btn(id: &'static str, which: Icon, cx: &mut Context<'_, RoomView>) -> i
         .on_click(cx.listener(|v, _, _, cx| v.show_toast("Coming in the next desktop update", cx)))
 }
 
-fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+fn tray_pill(
+    id: SharedString,
+    icon_opt: Option<Icon>,
+    label: SharedString,
+    active: bool,
+    danger: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(42.))
+        .px(px(14.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(8.))
+        .rounded(px(12.))
+        .cursor_pointer()
+        .bg(if danger {
+            tokens::danger_bg()
+        } else if active {
+            gpui_kit::rgb(0x0026_2630).into()
+        } else {
+            tokens::raised()
+        })
+        .hover(|s| s.bg(gpui_kit::rgb(0x0026_2630)))
+        .children(icon_opt.map(|i| {
+            icon(
+                i,
+                px(17.),
+                if danger {
+                    tokens::danger_text()
+                } else if active {
+                    tokens::focus()
+                } else {
+                    tokens::text_2()
+                },
+            )
+        }))
+        .child(
+            div()
+                .text_size(px(13.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(if danger {
+                    tokens::danger_text()
+                } else {
+                    tokens::text()
+                })
+                .child(label),
+        )
+}
+
+fn tray_title(icon_type: Icon, title: &'static str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(8.))
+        .px(px(12.))
+        .h(px(42.))
+        .rounded(px(12.))
+        .bg(alpha(tokens::focus(), 0.12))
+        .border_1()
+        .border_color(alpha(tokens::focus(), 0.3))
+        .child(icon(icon_type, px(18.), tokens::focus()))
+        .child(
+            div()
+                .text_size(px(13.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(tokens::text())
+                .child(title),
+        )
+}
+
+fn tray_done(cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    div()
+        .id("tray-done-btn")
+        .h(px(42.))
+        .px(px(16.))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.))
+        .rounded(px(12.))
+        .bg(tokens::raised())
+        .border_1()
+        .border_color(tokens::line())
+        .cursor_pointer()
+        .hover(|s| {
+            s.bg(tokens::white().opacity(0.1))
+                .border_color(tokens::line_strong())
+        })
+        .on_click(cx.listener(|v, _, _, cx| {
+            v.pop = None;
+            cx.notify();
+        }))
+        .child(icon(Icon::Close, px(15.), tokens::text_2()))
+        .child(
+            div()
+                .text_size(px(13.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens::text())
+                .child("Done"),
+        )
+}
+
+fn horizontal_tray(
+    pop: Pop,
+    view: &RoomView,
+    room: &Snapshot,
+    is_fullscreen: bool,
+    cx: &mut Context<'_, RoomView>,
+) -> AnyElement {
+    let content = match pop {
+        Pop::Reactions => {
+            let reactions = view.settings.quick_reactions.iter().enumerate().map(|(i, e)| {
+                let emoji = e.clone();
+                div()
+                    .id(SharedString::from(format!("tray-react-{i}")))
+                    .size(px(44.))
+                    .rounded(px(12.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(24.))
+                    .cursor_pointer()
+                    .bg(tokens::raised())
+                    .hover(|s| s.bg(tokens::white().opacity(0.12)))
+                    .on_click(cx.listener(move |v, _, _, _| v.react(&emoji)))
+                    .child(e.clone())
+            });
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(tray_title(Icon::Smile, "Reactions"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .overflow_x_hidden()
+                                .children(reactions),
+                        )
+                        .child(
+                            div()
+                                .id("tray-choose-reactions")
+                                .h(px(40.))
+                                .px(px(12.))
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(11.))
+                                .border_1()
+                                .border_color(tokens::line())
+                                .bg(tokens::surface())
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens::raised()).text_color(tokens::text()))
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(tokens::text_2())
+                                .on_click(cx.listener(|v, _, _, cx| {
+                                    v.pop = None;
+                                    v.open_dialog(crate::view::Dialog::Reactions, cx);
+                                }))
+                                .child("✨ Choose reactions…"),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
+        Pop::Sounds => {
+            let muted = view.settings.soundboard_muted;
+            let clips = crate::sounds::CLIPS.iter().enumerate().map(|(i, c)| {
+                let playing = view.fun.banner.as_ref().is_some_and(|(s, _)| s.sound_id == c.id);
+                div()
+                    .id(SharedString::from(format!("tray-sfx-{}", c.id)))
+                    .h(px(44.))
+                    .px(px(12.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(8.))
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(if playing {
+                        tokens::sfx_pink()
+                    } else {
+                        tokens::line()
+                    })
+                    .bg(if playing {
+                        Hsla {
+                            a: 0.15,
+                            ..tokens::sfx_purple()
+                        }
+                    } else {
+                        tokens::raised()
+                    })
+                    .cursor_pointer()
+                    .hover(|s| s.bg(tokens::white().opacity(0.1)))
+                    .on_click(cx.listener(move |v, _, _, _| v.play_clip(i)))
+                    .child(div().text_size(px(18.)).child(c.emoji))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tokens::text())
+                            .child(c.name),
+                    )
+            });
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(tray_title(Icon::Music, "Soundboard"))
+                        .child(
+                            div()
+                                .id("tray-soundboard-mute")
+                                .h(px(42.))
+                                .px(px(10.))
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .gap(px(6.))
+                                .rounded(px(11.))
+                                .bg(tokens::surface())
+                                .border_1()
+                                .border_color(tokens::line())
+                                .cursor_pointer()
+                                .on_click(cx.listener(|v, _, _, cx| v.toggle_soundboard_mute(cx)))
+                                .child(icon(
+                                    if muted { Icon::SpeakerOff } else { Icon::Speaker },
+                                    px(18.),
+                                    if muted {
+                                        tokens::danger_text()
+                                    } else {
+                                        tokens::text_2()
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(if muted {
+                                            tokens::danger_text()
+                                        } else {
+                                            tokens::text_2()
+                                        })
+                                        .child(if muted { "Muted" } else { "Sound on" }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .gap(px(2.))
+                                .px(px(6.))
+                                .h(px(42.))
+                                .rounded(px(11.))
+                                .bg(tokens::surface())
+                                .border_1()
+                                .border_color(tokens::line())
+                                .child(
+                                    div()
+                                        .px(px(4.))
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(tokens::text_2())
+                                        .child("Vol:"),
+                                )
+                                .children([0.25f32, 0.5, 0.75, 1.0].map(|lvl| {
+                                    let active =
+                                        !muted && (view.settings.soundboard_volume - lvl).abs() < 0.13;
+                                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                                    let pct = (lvl * 100.0).round() as u32;
+                                    div()
+                                        .id(SharedString::from(format!("tray-sfx-vol-{pct}")))
+                                        .px(px(6.))
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .cursor_pointer()
+                                        .when(active, |s| s.bg(tokens::white().opacity(0.18)))
+                                        .text_size(px(12.))
+                                        .font_weight(if active {
+                                            FontWeight::BOLD
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .text_color(if active { tokens::text() } else { tokens::text_2() })
+                                        .hover(|s| s.bg(tokens::white().opacity(0.1)))
+                                        .on_click(cx.listener(move |v, _, _, cx| {
+                                            v.set_soundboard_volume(lvl, cx);
+                                        }))
+                                        .child(format!("{pct}%"))
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .overflow_x_hidden()
+                                .children(clips),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
+        Pop::More => {
+            let is_host = room.host.as_ref() == Some(&room.me);
+            let lock = room.playback_lock;
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .overflow_x_hidden()
+                        .child(tray_title(Icon::More, "More"))
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-fullscreen"),
+                                Some(Icon::ScreenShare),
+                                SharedString::from(if is_fullscreen {
+                                    "Exit full screen (F11)"
+                                } else {
+                                    "Full screen (F11)"
+                                }),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, window, cx| {
+                                v.pop = None;
+                                v.toggle_app_fullscreen(window, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-voice"),
+                                Some(Icon::Settings),
+                                SharedString::from("Voice settings"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Voice, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-conn"),
+                                Some(Icon::Signal),
+                                SharedString::from("Connection details"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_net(cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-app-sound"),
+                                Some(Icon::Speaker),
+                                SharedString::from(if view.extras.sharing.is_some() {
+                                    "Sharing an app's sound…"
+                                } else {
+                                    "Share an app's sound…"
+                                }),
+                                view.extras.sharing.is_some(),
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_app_sound(cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-qr"),
+                                Some(Icon::Qr),
+                                SharedString::from("Invite with QR code"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Qr, cx);
+                            })),
+                        )
+                        .when(is_host, |el| {
+                            el.child(
+                                tray_pill(
+                                    SharedString::from("tray-m-lock"),
+                                    Some(Icon::Lock),
+                                    SharedString::from(if lock {
+                                        "🔒 Only I control: ON"
+                                    } else {
+                                        "🔓 Everyone controls"
+                                    }),
+                                    lock,
+                                    false,
+                                )
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.command(rtc_core::Command::SetPlaybackLock(!lock));
+                                    cx.notify();
+                                })),
+                            )
+                        })
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-desktop"),
+                                Some(Icon::More),
+                                SharedString::from("In-game overlay"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Desktop, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-player-shortcuts"),
+                                Some(Icon::Settings),
+                                SharedString::from("Player shortcuts…"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Player, cx);
+                            })),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
+        Pop::Volume => {
+            let Some((peer, m)) = view
+                .volume_for
+                .as_ref()
+                .and_then(|p| room.members.iter().find(|(q, _)| q == p))
+            else {
+                return div().child(tray_done(cx)).into_any_element();
+            };
+            let name = m.username.clone().unwrap_or_else(|| "Peer".to_owned());
+            let (volume, muted) = view.peer_volume(m);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pct = (volume * 100.0).round() as u32;
+            let (mute_who, reset_who) = (peer.clone(), peer.clone());
+            let preset_btn = |label: &'static str, val: f32, cx: &mut Context<'_, RoomView>| {
+                let on = !muted && (volume - val).abs() < 0.04;
+                let who = peer.clone();
+                div()
+                    .id(label)
+                    .h(px(38.))
+                    .px(px(10.))
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(if on { tokens::focus() } else { tokens::line() })
+                    .bg(if on {
+                        alpha(tokens::focus(), 0.15)
+                    } else {
+                        tokens::surface()
+                    })
+                    .text_color(if on { tokens::focus() } else { tokens::text_2() })
+                    .text_size(px(12.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .cursor_pointer()
+                    .hover(|s| s.border_color(tokens::line_strong()))
+                    .on_click(cx.listener(move |v, _, _, cx| v.set_peer_volume(&who, val, false, cx)))
+                    .child(label)
+            };
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .child(avatar(&name, 38., m.speaking && !m.muted, tokens::panel()))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .text_size(px(14.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(if muted {
+                                            tokens::danger_text()
+                                        } else {
+                                            tokens::text_2()
+                                        })
+                                        .child(if muted {
+                                            "Muted for you".to_owned()
+                                        } else {
+                                            format!("{pct}% volume")
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(preset_btn("50%", 0.5, cx))
+                                .child(preset_btn("100%", 1.0, cx))
+                                .child(preset_btn("150%", 1.5, cx))
+                                .child(preset_btn("200%", 2.0, cx)),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-vol-mute"),
+                                Some(if muted { Icon::SpeakerOff } else { Icon::Speaker }),
+                                SharedString::from(if muted { "Unmute for Me" } else { "Mute for Me" }),
+                                muted,
+                                muted,
+                            )
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.set_peer_volume(&mute_who, volume, !muted, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-vol-reset"),
+                                None,
+                                SharedString::from("Reset (100%)"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.set_peer_volume(&reset_who, 1.0, false, cx);
+                            })),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
+        Pop::Devices => {
+            let inputs = &view.devices.inputs;
+            let outputs = &view.devices.outputs;
+            let in_name = inputs
+                .iter()
+                .find(|d| d.id == view.settings.input_device_id)
+                .map_or("System default", |d| d.name.as_str());
+            let out_name = outputs
+                .iter()
+                .find(|d| d.id == view.settings.output_device_id)
+                .map_or("System default", |d| d.name.as_str());
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(tray_title(Icon::Mic, "Audio"))
+                        .child(
+                            div()
+                                .h(px(42.))
+                                .px(px(12.))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .rounded(px(11.))
+                                .bg(tokens::raised())
+                                .border_1()
+                                .border_color(tokens::line())
+                                .child(icon(Icon::Mic, px(16.), tokens::text_2()))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .max_w(px(200.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(format!("Mic: {in_name}")),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h(px(42.))
+                                .px(px(12.))
+                                .flex()
+                                .items_center()
+                                .gap(px(6.))
+                                .rounded(px(11.))
+                                .bg(tokens::raised())
+                                .border_1()
+                                .border_color(tokens::line())
+                                .child(icon(Icon::Speaker, px(16.), tokens::text_2()))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .max_w(px(200.))
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(format!("Speaker: {out_name}")),
+                                ),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-devices-settings"),
+                                Some(Icon::Settings),
+                                SharedString::from("Voice settings & mic test…"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Voice, cx);
+                            })),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
+        Pop::Games => {
+            let open = room.activity.as_ref().map(|a| a.current.id.clone());
+            let people = room.members.len() + 1;
+            let activities = rtc_games::activities(room.dev_activities).into_iter().map(|a| {
+                let disabled = people < a.min_people || open.as_deref() == Some(a.id);
+                tray_pill(
+                    SharedString::from(format!("tray-game-{}", a.id)),
+                    None,
+                    SharedString::from(format!("{}  {}", a.icon, a.name)),
+                    open.as_deref() == Some(a.id),
+                    false,
+                )
+                .when(!disabled, |el| {
+                    el.on_click(cx.listener(move |v, _, _, cx| {
+                        v.pop = None;
+                        v.start_activity(a.id, cx);
+                    }))
+                })
+                .when(disabled, |el| el.opacity(0.4).cursor_default())
+            });
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(tray_title(Icon::Games, "Play together"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .overflow_x_hidden()
+                                .children(activities),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
+    };
+    div()
+        .h(px(80.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(14.))
+        .px(px(20.))
+        .bg(tokens::panel())
+        .border_t_1()
+        .border_color(tokens::raised())
+        .child(content)
+        .into_any_element()
+}
+
+fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<'_, RoomView>) -> AnyElement {
+    if let Some(pop) = view.pop {
+        return horizontal_tray(pop, view, room, is_fullscreen, cx);
+    }
     let me_host = room.host.as_ref() == Some(&room.me);
     let mic_off = room.muted || room.deafened;
     let speaking = room.speaking && !mic_off;
@@ -778,7 +1551,7 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                 .on_click(cx.listener(|v, _, _, cx| v.toggle_pop(Pop::More, cx))),
         )
         .when(view.pop == Some(Pop::More), |el| {
-            el.child(more_pop(view, room, cx))
+            el.child(more_pop(view, room, is_fullscreen, cx))
         });
     div()
         .h(px(80.))
@@ -882,28 +1655,56 @@ fn dock(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> imp
                         })
                         .into_any_element()
                 })
-                .child(more),
+                .child(more)
+                .when(room.watch.showing.is_some(), |el| {
+                    el.child(
+                        div()
+                            .id("dock-fullscreen")
+                            .h(px(46.))
+                            .px(px(14.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(13.))
+                            .bg(tokens::raised())
+                            .text_color(tokens::text())
+                            .text_size(px(13.5))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(tokens::white().opacity(0.08)))
+                            .on_click(cx.listener(|v, _, window, cx| v.toggle_video_fullscreen(window, cx)))
+                            .child("Full screen"),
+                    )
+                }),
         )
         .child(
-            div().flex_1().flex().justify_end().child(
-                div()
-                    .id("leave")
-                    .h(px(42.))
-                    .px(px(16.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(11.))
-                    .border_1()
-                    .border_color(tokens::danger_line())
-                    .text_color(tokens::danger_text())
-                    .text_size(px(14.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(tokens::danger_bg()))
-                    .on_click(cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Leave, cx)))
-                    .child("Leave"),
-            ),
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_end()
+                .gap(px(10.))
+                .child(crate::fun::dock_reactions(view, cx))
+                .child(
+                    div()
+                        .id("leave")
+                        .h(px(42.))
+                        .px(px(16.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(11.))
+                        .border_1()
+                        .border_color(tokens::danger_line())
+                        .text_color(tokens::danger_text())
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .cursor_pointer()
+                        .hover(|s| s.bg(tokens::danger_bg()))
+                        .on_click(cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Leave, cx)))
+                        .child("Leave"),
+                ),
         )
+        .into_any_element()
 }
 
 /// A device list in the devices popover and the voice settings (the web app's `<select>`).
@@ -1186,7 +1987,12 @@ fn volume_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) 
     .into_any_element()
 }
 
-fn more_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+fn more_pop(
+    view: &RoomView,
+    room: &Snapshot,
+    is_fullscreen: bool,
+    cx: &mut Context<'_, RoomView>,
+) -> impl IntoElement {
     let is_host = room.host.as_ref() == Some(&room.me);
     let lock = room.playback_lock;
     deferred(
@@ -1197,6 +2003,21 @@ fn more_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) ->
                     v.pop = None;
                     cx.notify();
                 }))
+                .child(menu_item(
+                    "m-fullscreen",
+                    None,
+                    if is_fullscreen {
+                        "Exit full screen (F11)"
+                    } else {
+                        "Full screen (F11)"
+                    },
+                    false,
+                    None,
+                    Some(Box::new(cx.listener(|v, _, window, cx| {
+                        v.pop = None;
+                        v.toggle_app_fullscreen(window, cx);
+                    }))),
+                ))
                 .child(menu_item(
                     "m-voice",
                     Some(Icon::Settings),

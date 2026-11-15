@@ -44,8 +44,8 @@ pub trait Echo: Send {
 /// Where the cleaned-up microphone goes (the call), one 10 ms frame at a time.
 pub type Sink = Box<dyn FnMut(&[i16]) + Send>;
 
-/// The speakers stay this far ahead (30 ms, stereo samples): enough to ride out a late wake-up.
-const RENDER_AHEAD: usize = mix::OUT * 3;
+/// The speakers stay this far ahead (60 ms, stereo samples): enough to ride out a late wake-up.
+const RENDER_AHEAD: usize = mix::OUT * 6;
 /// How often the default devices are checked (to follow Windows when they change).
 const DEFAULT_CHECK: Duration = Duration::from_secs(2);
 /// Speakers whose queue stays full this long have stopped: reopen them.
