@@ -215,6 +215,12 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
           }
         }
 
+        if ('audioSession' in navigator && (navigator as unknown as { audioSession?: { type: string } }).audioSession) {
+          try {
+            (navigator as unknown as { audioSession: { type: string } }).audioSession.type = 'play-and-record';
+          } catch { /* ignore */ }
+        }
+
         setIsMicMuted(false);
         isMicMutedRef.current = false;
         applyVoiceGate();
@@ -238,10 +244,42 @@ export function useVoiceChat(ctx: UseVoiceChatContext) {
         showToast('⚠️ Could not access microphone. Check permissions.');
       }
     } else {
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
+      const isMobile =
+        typeof navigator !== 'undefined' &&
+        (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+          (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent || '')));
+
+      if (isMobile) {
+        // On mobile devices, leaving an active microphone track open forces the mobile OS
+        // (Android MODE_IN_COMMUNICATION / iOS PlayAndRecord) into call-mode, ducking all media
+        // audio and routing it through telephony speech-band filters.
+        // Releasing the hardware tracks completely allows the OS to immediately return to
+        // high-fidelity media playback mode for synchronized video and screen audio.
+        if (localStreamRef.current) {
+          try {
+            localStreamRef.current.getTracks().forEach((track) => track.stop());
+          } catch { /* ignore */ }
+          localStreamRef.current = null;
+        }
+        if (localSourceNodeRef.current) {
+          try { localSourceNodeRef.current.disconnect(); } catch { /* ignore */ }
+          localSourceNodeRef.current = null;
+        }
+        micPipeline.teardown();
+        for (const peer of peersRef.current.values()) {
+          replacePeerAudioTrack(peer.pc, null, logLocalDebug);
+        }
+        if ('audioSession' in navigator && (navigator as unknown as { audioSession?: { type: string } }).audioSession) {
+          try {
+            (navigator as unknown as { audioSession: { type: string } }).audioSession.type = 'playback';
+          } catch { /* ignore */ }
+        }
+      } else {
+        if (localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach((track) => {
+            track.enabled = false;
+          });
+        }
       }
       setIsMicMuted(true);
       isMicMutedRef.current = true;
