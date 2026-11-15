@@ -11,12 +11,12 @@ use crate::dsp::{FRAME, Limiter, peak, to_f32};
 /// Samples in one 10 ms frame of the mix (stereo, interleaved).
 pub(crate) const OUT: usize = FRAME * 2;
 
-/// Samples a person's queue can hold (200 ms); more is dropped.
-pub(crate) const QUEUE: usize = FRAME * 20;
+/// Samples a person's queue can hold (250 ms); more is dropped.
+pub(crate) const QUEUE: usize = FRAME * 25;
 /// Wait for this much before starting to play someone (20 ms), so the first frames don't stutter.
 const PREBUFFER: usize = FRAME * 2;
-/// More than this queued (60 ms) means the network side runs ahead of the speakers: skip a frame.
-const TOO_MUCH: usize = FRAME * 6;
+/// More than this queued (100 ms) means the network side runs ahead of the speakers: skip a frame.
+const TOO_MUCH: usize = FRAME * 10;
 
 /// A person's volume and level, shared between the mixer and the app.
 #[derive(Debug)]
