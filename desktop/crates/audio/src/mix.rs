@@ -202,12 +202,14 @@ impl Mixer {
         });
     }
 
-    /// The next 10 ms for the speakers, stereo (silence when `deafened`, except our own sounds).
+    /// The next 10 ms for the speakers, stereo (peers' speaking voices silenced when `deafened`).
     pub(crate) fn next(&mut self, deafened: bool, out: &mut [f32; OUT]) {
         out.fill(0.0);
         for p in &mut self.peers {
-            // keep emptying the queues while deafened so nothing piles up
-            if deafened {
+            // keep emptying the queues while deafened so nothing piles up.
+            // Only deafen speaking voices (mono, channels == 1). Screen share audio (stereo, channels == 2)
+            // and video audio continue playing normally!
+            if deafened && p.channels == 1 {
                 let mut sink = [0.0f32; OUT];
                 p.add_to(&mut sink, &mut self.scratch);
             } else {
@@ -288,6 +290,14 @@ mod tests {
         m.play(Arc::from(vec![0.5f32; FRAME + 10]), 1.0, false);
         m.next(true, &mut out);
         assert!((out[0] - 0.5).abs() < 0.01, "our own sounds still play");
+        // Screen share audio (stereo, channels == 2) still plays when deafened
+        let (mut fs, st) = stereo_peer(2);
+        m.peers.push(st);
+        let pairs: Vec<i16> = (0..FRAME * 2).flat_map(|_| [8192i16, 8192]).collect();
+        fs.push(&pairs);
+        let mut out2 = [0.0f32; OUT];
+        m.next(true, &mut out2);
+        assert!(out2[0] > 0.2, "screen share audio still plays when deafened");
     }
 
     #[test]

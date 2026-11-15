@@ -111,6 +111,34 @@
   flex: none;
 }
 .dh-nav { display: flex; align-items: center; gap: clamp(20px, 2.2vw, 32px); font-size: 15px; font-weight: 500; }
+.dh-nav-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--rd-line);
+  background: var(--rd-surface);
+  color: var(--rd-text) !important;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: all 0.15s ease;
+}
+.dh-nav-download:hover {
+  background: var(--rd-raised);
+  border-color: var(--rd-line-strong);
+  color: #fff !important;
+}
+.dh-point-download {
+  color: var(--rd-accent-light, #6aa8ff) !important;
+  text-decoration: underline !important;
+  font-weight: 600;
+}
+.dh-point-download:hover {
+  color: #fff !important;
+}
 .dh-status { display: inline-flex; align-items: center; gap: 8px; color: var(--rd-text-2); font-size: 14px; }
 .dh-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--rd-warn); }
 .dh-status.is-online .dh-dot, .dh-dot.is-live { background: var(--rd-live); }
@@ -588,6 +616,33 @@
   border-top: none !important;
   box-shadow: none !important;
 }
+.rh-download {
+  height: 36px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--rd-line);
+  background: var(--rd-surface);
+  color: var(--rd-text-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.rh-download:hover {
+  border-color: var(--rd-line-strong);
+  color: var(--rd-text);
+  background: var(--rd-raised);
+}
+@media (max-width: 960px) {
+  .rh-download-text { display: none; }
+  .rh-download { padding: 0 9px; }
+}
 .rh-conn {
   height: 36px; padding: 0 12px;
   display: inline-flex; align-items: center; gap: 8px;
@@ -860,6 +915,7 @@
 .ip-copy { width: 100%; min-height: 48px; font-size: 16px; }
 .ip-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ip-row .rd-btn { min-height: 44px; text-decoration: none; }
+.ip-download { min-height: 44px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 600; font-size: 14px; }
 .ip-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--rd-raised); display: flex; flex-direction: column; gap: 4px; }
 .ip-foot p:first-child { font-size: 14px; font-weight: 600; }
 .ip-foot p:last-child { font-size: 14px; color: var(--rd-text-3); }

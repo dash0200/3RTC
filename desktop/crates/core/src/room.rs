@@ -953,9 +953,9 @@ impl Room {
         fx.push(Effect::SetDeafened(deafened));
         self.log(
             if deafened {
-                "🔇 Audio & microphone blocked (Text Chat only mode)."
+                "🔇 Speaking voices & microphone muted."
             } else {
-                "🔊 You unblocked incoming audio."
+                "🔊 Speaking voices unmuted."
             },
             fx,
         );

@@ -142,14 +142,10 @@ impl RoomView {
         });
     }
 
-    fn deafened(&self) -> bool {
-        self.room.as_ref().is_some_and(|r| r.deafened)
-    }
-
     /// A reaction to show (ours or someone's): float it, count the combo, pop.
     pub(crate) fn on_reaction(&mut self, r: Reaction, cx: &mut Context<'_, Self>) {
         let now = Instant::now();
-        if !self.deafened() && self.fun.last_pop.is_none_or(|t| now.duration_since(t) >= POP_GAP) {
+        if self.fun.last_pop.is_none_or(|t| now.duration_since(t) >= POP_GAP) {
             self.fun.last_pop = Some(now);
             let volume = if r.from.is_none() { 1.0 } else { 0.8 };
             // the classic audio path plays these through Windows, which would cut a clip short
@@ -221,8 +217,7 @@ impl RoomView {
         } else {
             self.settings.soundboard_volume.max(0.1)
         };
-        if !self.deafened()
-            && volume > 0.0
+        if volume > 0.0
             && let Some(clip) = sounds::clip(&s.sound_id)
         {
             if self.has_pipeline() {

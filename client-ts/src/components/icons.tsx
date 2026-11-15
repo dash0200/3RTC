@@ -77,6 +77,7 @@ const paths: Record<string, React.ReactNode> = {
   speaker: <path d="M11 5L6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" />,
   speakerOff: <path d="M11 5L6 9H2v6h4l5 4zM22 9l-6 6M16 9l6 6" />,
   upload: <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />,
+  download: <path d="M12 4v12M7 11l5 5 5-5M4 20h16" />,
   userPlus: (
     <>
       <circle cx="9" cy="8" r="4" />

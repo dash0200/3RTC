@@ -45,7 +45,7 @@ function pwaServiceWorker(): Plugin {
             walk(full);
           } else {
             const rel = path.relative(publicDir, full).split(path.sep).join('/');
-            if (NOT_PRECACHED.test(rel) || ON_DEMAND_ASSET.test(rel) || rel.startsWith('ffmpeg/') || rel.startsWith('libbitsub/')) continue;
+            if (NOT_PRECACHED.test(rel) || ON_DEMAND_ASSET.test(rel) || rel.startsWith('ffmpeg/') || rel.startsWith('libbitsub/') || rel.startsWith('desktop/')) continue;
             files.push(rel);
             hash.update(rel);
             hash.update(fs.readFileSync(full));
