@@ -1373,7 +1373,7 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
     let ptt = view.settings.voice_mode == crate::settings::VoiceMode::Ptt;
     let ptt_key = view.settings.ptt_keys.to_string();
     let status: String = if room.deafened {
-        "Sound off".into()
+        "Deafened".into()
     } else if ptt {
         if view.ptt_talking && !room.muted {
             "Talking".into()
@@ -1388,7 +1388,7 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
         "Mic on".into()
     };
     let mic_label: String = if room.deafened {
-        "Mic blocked".into()
+        "Deafened".into()
     } else if ptt {
         if view.ptt_talking && !room.muted {
             "Talking".into()
