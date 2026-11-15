@@ -107,6 +107,8 @@ pub enum Event {
     Error(String),
     /// The provider refused this video (removed, private, not allowed on other sites).
     Unavailable(String),
+    /// Fullscreen state changed in the web player.
+    Fullscreen(bool),
 }
 
 impl Event {
@@ -142,6 +144,7 @@ impl Event {
                 time: num("t"),
             }),
             "ended" => Some(Self::Ended),
+            "fullscreen" => Some(Self::Fullscreen(field("on") == Some("true"))),
             "error" if field("unavailable") == Some("true") => {
                 Some(Self::Unavailable(field("message").unwrap_or("").to_owned()))
             }
@@ -389,6 +392,13 @@ impl Player {
             ));
         }
     }
+
+    /// Tells the web player to request or exit fullscreen.
+    pub fn set_fullscreen(&self, on: bool) {
+        self.0.command(&format!(
+            "window.rtc && window.rtc.cmd({{do:'fullscreen',on:{on}}})"
+        ));
+    }
 }
 
 fn with_time(what: &str, at: Option<f64>) -> String {
@@ -434,6 +444,14 @@ mod tests {
             })
         );
         assert_eq!(Event::parse(r#"{"ev":"ended"}"#), Some(Event::Ended));
+        assert_eq!(
+            Event::parse(r#"{"ev":"fullscreen","on":true}"#),
+            Some(Event::Fullscreen(true))
+        );
+        assert_eq!(
+            Event::parse(r#"{"ev":"fullscreen","on":false}"#),
+            Some(Event::Fullscreen(false))
+        );
         assert_eq!(Event::parse(r#"{"x":1}"#), None);
         assert_eq!(Event::parse("not json"), None);
     }

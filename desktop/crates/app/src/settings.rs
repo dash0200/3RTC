@@ -84,6 +84,32 @@ pub(crate) struct Settings {
     pub(crate) screen_sound: bool,
     /// Watching someone's screen: its sound's volume (0–2, 1 as sent).
     pub(crate) screen_volume: f32,
+    /// Seconds to jump on forward/backward seek (default: 5.0).
+    pub(crate) seek_step_secs: f64,
+    /// Single click on player toggles play/pause (default: true).
+    pub(crate) player_click_play: bool,
+    /// Double click on player toggles fullscreen (default: true).
+    pub(crate) player_double_click_fullscreen: bool,
+    /// Mouse scroll wheel on player adjusts volume (default: true).
+    pub(crate) player_scroll_volume: bool,
+    /// Mouse 4th & 5th side buttons seek (default: true).
+    pub(crate) player_mouse_nav_seek: bool,
+    /// Arrow keys seek and adjust volume (default: true).
+    pub(crate) player_arrow_keys: bool,
+    /// Play / pause shortcut key (default: Space).
+    pub(crate) key_player_play_pause: Binding,
+    /// Full screen shortcut key (default: F).
+    pub(crate) key_player_fullscreen: Binding,
+    /// Seek backward shortcut key (default: Left).
+    pub(crate) key_player_seek_backward: Binding,
+    /// Seek forward shortcut key (default: Right).
+    pub(crate) key_player_seek_forward: Binding,
+    /// Volume up shortcut key (default: Up).
+    pub(crate) key_player_volume_up: Binding,
+    /// Volume down shortcut key (default: Down).
+    pub(crate) key_player_volume_down: Binding,
+    /// Cycle subtitles shortcut key (default: S).
+    pub(crate) key_player_subtitles: Binding,
 }
 
 /// The settings file's format now. Each change that needs more than new fields with defaults
@@ -196,6 +222,19 @@ impl Default for Settings {
             screen_quality: 0,
             screen_sound: true,
             screen_volume: 1.0,
+            seek_step_secs: 5.0,
+            player_click_play: true,
+            player_double_click_fullscreen: true,
+            player_scroll_volume: true,
+            player_mouse_nav_seek: true,
+            player_arrow_keys: true,
+            key_player_play_pause: Binding::key(Key::SPACE),
+            key_player_fullscreen: Binding::key(Key(0x46)),
+            key_player_seek_backward: Binding::key(Key(0x25)),
+            key_player_seek_forward: Binding::key(Key(0x27)),
+            key_player_volume_up: Binding::key(Key(0x26)),
+            key_player_volume_down: Binding::key(Key(0x28)),
+            key_player_subtitles: Binding::key(Key(0x53)),
         }
     }
 }
@@ -252,6 +291,9 @@ impl Settings {
         s.quick_reactions = clean_reactions(&s.quick_reactions);
         if !(0.0..=1.0).contains(&s.soundboard_volume) {
             s.soundboard_volume = 0.75;
+        }
+        if !(1.0..=120.0).contains(&s.seek_step_secs) {
+            s.seek_step_secs = 5.0;
         }
         if rtc_protocol::ClientId::new(&s.client_id).is_err() {
             s.client_id = format!("dk-{:016x}", rand::random::<u64>());
@@ -313,6 +355,11 @@ mod tests {
         assert!(s.voice_isolation && !s.classic_audio && s.volumes.is_empty());
         assert_eq!(s.quick_reactions.len(), 6);
         assert!((s.soundboard_volume - 0.75).abs() < f32::EPSILON && !s.soundboard_muted);
+        assert!(
+            (s.seek_step_secs - 5.0).abs() < f64::EPSILON
+                && s.player_click_play
+                && s.player_double_click_fullscreen
+        );
     }
 
     #[test]

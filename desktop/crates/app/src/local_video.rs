@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::{
     AnyElement, Bounds, Context, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, ParentElement as _, PathPromptOptions, Pixels, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, canvas, div, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, canvas, div, prelude::FluentBuilder as _, px,
     relative,
 };
 use rtc_core::{PlayerReport, Showing, UserAction, WatchCommand};
@@ -34,8 +34,10 @@ const VIDEO_EXT: &[&str] = &[
 const SUB_EXT: &[&str] = &["srt", "ass", "ssa", "vtt", "sub", "sup"];
 /// The control bar under the video.
 const BAR_H: f32 = 52.;
+/// In full screen, height of the bottom trigger region to reveal controls.
+pub(crate) const FULLSCREEN_BOTTOM_ZONE: f32 = BAR_H;
 /// In full screen, the controls bar stays visible this long after the pointer moved out of it.
-const FULLSCREEN_HIDE_DELAY: Duration = Duration::from_millis(3500);
+const FULLSCREEN_HIDE_DELAY: Duration = Duration::from_millis(2500);
 
 fn has_ext(path: &Path, list: &[&str]) -> bool {
     path.extension()
@@ -110,10 +112,18 @@ pub(crate) struct LocalUi {
     /// The open track menu.
     pub(crate) menu: Option<TrackKind>,
     pub(crate) fullscreen: bool,
+    /// Whether the OS window was put into full screen for this video.
+    pub(crate) video_fullscreen_window: bool,
+    /// The window's HWND handle for cursor tracking.
+    pub(crate) hwnd: isize,
+    /// The window scale factor for DPI-aware mouse hit testing.
+    pub(crate) scale: f32,
     /// In full screen, whether the bottom controls panel is currently shown.
     pub(crate) fullscreen_controls: bool,
     /// When the cursor moved out of the panel in full screen.
     pub(crate) controls_left_at: Option<Instant>,
+    /// Task that auto-hides controls or shows them when cursor reaches bottom in full screen.
+    pub(crate) fullscreen_task: Option<Task<()>>,
     /// The offer card's note (the wrong file was chosen).
     pub(crate) offer_error: Option<SharedString>,
     /// The file we offer to viewers (the engine serves it).
@@ -151,8 +161,12 @@ impl LocalUi {
             tracks: Vec::new(),
             menu: None,
             fullscreen: false,
+            video_fullscreen_window: false,
+            hwnd: 0,
+            scale: 1.0,
             fullscreen_controls: false,
             controls_left_at: None,
+            fullscreen_task: None,
             offer_error: None,
             sharing: false,
             stream: None,
@@ -465,6 +479,93 @@ impl RoomView {
                 }
                 None
             }
+            VideoEvent::Click => {
+                if self.pop.is_some() {
+                    self.pop = None;
+                } else if self.settings.player_click_play
+                    && !self.room.as_ref().is_some_and(crate::watch::locked_for_me)
+                {
+                    self.video_toggle_play(cx);
+                }
+                None
+            }
+            VideoEvent::DblClick => {
+                if self.settings.player_double_click_fullscreen {
+                    if self.settings.player_click_play
+                        && !self.room.as_ref().is_some_and(crate::watch::locked_for_me)
+                    {
+                        self.video_toggle_play(cx);
+                    }
+                    self.toggle_video_fullscreen(window, cx);
+                }
+                None
+            }
+            VideoEvent::PlayPause => {
+                if !self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+                    self.video_toggle_play(cx);
+                }
+                None
+            }
+            VideoEvent::SeekBack => {
+                if self.settings.player_arrow_keys {
+                    self.video_backward_5(cx);
+                }
+                None
+            }
+            VideoEvent::SeekForward => {
+                if self.settings.player_arrow_keys {
+                    self.video_forward_5(cx);
+                }
+                None
+            }
+            VideoEvent::VolumeUp => {
+                if self.settings.player_arrow_keys {
+                    let v = (self.watch.local.volume + 5.0).clamp(0.0, 100.0);
+                    self.video_volume(v, cx);
+                }
+                None
+            }
+            VideoEvent::VolumeDown => {
+                if self.settings.player_arrow_keys {
+                    let v = (self.watch.local.volume - 5.0).clamp(0.0, 100.0);
+                    self.video_volume(v, cx);
+                }
+                None
+            }
+            VideoEvent::WheelUp => {
+                if self.settings.player_scroll_volume {
+                    let v = (self.watch.local.volume + 5.0).clamp(0.0, 100.0);
+                    self.video_volume(v, cx);
+                }
+                None
+            }
+            VideoEvent::WheelDown => {
+                if self.settings.player_scroll_volume {
+                    let v = (self.watch.local.volume - 5.0).clamp(0.0, 100.0);
+                    self.video_volume(v, cx);
+                }
+                None
+            }
+            VideoEvent::Mute => {
+                self.video_mute(cx);
+                None
+            }
+            VideoEvent::Subtitles => {
+                self.cycle_subtitles(cx);
+                None
+            }
+            VideoEvent::MouseBack => {
+                if self.settings.player_mouse_nav_seek {
+                    self.video_backward_5(cx);
+                }
+                None
+            }
+            VideoEvent::MouseForward => {
+                if self.settings.player_mouse_nav_seek {
+                    self.video_forward_5(cx);
+                }
+                None
+            }
             VideoEvent::Error(message) => {
                 tracing::warn!("video: {message}");
                 // its window would cover the message
@@ -608,20 +709,29 @@ impl RoomView {
     }
 
     /// The bar's play/pause: like a click on the video (the room follows).
-    fn video_toggle_play(&mut self, cx: &mut Context<'_, Self>) {
+    pub(crate) fn video_toggle_play(&mut self, cx: &mut Context<'_, Self>) {
         if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
             return;
         }
         let playing = self.watch.local.playing;
         let mut done = false;
-        self.with_video(|p| {
+        if let Some(p) = self.watch.player.borrow().as_ref() {
             if playing {
                 p.pause(None);
             } else {
                 p.play(None);
             }
             done = true;
-        });
+        } else {
+            self.with_video(|p| {
+                if playing {
+                    p.pause(None);
+                } else {
+                    p.play(None);
+                }
+                done = true;
+            });
+        }
         if !done {
             return;
         }
@@ -637,12 +747,17 @@ impl RoomView {
         cx.notify();
     }
 
-    fn video_seek(&mut self, to: f64, cx: &mut Context<'_, Self>) {
+    pub(crate) fn video_seek(&mut self, to: f64, cx: &mut Context<'_, Self>) {
         let mut done = false;
-        self.with_video(|p| {
+        if let Some(p) = self.watch.player.borrow().as_ref() {
             p.seek(to);
             done = true;
-        });
+        } else {
+            self.with_video(|p| {
+                p.seek(to);
+                done = true;
+            });
+        }
         if done {
             self.watch.local.time = to;
             self.watch_cmd(WatchCommand::Player(PlayerReport::User {
@@ -653,7 +768,32 @@ impl RoomView {
         }
     }
 
-    fn video_volume(&mut self, volume: f64, cx: &mut Context<'_, Self>) {
+    pub(crate) fn video_forward_5(&mut self, cx: &mut Context<'_, Self>) {
+        if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+            return;
+        }
+        let cur = self.watch.local.time;
+        let dur = if self.watch.local.duration > 0.0 {
+            self.watch.local.duration
+        } else {
+            cur + 100.0
+        };
+        let step = self.settings.seek_step_secs.max(1.0);
+        let to = (cur + step).min(dur);
+        self.video_seek(to, cx);
+    }
+
+    pub(crate) fn video_backward_5(&mut self, cx: &mut Context<'_, Self>) {
+        if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+            return;
+        }
+        let cur = self.watch.local.time;
+        let step = self.settings.seek_step_secs.max(1.0);
+        let to = (cur - step).max(0.0);
+        self.video_seek(to, cx);
+    }
+
+    pub(crate) fn video_volume(&mut self, volume: f64, cx: &mut Context<'_, Self>) {
         let muted = self.watch.local.muted;
         self.with_video(|p| {
             p.set_volume(volume);
@@ -690,6 +830,39 @@ impl RoomView {
         cx.notify();
     }
 
+    pub(crate) fn cycle_subtitles(&mut self, cx: &mut Context<'_, Self>) {
+        let subs: Vec<i64> = self
+            .watch
+            .local
+            .tracks
+            .iter()
+            .filter(|t| t.kind == TrackKind::Subtitle)
+            .map(|t| t.id)
+            .collect();
+        if subs.is_empty() {
+            return;
+        }
+        let cur = self
+            .watch
+            .local
+            .tracks
+            .iter()
+            .find(|t| t.kind == TrackKind::Subtitle && t.selected)
+            .map(|t| t.id);
+        let next = match cur {
+            None => Some(subs[0]),
+            Some(id) => {
+                let idx = subs.iter().position(|&x| x == id).unwrap_or(0);
+                if idx + 1 < subs.len() {
+                    Some(subs[idx + 1])
+                } else {
+                    None
+                }
+            }
+        };
+        self.video_track(TrackKind::Subtitle, next, cx);
+    }
+
     fn toggle_track_menu(&mut self, kind: TrackKind, cx: &mut Context<'_, Self>) {
         self.watch.local.menu = if self.watch.local.menu == Some(kind) {
             None
@@ -704,12 +877,29 @@ impl RoomView {
         let on = !self.watch.local.fullscreen;
         self.watch.local.fullscreen = on;
         if on {
+            self.watch.local.hwnd = rtc_platform_win::raw_hwnd(window);
+            self.watch.local.scale = window.scale_factor();
+            self.watch.local.fullscreen_controls = true;
+            self.watch.local.controls_left_at = Some(Instant::now());
+            if !window.is_fullscreen() {
+                self.watch.local.video_fullscreen_window = true;
+                window.toggle_fullscreen();
+            }
+            self.ensure_fullscreen_watch(cx);
+        } else {
             self.watch.local.fullscreen_controls = false;
             self.watch.local.controls_left_at = None;
+            self.watch.local.fullscreen_task = None;
+            if self.watch.local.video_fullscreen_window {
+                self.watch.local.video_fullscreen_window = false;
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
+            } else if window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
         }
-        if window.is_fullscreen() != on {
-            window.toggle_fullscreen();
-        }
+        self.set_web_player_fullscreen(on);
         cx.notify();
     }
 
@@ -718,9 +908,74 @@ impl RoomView {
         self.watch.local.fullscreen = false;
         self.watch.local.fullscreen_controls = false;
         self.watch.local.controls_left_at = None;
-        if window.is_fullscreen() {
-            window.toggle_fullscreen();
+        self.watch.local.fullscreen_task = None;
+        self.set_web_player_fullscreen(false);
+        if self.watch.local.video_fullscreen_window || window.is_fullscreen() {
+            self.watch.local.video_fullscreen_window = false;
+            if window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
         }
+    }
+
+    /// Toggles full screen for the entire desktop application window.
+    pub(crate) fn toggle_app_fullscreen(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        window.toggle_fullscreen();
+        cx.notify();
+    }
+
+    /// Ensures the watcher task is active to show controls on bottom cursor and auto-hide after 2.5s.
+    pub(crate) fn ensure_fullscreen_watch(&mut self, cx: &mut Context<'_, Self>) {
+        if !self.watch.local.fullscreen || self.watch.local.fullscreen_task.is_some() {
+            return;
+        }
+        self.watch.local.fullscreen_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+                let done = this
+                    .update(cx, |view, cx| {
+                        if !view.watch.local.fullscreen {
+                            view.watch.local.fullscreen_task = None;
+                            return true;
+                        }
+                        let threshold_px =
+                            (FULLSCREEN_BOTTOM_ZONE * view.watch.local.scale.max(1.0)).round() as i32;
+                        if let Some((_x, _y, at_bottom)) =
+                            rtc_platform_win::cursor_window_state(view.watch.local.hwnd, threshold_px)
+                        {
+                            if at_bottom {
+                                let change = !view.watch.local.fullscreen_controls;
+                                view.watch.local.fullscreen_controls = true;
+                                view.watch.local.controls_left_at = None;
+                                if change {
+                                    cx.notify();
+                                }
+                            } else if view.watch.local.fullscreen_controls {
+                                if view.watch.local.menu.is_some() || view.dialog.is_some() {
+                                    return false;
+                                }
+                                if view.watch.local.controls_left_at.is_none() {
+                                    view.watch.local.controls_left_at = Some(Instant::now());
+                                } else if view
+                                    .watch
+                                    .local
+                                    .controls_left_at
+                                    .is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
+                                {
+                                    view.watch.local.fullscreen_controls = false;
+                                    view.watch.local.controls_left_at = None;
+                                    cx.notify();
+                                }
+                            }
+                        }
+                        false
+                    })
+                    .unwrap_or(true);
+                if done {
+                    break;
+                }
+            }
+        }));
     }
 
     /// Cursor entered or left the controls panel in full screen.
@@ -735,29 +990,8 @@ impl RoomView {
             if change {
                 cx.notify();
             }
-        } else {
-            if !self.watch.local.fullscreen_controls {
-                return;
-            }
+        } else if self.watch.local.fullscreen_controls && self.watch.local.controls_left_at.is_none() {
             self.watch.local.controls_left_at = Some(Instant::now());
-            cx.spawn(async move |v, cx| {
-                cx.background_executor().timer(FULLSCREEN_HIDE_DELAY).await;
-                v.update(cx, |v, cx| {
-                    if v.watch.local.fullscreen
-                        && v.watch.local.menu.is_none()
-                        && v.watch
-                            .local
-                            .controls_left_at
-                            .is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
-                    {
-                        v.watch.local.fullscreen_controls = false;
-                        v.watch.local.controls_left_at = None;
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
         }
     }
 }
@@ -901,7 +1135,8 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                 ))
         }))
         .child({
-            let at = Rc::clone(&scrub);
+            let down = Rc::clone(&scrub);
+            let drag = Rc::clone(&scrub);
             div()
                 .id("lv-scrub")
                 .flex_1()
@@ -914,12 +1149,21 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                     cx.listener(move |v, e: &MouseDownEvent, _, cx| {
                         if duration > 0.0
                             && !locked
-                            && let Some(f) = along(&at, e.position.x)
+                            && let Some(f) = along(&down, e.position.x)
                         {
                             v.video_seek(f * duration, cx);
                         }
                     }),
                 )
+                .on_mouse_move(cx.listener(move |v, e: &MouseMoveEvent, _, cx| {
+                    if duration > 0.0
+                        && !locked
+                        && e.pressed_button == Some(MouseButton::Left)
+                        && let Some(f) = along(&drag, e.position.x)
+                    {
+                        v.video_seek(f * duration, cx);
+                    }
+                }))
         })
         .child(
             bar_btn("lv-mute")
@@ -973,6 +1217,11 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                 .when(menu == Some(TrackKind::Subtitle), |b| b.bg(tokens::raised()))
                 .child("Subtitles")
                 .on_click(cx.listener(|v, _, _, cx| v.toggle_track_menu(TrackKind::Subtitle, cx))),
+        )
+        .child(
+            bar_btn("lv-shortcuts")
+                .child("Shortcuts")
+                .on_click(cx.listener(|v, _, _, cx| v.open_dialog(crate::view::Dialog::Player, cx))),
         )
         .child(
             bar_btn("lv-full")
@@ -1090,7 +1339,7 @@ pub(crate) fn offer(
         .top_0()
         .left_0()
         .bottom(px(0.))
-        .right(px(crate::watch::REACTION_STRIP))
+        .right(px(0.))
         .rounded(tokens::RADIUS_VIDEO)
         .bg(tokens::surface())
         .border_1()

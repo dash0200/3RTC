@@ -27,6 +27,12 @@
 <script>
 (function () {
   const send = (m) => { try { window.ipc.postMessage(JSON.stringify(m)); } catch (e) {} };
+  function onFsChange() {
+    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    send({ ev: 'fullscreen', on: isFs });
+  }
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
   const params = new URLSearchParams(location.search);
   const kind = params.get('kind');
   const id = params.get('id') || '';
@@ -115,6 +121,23 @@
         if (v) v.controls = !c.on;
         return;
       }
+      if (c.do === 'fullscreen') {
+        if (c.on) {
+          const el = document.getElementById('p') || document.documentElement;
+          if (el.requestFullscreen) {
+            el.requestFullscreen().catch(() => {});
+          } else if (el.webkitRequestFullscreen) {
+            el.webkitRequestFullscreen();
+          }
+        } else if (document.fullscreenElement || document.webkitFullscreenElement) {
+          if (document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+          } else if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+          }
+        }
+        return;
+      }
       if (!ready) { pending = c; return; }   // the newest wins
       apply(c);
     }
@@ -134,7 +157,7 @@
       let last = -1;
       const p = new YT.Player('p', {
         videoId: id,
-        playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0, modestbranding: 1, enablejsapi: 1, origin: location.origin },
+        playerVars: { autoplay: 0, controls: 1, playsinline: 1, rel: 0, modestbranding: 1, enablejsapi: 1, origin: location.origin, fs: 1 },
         events: {
           onReady: () => {
             api = {
@@ -255,6 +278,31 @@
       v.src = id;
     }
   }
+
+  window.addEventListener('mouseup', (e) => {
+    if (document.body.classList.contains('locked')) return;
+    if (e.button === 3) {
+      if (api && ready && !live) {
+        api.time().then(t => {
+          const target = Math.max(0, (Number(t) || 0) - 5);
+          expect('seek', 6000);
+          api.seek(target);
+          send({ ev: 'user', do: 'seek', t: target });
+        });
+      }
+    } else if (e.button === 4) {
+      if (api && ready && !live) {
+        Promise.all([api.time(), api.duration()]).then(([t, d]) => {
+          const cur = Number(t) || 0;
+          const dur = Number(d) || (cur + 100);
+          const target = Math.min(dur, cur + 5);
+          expect('seek', 6000);
+          api.seek(target);
+          send({ ev: 'user', do: 'seek', t: target });
+        });
+      }
+    }
+  });
 
   if (kind === 'youtube') youtube();
   else if (kind === 'vimeo') vimeo();

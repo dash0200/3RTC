@@ -6,7 +6,7 @@
 use gpui_kit::component::Sizable as _;
 use gpui_kit::{
     AnyElement, Context, Focusable as _, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, StatefulInteractiveElement as _, Styled as _, Window, div,
+    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px, rgb,
 };
 use rtc_platform_win::keys::{Binding, Key};
@@ -43,7 +43,7 @@ pub(crate) fn render(
         )
         .into_any_element(),
         Dialog::Desktop => {
-            dialog("desktop-dialog", px(520.), desktop(view, close, cx), dismiss).into_any_element()
+            dialog("desktop-dialog", px(540.), desktop(view, close, cx), dismiss).into_any_element()
         }
         Dialog::Link(room) => {
             dialog("link-dialog", px(380.), link(view, room, cx), dismiss).into_any_element()
@@ -72,6 +72,13 @@ pub(crate) fn render(
             "app-sound-dialog",
             px(480.),
             crate::extras::app_sound_dialog(view, cx),
+            dismiss,
+        )
+        .into_any_element(),
+        Dialog::Player => dialog(
+            "player-dialog",
+            px(540.),
+            player_shortcuts(view, close, cx),
             dismiss,
         )
         .into_any_element(),
@@ -668,6 +675,13 @@ fn record_button(
         KeyTarget::Ptt => "rec-ptt",
         KeyTarget::Mute => "rec-mute",
         KeyTarget::Deafen => "rec-deafen",
+        KeyTarget::PlayerPlayPause => "rec-pl-play",
+        KeyTarget::PlayerFullscreen => "rec-pl-fs",
+        KeyTarget::PlayerSeekBackward => "rec-pl-seek-back",
+        KeyTarget::PlayerSeekForward => "rec-pl-seek-fwd",
+        KeyTarget::PlayerVolumeUp => "rec-pl-vol-up",
+        KeyTarget::PlayerVolumeDown => "rec-pl-vol-down",
+        KeyTarget::PlayerSubtitles => "rec-pl-subs",
     };
     div()
         .id(id)
@@ -955,6 +969,13 @@ fn hotkey_row(
         KeyTarget::Ptt => "clear-ptt",
         KeyTarget::Mute => "clear-mute",
         KeyTarget::Deafen => "clear-deafen",
+        KeyTarget::PlayerPlayPause => "clear-pl-play",
+        KeyTarget::PlayerFullscreen => "clear-pl-fs",
+        KeyTarget::PlayerSeekBackward => "clear-pl-seek-back",
+        KeyTarget::PlayerSeekForward => "clear-pl-seek-fwd",
+        KeyTarget::PlayerVolumeUp => "clear-pl-vol-up",
+        KeyTarget::PlayerVolumeDown => "clear-pl-vol-down",
+        KeyTarget::PlayerSubtitles => "clear-pl-subs",
     };
     div()
         .flex()
@@ -1112,6 +1133,7 @@ fn desktop(
     let supported = RoomView::desktop_supported();
     let tray = view.has_tray();
     div()
+        .w_full()
         .flex()
         .flex_col()
         .child(head(
@@ -1122,6 +1144,7 @@ fn desktop(
         ))
         .child(
             div()
+                .w_full()
                 .px(px(24.))
                 .pb(px(16.))
                 .flex()
@@ -1274,21 +1297,30 @@ fn graphics(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement
         .when(restart, |el| {
             el.child(
                 div()
+                    .w_full()
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap(px(10.))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .text_size(px(12.5))
                             .text_color(tokens::focus())
                             .child("Restart 3RTC to switch the graphics card."),
                     )
                     .child(
-                        Button::new("d-gpu-restart", "Restart now")
-                            .variant(Variant::Primary)
-                            .min_height(px(32.))
-                            .on_click(cx.listener(|v, _, _, cx| v.restart_for_update(cx))),
+                        div()
+                            .flex_shrink_0()
+                            .child(
+                                Button::new("d-gpu-restart", "Restart now")
+                                    .variant(Variant::Primary)
+                                    .min_height(px(32.))
+                                    .font_size(px(13.))
+                                    .padding_x(px(14.))
+                                    .on_click(cx.listener(|v, _, _, cx| v.restart_for_update(cx))),
+                            ),
                     ),
             )
         })
@@ -1320,17 +1352,22 @@ fn updates(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement 
         Status::Checking | Status::Downloading(..) | Status::Dev
     );
     div()
+        .w_full()
         .flex()
         .flex_col()
         .gap(px(10.))
         .pt(px(6.))
         .child(
             div()
+                .w_full()
                 .flex()
                 .items_center()
                 .justify_between()
+                .gap(px(12.))
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(3.))
@@ -1340,29 +1377,44 @@ fn updates(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement 
                                 .text_size(px(12.))
                                 .text_color(tokens::text_3())
                                 .child(format!("This version: {}", crate::view::BUILD)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(tokens::text_3())
-                                .child("Video files play with mpv (libmpv, LGPL 2.1+, mpv.io; source: github.com/mpv-player/mpv)."),
                         ),
                 )
-                .child(if ready {
-                    Button::new("restart-update", "Restart now")
-                        .variant(Variant::Primary)
-                        .min_height(px(34.))
-                        .on_click(cx.listener(|v, _, _, cx| v.restart_for_update(cx)))
-                        .into_any_element()
-                } else {
-                    Button::new("check-update", "Check for updates")
-                        .min_height(px(34.))
-                        .disabled(busy)
-                        .on_click(cx.listener(|v, _, _, cx| v.check_updates(true, cx)))
-                        .into_any_element()
-                }),
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .child(if ready {
+                            Button::new("restart-update", "Restart now")
+                                .variant(Variant::Primary)
+                                .min_height(px(34.))
+                                .font_size(px(13.))
+                                .padding_x(px(14.))
+                                .on_click(cx.listener(|v, _, _, cx| v.restart_for_update(cx)))
+                                .into_any_element()
+                        } else {
+                            Button::new("check-update", "Check for updates")
+                                .min_height(px(34.))
+                                .font_size(px(13.))
+                                .padding_x(px(14.))
+                                .disabled(busy)
+                                .on_click(cx.listener(|v, _, _, cx| v.check_updates(true, cx)))
+                                .into_any_element()
+                        }),
+                ),
         )
-        .child(div().text_size(px(12.5)).text_color(color).child(text))
+        .child(
+            div()
+                .text_size(px(11.))
+                .line_height(gpui_kit::relative(1.4))
+                .text_color(tokens::text_3())
+                .child("Video files play with mpv (libmpv, LGPL 2.1+, mpv.io; source: github.com/mpv-player/mpv)."),
+        )
+        .child(
+            div()
+                .text_size(px(12.5))
+                .line_height(gpui_kit::relative(1.4))
+                .text_color(color)
+                .child(text),
+        )
         .child(toggle_row(
             "d-auto-update",
             "Update automatically",
@@ -1412,5 +1464,194 @@ fn link(view: &RoomView, room: RoomId, cx: &mut Context<'_, RoomView>) -> impl I
                 .variant(Variant::Inverse)
                 .full_width()
                 .on_click(cx.listener(|v, _, _, cx| v.close_dialog(cx))),
+        )
+}
+
+// ---- player shortcuts & controls dialog ---------------------------------------------------------
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn player_shortcuts(
+    view: &RoomView,
+    close: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    cx: &mut Context<'_, RoomView>,
+) -> impl IntoElement {
+    let current_step = view.settings.seek_step_secs.round() as u64;
+    let step_chip = |secs: u64, label: &'static str| {
+        let on = current_step == secs;
+        div()
+            .id(SharedString::from(format!("step-chip-{secs}")))
+            .px(px(12.))
+            .py(px(6.))
+            .rounded_full()
+            .border_1()
+            .border_color(if on { tokens::focus() } else { tokens::line() })
+            .bg(if on { sky(0.18) } else { tokens::bg() })
+            .text_size(px(13.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(if on { tokens::focus() } else { tokens::text() })
+            .cursor_pointer()
+            .hover(|s| s.border_color(tokens::line_strong()))
+            .on_click(cx.listener(move |v, _, _, cx| v.set_seek_step(secs as f64, cx)))
+            .child(label)
+    };
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .child(head(
+            "Player Shortcuts & Controls",
+            "Customise playback controls, seek step and gestures".to_owned(),
+            Icon::Settings,
+            close,
+        ))
+        .child(
+            div()
+                .p(px(20.))
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(section(
+                    "SEEK DURATION",
+                    "Step for arrow keys and side mouse buttons",
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(step_chip(5, "5s (default)"))
+                        .child(step_chip(10, "10s"))
+                        .child(step_chip(15, "15s"))
+                        .child(step_chip(30, "30s"))
+                        .child(step_chip(60, "60s")),
+                )
+                .child(div().h(px(1.)).bg(tokens::line()))
+                .child(section("GESTURES & CONTROLS", "Mouse and keyboard shortcuts"))
+                .child(toggle_row(
+                    "ps-click-play",
+                    "Single click to Play / Pause",
+                    "Clicking anywhere on the video toggles playback",
+                    view.settings.player_click_play,
+                    true,
+                    RoomView::set_player_click_play,
+                    cx,
+                ))
+                .child(toggle_row(
+                    "ps-dblclick-fs",
+                    "Double click for Full Screen",
+                    "Double-clicking on the video enters or exits full screen mode",
+                    view.settings.player_double_click_fullscreen,
+                    true,
+                    RoomView::set_player_double_click_fullscreen,
+                    cx,
+                ))
+                .child(toggle_row(
+                    "ps-scroll-vol",
+                    "Mouse wheel adjusts Volume",
+                    "Scrolling up or down over the video raises or lowers audio volume",
+                    view.settings.player_scroll_volume,
+                    true,
+                    RoomView::set_player_scroll_volume,
+                    cx,
+                ))
+                .child(toggle_row(
+                    "ps-nav-seek",
+                    "Mouse side buttons Seek",
+                    "Mouse 4th & 5th (back/forward) buttons skip backward or forward",
+                    view.settings.player_mouse_nav_seek,
+                    true,
+                    RoomView::set_player_mouse_nav_seek,
+                    cx,
+                ))
+                .child(toggle_row(
+                    "ps-arrow-keys",
+                    "Arrow keys Seek & Volume",
+                    "Left / Right arrows seek by the step; Up / Down arrows adjust volume",
+                    view.settings.player_arrow_keys,
+                    true,
+                    RoomView::set_player_arrow_keys,
+                    cx,
+                ))
+                .child(div().h(px(1.)).bg(tokens::line()))
+                .child(section(
+                    "KEYBOARD SHORTCUTS",
+                    "Click Record to choose your custom key (or combination)",
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .p(px(14.))
+                        .rounded(px(10.))
+                        .bg(tokens::bg())
+                        .border_1()
+                        .border_color(tokens::line())
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerPlayPause,
+                            "Play / Pause",
+                            &view.settings.key_player_play_pause,
+                            cx,
+                        ))
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerFullscreen,
+                            "Full Screen",
+                            &view.settings.key_player_fullscreen,
+                            cx,
+                        ))
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerSeekBackward,
+                            "Seek Backward",
+                            &view.settings.key_player_seek_backward,
+                            cx,
+                        ))
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerSeekForward,
+                            "Seek Forward",
+                            &view.settings.key_player_seek_forward,
+                            cx,
+                        ))
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerVolumeUp,
+                            "Volume Up",
+                            &view.settings.key_player_volume_up,
+                            cx,
+                        ))
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerVolumeDown,
+                            "Volume Down",
+                            &view.settings.key_player_volume_down,
+                            cx,
+                        ))
+                        .child(hotkey_row(
+                            view,
+                            KeyTarget::PlayerSubtitles,
+                            "Cycle Subtitles",
+                            &view.settings.key_player_subtitles,
+                            cx,
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .p(px(16.))
+                .px(px(24.))
+                .border_t_1()
+                .border_color(tokens::raised())
+                .flex()
+                .justify_end()
+                .child(
+                    Button::new("player-done", "Done")
+                        .variant(Variant::Primary)
+                        .min_height(px(38.))
+                        .on_click(cx.listener(|v, _, _, cx| v.close_dialog(cx))),
+                ),
         )
 }
