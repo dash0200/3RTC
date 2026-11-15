@@ -511,6 +511,24 @@ impl Home<'_> {
             .text_size(px(13.))
             .child(
                 div()
+                    .id("foot-desktop")
+                    .text_color(tokens::text_2())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(tokens::text()))
+                    .on_click(cx.listener(|v, _, _, cx| v.open_dialog(crate::view::Dialog::Desktop, cx)))
+                    .child("Desktop settings"),
+            )
+            .child(
+                div()
+                    .id("foot-player")
+                    .text_color(tokens::text_2())
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(tokens::text()))
+                    .on_click(cx.listener(|v, _, _, cx| v.open_dialog(crate::view::Dialog::Player, cx)))
+                    .child("Player shortcuts"),
+            )
+            .child(
+                div()
                     .id("foot-server")
                     .text_color(tokens::text_2())
                     .cursor_pointer()
