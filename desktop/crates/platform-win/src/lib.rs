@@ -65,8 +65,9 @@ pub use other::{AppSound, audio_apps};
 pub use other::{H264Encoder, ParentWindow, VideoPlayer};
 #[cfg(not(windows))]
 pub use other::{
-    KeyWatcher, Tray, autostart, center_cursor, foreground_admin_app, hide_window, keys_down, links,
-    lock_pointer, play_wav, set_cursor_visible, set_window_icon, show_window, unlock_pointer,
+    KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state,
+    foreground_admin_app, hide_window, keys_down, links, lock_pointer, play_wav, raw_hwnd,
+    set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };
 #[cfg(not(windows))]
 pub use other::{gpu_choice, gpus, set_gpu_choice};
@@ -79,8 +80,9 @@ pub use ui_thread::{ParentWindow, UiThread};
 pub use video::{EncodedUnit, Rect, StreamSource, Track, TrackKind, VideoAction, VideoEvent, VideoSource};
 #[cfg(windows)]
 pub use win::{
-    KeyWatcher, Tray, autostart, center_cursor, foreground_admin_app, hide_window, keys_down, links,
-    lock_pointer, play_wav, set_cursor_visible, set_window_icon, show_window, unlock_pointer,
+    KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state,
+    foreground_admin_app, hide_window, keys_down, links, lock_pointer, play_wav, raw_hwnd,
+    set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };
 
 /// The graphics card the app asks Windows for (it applies from the next start).

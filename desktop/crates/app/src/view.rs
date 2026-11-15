@@ -81,6 +81,8 @@ pub(crate) enum Dialog {
     AppSound,
     /// Pick a screen or window to share.
     Screen,
+    /// Player shortcuts and controls settings.
+    Player,
 }
 
 /// Which key is being recorded in the settings.
@@ -89,6 +91,13 @@ pub(crate) enum KeyTarget {
     Ptt,
     Mute,
     Deafen,
+    PlayerPlayPause,
+    PlayerFullscreen,
+    PlayerSeekBackward,
+    PlayerSeekForward,
+    PlayerVolumeUp,
+    PlayerVolumeDown,
+    PlayerSubtitles,
 }
 
 /// One line in the Logs tab.
@@ -776,6 +785,42 @@ impl RoomView {
         cx.notify();
     }
 
+    pub(crate) fn set_seek_step(&mut self, secs: f64, cx: &mut Context<'_, Self>) {
+        self.settings.seek_step_secs = secs.clamp(1.0, 120.0);
+        self.settings.save();
+        cx.notify();
+    }
+
+    pub(crate) fn set_player_click_play(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.player_click_play = on;
+        self.settings.save();
+        cx.notify();
+    }
+
+    pub(crate) fn set_player_double_click_fullscreen(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.player_double_click_fullscreen = on;
+        self.settings.save();
+        cx.notify();
+    }
+
+    pub(crate) fn set_player_scroll_volume(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.player_scroll_volume = on;
+        self.settings.save();
+        cx.notify();
+    }
+
+    pub(crate) fn set_player_mouse_nav_seek(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.player_mouse_nav_seek = on;
+        self.settings.save();
+        cx.notify();
+    }
+
+    pub(crate) fn set_player_arrow_keys(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.player_arrow_keys = on;
+        self.settings.save();
+        cx.notify();
+    }
+
     /// Switches between our own audio path and libwebrtc's (restarts the engine: not in a room).
     pub(crate) fn set_classic_audio(&mut self, on: bool, cx: &mut Context<'_, Self>) {
         if self.in_room().is_some() {
@@ -1113,6 +1158,13 @@ impl RoomView {
             KeyTarget::Ptt => self.settings.ptt_keys = binding,
             KeyTarget::Mute => self.settings.mute_keys = binding,
             KeyTarget::Deafen => self.settings.deafen_keys = binding,
+            KeyTarget::PlayerPlayPause => self.settings.key_player_play_pause = binding,
+            KeyTarget::PlayerFullscreen => self.settings.key_player_fullscreen = binding,
+            KeyTarget::PlayerSeekBackward => self.settings.key_player_seek_backward = binding,
+            KeyTarget::PlayerSeekForward => self.settings.key_player_seek_forward = binding,
+            KeyTarget::PlayerVolumeUp => self.settings.key_player_volume_up = binding,
+            KeyTarget::PlayerVolumeDown => self.settings.key_player_volume_down = binding,
+            KeyTarget::PlayerSubtitles => self.settings.key_player_subtitles = binding,
         }
         self.settings.save();
         self.watch_keys();
@@ -1367,18 +1419,67 @@ impl RoomView {
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
         let ks = &event.keystroke;
         if ks.key == "escape" {
-            if self.screen.fullscreen {
+            if self.watch.local.fullscreen {
+                self.end_video_fullscreen(window);
+            } else if self.screen.fullscreen {
                 self.end_screen_fullscreen(window);
             } else if self.dialog.is_some() {
                 self.dialog = None;
             } else if self.pop.is_some() {
                 self.pop = None;
+            } else if window.is_fullscreen() {
+                window.toggle_fullscreen();
             }
             cx.notify();
             return;
         }
+        if self.typing(window, cx) {
+            return;
+        }
+        if ks.key == "f11" {
+            self.toggle_app_fullscreen(window, cx);
+            return;
+        }
+        if self.in_room().is_none() || self.dialog.is_some() {
+            return;
+        }
+        let watching = self.room.as_ref().is_some_and(|r| r.watch.showing.is_some());
+        if watching {
+            if matches_binding(&self.settings.key_player_fullscreen, ks) {
+                self.toggle_video_fullscreen(window, cx);
+                return;
+            }
+            if matches_binding(&self.settings.key_player_play_pause, ks) {
+                if !self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+                    self.video_toggle_play(cx);
+                }
+                return;
+            }
+            if matches_binding(&self.settings.key_player_seek_backward, ks) {
+                self.video_backward_5(cx);
+                return;
+            }
+            if matches_binding(&self.settings.key_player_seek_forward, ks) {
+                self.video_forward_5(cx);
+                return;
+            }
+            if matches_binding(&self.settings.key_player_volume_up, ks) {
+                let v = (self.watch.local.volume + 5.0).clamp(0.0, 100.0);
+                self.video_volume(v, cx);
+                return;
+            }
+            if matches_binding(&self.settings.key_player_volume_down, ks) {
+                let v = (self.watch.local.volume - 5.0).clamp(0.0, 100.0);
+                self.video_volume(v, cx);
+                return;
+            }
+            if matches_binding(&self.settings.key_player_subtitles, ks) {
+                self.cycle_subtitles(cx);
+                return;
+            }
+        }
         let plain = !(ks.modifiers.control || ks.modifiers.alt || ks.modifiers.platform);
-        if !plain || self.typing(window, cx) || self.in_room().is_none() || self.dialog.is_some() {
+        if !plain {
             return;
         }
         match ks.key.as_str() {
@@ -1644,5 +1745,74 @@ impl GpuState {
 impl Drop for RoomView {
     fn drop(&mut self) {
         rtc_platform_win::unlock_pointer();
+    }
+}
+
+fn matches_binding(binding: &Binding, ks: &gpui_kit::Keystroke) -> bool {
+    if binding.is_empty() {
+        return false;
+    }
+    let keys = binding.keys();
+    let has_ctrl = keys.contains(&Key::CTRL);
+    let has_alt = keys.contains(&Key::ALT);
+    let has_shift = keys.contains(&Key::SHIFT);
+    let has_win = keys.contains(&Key::WIN);
+    if ks.modifiers.control != has_ctrl
+        || ks.modifiers.alt != has_alt
+        || ks.modifiers.shift != has_shift
+        || ks.modifiers.platform != has_win
+    {
+        return false;
+    }
+    let Some(main) = keys.iter().find(|k| !k.is_modifier()) else {
+        return false;
+    };
+    match ks.key.to_ascii_lowercase().as_str() {
+        "space" => *main == Key::SPACE,
+        "left" | "arrowleft" => *main == Key(0x25),
+        "up" | "arrowup" => *main == Key(0x26),
+        "right" | "arrowright" => *main == Key(0x27),
+        "down" | "arrowdown" => *main == Key(0x28),
+        "enter" | "return" => *main == Key(0x0D),
+        "escape" => *main == Key(0x1B),
+        "tab" => *main == Key(0x09),
+        "backspace" => *main == Key(0x08),
+        "pageup" => *main == Key(0x21),
+        "pagedown" => *main == Key(0x22),
+        "end" => *main == Key(0x23),
+        "home" => *main == Key(0x24),
+        "insert" => *main == Key(0x2D),
+        "delete" => *main == Key(0x2E),
+        s if s.len() == 1 => {
+            let Some(ch) = s.chars().next() else { return false };
+            match ch {
+                'a'..='z' => {
+                    let Ok(b) = u8::try_from(ch) else { return false };
+                    *main == Key(b - b'a' + 0x41)
+                }
+                '0'..='9' => {
+                    let Ok(b) = u8::try_from(ch) else { return false };
+                    *main == Key(b)
+                }
+                ';' => *main == Key(0xBA),
+                '=' => *main == Key(0xBB),
+                ',' => *main == Key(0xBC),
+                '-' => *main == Key(0xBD),
+                '.' => *main == Key(0xBE),
+                '/' => *main == Key(0xBF),
+                '`' | '~' => *main == Key(0xC0),
+                '[' => *main == Key(0xDB),
+                '\\' => *main == Key(0xDC),
+                ']' => *main == Key(0xDD),
+                '\'' => *main == Key(0xDE),
+                _ => false,
+            }
+        }
+        s if s.starts_with('f') && s.len() >= 2 => s[1..]
+            .parse::<u8>()
+            .ok()
+            .filter(|&n| (1..=24).contains(&n))
+            .is_some_and(|n| *main == Key(0x70 + n - 1)),
+        _ => false,
     }
 }

@@ -134,7 +134,7 @@ impl RoomView {
         }
     }
 
-    fn start_activity(&mut self, id: &'static str, cx: &mut Context<'_, Self>) {
+    pub(crate) fn start_activity(&mut self, id: &'static str, cx: &mut Context<'_, Self>) {
         self.pop = None;
         self.activity_command(ActivityCommand::Start(id.to_owned()), cx);
     }

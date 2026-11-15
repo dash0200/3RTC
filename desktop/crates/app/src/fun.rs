@@ -3,6 +3,7 @@
 //! (`DesktopDock.tsx`, `SoundboardTray.tsx`), the banner saying who played a clip
 //! (`Stage.tsx`) and the quick reactions editor (`features/reactions/ReactionsEditor.tsx`).
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -127,6 +128,13 @@ impl RoomView {
     /// Plays a soundboard clip for everyone.
     pub(crate) fn play_clip(&mut self, index: usize) {
         let Some(c) = CLIPS.get(index) else { return };
+        if self.settings.soundboard_muted {
+            self.settings.soundboard_muted = false;
+            if self.settings.soundboard_volume <= 0.05 {
+                self.settings.soundboard_volume = 0.75;
+            }
+            self.settings.save();
+        }
         self.command(rtc_core::Command::PlaySound {
             sound_id: c.id.to_owned(),
             sound_name: c.name.to_owned(),
@@ -207,10 +215,11 @@ impl RoomView {
 
     /// A clip to play (ours or someone's): play it at the soundboard volume and say who.
     pub(crate) fn on_sound(&mut self, s: Sound, cx: &mut Context<'_, Self>) {
-        let volume = if self.settings.soundboard_muted {
+        let is_local = s.from.is_none();
+        let volume = if self.settings.soundboard_muted && !is_local {
             0.0
         } else {
-            self.settings.soundboard_volume
+            self.settings.soundboard_volume.max(0.1)
         };
         if !self.deafened()
             && volume > 0.0
@@ -219,6 +228,8 @@ impl RoomView {
             if self.has_pipeline() {
                 if let (Some(e), Some(samples)) = (&self.engine, sounds::clip_samples(clip)) {
                     e.play_samples(samples, volume, true);
+                } else if let Some(wav) = sounds::clip_wav(clip) {
+                    rtc_platform_win::play_wav(wav);
                 }
             } else if let Some(wav) = sounds::clip_wav(clip) {
                 rtc_platform_win::play_wav(wav);
@@ -292,6 +303,9 @@ impl RoomView {
 
     pub(crate) fn toggle_soundboard_mute(&mut self, cx: &mut Context<'_, Self>) {
         self.settings.soundboard_muted = !self.settings.soundboard_muted;
+        if !self.settings.soundboard_muted && self.settings.soundboard_volume <= 0.05 {
+            self.settings.soundboard_volume = 0.75;
+        }
         self.settings.save();
         cx.notify();
     }
@@ -412,13 +426,8 @@ fn float_at(f: &Float, t: f32) -> (f32, f32, f32, f32) {
 }
 
 /// The floating reactions and combo counters, over the stage's bottom right.
-/// `beside`: a video plays, so they float in the strip beside it (the web view covers the rest).
 pub(crate) fn layer(view: &RoomView, beside: bool) -> impl IntoElement {
-    let w = if beside {
-        crate::watch::REACTION_STRIP - 8.0
-    } else {
-        LAYER_W
-    };
+    let w = LAYER_W;
     let now = Instant::now();
     let tag_bg = Hsla {
         a: 0.88,
@@ -426,7 +435,7 @@ pub(crate) fn layer(view: &RoomView, beside: bool) -> impl IntoElement {
     };
     div()
         .absolute()
-        .right(px(if beside { 4. } else { 28. }))
+        .right(px(28.))
         .bottom(px(24.))
         .w(px(w))
         .h(px(LAYER_H))
@@ -529,11 +538,7 @@ pub(crate) fn banner(view: &RoomView, beside: bool) -> Option<impl IntoElement> 
         div()
             .absolute()
             .bottom(px(if beside { 10. } else { 84. }))
-            .right(px(if beside {
-                crate::watch::REACTION_STRIP + 12.
-            } else {
-                28.
-            }))
+            .right(px(28.))
             .flex()
             .items_center()
             .gap(px(12.))
@@ -607,6 +612,166 @@ pub(crate) fn banner(view: &RoomView, beside: bool) -> Option<impl IntoElement> 
                     .child(div().flex().items_end().gap(px(3.)).h(px(10.)).children(bars)),
             ),
     )
+}
+
+/// Reactions in the bottom panel (dock) on the right side:
+/// 1. Active soundboard clip banner if someone played a clip.
+/// 2. Active live reaction badge(s) when someone reacts (emoji, sender tag, combo multiplier).
+/// 3. Quick reaction emojis (1-click to react with 👍 ❤️ 🔥 👏 😂 🎉).
+pub(crate) fn dock_reactions(view: &RoomView, _cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let now = Instant::now();
+    let tag_bg = Hsla {
+        a: 0.92,
+        ..tokens::reaction_tag()
+    };
+
+    // 1. Soundboard clip banner if active
+    let banner_pill = view.fun.banner.as_ref().and_then(|(s, at)| {
+        let t = at.elapsed().as_secs_f32();
+        if t >= BANNER.as_secs_f32() {
+            return None;
+        }
+        let bars = (0..4).map(move |i| {
+            #[allow(clippy::cast_precision_loss)]
+            let h = 3.0 + 6.0 * ((t * 9.0 + i as f32 * 1.3).sin() * 0.5 + 0.5);
+            div().w(px(2.5)).h(px(h)).rounded(px(1.5)).bg(tokens::sfx_lilac())
+        });
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .pl(px(8.))
+                .pr(px(10.))
+                .h(px(36.))
+                .rounded_full()
+                .bg(Hsla {
+                    a: 0.94,
+                    ..tokens::sfx_ground()
+                })
+                .border_1()
+                .border_color(Hsla {
+                    a: 0.45,
+                    ..tokens::sfx_lilac()
+                })
+                .shadow(tokens::drop_shadow(6., 16., 0.4))
+                .child(
+                    div()
+                        .size(px(22.))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(14.))
+                        .child(s.emoji.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(tokens::text())
+                        .child(if s.from.is_none() {
+                            "You".to_owned()
+                        } else {
+                            s.name.clone()
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(tokens::sfx_muted())
+                        .child("played"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens::sfx_lilac())
+                        .child(s.sound_name.clone()),
+                )
+                .child(div().flex().items_end().gap(px(2.)).h(px(10.)).children(bars)),
+        )
+    });
+
+    // 2. Up to 2 recent active reaction floats
+    let mut seen = HashSet::new();
+    let mut active = Vec::new();
+    for f in view.fun.floats.iter().rev() {
+        let key = (f.emoji.to_string(), f.tag.as_ref().map(ToString::to_string));
+        if seen.insert(key) && now.duration_since(f.born).as_secs_f32() < f.secs {
+            active.push(f);
+            if active.len() >= 2 {
+                break;
+            }
+        }
+    }
+
+    let live_pills = active.into_iter().rev().map(|f| {
+        let t = now.duration_since(f.born).as_secs_f32() / f.secs;
+        // Bounce pop scale
+        let pop = if t < 0.15 {
+            1.0 + (t / 0.15) * 0.25
+        } else if t < 0.3 {
+            1.25 - ((t - 0.15) / 0.15) * 0.25
+        } else {
+            1.0
+        };
+        let opacity = if t > 0.75 {
+            ((1.0 - t) / 0.25).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        // Find matching combo if any
+        let combo = view.fun.combos.iter().find(|c| {
+            c.emoji.as_ref() == f.emoji.as_ref() && now.duration_since(c.last) < COMBO_SHOW + COMBO_FADE
+        });
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .pl(px(8.))
+            .pr(px(10.))
+            .h(px(36.))
+            .rounded_full()
+            .bg(tag_bg)
+            .border_1()
+            .border_color(tokens::white().opacity(0.22))
+            .shadow(tokens::drop_shadow(4., 12., 0.4))
+            .opacity(opacity)
+            .child(
+                div()
+                    .text_size(px(22. * pop))
+                    .line_height(relative(1.))
+                    .child(f.emoji.clone()),
+            )
+            .when_some(f.tag.clone(), |el, tag| {
+                el.child(
+                    div()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens::text())
+                        .child(tag),
+                )
+            })
+            .when_some(combo, |el, c| {
+                el.child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::EXTRA_BOLD)
+                        .text_color(tokens::combo_gold())
+                        .child(format!("×{}", c.count)),
+                )
+            })
+    });
+
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .children(banner_pill)
+        .children(live_pills)
 }
 
 /// The dock's reactions popover: your set, and "Choose your reactions…".
