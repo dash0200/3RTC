@@ -747,10 +747,11 @@ fn horizontal_tray(
                         .child(tray_title(Icon::Smile, "Reactions"))
                         .child(
                             div()
+                                .id("tray-reactions-scroll")
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .overflow_x_hidden()
+                                .overflow_x_scroll()
                                 .children(reactions),
                         )
                         .child(
@@ -919,10 +920,11 @@ fn horizontal_tray(
                         )
                         .child(
                             div()
+                                .id("tray-sounds-scroll")
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .overflow_x_hidden()
+                                .overflow_x_scroll()
                                 .children(clips),
                         ),
                 )
@@ -941,12 +943,13 @@ fn horizontal_tray(
                 .gap(px(14.))
                 .child(
                     div()
+                        .id("tray-more-scroll")
                         .flex_1()
                         .min_w_0()
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .overflow_x_hidden()
+                        .overflow_x_scroll()
                         .child(tray_title(Icon::More, "More"))
                         .child(
                             tray_pill(
@@ -967,6 +970,19 @@ fn horizontal_tray(
                         )
                         .child(
                             tray_pill(
+                                SharedString::from("tray-m-desktop"),
+                                Some(Icon::Settings),
+                                SharedString::from("Desktop settings"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Desktop, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
                                 SharedString::from("tray-m-voice"),
                                 Some(Icon::Settings),
                                 SharedString::from("Voice settings"),
@@ -976,6 +992,32 @@ fn horizontal_tray(
                             .on_click(cx.listener(|v, _, _, cx| {
                                 v.pop = None;
                                 v.open_dialog(Dialog::Voice, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-player-shortcuts"),
+                                Some(Icon::Settings),
+                                SharedString::from("Player shortcuts…"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Player, cx);
+                            })),
+                        )
+                        .child(
+                            tray_pill(
+                                SharedString::from("tray-m-server"),
+                                Some(Icon::Settings),
+                                SharedString::from("Server settings"),
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.pop = None;
+                                v.open_dialog(Dialog::Server, cx);
                             })),
                         )
                         .child(
@@ -1040,32 +1082,15 @@ fn horizontal_tray(
                                 })),
                             )
                         })
-                        .child(
-                            tray_pill(
-                                SharedString::from("tray-m-desktop"),
-                                Some(Icon::More),
-                                SharedString::from("In-game overlay"),
+                        .when(!is_host && lock, |el| {
+                            el.child(tray_pill(
+                                SharedString::from("tray-m-lock-status"),
+                                Some(Icon::Lock),
+                                SharedString::from("🔒 Host controls playback"),
                                 false,
                                 false,
-                            )
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.pop = None;
-                                v.open_dialog(Dialog::Desktop, cx);
-                            })),
-                        )
-                        .child(
-                            tray_pill(
-                                SharedString::from("tray-m-player-shortcuts"),
-                                Some(Icon::Settings),
-                                SharedString::from("Player shortcuts…"),
-                                false,
-                                false,
-                            )
-                            .on_click(cx.listener(|v, _, _, cx| {
-                                v.pop = None;
-                                v.open_dialog(Dialog::Player, cx);
-                            })),
-                        ),
+                            ))
+                        }),
                 )
                 .child(tray_done(cx))
                 .into_any_element()
@@ -1310,10 +1335,11 @@ fn horizontal_tray(
                         .child(tray_title(Icon::Games, "Play together"))
                         .child(
                             div()
+                                .id("tray-games-scroll")
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
-                                .overflow_x_hidden()
+                                .overflow_x_scroll()
                                 .children(activities),
                         ),
                 )
@@ -1347,7 +1373,7 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
     let ptt = view.settings.voice_mode == crate::settings::VoiceMode::Ptt;
     let ptt_key = view.settings.ptt_keys.to_string();
     let status: String = if room.deafened {
-        "Sound off".into()
+        "Deafened".into()
     } else if ptt {
         if view.ptt_talking && !room.muted {
             "Talking".into()
@@ -1362,7 +1388,7 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
         "Mic on".into()
     };
     let mic_label: String = if room.deafened {
-        "Mic blocked".into()
+        "Deafened".into()
     } else if ptt {
         if view.ptt_talking && !room.muted {
             "Talking".into()
@@ -1579,10 +1605,14 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
         ))
         .child(
             div()
+                .id("dock-center-scroll")
+                .flex_1()
+                .min_w_0()
                 .flex()
-                .flex_none()
                 .items_center()
+                .justify_center()
                 .gap(px(8.))
+                .overflow_x_scroll()
                 .child(mic)
                 .child(
                     dock_btn(
@@ -2086,12 +2116,32 @@ fn more_pop(
                 })
                 .child(menu_item(
                     "m-desktop",
-                    Some(Icon::More),
-                    "Desktop",
+                    Some(Icon::Settings),
+                    "Desktop settings",
                     false,
                     None,
                     Some(Box::new(
                         cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Desktop, cx)),
+                    )),
+                ))
+                .child(menu_item(
+                    "m-player-shortcuts",
+                    Some(Icon::Settings),
+                    "Player shortcuts…",
+                    false,
+                    None,
+                    Some(Box::new(
+                        cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Player, cx)),
+                    )),
+                ))
+                .child(menu_item(
+                    "m-server",
+                    Some(Icon::Settings),
+                    "Server settings",
+                    false,
+                    None,
+                    Some(Box::new(
+                        cx.listener(|v, _, _, cx| v.open_dialog(Dialog::Server, cx)),
                     )),
                 )),
         ),

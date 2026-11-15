@@ -1137,8 +1137,8 @@ fn desktop(
         .flex()
         .flex_col()
         .child(head(
-            "Desktop",
-            "Startup, the tray, notifications and links".to_owned(),
+            "Desktop Settings",
+            "Startup, the tray, notifications, GPU and in-game overlay".to_owned(),
             Icon::Settings,
             close,
         ))

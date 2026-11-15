@@ -322,6 +322,16 @@ export default function DesktopDock({
           </button>
           {more.open && (
             <div className="dock-pop dock-menu" role="menu" aria-label="More">
+              <a
+                href="/desktop/3RTC-portable.zip"
+                download="3RTC-portable.zip"
+                role="menuitem"
+                className="dock-menu-item"
+                onClick={() => more.close()}
+                title="Download 3RTC portable Windows app (.zip)"
+              >
+                <Icon name="download" size={18} />Download Desktop app (.zip)
+              </a>
               <button type="button" role="menuitem" className="dock-menu-item" onClick={() => { more.close(); onOpenAudioSettings?.(); }}><Icon name="settings" size={18} />Voice settings</button>
               <button type="button" role="menuitem" className="dock-menu-item" onClick={() => { more.close(); onOpenNetworkHud?.(); }}><Icon name="signal" size={18} />Connection details</button>
               <button type="button" role="menuitem" className="dock-menu-item" onClick={() => { more.close(); onOpenQrCode?.(); }}><Icon name="qr" size={18} />Invite with QR code</button>

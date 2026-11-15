@@ -135,6 +135,16 @@ export default function Header({
           )}
         </div>
       )}
+      <a
+        href="/desktop/3RTC-portable.zip"
+        download="3RTC-portable.zip"
+        className="rh-download"
+        title="Download full 3RTC Windows Desktop app (.zip)"
+        aria-label="Download Desktop App (.zip)"
+      >
+        <Icon name="download" size={15} strokeWidth={2.2} />
+        <span className="rh-download-text">Desktop app (.zip)</span>
+      </a>
       <button type="button" className={`rh-conn is-${connection.tone}`} onClick={onOpenNetworkHud} aria-label={`${connection.text}. Open connection details`}>
         <Icon name="signal" size={16} strokeWidth={2.4} />
         {connection.text}

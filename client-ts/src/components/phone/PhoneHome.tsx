@@ -90,6 +90,7 @@ export default function PhoneHome({
           <button type="button" className="phone-link-btn" onClick={onOpenServerSettings}>Server settings</button>
         )}
         <nav className="site-links phone-site-links" aria-label="About 3RTC">
+          <a href="/desktop/3RTC-portable.zip" download="3RTC-portable.zip">Desktop App (.zip)</a>
           <a href="/about">About</a>
           <a href="/youtube-watch-party">YouTube watch party</a>
           <a href="/watch-movies-together">Movie night</a>

@@ -492,6 +492,16 @@ export function MoreSheet({
           <span className="phone-row-text">Invite with QR code</span>
           {roomId && <span className="phone-row-value mono">{roomId}</span>}
         </button>
+        <a href="/desktop/3RTC-portable.zip" download="3RTC-portable.zip" className="phone-row" onClick={() => onClose?.()}>
+          <span className="phone-row-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v12M7 11l5 5 5-5M4 20h16" /></svg>
+          </span>
+          <span className="phone-row-text">
+            <span>Download Desktop App (.zip)</span>
+            <span className="phone-row-sub">Windows portable 64-bit</span>
+          </span>
+          {Chevron}
+        </a>
         {onOpenServerSettings && (
           <button type="button" className="phone-row" onClick={then(onOpenServerSettings)}>
             <span className="phone-row-icon" aria-hidden="true">{MoreIcon.server}</span>

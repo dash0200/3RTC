@@ -49,6 +49,15 @@ export default function InvitePanel({
         <a className="rd-btn rd-btn-secondary" href={whatsapp} target="_blank" rel="noopener noreferrer">WhatsApp</a>
         <button type="button" className="rd-btn rd-btn-secondary" onClick={onShowQr}>Show QR code</button>
       </div>
+      <a
+        href="/desktop/3RTC-portable.zip"
+        download="3RTC-portable.zip"
+        className="rd-btn rd-btn-secondary ip-download"
+        title="Download full 3RTC Windows Desktop app (.zip)"
+      >
+        <Icon name="download" size={16} strokeWidth={2.2} />
+        Download Desktop app (.zip)
+      </a>
       <div className="ip-foot">
         <p>{isTab ? 'Queue videos before friends arrive' : 'Chat, queue and people show up here'}</p>
         <p>{isTab ? 'Switch to the Queue tab above to add videos or search quick picks.' : 'as soon as someone joins.'}</p>

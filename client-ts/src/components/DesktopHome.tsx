@@ -4,6 +4,7 @@ import { BUILD, BUILD_LABEL } from '../version';
 import RejoinCard, { type RejoinInfo } from './RejoinCard';
 import { useRoomCodeInput } from '../hooks/useRoomCodeInput';
 import { Logo } from './Logo';
+import { Icon } from './icons';
 
 export interface DesktopHomeProps {
   /** Why the last join didn't work (shown while the code is still the one that failed) */
@@ -40,6 +41,15 @@ export default function DesktopHome({
       <header className="dh-header">
         <Logo />
         <nav className="dh-nav" aria-label="3RTC">
+          <a
+            href="/desktop/3RTC-portable.zip"
+            download="3RTC-portable.zip"
+            className="dh-nav-download"
+            title="Download full 3RTC Windows Desktop app (.zip)"
+          >
+            <Icon name="download" size={16} strokeWidth={2.4} />
+            <span>Download Desktop App (.zip)</span>
+          </a>
           <a href="/watch-videos-together">How it works</a>
           <a href="/about">About</a>
           <span className={`dh-status ${isOnline ? 'is-online' : ''}`}>
@@ -102,6 +112,15 @@ export default function DesktopHome({
             <ul className="dh-points">
               <li><Check />Video, voice and chat stay between your devices</li>
               <li><Check />Works on phone — add it to your home screen</li>
+              <li>
+                <Check />
+                <span>
+                  Windows desktop app:{' '}
+                  <a href="/desktop/3RTC-portable.zip" download="3RTC-portable.zip" className="dh-point-download">
+                    Download full .zip
+                  </a>
+                </span>
+              </li>
             </ul>
           </div>
 
@@ -133,6 +152,7 @@ export default function DesktopHome({
           <a href="/play-ludo-online">Play Ludo</a>
         </nav>
         <nav aria-label="More">
+          <a href="/desktop/3RTC-portable.zip" download="3RTC-portable.zip">Download Windows app (.zip)</a>
           {onOpenServerSettings && <button type="button" className="dh-linkbtn" onClick={onOpenServerSettings}>Server settings</button>}
           <a href="/privacy">Privacy</a>
           <a href="/about">About</a>
