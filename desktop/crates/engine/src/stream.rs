@@ -31,12 +31,12 @@ use tokio::sync::Notify;
 // ---- numbers from p2pStreamer.ts ------------------------------------------------------------------
 
 /// Pause a block stream above this much queued on the channel …
-const RANGE_BUFFER_HIGH: u64 = 192 * 1024;
+const RANGE_BUFFER_HIGH: u64 = 96 * 1024;
 /// … until it's down to this.
-const RANGE_BUFFER_LOW: u64 = 64 * 1024;
+const RANGE_BUFFER_LOW: u64 = 32 * 1024;
 /// The same for the whole-file push.
-const PUSH_BUFFER_HIGH: u64 = 512 * 1024;
-const PUSH_BUFFER_LOW: u64 = 128 * 1024;
+const PUSH_BUFFER_HIGH: u64 = 192 * 1024;
+const PUSH_BUFFER_LOW: u64 = 64 * 1024;
 /// Read-ahead past the block the player reads.
 const PREFETCH_BYTES: u64 = 2 * 1024 * 1024;
 /// How far ahead blocks are fetched in the background.
@@ -380,6 +380,8 @@ async fn serve(
                 tracing::debug!("stream: send failed: {e:?}");
                 return;
             }
+            // Pace packets to prevent SCTP from saturating the UDP socket and starving voice RTP
+            tokio::time::sleep(Duration::from_millis(2)).await;
         }
         lock(&q).current = None;
     }
@@ -423,6 +425,7 @@ async fn push_whole(
             if dc.send(&pack_chunk(index, piece), true).is_err() {
                 return;
             }
+            tokio::time::sleep(Duration::from_millis(2)).await;
         }
         i += batch;
     }
