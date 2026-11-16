@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "rtc-app"
 description = "3RTC desktop app: the GPUI window"
 version.workspace = true
@@ -34,6 +34,9 @@ qrcode = { version = "0.14", default-features = false }
 ureq.workspace = true
 sha2.workspace = true
 url.workspace = true
+urlencoding.workspace = true
+librqbit.workspace = true
+librqbit-dualstack-sockets.workspace = true
 
 [lints]
 workspace = true

@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use gpui_kit::{
     AnyElement, ClipboardItem, Context, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, div, prelude::FluentBuilder as _, px,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div,
+    prelude::FluentBuilder as _, px,
 };
 use rtc_engine::NetPeer;
 use rtc_protocol::PeerId;
@@ -21,10 +22,39 @@ const EVERY: Duration = Duration::from_millis(2500);
 /// Round trips kept for the graph (`MAX_HISTORY_SAMPLES`).
 const HISTORY: usize = 15;
 
+/// Tabs in the network diagnostics dialog.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum NetTab {
+    #[default]
+    Hud,
+    Topology,
+}
+
+/// Visualization modes for the Topology & Technical Distance Map.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum ViewMode {
+    #[default]
+    Graph,
+    Radar,
+    Matrix,
+}
+
+/// Radar center perspective.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum Perspective {
+    #[default]
+    Host,
+    Me,
+}
+
 /// What the dialog shows.
 #[derive(Default)]
 pub(crate) struct NetState {
     pub(crate) peers: Vec<NetPeer>,
+    pub(crate) tab: NetTab,
+    pub(crate) view_mode: ViewMode,
+    pub(crate) perspective: Perspective,
+    pub(crate) selected_peer: Option<PeerId>,
     history: HashMap<PeerId, Vec<f64>>,
     ticker: Option<gpui_kit::Task<()>>,
     copied: bool,
@@ -346,15 +376,7 @@ fn graph(samples: &[f64]) -> AnyElement {
 /// The dialog.
 pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElement {
     let s = summary(&view.net.peers);
-    let (label, color, g) = grade(s.avg, s.loss);
-    let first = view
-        .net
-        .peers
-        .first()
-        .and_then(|p| view.net.history.get(&p.peer))
-        .cloned()
-        .unwrap_or_default();
-    let fmt = |v: f64| format!("{v:.1}").trim_end_matches(".0").to_owned();
+    let (label, color, _) = grade(s.avg, s.loss);
     div()
         .flex()
         .flex_col()
@@ -434,6 +456,337 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                         .child("✕"),
                 ),
         )
+        // Tabs Navigation
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .border_b_1()
+                .border_color(tokens::line())
+                .pb(px(8.))
+                .child(
+                    div()
+                        .id("tab-hud")
+                        .px(px(14.))
+                        .py(px(6.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .bg(if view.net.tab == NetTab::Hud {
+                            tokens::raised()
+                        } else {
+                            gpui_kit::transparent_black()
+                        })
+                        .text_color(if view.net.tab == NetTab::Hud {
+                            tokens::net_good()
+                        } else {
+                            tokens::text_2()
+                        })
+                        .hover(|s| s.bg(tokens::raised()))
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.net.tab = NetTab::Hud;
+                            cx.notify();
+                        }))
+                        .child("📊 Telemetry HUD"),
+                )
+                .child(
+                    div()
+                        .id("tab-topo")
+                        .px(px(14.))
+                        .py(px(6.))
+                        .rounded(px(8.))
+                        .cursor_pointer()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .bg(if view.net.tab == NetTab::Topology {
+                            tokens::raised()
+                        } else {
+                            gpui_kit::transparent_black()
+                        })
+                        .text_color(if view.net.tab == NetTab::Topology {
+                            tokens::net_good()
+                        } else {
+                            tokens::text_2()
+                        })
+                        .hover(|s| s.bg(tokens::raised()))
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.net.tab = NetTab::Topology;
+                            cx.notify();
+                        }))
+                        .child("🗺️ Topology & Technical Distance Map"),
+                ),
+        )
+        .child(match view.net.tab {
+            NetTab::Hud => hud_view(view, cx).into_any_element(),
+            NetTab::Topology => topology_view(view, cx).into_any_element(),
+        })
+        .into_any_element()
+}
+
+fn room_capacity_advisor_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let room = view.room.as_ref();
+    let is_host = room.and_then(|r| r.host.as_ref()) == room.map(|r| &r.me);
+    let is_hub = room.is_some_and(|r| r.topology == "hub");
+    let current_max = room.map(|r| r.max_users).unwrap_or(if is_hub { 32 } else { 4 });
+
+    let s = summary(&view.net.peers);
+    let down_kbps = s.down;
+    let up_kbps = s.up;
+    let down_mbps = (down_kbps * 8.0) / 1024.0;
+    let up_mbps = (up_kbps * 8.0) / 1024.0;
+    let est_down_mbps = down_mbps.max(15.0);
+    let est_up_mbps = if up_mbps > 0.5 { up_mbps.max(6.0) } else { 10.0 };
+
+    let rec_peers: u32 = if is_hub {
+        if est_up_mbps < 8.0 {
+            6
+        } else if est_up_mbps < 15.0 {
+            8
+        } else if est_up_mbps < 25.0 {
+            12
+        } else if est_up_mbps < 45.0 {
+            18
+        } else if est_up_mbps < 80.0 {
+            25
+        } else {
+            (est_up_mbps / 2.2).floor() as u32 + 2
+        }
+    } else if est_up_mbps >= 12.0 {
+        6
+    } else {
+        4
+    };
+
+    let suggestion = if is_hub {
+        format!(
+            "Based on your ~{est_up_mbps:.1} Mbps upload & ~{est_down_mbps:.1} Mbps download, ~{rec_peers} peers can join smoothly in Hub mode."
+        )
+    } else {
+        format!("Mesh mode is best for ~{rec_peers} peers. Switch to Hub (HStar) mode for larger rooms.")
+    };
+
+    div()
+        .p(px(16.))
+        .rounded(px(12.))
+        .bg(tokens::surface())
+        .border_1()
+        .border_color(tokens::line())
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(tokens::text())
+                                .child("⚡ Room Peer Capacity & Dynamic Advisor"),
+                        )
+                        .child(
+                            div()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded_full()
+                                .bg(if is_hub {
+                                    Hsla {
+                                        a: 0.25,
+                                        ..tokens::focus()
+                                    }
+                                } else {
+                                    Hsla {
+                                        a: 0.15,
+                                        ..tokens::accent()
+                                    }
+                                })
+                                .text_color(if is_hub { tokens::focus() } else { tokens::accent() })
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(if is_hub {
+                                    "⭐ Host Hub Mode"
+                                } else {
+                                    "🕸️ Full Mesh"
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .text_size(px(12.))
+                        .text_color(tokens::text_2())
+                        .child(format!("⬇️ Avg Down: {est_down_mbps:.1} Mbps"))
+                        .child(format!("⬆️ Avg Up: {est_up_mbps:.1} Mbps")),
+                ),
+        )
+        .child(
+            div()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Max Room Peers:"),
+                        )
+                        .when(is_host, |el| {
+                            el.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        Button::new("peer-dec", "-")
+                                            .min_height(px(26.))
+                                            .padding_x(px(8.))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                let next = current_max.saturating_sub(1).max(2);
+                                                v.command(rtc_core::Command::SetRoomSize(next));
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(36.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(tokens::accent())
+                                            .text_size(px(14.))
+                                            .child(current_max.to_string()),
+                                    )
+                                    .child(
+                                        Button::new("peer-inc", "+")
+                                            .min_height(px(26.))
+                                            .padding_x(px(8.))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                let next = current_max + 1;
+                                                v.command(rtc_core::Command::SetRoomSize(next));
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(tokens::text_3())
+                                            .ml(px(6.))
+                                            .child("Presets:"),
+                                    )
+                                    .children([4u32, 8, 12, 16, 24, 32, 50].into_iter().map(|preset| {
+                                        let active = current_max == preset;
+                                        Button::new(format!("preset-{preset}"), preset.to_string())
+                                            .min_height(px(24.))
+                                            .padding_x(px(8.))
+                                            .font_size(px(11.))
+                                            .variant(if active { Variant::Primary } else { Variant::Ghost })
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                v.command(rtc_core::Command::SetRoomSize(preset));
+                                                cx.notify();
+                                            }))
+                                    })),
+                            )
+                        })
+                        .when(!is_host, |el| {
+                            el.child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(tokens::accent())
+                                    .child(format!("{current_max} peers (Host managed)")),
+                            )
+                        }),
+                )
+                .when(is_host && current_max != rec_peers, |el| {
+                    el.child(
+                        Button::new("apply-rec", format!("Apply Recommended: {rec_peers} Peers"))
+                            .min_height(px(26.))
+                            .padding_x(px(10.))
+                            .font_size(px(11.5))
+                            .variant(Variant::Primary)
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.command(rtc_core::Command::SetRoomSize(rec_peers));
+                                cx.notify();
+                            })),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(Hsla {
+                    a: 0.1,
+                    ..tokens::accent()
+                })
+                .border_1()
+                .border_color(Hsla {
+                    a: 0.25,
+                    ..tokens::accent()
+                })
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(tokens::text())
+                        .child(format!("💡 {suggestion}")),
+                )
+                .when(is_host && !is_hub && rec_peers > 4, |el| {
+                    el.child(
+                        Button::new("hud-switch-hub", "Switch to Hub Mode")
+                            .min_height(px(24.))
+                            .padding_x(px(8.))
+                            .font_size(px(11.))
+                            .variant(Variant::Secondary)
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.command(rtc_core::Command::SetTopology("hub".to_owned()));
+                                cx.notify();
+                            })),
+                    )
+                }),
+        )
+}
+
+fn hud_view(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let s = summary(&view.net.peers);
+    let (_, color, g) = grade(s.avg, s.loss);
+    let first = view
+        .net
+        .peers
+        .first()
+        .and_then(|p| view.net.history.get(&p.peer))
+        .cloned()
+        .unwrap_or_default();
+    let fmt = |v: f64| format!("{v:.1}").trim_end_matches(".0").to_owned();
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(14.))
+        .child(room_capacity_advisor_card(view, cx))
         .child(
             div()
                 .flex()
@@ -685,6 +1038,1108 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                 ),
         )
         .into_any_element()
+}
+
+fn topology_view(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let room = view.room.as_ref();
+    let is_hub = room.is_some_and(|r| r.topology == "hub");
+    let is_host = room.and_then(|r| r.host.as_ref()) == room.map(|r| &r.me);
+    let my_name = room
+        .map(|r| {
+            if r.username.is_empty() {
+                "You".to_owned()
+            } else {
+                r.username.clone()
+            }
+        })
+        .unwrap_or_else(|| "You".to_owned());
+    let host_name = room
+        .and_then(|r| {
+            r.host.as_ref().map(|h| {
+                if h == &r.me {
+                    format!("{my_name} (You)")
+                } else {
+                    view.name_of(h)
+                }
+            })
+        })
+        .unwrap_or_else(|| "Host".to_owned());
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        // Header & Mode Bar
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(10.))
+                .flex_wrap()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .text_size(px(14.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(tokens::text())
+                                        .child("NETWORK TOPOLOGY & TECHNICAL DISTANCE MAP"),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(8.))
+                                        .py(px(2.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(if is_hub {
+                                            tokens::sfx_purple()
+                                        } else {
+                                            tokens::net_good()
+                                        })
+                                        .bg(Hsla {
+                                            a: 0.15,
+                                            ..(if is_hub {
+                                                tokens::sfx_purple()
+                                            } else {
+                                                tokens::net_good()
+                                            })
+                                        })
+                                        .text_color(if is_hub {
+                                            tokens::sfx_lilac()
+                                        } else {
+                                            tokens::net_good()
+                                        })
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(if is_hub {
+                                            "⭐ Host Hub Topology"
+                                        } else {
+                                            "🕸️ Full Mesh Topology"
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(tokens::text_3())
+                                .child("Real-time peer technical distance computed from RTT latency, packet loss, audio jitter & ICE candidate path"),
+                        ),
+                )
+                // Controls: Mode selector & Hub toggle
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        // View mode selector
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .p(px(2.))
+                                .rounded(px(8.))
+                                .bg(tokens::bg())
+                                .border_1()
+                                .border_color(tokens::line())
+                                .child(
+                                    div()
+                                        .id("btn-mode-graph")
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .cursor_pointer()
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .bg(if view.net.view_mode == ViewMode::Graph {
+                                            tokens::raised()
+                                        } else {
+                                            gpui_kit::transparent_black()
+                                        })
+                                        .text_color(if view.net.view_mode == ViewMode::Graph {
+                                            tokens::net_good()
+                                        } else {
+                                            tokens::text_2()
+                                        })
+                                        .on_click(cx.listener(|v, _, _, cx| {
+                                            v.net.view_mode = ViewMode::Graph;
+                                            cx.notify();
+                                        }))
+                                        .child("🕸️ Graph"),
+                                )
+                                .child(
+                                    div()
+                                        .id("btn-mode-radar")
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .cursor_pointer()
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .bg(if view.net.view_mode == ViewMode::Radar {
+                                            tokens::raised()
+                                        } else {
+                                            gpui_kit::transparent_black()
+                                        })
+                                        .text_color(if view.net.view_mode == ViewMode::Radar {
+                                            tokens::net_good()
+                                        } else {
+                                            tokens::text_2()
+                                        })
+                                        .on_click(cx.listener(|v, _, _, cx| {
+                                            v.net.view_mode = ViewMode::Radar;
+                                            cx.notify();
+                                        }))
+                                        .child("🎯 Radar"),
+                                )
+                                .child(
+                                    div()
+                                        .id("btn-mode-matrix")
+                                        .px(px(8.))
+                                        .py(px(4.))
+                                        .rounded(px(6.))
+                                        .cursor_pointer()
+                                        .text_size(px(11.5))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .bg(if view.net.view_mode == ViewMode::Matrix {
+                                            tokens::raised()
+                                        } else {
+                                            gpui_kit::transparent_black()
+                                        })
+                                        .text_color(if view.net.view_mode == ViewMode::Matrix {
+                                            tokens::net_good()
+                                        } else {
+                                            tokens::text_2()
+                                        })
+                                        .on_click(cx.listener(|v, _, _, cx| {
+                                            v.net.view_mode = ViewMode::Matrix;
+                                            cx.notify();
+                                        }))
+                                        .child("📊 Matrix"),
+                                ),
+                        )
+                        // Host Hub Switcher (or status badge for guests)
+                        .child(if is_host {
+                            Button::new(
+                                "switch-topology",
+                                if is_hub {
+                                    "Switch to 🕸️ Full Mesh"
+                                } else {
+                                    "Switch to ⭐ Host Hub"
+                                },
+                            )
+                            .variant(if is_hub {
+                                Variant::Secondary
+                            } else {
+                                Variant::Primary
+                            })
+                            .min_height(px(28.))
+                            .font_size(px(11.5))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                let next = if is_hub { "mesh" } else { "hub" };
+                                v.command(rtc_core::Command::SetTopology(next.to_owned()));
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                        } else {
+                            div()
+                                .px(px(10.))
+                                .py(px(4.))
+                                .rounded(px(6.))
+                                .bg(tokens::bg())
+                                .border_1()
+                                .border_color(tokens::line())
+                                .text_size(px(11.5))
+                                .text_color(tokens::text_3())
+                                .child(if is_hub {
+                                    "⭐ Hub managed by Host"
+                                } else {
+                                    "🕸️ Full Mesh active"
+                                })
+                                .into_any_element()
+                        }),
+                ),
+        )
+        // Radar Perspective Switcher
+        .when(view.net.view_mode == ViewMode::Radar, |el| {
+            el.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .text_size(px(12.))
+                    .text_color(tokens::text_2())
+                    .child("Radar Center Perspective:")
+                    .child(
+                        div()
+                            .id("btn-persp-host")
+                            .px(px(8.))
+                            .py(px(3.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .bg(if view.net.perspective == Perspective::Host {
+                                tokens::focus()
+                            } else {
+                                tokens::bg()
+                            })
+                            .text_color(if view.net.perspective == Perspective::Host {
+                                tokens::white()
+                            } else {
+                                tokens::text_2()
+                            })
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.net.perspective = Perspective::Host;
+                                cx.notify();
+                            }))
+                            .child("👑 Host Perspective"),
+                    )
+                    .child(
+                        div()
+                            .id("btn-persp-me")
+                            .px(px(8.))
+                            .py(px(3.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .bg(if view.net.perspective == Perspective::Me {
+                                tokens::focus()
+                            } else {
+                                tokens::bg()
+                            })
+                            .text_color(if view.net.perspective == Perspective::Me {
+                                tokens::white()
+                            } else {
+                                tokens::text_2()
+                            })
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.net.perspective = Perspective::Me;
+                                cx.notify();
+                            }))
+                            .child("👤 My Perspective"),
+                    ),
+            )
+        })
+        // View content
+        .child(match view.net.view_mode {
+            ViewMode::Graph => graph_view(view, is_hub, &host_name, &my_name, cx),
+            ViewMode::Radar => radar_view(view, is_hub, &host_name, &my_name),
+            ViewMode::Matrix => matrix_view(view, is_hub, is_host, &my_name),
+        })
+        // Bottom actions
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .pt(px(10.))
+                .border_t_1()
+                .border_color(tokens::line())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(tokens::text_3())
+                        .child(if is_hub {
+                            "⭐ Host Hub: Centralized star relay minimizes guest bandwidth & optimizes movie sync."
+                        } else {
+                            "🕸️ Full Mesh: Decentralized P2P connects all peers directly with zero server overhead."
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            Button::new(
+                                "net-copy-topo",
+                                if view.net.copied {
+                                    "✓ Report Copied!"
+                                } else {
+                                    "Copy Diagnostic Report"
+                                },
+                            )
+                            .min_height(px(34.))
+                            .font_size(px(12.5))
+                            .on_click(cx.listener(|v, _, _, cx| v.copy_report(cx))),
+                        )
+                        .child(
+                            Button::new("net-done-topo", "Done")
+                                .variant(Variant::Primary)
+                                .min_height(px(34.))
+                                .font_size(px(12.5))
+                                .on_click(cx.listener(|v, _, _, cx| v.close_dialog(cx))),
+                        ),
+                ),
+        )
+}
+
+fn graph_view(
+    view: &RoomView,
+    is_hub: bool,
+    host_name: &str,
+    _my_name: &str,
+    cx: &mut Context<'_, RoomView>,
+) -> AnyElement {
+    let peers = &view.net.peers;
+    let selected_peer_id = view
+        .net
+        .selected_peer
+        .as_ref()
+        .or_else(|| peers.first().map(|p| &p.peer));
+    let selected = peers.iter().find(|p| Some(&p.peer) == selected_peer_id);
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(
+            div()
+                .p(px(14.))
+                .rounded(px(12.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .when(is_hub, |el| {
+                    el.child(
+                        div()
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(tokens::sfx_purple())
+                            .bg(Hsla { a: 0.08, ..tokens::sfx_purple() })
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .child(
+                                        div()
+                                            .size(px(36.))
+                                            .rounded_full()
+                                            .bg(tokens::sfx_purple())
+                                            .text_color(tokens::white())
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(16.))
+                                            .child("👑"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(6.))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(14.))
+                                                            .font_weight(FontWeight::BOLD)
+                                                            .child(host_name.to_owned()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .px(px(6.))
+                                                            .py(px(1.))
+                                                            .rounded_full()
+                                                            .bg(tokens::sfx_purple())
+                                                            .text_color(tokens::white())
+                                                            .text_size(px(10.))
+                                                            .font_weight(FontWeight::BOLD)
+                                                            .child("HUB RELAY"),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(11.5))
+                                                    .text_color(tokens::text_2())
+                                                    .child("Central Media & Signaling Star Router • Zero Server Fees"),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_end()
+                                    .child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(tokens::live())
+                                            .child("⚡ Active Hub"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(tokens::text_3())
+                                            .child(format!("{} connected peers", peers.len())),
+                                    ),
+                            ),
+                    )
+                })
+                .when(!is_hub, |el| {
+                    el.child(
+                        div()
+                            .p(px(10.))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(tokens::line())
+                            .bg(tokens::panel())
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(icon(Icon::Signal, px(16.), tokens::net_good()))
+                                    .child(
+                                        div()
+                                            .text_size(px(12.5))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(tokens::text())
+                                            .child("Decentralized Full Mesh: Direct P2P tunnel to each participant"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(tokens::text_3())
+                                    .child(format!("{} P2P links", peers.len())),
+                            ),
+                    )
+                })
+                .when(peers.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .p(px(20.))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(tokens::text_2())
+                                    .child("No peers connected yet"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .text_color(tokens::text_3())
+                                    .child(if is_hub {
+                                        "When friends join, they will link directly into your Desktop Hub."
+                                    } else {
+                                        "Invite friends using the room code or QR code to establish peer mesh."
+                                    }),
+                            ),
+                    )
+                })
+                .children(peers.iter().map(|p| {
+                    let n = &p.net;
+                    let (score, label, col) = technical_distance(
+                        n.rtt_ms.unwrap_or(50.0),
+                        n.connection_type(),
+                        n.loss_percent(),
+                        n.jitter_ms,
+                    );
+                    let name = view.name_of(&p.peer);
+                    let is_sel = selected.is_some_and(|s| s.peer == p.peer);
+                    let peer_id = p.peer.clone();
+
+                    div()
+                        .id(SharedString::from(format!("node-{}", p.peer)))
+                        .p(px(10.))
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(if is_sel { tokens::focus() } else { tokens::line() })
+                        .bg(if is_sel { tokens::raised() } else { tokens::panel() })
+                        .cursor_pointer()
+                        .hover(|s| s.bg(tokens::raised()))
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            v.net.selected_peer = Some(peer_id.clone());
+                            cx.notify();
+                        }))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(
+                                    div()
+                                        .size(px(32.))
+                                        .rounded_full()
+                                        .bg(tokens::line())
+                                        .text_color(tokens::text())
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(peer_initials(&name)),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(6.))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(13.))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(name),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .px(px(6.))
+                                                        .py(px(1.))
+                                                        .rounded(px(4.))
+                                                        .bg(tokens::bg())
+                                                        .text_size(px(10.))
+                                                        .text_color(tokens::text_3())
+                                                        .child(p.peer.as_str().chars().take(6).collect::<String>()),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(11.5))
+                                                .text_color(tokens::text_3())
+                                                .child(format!(
+                                                    "{} • Jitter {:.1}ms • Loss {:.1}%",
+                                                    n.connection_type(),
+                                                    n.jitter_ms,
+                                                    n.loss_percent()
+                                                )),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .items_end()
+                                        .child(
+                                            div()
+                                                .text_size(px(13.))
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(col)
+                                                .child(format!("{} ms", n.rtt_ms.map_or(0.0, f64::round))),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(10.5))
+                                                .text_color(tokens::text_3())
+                                                .child(format!("Score: {score}")),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .px(px(8.))
+                                        .py(px(3.))
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(Hsla { a: 0.35, ..col })
+                                        .bg(Hsla { a: 0.12, ..col })
+                                        .text_color(col)
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(label),
+                                ),
+                        )
+                })),
+        )
+        // Inspector card
+        .when_some(selected, |el, sel| {
+            let n = &sel.net;
+            let (score, label, col) = technical_distance(
+                n.rtt_ms.unwrap_or(50.0),
+                n.connection_type(),
+                n.loss_percent(),
+                n.jitter_ms,
+            );
+            let name = view.name_of(&sel.peer);
+
+            el.child(
+                div()
+                    .p(px(12.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(tokens::line())
+                    .bg(tokens::bg())
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(format!("Peer Inspection: {name}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .px(px(6.))
+                                            .py(px(1.))
+                                            .rounded(px(4.))
+                                            .bg(tokens::raised())
+                                            .text_size(px(10.5))
+                                            .text_color(tokens::text_2())
+                                            .child(format!("`{}`", sel.peer)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded_full()
+                                    .border_1()
+                                    .border_color(Hsla { a: 0.35, ..col })
+                                    .bg(Hsla { a: 0.12, ..col })
+                                    .text_color(col)
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(label),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(8.))
+                            .child(inspector_tile("RTT LATENCY", format!("{} ms", n.rtt_ms.map_or(0.0, f64::round)), col))
+                            .child(inspector_tile("CANDIDATES", format!("{} → {}", n.local_type, n.remote_type), tokens::text()))
+                            .child(inspector_tile("LOSS / JITTER", format!("{:.1}% • {:.1}ms", n.loss_percent(), n.jitter_ms), tokens::text()))
+                            .child(inspector_tile("TECH DISTANCE", format!("Score: {score}"), col)),
+                    ),
+            )
+        })
+        .into_any_element()
+}
+
+fn radar_view(view: &RoomView, _is_hub: bool, host_name: &str, my_name: &str) -> AnyElement {
+    let peers = &view.net.peers;
+    let center_name = if view.net.perspective == Perspective::Host {
+        host_name
+    } else {
+        my_name
+    };
+
+    let bands: [(&'static str, &'static str, Hsla, f64, f64); 5] = [
+        (
+            "⚡ Zone 0: Local LAN",
+            "Direct subnet link (<15 ms)",
+            tokens::net_excellent(),
+            0.0,
+            15.0,
+        ),
+        (
+            "🟢 Zone 1: Near / Low Latency",
+            "Direct P2P WAN link (15–50 ms)",
+            tokens::net_good(),
+            15.0,
+            50.0,
+        ),
+        (
+            "🟡 Zone 2: Medium Latency",
+            "Standard regional routing (50–120 ms)",
+            tokens::net_fair(),
+            50.0,
+            120.0,
+        ),
+        (
+            "🟠 Zone 3: Far / High Latency",
+            "Cross-region / transatlantic (120–250 ms)",
+            tokens::warn(),
+            120.0,
+            250.0,
+        ),
+        (
+            "🔴 Zone 4: Distant / Relayed",
+            "Cloud TURN relay fallback (>250 ms or TURN)",
+            tokens::net_poor(),
+            250.0,
+            10000.0,
+        ),
+    ];
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .child(
+            div()
+                .p(px(8.))
+                .rounded(px(8.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(
+                    div()
+                        .size(px(24.))
+                        .rounded_full()
+                        .bg(tokens::focus())
+                        .text_color(tokens::white())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(12.))
+                        .child("🎯"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(tokens::text_2())
+                        .child(format!("Radar center perspective: {center_name} (Distances calculated relative to this participant)")),
+                ),
+        )
+        .children(bands.iter().map(|(name, sub, col, min_s, max_s)| {
+            let in_tier: Vec<_> = peers
+                .iter()
+                .filter(|p| {
+                    let (score, _, _) = technical_distance(
+                        p.net.rtt_ms.unwrap_or(50.0),
+                        p.net.connection_type(),
+                        p.net.loss_percent(),
+                        p.net.jitter_ms,
+                    );
+                    f64::from(score) >= *min_s && f64::from(score) < *max_s
+                })
+                .collect();
+
+            div()
+                .p(px(10.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(if !in_tier.is_empty() { *col } else { tokens::line() })
+                .bg(if !in_tier.is_empty() { Hsla { a: 0.05, ..*col } } else { tokens::bg() })
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(*col)
+                                        .child(*name),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(tokens::text_3())
+                                        .child(*sub),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px(px(6.))
+                                .py(px(1.))
+                                .rounded_full()
+                                .bg(tokens::raised())
+                                .text_size(px(10.5))
+                                .text_color(tokens::text_2())
+                                .child(format!("{} peers", in_tier.len())),
+                        ),
+                )
+                .when(in_tier.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(tokens::text_3())
+                            .child("— No participants in this distance range"),
+                    )
+                })
+                .when(!in_tier.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(8.))
+                            .children(in_tier.into_iter().map(|p| {
+                                let peer_name = view.name_of(&p.peer);
+                                let rtt = p.net.rtt_ms.map_or(0.0, f64::round);
+                                div()
+                                    .px(px(10.))
+                                    .py(px(4.))
+                                    .rounded(px(6.))
+                                    .bg(tokens::raised())
+                                    .border_1()
+                                    .border_color(tokens::line())
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .size(px(18.))
+                                            .rounded_full()
+                                            .bg(tokens::line())
+                                            .text_size(px(10.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(peer_initials(&peer_name)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(peer_name),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(*col)
+                                            .child(format!("{rtt}ms")),
+                                    )
+                            })),
+                    )
+                })
+        }))
+        .into_any_element()
+}
+
+fn matrix_view(view: &RoomView, _is_hub: bool, is_host: bool, my_name: &str) -> AnyElement {
+    let peers = &view.net.peers;
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .child(
+            div()
+                .p(px(8.))
+                .rounded(px(8.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(tokens::text_2())
+                .child(div().w(px(160.)).child("PARTICIPANT"))
+                .child(div().w(px(130.)).child("ROLE / CLIENT"))
+                .child(div().w(px(80.)).child("PING (RTT)"))
+                .child(div().w(px(110.)).child("PATH TYPE"))
+                .child(div().w(px(70.)).child("LOSS %"))
+                .child(div().flex_1().child("TECHNICAL DISTANCE")),
+        )
+        // Self row
+        .child(
+            div()
+                .p(px(8.))
+                .rounded(px(8.))
+                .bg(tokens::raised())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .w(px(160.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child("👤")
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{my_name} (You)")),
+                        ),
+                )
+                .child(div().w(px(130.)).text_color(tokens::text_2()).child(if is_host {
+                    "👑 Host • Desktop"
+                } else {
+                    "Participant • Desktop"
+                }))
+                .child(
+                    div()
+                        .w(px(80.))
+                        .text_color(tokens::net_excellent())
+                        .font_weight(FontWeight::BOLD)
+                        .child("0 ms"),
+                )
+                .child(
+                    div()
+                        .w(px(110.))
+                        .text_color(tokens::text_2())
+                        .child("Local Loopback"),
+                )
+                .child(div().w(px(70.)).text_color(tokens::text_3()).child("0.0%"))
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(tokens::net_excellent())
+                        .child("Score 0 (⚡ Local)"),
+                ),
+        )
+        // Peers rows
+        .children(peers.iter().map(|p| {
+            let n = &p.net;
+            let (score, label, col) = technical_distance(
+                n.rtt_ms.unwrap_or(50.0),
+                n.connection_type(),
+                n.loss_percent(),
+                n.jitter_ms,
+            );
+            let name = view.name_of(&p.peer);
+            let rtt = n.rtt_ms.map_or(0.0, f64::round);
+
+            div()
+                .p(px(8.))
+                .rounded(px(8.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .w(px(160.))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .size(px(20.))
+                                .rounded_full()
+                                .bg(tokens::line())
+                                .text_size(px(10.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(peer_initials(&name)),
+                        )
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(name)),
+                )
+                .child(div().w(px(130.)).text_color(tokens::text_2()).child("Guest Peer"))
+                .child(
+                    div()
+                        .w(px(80.))
+                        .text_color(col)
+                        .font_weight(FontWeight::BOLD)
+                        .child(format!("{rtt} ms")),
+                )
+                .child(
+                    div()
+                        .w(px(110.))
+                        .text_color(tokens::text_2())
+                        .child(n.connection_type().to_owned()),
+                )
+                .child(
+                    div()
+                        .w(px(70.))
+                        .text_color(tokens::text_3())
+                        .child(format!("{:.1}%", n.loss_percent())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(col)
+                        .child(format!("Score {score} ({label})")),
+                )
+        }))
+        .into_any_element()
+}
+
+fn inspector_tile(label: &'static str, val: String, col: Hsla) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_w_0()
+        .p(px(8.))
+        .rounded(px(6.))
+        .bg(tokens::panel())
+        .border_1()
+        .border_color(tokens::line())
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(
+            div()
+                .text_size(px(10.5))
+                .font_weight(FontWeight::BOLD)
+                .text_color(tokens::text_3())
+                .child(label),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(col)
+                .child(val),
+        )
+}
+
+fn peer_initials(name: &str) -> String {
+    let mut chars = name.chars().filter(|c| c.is_alphanumeric());
+    match (chars.next(), chars.next()) {
+        (Some(a), Some(b)) => format!("{}{}", a.to_uppercase(), b.to_lowercase()),
+        (Some(a), None) => a.to_uppercase().to_string(),
+        _ => "?".to_owned(),
+    }
 }
 
 #[cfg(test)]

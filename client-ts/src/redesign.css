@@ -89,18 +89,30 @@
    Desktop home
    ========================================================================== */
 .dh {
-  height: 100vh;
-  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   background: var(--rd-bg);
   color: var(--rd-text);
+  scroll-behavior: smooth;
 }
 .dh a { color: var(--rd-text-2); text-decoration: none; }
 .dh a:hover { color: var(--rd-text); }
+
+.dh-above-fold {
+  height: 100vh;
+  height: 100dvh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: none;
+  position: relative;
+}
 
 .dh-header {
   display: flex;
@@ -387,11 +399,404 @@
 .dh-linkbtn:hover { color: var(--rd-text); }
 .dh-build { font-family: var(--font-mono); font-size: 12px; }
 
+/* Scroll hint at the bottom of the landing viewport */
+.dh-scroll-hint {
+  padding-bottom: clamp(6px, 1.2vh, 14px);
+  display: flex;
+  justify-content: center;
+  flex: none;
+}
+.dh-scroll-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--rd-line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--rd-text-3);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+.dh-scroll-btn:hover {
+  color: var(--rd-text);
+  background: var(--rd-raised);
+  border-color: var(--rd-line-strong);
+  transform: translateY(1px);
+}
+.dh-scroll-btn svg {
+  color: var(--rd-accent-light, #6aa8ff);
+  animation: dh-bounce 2s infinite ease-in-out;
+}
+@keyframes dh-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(3px); }
+}
+
+/* ==========================================================================
+   Desktop App Section (extended landing page)
+   ========================================================================== */
+.dh-desktop {
+  width: 100%;
+  padding: clamp(56px, 7vh, 88px) clamp(24px, 4vw, 64px);
+  background: linear-gradient(180deg, var(--rd-bg) 0%, rgba(20, 24, 33, 0.55) 45%, var(--rd-bg) 100%);
+  border-top: 1px solid var(--rd-raised);
+}
+.dh-desktop-wrap {
+  max-width: 1140px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(40px, 5vh, 60px);
+}
+
+.dh-desktop-head {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+.dh-desktop-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: rgba(74, 114, 255, 0.12);
+  border: 1px solid rgba(74, 114, 255, 0.28);
+  color: var(--rd-accent-light, #6aa8ff);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.dh-desktop-title {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3.2vw, 44px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  color: var(--rd-text);
+  margin: 0;
+}
+.dh-desktop-desc {
+  font-size: clamp(15px, 1.5vw, 16.5px);
+  line-height: 1.55;
+  color: var(--rd-text-2);
+  margin: 0;
+  max-width: 660px;
+}
+.dh-desktop-cta-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+.dh-desktop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 26px;
+  border-radius: 14px;
+  text-decoration: none;
+  box-shadow: 0 4px 20px rgba(74, 114, 255, 0.25);
+  transition: all 0.18s ease;
+}
+.dh-desktop-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 28px rgba(74, 114, 255, 0.38);
+}
+.dh-desktop-btn-text {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  line-height: 1.25;
+}
+.dh-desktop-btn-text strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+.dh-desktop-btn-text small {
+  font-size: 12px;
+  opacity: 0.85;
+  font-weight: 500;
+}
+.dh-desktop-free-badge {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rd-live-text);
+}
+
+/* 4 Spotlight Feature Cards */
+.dh-spotlight-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+}
+@media (max-width: 1100px) {
+  .dh-spotlight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.dh-spotlight-card {
+  background: var(--rd-surface);
+  border: 1px solid var(--rd-line);
+  border-radius: 18px;
+  padding: 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.dh-spotlight-card:hover {
+  border-color: var(--rd-line-strong);
+  transform: translateY(-2px);
+}
+.dh-spotlight-icon-wrap {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--rd-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--icon-tint, var(--rd-accent));
+}
+.dh-spotlight-pill {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rd-text-3);
+}
+.dh-spotlight-card h3 {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--rd-text);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.dh-spotlight-card p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--rd-text-2);
+  margin: 0;
+  flex: 1;
+}
+.dh-spotlight-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--rd-line);
+  padding-top: 13px;
+}
+.dh-spotlight-list li {
+  font-size: 13px;
+  color: var(--rd-text-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dh-spotlight-list svg {
+  color: var(--rd-live);
+  flex: none;
+}
+
+/* Comparison Section */
+.dh-compare-section {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: var(--rd-surface);
+  border: 1px solid var(--rd-line);
+  border-radius: 20px;
+  padding: clamp(22px, 3vw, 36px);
+}
+.dh-compare-head {
+  text-align: center;
+  max-width: 600px;
+  margin: 0 auto;
+}
+.dh-compare-head h3 {
+  font-family: var(--font-display);
+  font-size: clamp(22px, 2.4vw, 27px);
+  font-weight: 700;
+  color: var(--rd-text);
+  margin: 0 0 5px;
+}
+.dh-compare-head p {
+  font-size: 14px;
+  color: var(--rd-text-2);
+  margin: 0;
+}
+.dh-compare-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-top: 8px;
+}
+.dh-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+.dh-compare-table th {
+  padding: 13px 16px;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--rd-text-3);
+  border-bottom: 1px solid var(--rd-line);
+}
+.dh-compare-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--rd-line);
+  color: var(--rd-text-2);
+  vertical-align: middle;
+}
+.dh-col-feature { width: 36%; }
+.dh-col-web { width: 32%; }
+.dh-col-desktop { width: 32%; }
+.dh-desk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--rd-accent-light, #6aa8ff);
+  font-weight: 700;
+  font-size: 13.5px;
+}
+.dh-feature-cell strong {
+  display: block;
+  color: var(--rd-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.dh-feature-cell span {
+  display: block;
+  font-size: 11.5px;
+  color: var(--rd-text-3);
+  margin-top: 2px;
+}
+.dh-highlight-col {
+  background: rgba(74, 114, 255, 0.04);
+  color: var(--rd-text) !important;
+}
+.dh-text-accent {
+  color: var(--rd-accent-light, #6aa8ff);
+}
+.dh-subtext {
+  display: block;
+  font-size: 11.5px;
+  color: var(--rd-text-2);
+  margin-top: 3px;
+}
+.dh-tag-ok {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(54, 211, 153, 0.12);
+  color: var(--rd-live-text);
+  font-weight: 600;
+  font-size: 12px;
+}
+.dh-icon-dash {
+  color: var(--rd-text-3);
+}
+
+/* Bottom Download Banner */
+.dh-desktop-banner {
+  background: radial-gradient(circle at 10% 20%, rgba(74, 114, 255, 0.14) 0%, rgba(20, 24, 33, 0.95) 90%);
+  border: 1px solid rgba(74, 114, 255, 0.22);
+  border-radius: 20px;
+  padding: clamp(26px, 3.5vw, 40px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+}
+.dh-banner-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 580px;
+}
+.dh-banner-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--rd-accent-light, #6aa8ff);
+}
+.dh-banner-copy h3 {
+  font-family: var(--font-display);
+  font-size: clamp(21px, 2.4vw, 30px);
+  font-weight: 700;
+  color: var(--rd-text);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.dh-banner-copy p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--rd-text-2);
+  margin: 0;
+}
+.dh-banner-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.dh-banner-btn {
+  text-decoration: none;
+  white-space: nowrap;
+  padding: 12px 24px;
+}
+.dh-banner-sub {
+  font-size: 12px;
+  color: var(--rd-text-3);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .dh-spotlight-grid {
+    grid-template-columns: 1fr;
+  }
+  .dh-desktop-banner {
+    flex-direction: column;
+    text-align: center;
+  }
+  .dh-banner-actions {
+    width: 100%;
+  }
+  .dh-banner-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .dh-col-feature { width: 40%; }
+  .dh-col-web { width: 30%; }
+  .dh-col-desktop { width: 30%; }
+}
+
 @media (max-width: 900px), (max-height: 560px) {
   .dh {
     height: auto;
     min-height: 100%;
     overflow-y: auto;
+  }
+  .dh-above-fold {
+    height: auto;
+    min-height: 100vh;
   }
   .dh-header, .dh-main, .dh-footer {
     padding-left: 20px;
@@ -695,10 +1100,10 @@
   position: relative; z-index: 30;
 }
 .stage-section.is-watching .dock {
-  height: 68px; padding: 0 14px; background: rgba(10, 10, 13, 0.75);
+  height: 68px; padding: 0 20px; background: var(--rd-panel);
   backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid var(--rd-line); border-radius: 14px; margin: 8px 12px 10px;
-  gap: 10px;
+  border-top: 1px solid var(--rd-raised); border-radius: 0; margin: 0;
+  gap: 14px;
 }
 .dock-people-group {
   flex: 1 1 0%;
@@ -1157,19 +1562,40 @@
 @media (max-width: 1200px) { .qp-browser .qp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 /* ==========================================================================
-   Room, watching (desktop): padded stage, rounded video, people on the video
+   Room, watching (desktop): edge-to-edge flush stage matching desktop app
    ========================================================================== */
 .app-container:not(.phone-app) .stage-section.is-watching {
-  padding: 16px 16px 0; gap: 12px;
+  padding: 0; gap: 0;
   position: relative;
-  overflow: visible;
+  overflow: hidden;
+  height: 100%;
 }
 .app-container:not(.phone-app) .stage-section.is-watching .stage-canvas {
   position: relative;
   z-index: 2 !important;
-  border-radius: 16px; overflow: hidden;
+  border-radius: 0 !important; overflow: hidden;
   background: #000000 !important;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.75);
+  box-shadow: none !important;
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
+}
+.app-container:not(.phone-app) .stage-section.is-watching .yt-fullstage-player,
+.app-container:not(.phone-app) .stage-section.is-watching .local-fullstage-player,
+.app-container:not(.phone-app) .stage-section.is-watching .link-player,
+.app-container:not(.phone-app) .stage-section.is-watching .screen-share-stage {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.app-container:not(.phone-app) .stage-section.is-watching .yt-stage-canvas-viewport {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
 }
 .stage-section.is-watching .rd-sync-pill {
   display: none !important;

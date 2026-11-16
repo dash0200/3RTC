@@ -20,9 +20,27 @@ function pwaServiceWorker(): Plugin {
   let config: ResolvedConfig;
   return {
     name: '3rtc-pwa-service-worker',
-    apply: 'build',
     configResolved(resolved) {
       config = resolved;
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url === '/sw.js') {
+          try {
+            const template = fs.readFileSync(path.resolve(config.root, 'src/pwa/sw.js'), 'utf8');
+            const source = template
+              .replace("const VERSION = '__SW_VERSION__';", "const VERSION = 'dev';")
+              .replace('const PRECACHE_URLS = __PRECACHE_URLS__;', 'const PRECACHE_URLS = [];');
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(source);
+            return;
+          } catch (e) {
+            next(e);
+            return;
+          }
+        }
+        next();
+      });
     },
     writeBundle(options, bundle) {
       const outDir = options.dir || config.build.outDir;

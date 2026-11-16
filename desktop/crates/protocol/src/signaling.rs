@@ -88,6 +88,12 @@ pub enum ClientMessage {
         /// "mesh" or "hub".
         topology: String,
     },
+    /// The host dynamically changes room capacity.
+    #[serde(rename_all = "camelCase")]
+    SetRoomSize {
+        /// Maximum peers allowed in the room.
+        max_users: u32,
+    },
     /// Ask whether a room exists on this server (answered by [`ServerMessage::RoomFound`]).
     #[serde(rename_all = "camelCase")]
     FindRoom {
@@ -151,6 +157,9 @@ pub enum ServerMessage {
         /// Room topology ("mesh" or "hub").
         #[serde(default)]
         topology: Option<String>,
+        /// Configured room capacity.
+        #[serde(default)]
+        max_users: Option<u32>,
     },
     /// You got your room back as its host.
     #[serde(rename_all = "camelCase")]
@@ -170,6 +179,9 @@ pub enum ServerMessage {
         /// Room topology ("mesh" or "hub").
         #[serde(default)]
         topology: Option<String>,
+        /// Configured room capacity.
+        #[serde(default)]
+        max_users: Option<u32>,
     },
     /// You're in.
     #[serde(rename_all = "camelCase")]
@@ -190,6 +202,9 @@ pub enum ServerMessage {
         /// Room topology ("mesh" or "hub").
         #[serde(default)]
         topology: Option<String>,
+        /// Configured room capacity.
+        #[serde(default)]
+        max_users: Option<u32>,
     },
     /// The host changed.
     #[serde(rename_all = "camelCase")]
@@ -215,6 +230,15 @@ pub enum ServerMessage {
         topology: String,
         /// The host's peer id.
         host_peer_id: PeerId,
+    },
+    /// Room capacity changed.
+    #[serde(rename_all = "camelCase")]
+    RoomSizeChanged {
+        /// Maximum peers allowed in the room.
+        max_users: u32,
+        /// Who changed it.
+        #[serde(default)]
+        from: Option<PeerId>,
     },
     /// Someone joined: offer to them.
     #[serde(rename_all = "camelCase")]
@@ -419,6 +443,7 @@ mod tests {
                 seat_token: "s".into(),
                 host_token: None,
                 topology: None,
+                max_users: None,
             }
         );
         let h = ServerMessage::from_json(r#"{"type":"host","hostPeerId":"b","from":"a"}"#).unwrap();

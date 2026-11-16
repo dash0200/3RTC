@@ -49,6 +49,10 @@ fn is_video(path: &Path) -> bool {
     has_ext(path, VIDEO_EXT)
 }
 
+fn is_torrent(path: &Path) -> bool {
+    has_ext(path, &["torrent"])
+}
+
 fn is_subtitle(path: &Path) -> bool {
     has_ext(path, SUB_EXT)
 }
@@ -98,7 +102,7 @@ type Events = (u64, VideoEvent);
 /// The local video's state on screen.
 pub(crate) struct LocalUi {
     /// The file chosen here (played when the room opens it).
-    file: Option<PathBuf>,
+    pub(crate) file: Option<PathBuf>,
     /// Which player the events are from (an old one's late events are dropped).
     generation: u64,
     pub(crate) time: f64,
@@ -122,6 +126,8 @@ pub(crate) struct LocalUi {
     pub(crate) fullscreen_controls: bool,
     /// When the cursor moved out of the panel in full screen.
     pub(crate) controls_left_at: Option<Instant>,
+    /// Last time play/pause was toggled, for debouncing multiple events.
+    pub(crate) last_play_toggle: Option<Instant>,
     /// Task that auto-hides controls or shows them when cursor reaches bottom in full screen.
     pub(crate) fullscreen_task: Option<Task<()>>,
     /// The offer card's note (the wrong file was chosen).
@@ -166,6 +172,7 @@ impl LocalUi {
             scale: 1.0,
             fullscreen_controls: false,
             controls_left_at: None,
+            last_play_toggle: None,
             fullscreen_task: None,
             offer_error: None,
             sharing: false,
@@ -283,13 +290,19 @@ pub(crate) fn open_player(
 impl RoomView {
     /// Our own file plays: offer it to viewers who don't have it.
     pub(crate) fn share_own_file(&mut self, path: &Path) {
+        self.share_own_file_sized(path, None);
+    }
+
+    /// Our own file plays with an optional known size (e.g. torrent metadata): offer it to viewers who don't have it.
+    pub(crate) fn share_own_file_sized(&mut self, path: &Path, size: Option<u64>) {
         let Ok(meta) = std::fs::metadata(path) else { return };
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let file_size = size.unwrap_or(meta.len());
         if let Some(e) = &self.engine {
-            e.share_file(Some((path.to_path_buf(), name, meta.len())));
+            e.share_file(Some((path.to_path_buf(), name, file_size)));
             self.watch.local.sharing = true;
         }
     }
@@ -613,20 +626,35 @@ impl RoomView {
             cx.notify();
             return;
         }
+        if let Some(p) = paths.iter().find(|p| is_torrent(p)) {
+            self.play_torrent(crate::torrent::TorrentInput::TorrentFile(p.clone()), cx);
+            return;
+        }
         if let Some(p) = paths.iter().find(|p| is_video(p)) {
             self.play_path(p.clone(), cx);
         } else if let Some(p) = paths.first() {
+            if is_torrent(p) {
+                self.play_torrent(crate::torrent::TorrentInput::TorrentFile(p.clone()), cx);
+                return;
+            }
             self.play_path(p.clone(), cx);
         }
     }
 
     fn play_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        if is_torrent(&path) {
+            self.play_torrent(crate::torrent::TorrentInput::TorrentFile(path), cx);
+            return;
+        }
         if is_subtitle(&path) {
             self.add_subtitle(&path, cx);
             return;
         }
         if !is_video(&path) {
-            self.show_toast("That isn't a video file (MP4, MKV, WebM, MOV, AVI…)", cx);
+            self.show_toast(
+                "That isn't a video or torrent file (MP4, MKV, WebM, MOV, .torrent…)",
+                cx,
+            );
             return;
         }
         let size = match std::fs::metadata(&path) {
@@ -713,6 +741,12 @@ impl RoomView {
         if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
             return;
         }
+        if let Some(t) = self.watch.local.last_play_toggle
+            && t.elapsed() < Duration::from_millis(300)
+        {
+            return;
+        }
+        self.watch.local.last_play_toggle = Some(Instant::now());
         let playing = self.watch.local.playing;
         let mut done = false;
         if let Some(p) = self.watch.player.borrow().as_ref() {
@@ -881,12 +915,14 @@ impl RoomView {
             self.watch.local.scale = window.scale_factor();
             self.watch.local.fullscreen_controls = true;
             self.watch.local.controls_left_at = Some(Instant::now());
+            rtc_platform_win::set_cursor_visible(true);
             if !window.is_fullscreen() {
                 self.watch.local.video_fullscreen_window = true;
                 window.toggle_fullscreen();
             }
             self.ensure_fullscreen_watch(cx);
         } else {
+            rtc_platform_win::set_cursor_visible(true);
             self.watch.local.fullscreen_controls = false;
             self.watch.local.controls_left_at = None;
             self.watch.local.fullscreen_task = None;
@@ -905,6 +941,7 @@ impl RoomView {
 
     /// Leaves full screen when the video is gone (drawing found it so).
     pub(crate) fn end_video_fullscreen(&mut self, window: &mut Window) {
+        rtc_platform_win::set_cursor_visible(true);
         self.watch.local.fullscreen = false;
         self.watch.local.fullscreen_controls = false;
         self.watch.local.controls_left_at = None;
@@ -930,19 +967,52 @@ impl RoomView {
             return;
         }
         self.watch.local.fullscreen_task = Some(cx.spawn(async move |this, cx| {
+            let mut last_pos: Option<(i32, i32)> = None;
+            let mut last_activity = Instant::now();
+            let mut cursor_hidden = false;
+            let hide_delay = FULLSCREEN_HIDE_DELAY;
+
             loop {
-                cx.background_executor().timer(Duration::from_millis(100)).await;
+                cx.background_executor().timer(Duration::from_millis(60)).await;
                 let done = this
                     .update(cx, |view, cx| {
                         if !view.watch.local.fullscreen {
                             view.watch.local.fullscreen_task = None;
+                            if cursor_hidden {
+                                rtc_platform_win::set_cursor_visible(true);
+                            }
                             return true;
                         }
                         let threshold_px =
                             (FULLSCREEN_BOTTOM_ZONE * view.watch.local.scale.max(1.0)).round() as i32;
-                        if let Some((_x, _y, at_bottom)) =
+                        if let Some((x, y, at_bottom)) =
                             rtc_platform_win::cursor_window_state(view.watch.local.hwnd, threshold_px)
                         {
+                            let pos = (x, y);
+                            let moved = last_pos != Some(pos);
+                            if moved {
+                                last_pos = Some(pos);
+                                last_activity = Instant::now();
+                                if cursor_hidden {
+                                    cursor_hidden = false;
+                                    rtc_platform_win::set_cursor_visible(true);
+                                }
+                            }
+
+                            // While a menu or dialog is open, keep controls and cursor visible
+                            if view.watch.local.menu.is_some() || view.dialog.is_some() {
+                                if cursor_hidden {
+                                    cursor_hidden = false;
+                                    rtc_platform_win::set_cursor_visible(true);
+                                }
+                                if !view.watch.local.fullscreen_controls {
+                                    view.watch.local.fullscreen_controls = true;
+                                    cx.notify();
+                                }
+                                view.watch.local.controls_left_at = None;
+                                return false;
+                            }
+
                             if at_bottom {
                                 let change = !view.watch.local.fullscreen_controls;
                                 view.watch.local.fullscreen_controls = true;
@@ -950,21 +1020,47 @@ impl RoomView {
                                 if change {
                                     cx.notify();
                                 }
-                            } else if view.watch.local.fullscreen_controls {
-                                if view.watch.local.menu.is_some() || view.dialog.is_some() {
-                                    return false;
+                                // If the user left the mouse at bottom with no movement for 3s, hide panel and cursor
+                                if last_activity.elapsed() >= Duration::from_millis(3000) {
+                                    if view.watch.local.fullscreen_controls {
+                                        view.watch.local.fullscreen_controls = false;
+                                        cx.notify();
+                                    }
+                                    if !cursor_hidden {
+                                        cursor_hidden = true;
+                                        rtc_platform_win::set_cursor_visible(false);
+                                    }
                                 }
-                                if view.watch.local.controls_left_at.is_none() {
-                                    view.watch.local.controls_left_at = Some(Instant::now());
-                                } else if view
-                                    .watch
-                                    .local
-                                    .controls_left_at
-                                    .is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
+                            } else {
+                                // Mouse is not at bottom
+                                if view.watch.local.fullscreen_controls {
+                                    if view.watch.local.controls_left_at.is_none() {
+                                        view.watch.local.controls_left_at = Some(Instant::now());
+                                    } else if view
+                                        .watch
+                                        .local
+                                        .controls_left_at
+                                        .is_some_and(|t| t.elapsed() >= hide_delay)
+                                    {
+                                        view.watch.local.fullscreen_controls = false;
+                                        view.watch.local.controls_left_at = None;
+                                        cx.notify();
+                                    }
+                                }
+                                // Hide cursor along with the panel once stillness threshold is reached
+                                if (!view.watch.local.fullscreen_controls
+                                    || last_activity.elapsed() >= hide_delay)
+                                    && last_activity.elapsed() >= hide_delay
                                 {
-                                    view.watch.local.fullscreen_controls = false;
-                                    view.watch.local.controls_left_at = None;
-                                    cx.notify();
+                                    if view.watch.local.fullscreen_controls {
+                                        view.watch.local.fullscreen_controls = false;
+                                        view.watch.local.controls_left_at = None;
+                                        cx.notify();
+                                    }
+                                    if !cursor_hidden {
+                                        cursor_hidden = true;
+                                        rtc_platform_win::set_cursor_visible(false);
+                                    }
                                 }
                             }
                         }
@@ -1117,21 +1213,50 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                 .font_family(tokens::FONT_MONO)
                 .child(time_text),
         )
-        .children(l.progress.filter(|_| l.streaming()).map(|p| {
+        .children(l.progress.as_ref().filter(|_| l.streaming()).map(|p| {
             #[allow(clippy::cast_precision_loss)]
             let pct = if p.size > 0 {
                 (p.cached as f64 / p.size as f64 * 100.0).round()
             } else {
                 0.0
             };
+            let peer_name = view
+                .room
+                .as_ref()
+                .and_then(|r| {
+                    if r.me == p.from {
+                        Some(r.username.clone())
+                    } else {
+                        r.members
+                            .iter()
+                            .find(|(id, _)| *id == p.from)
+                            .and_then(|(_, m)| m.username.clone())
+                    }
+                })
+                .unwrap_or_else(|| {
+                    let id = p.from.as_str();
+                    format!("Peer {}", &id[..4.min(id.len())])
+                });
             div()
                 .flex_none()
                 .text_size(px(12.))
                 .text_color(tokens::text_3())
                 .child(format!(
-                    "Streaming{} · {pct:.0}% here · {:.1} MB/s",
-                    if p.relayed { " (passed along)" } else { "" },
+                    "Streaming from {peer_name}{} · {pct:.0}% here · {:.1} MB/s",
+                    if p.relayed { " (relayed)" } else { "" },
                     p.speed
+                ))
+        }))
+        .children(view.watch.torrent_stats.map(|ts| {
+            let sp_mb = ts.speed_bps as f64 / (1024.0 * 1024.0);
+            div()
+                .flex_none()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens::accent())
+                .child(format!(
+                    "🧲 s:{} p:{}({}) · {:.1} MB/s",
+                    ts.seeds, ts.peers, ts.total_peers, sp_mb
                 ))
         }))
         .child({

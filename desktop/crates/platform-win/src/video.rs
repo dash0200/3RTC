@@ -1,4 +1,4 @@
-//! What the local video player reports (`mpv.rs` on Windows).
+﻿//! What the local video player reports (`mpv.rs` on Windows).
 
 /// A person used the player (its keys or a click on the video).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +143,8 @@ pub trait StreamSource: Send + Sync {
 pub enum VideoSource {
     /// A file on this computer.
     File(std::path::PathBuf),
+    /// A streamable HTTP or network URL (e.g. local torrent stream).
+    Url(String),
     /// A file streamed from someone in the room.
     Stream(std::sync::Arc<dyn StreamSource>),
 }
@@ -151,6 +153,7 @@ impl std::fmt::Debug for VideoSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::File(p) => f.debug_tuple("File").field(p).finish(),
+            Self::Url(u) => f.debug_tuple("Url").field(u).finish(),
             Self::Stream(s) => f.debug_struct("Stream").field("size", &s.size()).finish(),
         }
     }

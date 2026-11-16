@@ -72,6 +72,18 @@ export interface SetTopologyMessage extends SignalingMessageBase {
   topology: 'mesh' | 'hub';
 }
 
+/** The host dynamically sets maximum peers allowed in the room */
+export interface SetRoomSizeMessage extends SignalingMessageBase {
+  type: 'set-room-size';
+  maxUsers: number;
+}
+
+export interface RoomSizeChangedMessage extends SignalingMessageBase {
+  type: 'room-size-changed';
+  maxUsers: number;
+  from?: string;
+}
+
 /** "Is room X on this server?" (answered with { type: 'room-found', roomId, exists }) */
 export interface FindRoomMessage extends SignalingMessageBase {
   type: 'find-room';
@@ -85,6 +97,8 @@ export interface RoomInfo {
   hostGen?: number;
   /** Network topology: 'mesh' (default full P2P) or 'hub' (host star relay) */
   topology?: 'mesh' | 'hub';
+  /** Configured capacity of the room (max users) */
+  maxUsers?: number;
 }
 
 export interface TokensResult {

@@ -202,6 +202,9 @@ fn header(
                 .text_color(tone_fg)
                 .text_size(px(14.))
                 .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.85))
+                .on_click(cx.listener(|v, _, _, cx| v.open_net(cx)))
                 .child(icon_bold(Icon::Signal, px(16.), tone_fg))
                 .child(text),
         )
@@ -228,6 +231,7 @@ fn header(
                     .child("Invite friends")
             } else {
                 let n = room.members.len() + 1;
+                let limit = room.max_users.max(n as u32);
                 el.px(px(16.))
                     .bg(tokens::surface())
                     .border_color(tokens::line())
@@ -238,7 +242,7 @@ fn header(
                         div()
                             .text_color(tokens::text_3())
                             .font_weight(FontWeight::MEDIUM)
-                            .child(format!("{n} / {}", n.max(4))),
+                            .child(format!("{n} / {limit}")),
                     )
             }
         })
@@ -486,11 +490,17 @@ fn stage(
                                                 "play-link",
                                                 if resolving {
                                                     "Checking…"
+                                                } else if crate::watch::locked_for_me(room) {
+                                                    "Add to queue"
                                                 } else {
                                                     "Play for everyone"
                                                 },
                                             )
-                                            .variant(Variant::Inverse)
+                                            .variant(if crate::watch::locked_for_me(room) {
+                                                Variant::Primary
+                                            } else {
+                                                Variant::Inverse
+                                            })
                                             .min_height(px(52.))
                                             .padding_x(px(22.))
                                             .font_size(px(16.))
@@ -502,7 +512,19 @@ fn stage(
                                         ),
                                 )
                                 .children(link_error)
-                                .child(
+                                .child(if crate::watch::locked_for_me(room) {
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(8.))
+                                        .text_size(px(14.))
+                                        .text_color(tokens::text_3())
+                                        .child(icon(Icon::Lock, px(15.), tokens::text_3()))
+                                        .child("Host controls are on: links you add go into the queue ·")
+                                        .child(inline_link("share", "share screen", cx))
+                                } else {
                                     div()
                                         .flex()
                                         .flex_wrap()
@@ -516,8 +538,8 @@ fn stage(
                                         .child(inline_link("browse", "browse files", cx))
                                         .child(div().text_color(tokens::text_3()).child("MP4, MKV, WebM"))
                                         .child("·")
-                                        .child(inline_link("share", "share screen", cx)),
-                                ),
+                                        .child(inline_link("share", "share screen", cx))
+                                }),
                         ),
                 )
                 .child(div().w_full().max_w(px(1180.)).child(picks)),
@@ -748,6 +770,8 @@ fn horizontal_tray(
                         .child(
                             div()
                                 .id("tray-reactions-scroll")
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
@@ -921,6 +945,8 @@ fn horizontal_tray(
                         .child(
                             div()
                                 .id("tray-sounds-scroll")
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
@@ -1336,6 +1362,8 @@ fn horizontal_tray(
                         .child(
                             div()
                                 .id("tray-games-scroll")
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
@@ -1605,14 +1633,10 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
         ))
         .child(
             div()
-                .id("dock-center-scroll")
-                .flex_1()
-                .min_w_0()
                 .flex()
+                .flex_none()
                 .items_center()
-                .justify_center()
                 .gap(px(8.))
-                .overflow_x_scroll()
                 .child(mic)
                 .child(
                     dock_btn(

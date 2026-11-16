@@ -69,6 +69,8 @@ export interface AddVideoSheetProps {
   onPlayQueue?: () => void;
   onPickFile?: (file: File) => void;
   onStopVideo?: () => void;
+  isHost?: boolean;
+  playbackLock?: boolean;
 }
 
 /**
@@ -87,8 +89,11 @@ export function AddVideoSheet({
   queuedIds = [],
   onPlayQueue,
   onPickFile,
-  onStopVideo
+  onStopVideo,
+  isHost = false,
+  playbackLock = false
 }: AddVideoSheetProps) {
+  const isLockedForMe = Boolean(playbackLock && !isHost);
   const queuedSet = new Set(queuedIds);
   const queuePick = onQueuePick || onQueueYouTube;
   const [link, setLink] = useState('');
@@ -170,8 +175,10 @@ export function AddVideoSheet({
             </span>
           </div>
           <div className="av-clip-actions">
-            <button type="button" className="rd-btn rd-btn-primary" disabled={busy} onClick={() => submitLink(clip, 'play')}>{busy ? 'Checking…' : 'Play now'}</button>
-            <button type="button" className="rd-btn rd-btn-secondary" disabled={busy} onClick={() => submitLink(clip, 'queue')}>Add to queue</button>
+            {!isLockedForMe && (
+              <button type="button" className="rd-btn rd-btn-primary" disabled={busy} onClick={() => submitLink(clip, 'play')}>{busy ? 'Checking…' : 'Play now'}</button>
+            )}
+            <button type="button" className={`rd-btn ${isLockedForMe ? 'rd-btn-primary' : 'rd-btn-secondary'}`} disabled={busy} onClick={() => submitLink(clip, 'queue')}>Add to queue</button>
           </div>
         </div>
       ) : clipAllowed ? (
@@ -190,16 +197,16 @@ export function AddVideoSheet({
         className="av-link"
         onSubmit={(e) => {
           e.preventDefault();
-          if (link.trim()) submitLink(link, 'play');
+          if (link.trim()) submitLink(link, isLockedForMe ? 'queue' : 'play');
         }}
       >
-        <label htmlFor="av-link-input" className="av-label">Or paste a link</label>
+        <label htmlFor="av-link-input" className="av-label">{isLockedForMe ? 'Add a link to the queue' : 'Or paste a link'}</label>
         <input
           id="av-link-input"
           className="av-input"
           type="url"
           inputMode="url"
-          placeholder="YouTube, Vimeo, Twitch or .mp4 link"
+          placeholder={isLockedForMe ? 'Add to queue (YouTube, Vimeo, Twitch or .mp4)' : 'YouTube, Vimeo, Twitch or .mp4 link'}
           value={link}
           onChange={(e) => {
             setLink(e.target.value);
@@ -209,43 +216,49 @@ export function AddVideoSheet({
         {error && <div className="av-error" role="alert">{error}</div>}
         {link.trim() && (
           <div className="av-clip-actions">
-            <button type="submit" className="rd-btn rd-btn-primary" disabled={busy}>{busy ? 'Checking…' : 'Play for everyone'}</button>
-            {isMediaActive && (
-              <button type="button" className="rd-btn rd-btn-secondary" disabled={busy} onClick={() => submitLink(link, 'queue')}>Add to queue</button>
+            {!isLockedForMe && (
+              <button type="submit" className="rd-btn rd-btn-primary" disabled={busy}>{busy ? 'Checking…' : 'Play for everyone'}</button>
+            )}
+            {(isMediaActive || isLockedForMe) && (
+              <button type={isLockedForMe ? 'submit' : 'button'} className={`rd-btn ${isLockedForMe ? 'rd-btn-primary' : 'rd-btn-secondary'}`} disabled={busy} onClick={() => submitLink(link, 'queue')}>Add to queue</button>
             )}
           </div>
         )}
       </form>
 
-      <button type="button" className="av-row" onClick={() => fileRef.current?.click()}>
-        <span className="av-row-icon" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg>
-        </span>
-        <span className="av-row-text">
-          <span>Play a video from this device</span>
-          <span className="av-row-sub">MP4, MKV, WebM · streams to everyone</span>
-        </span>
-      </button>
-      <input
-        ref={fileRef}
-        type="file"
-        accept="video/*,.mkv,.mp4,.webm,.mov,.m4v"
-        style={{ display: 'none' }}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) {
-            onPickFile?.(file);
-            onClose?.();
-          }
-          e.target.value = '';
-        }}
-      />
+      {!isLockedForMe && (
+        <>
+          <button type="button" className="av-row" onClick={() => fileRef.current?.click()}>
+            <span className="av-row-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg>
+            </span>
+            <span className="av-row-text">
+              <span>Play a video from this device</span>
+              <span className="av-row-sub">MP4, MKV, WebM · streams to everyone</span>
+            </span>
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="video/*,.mkv,.mp4,.webm,.mov,.m4v"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                onPickFile?.(file);
+                onClose?.();
+              }
+              e.target.value = '';
+            }}
+          />
+        </>
+      )}
 
       {group && (
         <div className="av-picks">
           <div className="av-picks-head">
             <span className="av-label">Quick picks</span>
-            {onPlayQueue && queuedIds.length > 0 && (
+            {onPlayQueue && !isLockedForMe && queuedIds.length > 0 && (
               <button type="button" className="av-play-queue" onClick={() => { onPlayQueue(); onClose?.(); }}>Play queue ({queuedIds.length})</button>
             )}
           </div>
@@ -271,7 +284,19 @@ export function AddVideoSheet({
           <div className="av-pick-row">
             {picks.map((v) => (
               <div key={v.id} className="av-pick">
-                <button type="button" className="av-pick-play" onClick={() => { onLoadYouTube?.(v.id, v.title); onClose?.(); }}>
+                <button
+                  type="button"
+                  className="av-pick-play"
+                  onClick={() => {
+                    if (isLockedForMe) {
+                      if (!queuedSet.has(v.id)) queuePick?.(v.id, v.title);
+                    } else {
+                      onLoadYouTube?.(v.id, v.title);
+                      onClose?.();
+                    }
+                  }}
+                  title={isLockedForMe ? `Add "${v.title}" to queue` : `Play "${v.title}" for everyone`}
+                >
                   <span className="av-pick-thumb" aria-hidden="true">
                     <img src={youtubeThumb(v.id)} alt="" loading="lazy" onError={(e) => { (e.currentTarget as HTMLElement).style.visibility = 'hidden'; }} />
                   </span>
@@ -294,7 +319,7 @@ export function AddVideoSheet({
         </div>
       )}
 
-      {isMediaActive && (
+      {isMediaActive && !isLockedForMe && (
         <button type="button" className="rd-btn av-stop" onClick={() => { onStopVideo?.(); onClose?.(); }}>
           Stop the video for everyone
         </button>

@@ -28,6 +28,7 @@ export interface HeaderProps {
   isHost?: boolean;
   username?: string;
   activityStatus?: ActivityStatus | null;
+  maxUsers?: number;
 }
 
 /**
@@ -54,7 +55,8 @@ export default function Header({
   connectedPeers = [],
   isHost = false,
   username = '',
-  activityStatus = null
+  activityStatus = null,
+  maxUsers
 }: HeaderProps) {
   const [copied, setCopied] = useState(false);
   const ping = networkStats?.avgPingMs;
@@ -68,6 +70,7 @@ export default function Header({
   const totalParticipants = connectedPeers.length + 1;
   const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
   const hasVotedSkip = skipVotes.includes(username);
+  const isLockedForMe = playbackLock && !isHost;
 
   const copy = async () => {
     if (!roomId) return;
@@ -107,7 +110,7 @@ export default function Header({
       )}
 
       {/* Dedicated video action buttons in Header - keeps video canvas 100% clean */}
-      {isMediaActive && (
+      {isMediaActive && !isLockedForMe && (
         <div className="rh-video-actions">
           {typeof onVoteSkip === 'function' && totalParticipants > 1 && (
             <button
@@ -152,7 +155,7 @@ export default function Header({
       <button type="button" className={`rh-invite ${alone ? 'is-primary' : ''}`} onClick={onOpenQrCode}>
         {alone && <Icon name="userPlus" size={17} strokeWidth={2.2} />}
         {alone ? 'Invite friends' : 'Invite'}
-        {!alone && <span className="rh-count">{peerCount} / {Math.max(MAX_ROOM_SIZE, peerCount)}</span>}
+        {!alone && <span className="rh-count">{peerCount} / {maxUsers || Math.max(MAX_ROOM_SIZE, peerCount)}</span>}
       </button>
       {onToggleChat && (
         <button

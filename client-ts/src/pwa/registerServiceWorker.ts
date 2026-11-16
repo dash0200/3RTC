@@ -5,8 +5,13 @@
  * intentionally not intercepted.
  */
 export function registerServiceWorker(): void {
-  if (!import.meta.env.PROD || typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
-  window.addEventListener('load', () => {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+  const register = () => {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
-  });
+  };
+  if (document.readyState === 'complete') {
+    register();
+  } else {
+    window.addEventListener('load', register);
+  }
 }

@@ -548,7 +548,7 @@ MBTN_FORWARD script-message 3rtc mouse_fwd
 fn input_conf() -> Option<String> {
     let path = std::env::temp_dir().join("3rtc-mpv-input.conf");
     std::fs::write(&path, INPUT_CONF).ok()?;
-    Some(path.to_string_lossy().into_owned())
+    Some(path.to_string_lossy().replace('\\', "/"))
 }
 
 // observed properties (reply ids)
@@ -638,6 +638,7 @@ fn setup(
     }
     let url = match source {
         VideoSource::File(path) => path.to_string_lossy().into_owned(),
+        VideoSource::Url(u) => u.clone(),
         VideoSource::Stream(s) => {
             let mut opener = Box::new(Arc::clone(s));
             let user: *mut Opener = &raw mut *opener;

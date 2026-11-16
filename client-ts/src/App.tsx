@@ -75,12 +75,12 @@ export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
 export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
 export const LOCAL_SIGNAL_URL = 'ws://localhost:8080';
 
-// Default primary server: Oracle Cloud (orc.3rtc.me) with automatic multi-cloud failover to GCP
-export const DEFAULT_SIGNAL_URL = ORACLE_SIGNAL_URL;
+// Default primary server: Google Cloud (gcp.3rtc.me) with automatic multi-cloud failover to Oracle
+export const DEFAULT_SIGNAL_URL = GCP_SIGNAL_URL;
 
-// Intelligent fallback pool: if orc.3rtc.me is not reachable, seamlessly fallback to GCP, then raw IP
+// Intelligent fallback pool: if gcp.3rtc.me is not reachable, seamlessly fallback to Oracle, then raw IP
 export const BACKUP_SIGNAL_URLS = [
-  GCP_SIGNAL_URL,
+  ORACLE_SIGNAL_URL,
   'wss://signal.3rtc.me',
   'wss://34.57.36.145.sslip.io:443'
 ];
@@ -253,7 +253,7 @@ export default function App() {
     identityFields: () => identityFieldsRef.current(),
     signalUrl, fallbackUrls, setSignalStatus, logLocalDebug, onRoomError: handleRoomError, onHostChanged: handleHostChanged
   });
-  const { roomId, isHost, peerCount, isP2PConnected, topology, switchTopology } = mesh;
+  const { roomId, isHost, peerCount, isP2PConnected, topology, switchTopology, maxUsers, setRoomMaxUsers } = mesh;
 
   const localUser = useMemo(() => (roomId ? {
     id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
@@ -291,8 +291,15 @@ export default function App() {
     activityLoad.load();
   }, [activityLoad]);
 
-  const activityMenu = useMemo(() => activities.menu.map((a: ActivityMenuItem) => (a.isOpen && !activityLoad.loaded
-    ? { ...a, isOpen: false, description: `On now: tap to join` } : a)), [activities.menu, activityLoad.loaded]);
+  const activityMenu = useMemo(() => activities.menu.map((a: ActivityMenuItem) => {
+    if (a.isOpen && !activityLoad.loaded) {
+      return { ...a, isOpen: false, description: 'On now: tap to join' };
+    }
+    if (playbackLock && !isHost && !a.isOpen) {
+      return { ...a, disabledReason: 'Only the host can start an activity' };
+    }
+    return a;
+  }), [activities.menu, activityLoad.loaded, playbackLock, isHost]);
   const startOrJoinActivity = useCallback((id: string) => {
     if (activities.current?.id === id && !activityLoad.loaded) joinActivity();
     else activities.start(id);
@@ -747,16 +754,22 @@ export default function App() {
       onPlayQueue={queue.length > 0 && !isMediaActive ? queueFeature.playNextInQueue : undefined}
       onPickFile={playback.selectLocalFile}
       onStopVideo={playback.exitVideo}
+      isHost={isHost}
+      playbackLock={playbackLock}
     />
   );
 
   const renderChat = (extra: Partial<LiveChatProps> = {}) => (
     <LiveChat
-      onSeekTo={isMediaActive ? playback.seekEveryone : undefined}
+      onSeekTo={isMediaActive && !(playbackLock && !isHost) ? playback.seekEveryone : undefined}
       messages={chat.messages}
       systemLogs={notices.systemLogs}
       onSendMessage={chat.sendMessage}
       onSendImage={chat.sendImage}
+      onSendFile={chat.sendFile}
+      onPauseTransfer={chat.pauseTransfer}
+      onResumeTransfer={chat.resumeTransfer}
+      onCancelTransfer={chat.cancelTransfer}
       onClearLogs={notices.clearLogs}
       onTestSound={handleTestSound}
       isP2PConnected={isP2PConnected}
@@ -788,6 +801,8 @@ export default function App() {
       onSendReaction={reactions.sendReaction}
       connectedPeers={connectedPeers}
       localUser={localUser}
+      isHost={isHost}
+      playbackLock={playbackLock}
       onSetPeerVolume={handleSetPeerVolume}
       onToggleMutePeer={handleToggleMutePeer}
       onMakeHost={mesh.transferHost}
@@ -951,6 +966,7 @@ export default function App() {
               isHost={isHost}
               username={username}
               activityStatus={shownActivityStatus}
+              maxUsers={maxUsers}
             />
             <div className="room-desktop-body">
               <div className="app-main-pane">
@@ -1022,6 +1038,8 @@ export default function App() {
           topology={topology}
           isHost={isHost}
           onSwitchTopology={switchTopology}
+          maxUsers={maxUsers}
+          onSetMaxUsers={setRoomMaxUsers}
         >
           <Suspense fallback={null}>
             <StreamDoctor bus={bus} peersRef={peersRef} peerNames={peerMetadata} selfName={username} />

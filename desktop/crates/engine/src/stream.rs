@@ -558,7 +558,7 @@ pub(crate) struct View {
 }
 
 /// How the stream we watch is doing (for the bar under the video).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StreamProgress {
     /// Bytes held now.
     pub cached: u64,
@@ -568,6 +568,8 @@ pub struct StreamProgress {
     pub speed: f64,
     /// Fetched through another viewer.
     pub relayed: bool,
+    /// The peer we are connected to and fetching pieces from.
+    pub from: PeerId,
 }
 
 impl View {
@@ -788,6 +790,7 @@ impl View {
             size: self.size,
             speed,
             relayed: self.relayed(),
+            from: self.source.clone(),
         }
     }
 

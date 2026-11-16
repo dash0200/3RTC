@@ -9,10 +9,13 @@
  * - Zero upload server or cloud dependency: 100% direct Peer-to-Peer blob transfer.
  */
 
-export const IMAGE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
+export const FILE_CHUNK_SIZE = 61440; // 60 KB (safely below 64 KB SCTP limit)
+export const IMAGE_CHUNK_SIZE = 61440;
 export const MAGIC_IMG1 = 0x494D4731;  // 'IMG1' in ASCII hex
-export const MAX_IMAGE_CHUNKS = 2048;   // 2048 * 60 KB = ~122 MB max
-export const MAX_IMAGE_FILE_SIZE = MAX_IMAGE_CHUNKS * IMAGE_CHUNK_SIZE;
+export const MAX_FILE_CHUNKS = 500000;  // ~30 GB max
+export const MAX_IMAGE_CHUNKS = 500000;
+export const MAX_FILE_SIZE = MAX_FILE_CHUNKS * FILE_CHUNK_SIZE;
+export const MAX_IMAGE_FILE_SIZE = MAX_FILE_SIZE;
 
 export const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/png',
@@ -29,6 +32,12 @@ export function sanitizeImageMimeType(mime?: string | null): string {
   if (typeof mime !== 'string') return 'image/png';
   const clean = mime.toLowerCase().trim().split(';')[0];
   return ALLOWED_IMAGE_MIME_TYPES.has(clean) ? clean : 'image/png';
+}
+
+export function sanitizeMimeType(mime?: string | null): string {
+  if (typeof mime !== 'string' || !mime.trim()) return 'application/octet-stream';
+  const clean = mime.toLowerCase().trim().split(';')[0].replace(/[^a-z0-9/._-]/g, '');
+  return clean || 'application/octet-stream';
 }
 
 /**
@@ -51,13 +60,55 @@ export function safeImageDownloadName(name?: string | null, mimeType?: string | 
 }
 
 /**
- * Human readable file size formatter
+ * Sanitizes download filename for any file type: removes path traversal while preserving extension
+ */
+export function safeFileDownloadName(name?: string | null, mimeType?: string | null): string {
+  if (!name && mimeType && ALLOWED_IMAGE_MIME_TYPES.has(mimeType.toLowerCase())) {
+    return safeImageDownloadName(name, mimeType);
+  }
+  let raw = String(name || 'shared-file').trim();
+  raw = raw.replace(/^.*[/\\]/, '').replace(/^\.+/, '');
+  const lastDot = raw.lastIndexOf('.');
+  const hasExt = lastDot > 0 && lastDot < raw.length - 1;
+  const stem = hasExt ? raw.slice(0, lastDot) : raw;
+  const ext = hasExt ? raw.slice(lastDot).replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 15) : '';
+
+  const cleanStem = stem
+    .replace(/[/\\?%*:|"<>]/g, '_')
+    .replace(/\.\.+/g, '.')
+    .replace(/[^a-zA-Z0-9_\s.-]/g, '')
+    .trim()
+    .slice(0, 80) || 'shared-file';
+
+  return `${cleanStem}${ext}`;
+}
+
+/**
+ * Human readable file size formatter with GB support
  */
 export function formatFileSize(bytes?: number | null): string {
   if (!bytes || isNaN(bytes)) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/**
+ * Returns a friendly emoji icon for any file type
+ */
+export function getFileIcon(fileName?: string | null, mimeType?: string | null): string {
+  const mime = String(mimeType || '').toLowerCase();
+  const n = String(fileName || '').toLowerCase();
+  if (mime.startsWith('image/') || /\.(png|jpe?g|webp|gif|avif|bmp|svg)$/i.test(n)) return '🖼️';
+  if (mime.startsWith('video/') || /\.(mp4|webm|mkv|mov|avi|flv|wmv)$/i.test(n)) return '🎥';
+  if (mime.startsWith('audio/') || /\.(mp3|wav|ogg|aac|flac|m4a|opus)$/i.test(n)) return '🎵';
+  if (mime.includes('zip') || mime.includes('compressed') || mime.includes('tar') || /\.(zip|tar|gz|bz2|7z|rar)$/i.test(n)) return '📦';
+  if (mime.includes('pdf') || n.endsWith('.pdf')) return '📕';
+  if (mime.startsWith('text/') || /\.(txt|md|rtf|json|csv|log)$/i.test(n)) return '📄';
+  if (/\.(docx?|pptx?|xlsx?)$/i.test(n)) return '📊';
+  if (/\.(exe|dmg|iso|bin|deb|rpm|apk)$/i.test(n)) return '💾';
+  return '📁';
 }
 
 /**
@@ -139,13 +190,14 @@ export interface P2PImageSenderOptions {
   sender?: string;
   isHost?: boolean;
   caption?: string;
-  onProgress?: (info: { transferId: string; id: string; chunkIndex: number; totalChunks: number; percent: number }) => void;
+  startChunk?: number;
+  onProgress?: (info: { transferId: string; id: string; chunkIndex: number; totalChunks: number; percent: number; isPaused?: boolean }) => void;
   onComplete?: (info: { transferId: string; id: string; fileSize: number; totalChunks: number }) => void;
   onError?: (err: Error) => void;
 }
 
 /**
- * Sender: Slices an image File and broadcasts it over open WebRTC DataChannels
+ * Sender: Slices an image or arbitrary file and broadcasts it over open WebRTC DataChannels
  */
 export class P2PImageSender {
   public file: File | Blob;
@@ -155,12 +207,13 @@ export class P2PImageSender {
   public sender: string;
   public isHost: boolean;
   public caption: string;
-  public onProgress: (info: { transferId: string; id: string; chunkIndex: number; totalChunks: number; percent: number }) => void;
+  public onProgress: (info: { transferId: string; id: string; chunkIndex: number; totalChunks: number; percent: number; isPaused?: boolean }) => void;
   public onComplete: (info: { transferId: string; id: string; fileSize: number; totalChunks: number }) => void;
   public onError: (err: Error) => void;
   public totalChunks: number;
   public currentChunkIndex: number;
   public isAborted: boolean;
+  public isPaused: boolean;
 
   constructor(
     file: File | Blob,
@@ -177,29 +230,64 @@ export class P2PImageSender {
     this.onProgress = options.onProgress || (() => { });
     this.onComplete = options.onComplete || (() => { });
     this.onError = options.onError || (() => { });
-    this.totalChunks = Math.ceil(file.size / IMAGE_CHUNK_SIZE) || 1;
+    this.totalChunks = Math.ceil(file.size / FILE_CHUNK_SIZE) || 1;
     this.currentChunkIndex = 0;
     this.isAborted = false;
+    this.isPaused = false;
+    if (typeof options.startChunk === 'number' && options.startChunk >= 0) {
+      this.currentChunkIndex = Math.min(options.startChunk, this.totalChunks);
+    }
+  }
+
+  pause(): void {
+    this.isPaused = true;
+    const percent = Math.min(100, Math.round((this.currentChunkIndex / this.totalChunks) * 100));
+    this.onProgress({
+      transferId: this.transferId,
+      id: this.id,
+      chunkIndex: this.currentChunkIndex,
+      totalChunks: this.totalChunks,
+      percent,
+      isPaused: true
+    });
+  }
+
+  resume(): void {
+    if (!this.isPaused && !this.isAborted) return;
+    this.isPaused = false;
+    this._pump();
+  }
+
+  seekTo(chunkIndex: number): void {
+    if (chunkIndex >= 0 && chunkIndex <= this.totalChunks) {
+      this.currentChunkIndex = chunkIndex;
+    }
   }
 
   start(): void {
     this.isAborted = false;
-    this.currentChunkIndex = 0;
+    this.isPaused = false;
 
     const channels = this.getDataChannels().filter((dc) => dc && dc.readyState === 'open');
     if (channels.length === 0) {
-      this.onError(new Error('No open peer data channels available to send image'));
+      this.onError(new Error('No open peer data channels available to send file'));
       return;
     }
 
+    const isImage = isImageFile(this.file);
+    const msgType = isImage ? 'p2p-image-start' : 'p2p-file-start';
+    const rawName = (this.file instanceof File ? this.file.name : '') || (isImage ? 'screenshot.png' : 'file.bin');
+    const safeName = isImage ? safeImageDownloadName(rawName, this.file.type) : safeFileDownloadName(rawName, this.file.type);
+    const mime = this.file.type || (isImage ? 'image/png' : 'application/octet-stream');
+
     // 1. Broadcast initial start announcement message to all peers
     const startMsg = JSON.stringify({
-      type: 'p2p-image-start',
+      type: msgType,
       id: this.id,
       transferId: this.transferId,
-      fileName: (this.file instanceof File ? this.file.name : '') || 'screenshot.png',
+      fileName: safeName,
       fileSize: this.file.size,
-      mimeType: this.file.type || 'image/png',
+      mimeType: mime,
       totalChunks: this.totalChunks,
       sender: this.sender,
       isHost: this.isHost,
@@ -219,10 +307,11 @@ export class P2PImageSender {
 
   abort(): void {
     this.isAborted = true;
+    this.isPaused = false;
   }
 
   private _pump(): void {
-    if (this.isAborted) return;
+    if (this.isAborted || this.isPaused) return;
 
     if (this.currentChunkIndex >= this.totalChunks) {
       this.onComplete({
@@ -236,26 +325,46 @@ export class P2PImageSender {
 
     const channels = this.getDataChannels().filter((dc) => dc && dc.readyState === 'open');
     if (channels.length === 0) {
-      this.onError(new Error('All peer connections dropped during image transfer'));
+      // Peer connection temporarily lost: pause transfer so reconnect resume can continue seamlessly
+      this.isPaused = true;
+      const percent = Math.min(100, Math.round((this.currentChunkIndex / this.totalChunks) * 100));
+      this.onProgress({
+        transferId: this.transferId,
+        id: this.id,
+        chunkIndex: this.currentChunkIndex,
+        totalChunks: this.totalChunks,
+        percent,
+        isPaused: true
+      });
       return;
     }
 
     // Backpressure flow control check: pause if any channel buffer is overloaded (>256 KB)
-    const isCongested = channels.some((dc) => (dc.bufferedAmount || 0) > 256 * 1024);
-    if (isCongested) {
-      setTimeout(() => this._pump(), 20);
+    const congested = channels.filter((dc) => (dc.bufferedAmount || 0) > 256 * 1024);
+    if (congested.length > 0) {
+      const slow = congested[0];
+      let done = false;
+      const cb = () => {
+        if (done) return;
+        done = true;
+        slow.onbufferedamountlow = null;
+        this._pump();
+      };
+      slow.bufferedAmountLowThreshold = 64 * 1024;
+      slow.onbufferedamountlow = cb;
+      setTimeout(cb, 50);
       return;
     }
 
-    const start = this.currentChunkIndex * IMAGE_CHUNK_SIZE;
-    const end = Math.min(start + IMAGE_CHUNK_SIZE, this.file.size);
+    const start = this.currentChunkIndex * FILE_CHUNK_SIZE;
+    const end = Math.min(start + FILE_CHUNK_SIZE, this.file.size);
     const slice = this.file.slice(start, end);
     const chunkIdx = this.currentChunkIndex;
     this.currentChunkIndex++;
 
     const reader = new FileReader();
     reader.onload = () => {
-      if (this.isAborted) return;
+      if (this.isAborted || this.isPaused) return;
       const arrayBuffer = reader.result as ArrayBuffer;
       const packet = createImagePacket(this.transferId, chunkIdx, this.totalChunks, arrayBuffer);
 
@@ -273,7 +382,8 @@ export class P2PImageSender {
         id: this.id,
         chunkIndex: chunkIdx,
         totalChunks: this.totalChunks,
-        percent
+        percent,
+        isPaused: false
       });
 
       // Pump next slice with micro-yield
@@ -292,6 +402,9 @@ export class P2PImageSender {
   }
 }
 
+export const P2PFileSender = P2PImageSender;
+export type P2PFileSenderOptions = P2PImageSenderOptions;
+
 export interface InboundImageTransfer {
   id: string;
   transferId: string;
@@ -307,7 +420,10 @@ export interface InboundImageTransfer {
   receivedCount: number;
   receivedBytes: number;
   createdAt: number;
+  isPaused?: boolean;
 }
+
+export type InboundFileTransfer = InboundImageTransfer;
 
 export interface CompletedImageTransfer {
   transferId: string;
@@ -323,13 +439,15 @@ export interface CompletedImageTransfer {
   objectUrl: string;
 }
 
+export type CompletedFileTransfer = CompletedImageTransfer;
+
 export interface ReceiverCallbacks {
   onProgress?: (transferId: string, percent: number, transfer: InboundImageTransfer) => void;
   onComplete?: (transferId: string, result: CompletedImageTransfer) => void;
 }
 
 /**
- * Receiver: Manages incoming peer image transfers and reassembles slices into Blobs
+ * Receiver: Manages incoming peer image & file transfers and reassembles slices into Blobs
  */
 export class P2PImageReceiver {
   public transfers = new Map<string, InboundImageTransfer>();
@@ -339,19 +457,30 @@ export class P2PImageReceiver {
     const transferId = typeof headerMsg.transferId === 'string' ? headerMsg.transferId : '';
     if (!transferId.trim() || transferId.length > 64) return;
 
+    // Do not overwrite existing chunks on reconnect announcement
+    if (this.transfers.has(transferId)) {
+      return;
+    }
+
     const totalChunks = typeof headerMsg.totalChunks === 'number' ? headerMsg.totalChunks : 0;
-    if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_IMAGE_CHUNKS) return;
+    if (!Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > MAX_FILE_CHUNKS) return;
 
     const rawFileSize = typeof headerMsg.fileSize === 'number' ? headerMsg.fileSize : 0;
     const safeFileSize = Number.isFinite(rawFileSize) && rawFileSize > 0 ? rawFileSize : 0;
-    const safeMime = sanitizeImageMimeType(typeof headerMsg.mimeType === 'string' ? headerMsg.mimeType : undefined);
+    const rawMime = typeof headerMsg.mimeType === 'string' ? headerMsg.mimeType : undefined;
+    const rawFileName = typeof headerMsg.fileName === 'string' ? headerMsg.fileName : '';
+    const isImg = isImageFile({ type: rawMime, name: rawFileName } as File);
+    const safeMime = isImg ? sanitizeImageMimeType(rawMime) : sanitizeMimeType(rawMime);
     const rawTimestamp = typeof headerMsg.timestamp === 'number' ? headerMsg.timestamp : Date.now();
     const safeTimestamp = Number.isFinite(rawTimestamp) ? rawTimestamp : Date.now();
+    const safeName = isImg
+      ? safeImageDownloadName(rawFileName || 'shared-image.png', safeMime)
+      : safeFileDownloadName(rawFileName || 'shared-file.bin', safeMime);
 
     this.transfers.set(transferId, {
       id: typeof headerMsg.id === 'string' && headerMsg.id ? headerMsg.id.slice(0, 64) : crypto.randomUUID(),
       transferId,
-      fileName: typeof headerMsg.fileName === 'string' ? headerMsg.fileName.slice(0, 120) : 'shared-image.png',
+      fileName: safeName,
       fileSize: safeFileSize,
       mimeType: safeMime,
       totalChunks,
@@ -362,7 +491,8 @@ export class P2PImageReceiver {
       chunks: new Array<ArrayBuffer>(totalChunks),
       receivedCount: 0,
       receivedBytes: 0,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      isPaused: false
     });
   }
 
@@ -383,7 +513,7 @@ export class P2PImageReceiver {
       transfer.receivedCount++;
       transfer.receivedBytes += data.byteLength;
 
-      if (transfer.receivedBytes > MAX_IMAGE_FILE_SIZE) {
+      if (transfer.receivedBytes > MAX_FILE_SIZE) {
         this.transfers.delete(transferId);
         return null;
       }
@@ -420,6 +550,29 @@ export class P2PImageReceiver {
     return null;
   }
 
+  pause(transferId: string): void {
+    const tr = this.transfers.get(transferId);
+    if (tr) tr.isPaused = true;
+  }
+
+  resume(transferId: string): void {
+    const tr = this.transfers.get(transferId);
+    if (tr) tr.isPaused = false;
+  }
+
+  isPaused(transferId: string): boolean {
+    return Boolean(this.transfers.get(transferId)?.isPaused);
+  }
+
+  getResumeChunk(transferId: string): number {
+    const tr = this.transfers.get(transferId);
+    if (!tr) return 0;
+    for (let i = 0; i < tr.totalChunks; i++) {
+      if (!tr.chunks[i]) return i;
+    }
+    return tr.totalChunks;
+  }
+
   abort(transferId: string): void {
     this.transfers.delete(transferId);
   }
@@ -428,7 +581,7 @@ export class P2PImageReceiver {
     this.transfers.clear();
   }
 
-  cleanStale(maxAgeMs = 120000): void {
+  cleanStale(maxAgeMs = 300000): void {
     const now = Date.now();
     for (const [tid, tr] of this.transfers.entries()) {
       if (now - tr.createdAt > maxAgeMs) {
@@ -440,3 +593,5 @@ export class P2PImageReceiver {
 
 // Global receiver singleton for room sessions
 export const p2pImageReceiver = new P2PImageReceiver();
+export const P2PFileReceiver = P2PImageReceiver;
+export const p2pFileReceiver = p2pImageReceiver;

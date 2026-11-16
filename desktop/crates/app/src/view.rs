@@ -109,7 +109,7 @@ pub(crate) struct LogLine {
 
 pub(crate) struct RoomView {
     pub(crate) settings: Settings,
-    runtime: tokio::runtime::Handle,
+    pub(crate) runtime: tokio::runtime::Handle,
     pub(crate) engine: Option<Handle>,
     pub(crate) room: Option<Snapshot>,
     pub(crate) chat: Vec<ChatLine>,
@@ -230,7 +230,7 @@ impl RoomView {
         let code = cx.new(CodeInput::new);
         let message = cx.new(|cx| InputState::new(window, cx).placeholder("Message the room"));
         let link = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Paste a YouTube, Vimeo, Twitch or video link")
+            InputState::new(window, cx).placeholder("Paste a YouTube, magnet:?, Vimeo, Twitch or video link")
         });
         let reaction_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Or type / paste any emoji"));

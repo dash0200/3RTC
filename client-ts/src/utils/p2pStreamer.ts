@@ -456,7 +456,10 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 async function ensureController(sw: ServiceWorkerContainer, timeoutMs = 6000): Promise<ServiceWorker | null> {
   if (sw.controller) return sw.controller;
-  const existing = await sw.getRegistration().catch(() => null);
+  let existing = await sw.getRegistration().catch(() => null);
+  if (!existing) {
+    existing = (await sw.register('/sw.js').catch(() => null)) ?? undefined;
+  }
   if (!existing) return null;
   const changed = new Promise<void>((resolve) => sw.addEventListener('controllerchange', () => resolve(), { once: true }));
   const deadline = sleep(timeoutMs);
