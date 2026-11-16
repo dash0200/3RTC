@@ -27,6 +27,7 @@ mod screen;
 mod settings;
 mod single;
 mod sounds;
+mod torrent;
 mod tycoon;
 mod update;
 mod view;
@@ -54,6 +55,7 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("starting the engine runtime")?;
     let handle = runtime.handle().clone();
+    crate::torrent::set_runtime_handle(handle.clone());
 
     // restarted after an update: let the old version close first, then tidy up after it
     if std::env::args().any(|a| a == "--after-update") {

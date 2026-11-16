@@ -35,6 +35,12 @@ use crate::view::RoomView;
 enum What {
     Web(rtc_webview::Source),
     File(std::path::PathBuf),
+    /// A torrent stream (HTTP range stream for mpv, local file for WebRTC peer range sharing).
+    Torrent {
+        url: String,
+        path: std::path::PathBuf,
+        size: Option<u64>,
+    },
     /// Someone's file, streamed to us.
     Stream(rtc_engine::StreamReader),
 }
@@ -136,8 +142,23 @@ pub(crate) struct WatchUi {
     pub(crate) unavailable: HashSet<String>,
     pub(crate) queue_link: Entity<InputState>,
     pub(crate) region_open: bool,
+    /// Live torrent pre-buffering / connection status.
+    pub(crate) torrent_status: Option<SharedString>,
+    /// Live swarm stats for the active torrent stream (for the person hosting it).
+    pub(crate) torrent_stats: Option<TorrentStatsInfo>,
+    /// Stream URL for active torrent playback via local HTTP server.
+    pub(crate) torrent_stream_url: Option<String>,
     /// Host control as last told to the web player (`None`: not yet, e.g. a new player).
     lock_applied: Cell<Option<bool>>,
+}
+
+/// Swarm statistics for active torrent playback.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TorrentStatsInfo {
+    pub(crate) seeds: usize,
+    pub(crate) peers: usize,
+    pub(crate) total_peers: usize,
+    pub(crate) speed_bps: u64,
 }
 
 /// Host control is on and we aren't the host: playback is the host's (`useHostControls`), so
@@ -172,9 +193,13 @@ impl WatchUi {
             thumbs: HashMap::new(),
             unavailable: HashSet::new(),
             queue_link: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("Paste a link (YouTube, Vimeo, Twitch, .mp4…)")
+                InputState::new(window, cx)
+                    .placeholder("Paste a link (YouTube, magnet:?, Vimeo, Twitch, .mp4…)")
             }),
             region_open: false,
+            torrent_status: None,
+            torrent_stats: None,
+            torrent_stream_url: None,
         }
     }
 }
@@ -296,18 +321,23 @@ fn probe(url: &str) -> bool {
 enum Resolved {
     YouTube(String, String),
     Media(Media),
+    Magnet(String),
 }
 
 /// The paste box: from text to something to play (`resolvePastedLink`), off the UI thread.
 fn resolve(text: &str, picks: &Picks) -> Result<Resolved, String> {
-    match detect_link(text)? {
+    let trimmed = text.trim();
+    if trimmed.starts_with("magnet:?") {
+        return Ok(Resolved::Magnet(trimmed.to_owned()));
+    }
+    match detect_link(trimmed)? {
         Link::YouTube(id) => {
             let title = youtube_title(&id, picks);
             Ok(Resolved::YouTube(id, title))
         }
         Link::Media { mut media, guessed } => {
             if guessed && !probe(&media.url) {
-                return Err("That link isn't a video this browser can play. Paste a YouTube, Vimeo or Twitch link, or a direct video link (.mp4, .webm, .m3u8).".to_owned());
+                return Err("That link isn't a video this browser can play. Paste a YouTube, magnet:?, Vimeo or Twitch link, or a direct video link (.mp4, .webm, .m3u8).".to_owned());
             }
             if media.provider == Provider::Vimeo {
                 let t = vimeo_title(&media.url);
@@ -423,8 +453,24 @@ impl RoomView {
                 player.borrow_mut().take();
                 self.watch.error = None;
                 let what = match &showing {
-                    Showing::Local { name, .. } => {
-                        if let Some(path) = self.watch.local.path_for(name) {
+                    Showing::Local { name, size, .. } => {
+                        if let Some(url) = self.watch.torrent_stream_url.take() {
+                            if let Some(path) = self.watch.local.path_for(name) {
+                                What::Torrent {
+                                    url,
+                                    path,
+                                    size: Some(*size),
+                                }
+                            } else if let Some(path) = &self.watch.local.file {
+                                What::Torrent {
+                                    url,
+                                    path: path.clone(),
+                                    size: Some(*size),
+                                }
+                            } else {
+                                What::File(self.watch.local.file.clone().unwrap_or_default())
+                            }
+                        } else if let Some(path) = self.watch.local.path_for(name) {
                             What::File(path)
                         } else if let Some(reader) = self.watch.local.stream_for(name) {
                             What::Stream(reader)
@@ -593,14 +639,19 @@ impl RoomView {
             return;
         }
         // quick answer for what can't be played at all
-        if let Err(e) = detect_link(&text) {
-            if to_queue {
-                self.watch.queue_error = Some(e.into());
-            } else {
-                self.watch.link_error = Some(e.into());
+        if !text.starts_with("magnet:?") {
+            match detect_link(&text) {
+                Ok(_) => {}
+                Err(e) => {
+                    if to_queue {
+                        self.watch.queue_error = Some(e.into());
+                    } else {
+                        self.watch.link_error = Some(e.into());
+                    }
+                    cx.notify();
+                    return;
+                }
             }
-            cx.notify();
-            return;
         }
         self.watch.resolving = true;
         self.watch.link_error = None;
@@ -623,25 +674,36 @@ impl RoomView {
                     }
                     Ok(r) => {
                         input.update(cx, |i, cx| i.set_value("", window, cx));
-                        let c = match (r, to_queue) {
-                            (Resolved::YouTube(id, title), false) => WatchCommand::PlayYouTube { id, title },
-                            (Resolved::Media(m), false) => WatchCommand::PlayLink(m),
-                            (Resolved::YouTube(id, title), true) => WatchCommand::QueueAdd {
-                                id: new_id(),
-                                video_id: Some(id),
-                                media: None,
-                                title,
-                                autoplay: true,
-                            },
-                            (Resolved::Media(m), true) => WatchCommand::QueueAdd {
-                                id: new_id(),
-                                video_id: None,
-                                title: m.display_title(),
-                                media: Some(m),
-                                autoplay: true,
-                            },
-                        };
-                        v.watch_cmd(c);
+                        match (r, to_queue) {
+                            (Resolved::Magnet(magnet), _) => {
+                                v.play_torrent(crate::torrent::TorrentInput::Magnet(magnet), cx);
+                                return;
+                            }
+                            (Resolved::YouTube(id, title), false) => {
+                                v.watch_cmd(WatchCommand::PlayYouTube { id, title });
+                            }
+                            (Resolved::Media(m), false) => {
+                                v.watch_cmd(WatchCommand::PlayLink(m));
+                            }
+                            (Resolved::YouTube(id, title), true) => {
+                                v.watch_cmd(WatchCommand::QueueAdd {
+                                    id: new_id(),
+                                    video_id: Some(id),
+                                    media: None,
+                                    title,
+                                    autoplay: true,
+                                });
+                            }
+                            (Resolved::Media(m), true) => {
+                                v.watch_cmd(WatchCommand::QueueAdd {
+                                    id: new_id(),
+                                    video_id: None,
+                                    title: m.display_title(),
+                                    media: Some(m),
+                                    autoplay: true,
+                                });
+                            }
+                        }
                     }
                 }
                 cx.notify();
@@ -649,6 +711,98 @@ impl RoomView {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Starts streaming and playback for a BitTorrent magnet link or `.torrent` file.
+    pub(crate) fn play_torrent(&mut self, input: crate::torrent::TorrentInput, cx: &mut Context<'_, Self>) {
+        if self.room.as_ref().is_some_and(locked_for_me) {
+            self.watch.link_error = Some("Host controls are on: only the host can start a video.".into());
+            cx.notify();
+            return;
+        }
+        self.watch.link_error = None;
+        self.watch.torrent_status = Some("🧲 Connecting to BitTorrent swarm...".into());
+        cx.notify();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::torrent::TorrentService::start_stream(&self.runtime, input, tx);
+
+        cx.spawn(async move |this, cx| {
+            while let Some(prog) = rx.recv().await {
+                let Ok(()) = this.update(cx, |v, cx| {
+                    match prog {
+                        crate::torrent::TorrentProgress::Connecting { title } => {
+                            v.watch.torrent_status =
+                                Some(format!("🧲 Connecting to BitTorrent swarm for “{title}”…").into());
+                        }
+                        crate::torrent::TorrentProgress::Resolved {
+                            title,
+                            filename,
+                            size,
+                            stream_url,
+                            file_path,
+                        } => {
+                            let size_fmt = rtc_protocol::image::format_size(size);
+                            v.watch.torrent_status =
+                                Some(format!("📁 “{filename}” ({size_fmt}) • {title}").into());
+                            v.watch.local.file = Some(file_path.clone());
+                            v.watch.torrent_stream_url = Some(stream_url);
+                            v.share_own_file_sized(&file_path, Some(size));
+                        }
+                        crate::torrent::TorrentProgress::Buffering {
+                            downloaded,
+                            target,
+                            seeds,
+                            peers,
+                            total_peers,
+                            speed_bps,
+                        } => {
+                            let d_mb = downloaded as f64 / (1024.0 * 1024.0);
+                            let t_mb = target as f64 / (1024.0 * 1024.0);
+                            let sp_mb = speed_bps as f64 / (1024.0 * 1024.0);
+                            v.watch.torrent_status = Some(
+                                format!(
+                                    "⏳ Pre-buffering: {d_mb:.1} / {t_mb:.1} MB • s:{seeds} p:{peers}({total_peers}) • {sp_mb:.1} MB/s"
+                                )
+                                .into(),
+                            );
+                            v.watch.torrent_stats = Some(TorrentStatsInfo {
+                                seeds,
+                                peers,
+                                total_peers,
+                                speed_bps,
+                            });
+                        }
+                        crate::torrent::TorrentProgress::ReadyToPlay { name, size } => {
+                            v.watch.torrent_status = None;
+                            v.watch_cmd(WatchCommand::PlayFile { name, size });
+                        }
+                        crate::torrent::TorrentProgress::LiveStats {
+                            seeds,
+                            peers,
+                            total_peers,
+                            speed_bps,
+                        } => {
+                            v.watch.torrent_stats = Some(TorrentStatsInfo {
+                                seeds,
+                                peers,
+                                total_peers,
+                                speed_bps,
+                            });
+                        }
+                        crate::torrent::TorrentProgress::Error(err) => {
+                            v.watch.torrent_status = None;
+                            v.watch.torrent_stats = None;
+                            v.watch.link_error = Some(err.into());
+                        }
+                    }
+                    cx.notify();
+                }) else {
+                    break;
+                };
+            }
+        })
+        .detach();
     }
 
     fn play_pick(&mut self, v: &Video, cx: &mut Context<'_, Self>) {
@@ -735,6 +889,19 @@ pub(crate) fn player_area(
                         window,
                         bounds,
                         rtc_platform_win::VideoSource::File(path),
+                        open.start,
+                        open.playing,
+                    );
+                    cx.notify();
+                    return;
+                }
+                What::Torrent { url, path, size } => {
+                    v.share_own_file_sized(&path, size);
+                    crate::local_video::open_player(
+                        v,
+                        window,
+                        bounds,
+                        rtc_platform_win::VideoSource::Url(url),
                         open.start,
                         open.playing,
                     );
@@ -1254,8 +1421,18 @@ pub(crate) fn browser(view: &mut RoomView, room: &Snapshot, cx: &mut Context<'_,
         .into_any_element()
 }
 
-/// Under the paste box: why a link can't be played.
+/// Under the paste box: live torrent status or why a link can't be played.
 pub(crate) fn link_error(view: &RoomView) -> Option<AnyElement> {
+    if let Some(status) = view.watch.torrent_status.clone() {
+        return Some(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens::accent())
+                .child(status)
+                .into_any_element(),
+        );
+    }
     let e = view.watch.link_error.clone()?;
     Some(
         div()
