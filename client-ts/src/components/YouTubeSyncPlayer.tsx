@@ -74,6 +74,8 @@ export interface YouTubeSyncPlayerProps {
   onPlayLink?: (media: MediaItem) => void;
   onQueueLink?: (media: MediaItem) => void;
   onStartScreenShare?: () => void;
+  isHost?: boolean;
+  playbackLock?: boolean;
 }
 
 export default function YouTubeSyncPlayer({
@@ -93,8 +95,12 @@ export default function YouTubeSyncPlayer({
   peerCount = 0,
   username = '',
   onPlayLink,   // a pasted Vimeo / Twitch / video-file link: play for everyone
-  onStartScreenShare
+  onQueueLink,
+  onStartScreenShare,
+  isHost = false,
+  playbackLock = false
 }: YouTubeSyncPlayerProps) {
+  const isLockedForMe = Boolean(playbackLock && !isHost);
   const [urlInput, setUrlInput] = useState('');
   const [playerReady, setPlayerReady] = useState(false);
   const [syncStatus, setSyncStatus] = useState('Ready');
@@ -501,6 +507,14 @@ export default function YouTubeSyncPlayer({
     if (e) e.preventDefault();
     const res = await resolveInput();
     if (!res) return;
+    if (isLockedForMe) {
+      if (res.kind === 'media' && res.media) {
+        onQueueLink?.(res.media);
+      } else if (res.kind === 'youtube' && res.videoId) {
+        onAddToQueue?.({ videoId: res.videoId, title: res.title });
+      }
+      return;
+    }
     if (res.kind === 'media') {
       onPlayLink?.(res.media);
       return;
@@ -622,7 +636,7 @@ export default function YouTubeSyncPlayer({
       onDragEnter={onDragOver}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDropOver(false); }}
       onDrop={(e) => {
-        if (!e.dataTransfer?.files?.length) return;
+        if (!e.dataTransfer?.files?.length || isLockedForMe) return;
         e.preventDefault();
         setIsDropOver(false);
         onLocalFileSelect?.(e.dataTransfer.files[0]);
@@ -640,7 +654,7 @@ export default function YouTubeSyncPlayer({
                 id="stage-link"
                 type="text"
                 className="yt-hero-input"
-                placeholder="Paste a YouTube, Vimeo, Twitch or video link"
+                placeholder={isLockedForMe ? 'Add to queue (YouTube, Vimeo, Twitch or video link)' : 'Paste a YouTube, Vimeo, Twitch or video link'}
                 value={urlInput}
                 onChange={(e) => {
                   setUrlInput(e.target.value);
@@ -653,15 +667,21 @@ export default function YouTubeSyncPlayer({
                 </button>
               )}
             </div>
-            <button type="submit" className="yt-hero-load-btn" title="Starts for everyone in the room">
-              <span>{isResolving ? 'Checking…' : 'Play for everyone'}</span>
+            <button
+              type="submit"
+              className="yt-hero-load-btn"
+              title={isLockedForMe ? 'Add video to shared queue' : 'Starts for everyone in the room'}
+            >
+              <span>{isResolving ? 'Checking…' : isLockedForMe ? 'Add to queue' : 'Play for everyone'}</span>
             </button>
           </form>
           {inputError && <div className="yt-url-error">{inputError}</div>}
           <p className="rd-drop-hint">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></svg>
-            {isDropOver ? 'Drop to play it for everyone' : 'or drop a video file anywhere here ·'}
-            {!isDropOver && (
+            {isLockedForMe
+              ? 'Host controls are on: only the host can start a video'
+              : (isDropOver ? 'Drop to play it for everyone' : 'or drop a video file anywhere here ·')}
+            {!isDropOver && !isLockedForMe && (
               <>
                 <button type="button" className="rd-inline-link" onClick={() => localFileInputRef.current?.click()}>browse files</button>
                 <span className="rd-drop-types">MP4, MKV, WebM</span>
@@ -671,6 +691,12 @@ export default function YouTubeSyncPlayer({
                     <button type="button" className="rd-inline-link" onClick={onStartScreenShare}>share screen</button>
                   </>
                 )}
+              </>
+            )}
+            {!isDropOver && isLockedForMe && typeof onStartScreenShare === 'function' && (
+              <>
+                <span>·</span>
+                <button type="button" className="rd-inline-link" onClick={onStartScreenShare}>share screen</button>
               </>
             )}
           </p>
@@ -690,16 +716,17 @@ export default function YouTubeSyncPlayer({
 
         {/* Quick picks: groups, categories and a thumbnail grid */}
         <QuickPicksBrowser
-          onPlay={(v) => {
+          onPlay={isLockedForMe ? undefined : (v) => {
             setInputError('');
             onVideoChange(v.id, v.title);
             onBroadcastAction('load', { newVideoId: v.id, title: v.title });
           }}
-          onShuffle={handleSelectPreset}
+          onShuffle={isLockedForMe ? undefined : handleSelectPreset}
           onQueue={typeof onAddToQueue === 'function' ? (v) => onAddToQueue({ videoId: v.id, title: v.title }, { autoplay: false }) : undefined}
           queuedIds={queue.map((item) => item.videoId).filter((id): id is string => Boolean(id))}
           queueCount={queue.length}
-          onPlayQueue={typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined}
+          onPlayQueue={isLockedForMe ? undefined : (typeof onPlayNextInQueue === 'function' ? onPlayNextInQueue : undefined)}
+          cardAction={isLockedForMe ? 'queue' : 'play'}
         />
       </div>
     </div>

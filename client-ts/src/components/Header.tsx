@@ -68,6 +68,7 @@ export default function Header({
   const totalParticipants = connectedPeers.length + 1;
   const requiredVotes = totalParticipants <= 2 ? totalParticipants : Math.ceil(totalParticipants / 2);
   const hasVotedSkip = skipVotes.includes(username);
+  const isLockedForMe = playbackLock && !isHost;
 
   const copy = async () => {
     if (!roomId) return;
@@ -107,7 +108,7 @@ export default function Header({
       )}
 
       {/* Dedicated video action buttons in Header - keeps video canvas 100% clean */}
-      {isMediaActive && (
+      {isMediaActive && !isLockedForMe && (
         <div className="rh-video-actions">
           {typeof onVoteSkip === 'function' && totalParticipants > 1 && (
             <button

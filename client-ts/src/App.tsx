@@ -291,8 +291,15 @@ export default function App() {
     activityLoad.load();
   }, [activityLoad]);
 
-  const activityMenu = useMemo(() => activities.menu.map((a: ActivityMenuItem) => (a.isOpen && !activityLoad.loaded
-    ? { ...a, isOpen: false, description: `On now: tap to join` } : a)), [activities.menu, activityLoad.loaded]);
+  const activityMenu = useMemo(() => activities.menu.map((a: ActivityMenuItem) => {
+    if (a.isOpen && !activityLoad.loaded) {
+      return { ...a, isOpen: false, description: 'On now: tap to join' };
+    }
+    if (playbackLock && !isHost && !a.isOpen) {
+      return { ...a, disabledReason: 'Only the host can start an activity' };
+    }
+    return a;
+  }), [activities.menu, activityLoad.loaded, playbackLock, isHost]);
   const startOrJoinActivity = useCallback((id: string) => {
     if (activities.current?.id === id && !activityLoad.loaded) joinActivity();
     else activities.start(id);
@@ -747,12 +754,14 @@ export default function App() {
       onPlayQueue={queue.length > 0 && !isMediaActive ? queueFeature.playNextInQueue : undefined}
       onPickFile={playback.selectLocalFile}
       onStopVideo={playback.exitVideo}
+      isHost={isHost}
+      playbackLock={playbackLock}
     />
   );
 
   const renderChat = (extra: Partial<LiveChatProps> = {}) => (
     <LiveChat
-      onSeekTo={isMediaActive ? playback.seekEveryone : undefined}
+      onSeekTo={isMediaActive && !(playbackLock && !isHost) ? playback.seekEveryone : undefined}
       messages={chat.messages}
       systemLogs={notices.systemLogs}
       onSendMessage={chat.sendMessage}
@@ -792,6 +801,8 @@ export default function App() {
       onSendReaction={reactions.sendReaction}
       connectedPeers={connectedPeers}
       localUser={localUser}
+      isHost={isHost}
+      playbackLock={playbackLock}
       onSetPeerVolume={handleSetPeerVolume}
       onToggleMutePeer={handleToggleMutePeer}
       onMakeHost={mesh.transferHost}

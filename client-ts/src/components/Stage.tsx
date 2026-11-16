@@ -199,6 +199,7 @@ export default function Stage({
 
   // Drag and Drop Local Video Handlers
   const [isStageDragOver, setIsStageDragOver] = useState(false);
+  const isLockedForMe = playbackLock && !isHost;
 
   const isVideoFile = (file: File) => {
     if (!file) return false;
@@ -224,6 +225,7 @@ export default function Stage({
     e.preventDefault();
     e.stopPropagation();
     setIsStageDragOver(false);
+    if (isLockedForMe) return;
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
       for (let i = 0; i < files.length; i++) {
@@ -260,8 +262,16 @@ export default function Stage({
                   <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z" />
                 </svg>
               </div>
-              <div className="stage-drag-title">Drop video to play for all peers</div>
-              <div className="stage-drag-subtitle">Supports MP4, MKV, WebM • WebRTC direct sync</div>
+              <div className="stage-drag-title">
+                {isLockedForMe
+                  ? 'Host controls are on: only the host can start a video'
+                  : 'Drop video to play for all peers'}
+              </div>
+              <div className="stage-drag-subtitle">
+                {isLockedForMe
+                  ? 'Ask the host to start playback'
+                  : 'Supports MP4, MKV, WebM • WebRTC direct sync'}
+              </div>
             </div>
           </div>
         )}
@@ -336,16 +346,16 @@ export default function Stage({
             remoteAction={remoteAction}
             onBroadcastAction={(action, payload = {}) => onBroadcastAction(action, { ...payload, type: 'media-action' })}
             onRegisterStateGetter={onRegisterStateGetter}
-            onExit={onExitVideo}
+            onExit={isLockedForMe ? undefined : onExitVideo}
             onEnded={onPlayNextInQueue ? () => onPlayNextInQueue({ auto: true }) : undefined}
-            onVoteSkip={onVoteSkip}
+            onVoteSkip={isLockedForMe ? undefined : onVoteSkip}
             skipVotes={skipVotes}
             peerCount={peerCount}
             username={username}
             paste={isPhone ? null : {
-              onPlayLink,
+              onPlayLink: isLockedForMe ? undefined : onPlayLink,
               onQueueLink,
-              onPlayYouTube: (id: string, title?: string) => {
+              onPlayYouTube: isLockedForMe ? undefined : (id: string, title?: string) => {
                 onVideoChange(id, title);
                 onBroadcastAction('load', { newVideoId: id, title });
               },
@@ -357,7 +367,7 @@ export default function Stage({
           <Suspense fallback={null}><LocalVideoSyncPlayer
             initialFile={localVideoFile}
             remoteMeta={remoteLocalVideoMeta}
-            onFileSelect={onLocalFileSelect}
+            onFileSelect={isLockedForMe ? undefined : onLocalFileSelect}
             onClose={onCloseLocalVideo}
             onBroadcastAction={onBroadcastAction}
             remoteAction={remoteAction}
@@ -369,6 +379,7 @@ export default function Stage({
             onRequestP2PStream={onRequestP2PStream}
             onCancelP2PStream={onCancelP2PStream}
             isHost={isHost}
+            playbackLock={playbackLock}
             reactionFeed={reactionFeed}
             onSendReaction={onSendReaction}
             roomId={roomId}
@@ -384,18 +395,20 @@ export default function Stage({
             remoteAction={remoteAction}
             isP2PConnected={isP2PConnected}
             onRegisterStateGetter={onRegisterStateGetter}
-            onLocalFileSelect={onLocalFileSelect}
+            onLocalFileSelect={isLockedForMe ? undefined : onLocalFileSelect}
             queue={queue}
             onAddToQueue={onAddToQueue}
             onPlayNextInQueue={onPlayNextInQueue}
-            onVoteSkip={onVoteSkip}
+            onVoteSkip={isLockedForMe ? undefined : onVoteSkip}
             skipVotes={skipVotes}
             peerCount={peerCount}
             username={username}
             onOpenQueue={onOpenQueue}
-            onPlayLink={onPlayLink}
+            onPlayLink={isLockedForMe ? undefined : onPlayLink}
             onQueueLink={onQueueLink}
             onStartScreenShare={screenShare?.startScreenShare}
+            isHost={isHost}
+            playbackLock={playbackLock}
           />
         )}
 
@@ -407,7 +420,7 @@ export default function Stage({
             streamProgress={streamProgress}
             onRequestStream={onRequestP2PStream}
             onCancelStream={onCancelP2PStream}
-            onPickFile={onLocalFileSelect}
+            onPickFile={isLockedForMe ? undefined : onLocalFileSelect}
           />
         )}
 

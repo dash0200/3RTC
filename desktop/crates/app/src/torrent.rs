@@ -212,9 +212,13 @@ impl TorrentService {
             }
         };
 
+        let opts = librqbit::AddTorrentOptions {
+            overwrite: true,
+            ..Default::default()
+        };
         let add_resp = self
             .session
-            .add_torrent(add_torrent, None)
+            .add_torrent(add_torrent, Some(opts))
             .await
             .map_err(|e| anyhow::anyhow!("Failed to add torrent: {e}"))?;
 

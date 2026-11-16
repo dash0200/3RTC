@@ -306,7 +306,9 @@ export default function LinkPlayer({
                         ⏭ Skip {skipVotes.length > 0 ? `(${skipVotes.length}/${required})` : ''}
                     </button>
                 )}
-                <button type="button" className="link-player-btn link-player-exit" onClick={onExit}>✕ Exit Video</button>
+                {typeof onExit === 'function' && (
+                    <button type="button" className="link-player-btn link-player-exit" onClick={onExit}>✕ Exit Video</button>
+                )}
             </div>
             <div className="link-player-stage" ref={containerRef}>
                 {error && (

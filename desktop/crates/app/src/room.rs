@@ -486,11 +486,17 @@ fn stage(
                                                 "play-link",
                                                 if resolving {
                                                     "Checking…"
+                                                } else if crate::watch::locked_for_me(room) {
+                                                    "Add to queue"
                                                 } else {
                                                     "Play for everyone"
                                                 },
                                             )
-                                            .variant(Variant::Inverse)
+                                            .variant(if crate::watch::locked_for_me(room) {
+                                                Variant::Primary
+                                            } else {
+                                                Variant::Inverse
+                                            })
                                             .min_height(px(52.))
                                             .padding_x(px(22.))
                                             .font_size(px(16.))
@@ -502,7 +508,19 @@ fn stage(
                                         ),
                                 )
                                 .children(link_error)
-                                .child(
+                                .child(if crate::watch::locked_for_me(room) {
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap(px(8.))
+                                        .text_size(px(14.))
+                                        .text_color(tokens::text_3())
+                                        .child(icon(Icon::Lock, px(15.), tokens::text_3()))
+                                        .child("Host controls are on: links you add go into the queue ·")
+                                        .child(inline_link("share", "share screen", cx))
+                                } else {
                                     div()
                                         .flex()
                                         .flex_wrap()
@@ -516,8 +534,8 @@ fn stage(
                                         .child(inline_link("browse", "browse files", cx))
                                         .child(div().text_color(tokens::text_3()).child("MP4, MKV, WebM"))
                                         .child("·")
-                                        .child(inline_link("share", "share screen", cx)),
-                                ),
+                                        .child(inline_link("share", "share screen", cx))
+                                }),
                         ),
                 )
                 .child(div().w_full().max_w(px(1180.)).child(picks)),
