@@ -1,4 +1,4 @@
-﻿//! What the local video player reports (`mpv.rs` on Windows).
+//! What the local video player reports (`mpv.rs` on Windows).
 
 /// A person used the player (its keys or a click on the video).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +136,10 @@ pub trait StreamSource: Send + Sync {
     fn read_at(&self, pos: u64, buf: &mut [u8]) -> Result<usize, String>;
     /// Stops every read now and later (the player is closing).
     fn close(&self);
+    /// The file's name, if known (used as a hint for format detection).
+    fn name(&self) -> &str {
+        ""
+    }
 }
 
 /// What the player opens.

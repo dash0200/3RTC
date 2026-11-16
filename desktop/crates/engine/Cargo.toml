@@ -20,6 +20,7 @@ sha2 = "0.10"
 serde_json.workspace = true
 futures-util.workspace = true
 rtc-platform-win.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

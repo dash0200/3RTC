@@ -165,7 +165,7 @@ export default function DesktopHome({
             </span>
             <h2 id="dh-desktop-heading" className="dh-desktop-title">Prefer a native app? Meet 3RTC Desktop.</h2>
             <p className="dh-desktop-desc">
-              Engineered in Rust with GPU hardware decoding. Designed for movie nights, watch parties, and gaming sessions without browser tabs or compromises.
+              Engineered in Rust with GPU hardware decoding, direct BitTorrent swarm streaming, and system-wide gaming integrations. Zero browser tabs, zero throttling, zero compromises.
             </p>
             <div className="dh-desktop-cta-row">
               <a
@@ -184,21 +184,37 @@ export default function DesktopHome({
             </div>
           </header>
 
-          {/* 4 Major Real Features Seen by the User */}
+          {/* 6 Major Desktop-Exclusive Features */}
           <div className="dh-spotlight-grid">
             <div className="dh-spotlight-card">
               <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#6aa8ff' } as React.CSSProperties}>
                 <Icon name="tv" size={24} strokeWidth={2} />
               </div>
               <span className="dh-spotlight-pill">Native mpv Engine</span>
-              <h3>Flawless 4K &amp; MKV Movie Sync</h3>
+              <h3>Flawless 4K, HDR &amp; Anime Subtitles</h3>
               <p>
-                Browsers often fail to play HEVC, 4K, or multi-audio MKV movies. 3RTC Desktop embeds the battle-tested <strong>mpv</strong> media engine with GPU hardware decoding for stutter-free playback and instant seeking.
+                Browsers fail on HEVC/H.265, 10-bit color, DTS/AC3 surround sound, or styled ASS anime subtitles. 3RTC Desktop embeds the battle-tested <strong>mpv</strong> media engine with Direct3D11 GPU hardware decoding for stutter-free playback and instant seeking.
               </p>
               <ul className="dh-spotlight-list">
                 <li><Check /> Plays any MKV, MP4, 4K HDR &amp; anime video</li>
-                <li><Check /> Instant audio track &amp; subtitle selection</li>
-                <li><Check /> True peer-to-peer sync with zero buffering</li>
+                <li><Check /> Switch audio tracks &amp; ASS styled subtitles on the fly</li>
+                <li><Check /> Microsecond sync precision across all peers</li>
+              </ul>
+            </div>
+
+            <div className="dh-spotlight-card">
+              <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#ff7849' } as React.CSSProperties}>
+                <Icon name="magnet" size={24} strokeWidth={2} />
+              </div>
+              <span className="dh-spotlight-pill">BitTorrent Swarm</span>
+              <h3>Stream Any Magnet or Torrent Link</h3>
+              <p>
+                Web browsers are trapped within WebTorrent web seeds. 3RTC Desktop connects directly to the real global BitTorrent swarm (DHT, PEX, TCP &amp; uTP) to stream movies instantly in sync as they download.
+              </p>
+              <ul className="dh-spotlight-list">
+                <li><Check /> Paste any magnet URI or drop a .torrent file</li>
+                <li><Check /> Streams from millions of standard BitTorrent seeders</li>
+                <li><Check /> Full room sync: everyone watches the torrent together</li>
               </ul>
             </div>
 
@@ -209,12 +225,28 @@ export default function DesktopHome({
               <span className="dh-spotlight-pill">Remote Control &amp; Screen</span>
               <h3>Screen Share &amp; Remote Control</h3>
               <p>
-                Share your screen with high FPS and crystal-clear stereo game audio. Give trusted friends remote mouse and keyboard control to co-play or help navigate, with a 250Hz Game Mode and instant safety take-back.
+                Share your screen with high FPS and crystal-clear stereo game audio via WASAPI loopback. Hand trusted friends remote mouse and keyboard control to co-play or help navigate, with a 250Hz Game Mode and instant safety take-back.
               </p>
               <ul className="dh-spotlight-list">
                 <li><Check /> High-FPS capture with direct stereo app sound</li>
                 <li><Check /> Mouse &amp; keyboard control with 250Hz Game Mode</li>
                 <li><Check /> Emergency take-back via mouse or Ctrl+Alt+Shift+X</li>
+              </ul>
+            </div>
+
+            <div className="dh-spotlight-card">
+              <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#eab308' } as React.CSSProperties}>
+                <Icon name="bolt" size={24} strokeWidth={2} />
+              </div>
+              <span className="dh-spotlight-pill">Hardware Accelerated</span>
+              <h3>Zero Background Lag &amp; NVENC Encoding</h3>
+              <p>
+                Browsers throttle background tabs down to 1Hz when you game, dropping audio and freezing video. 3RTC Desktop runs natively with NVENC/AMF hardware encoding, never dropping frames or stuttering voice when Alt-Tabbed.
+              </p>
+              <ul className="dh-spotlight-list">
+                <li><Check /> NVENC / AMF / QSV hardware video encoding at 60 FPS</li>
+                <li><Check /> Zero background throttling: voice &amp; sync stay active in games</li>
+                <li><Check /> Ultra-lightweight native Rust footprint (~40MB RAM)</li>
               </ul>
             </div>
 
@@ -238,15 +270,15 @@ export default function DesktopHome({
               <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#36d399' } as React.CSSProperties}>
                 <Icon name="keyboard" size={24} strokeWidth={2} />
               </div>
-              <span className="dh-spotlight-pill">System-Wide Shortcuts</span>
-              <h3>Global Push-to-Talk &amp; Hotkeys</h3>
+              <span className="dh-spotlight-pill">System Integration &amp; P2P</span>
+              <h3>Global Push-to-Talk &amp; Massive Files</h3>
               <p>
-                Browser shortcuts stop working the moment you click away. 3RTC Desktop provides true global hotkeys so push-to-talk, mute, and media controls respond from any screen or game.
+                Browser shortcuts stop working the moment you click away. 3RTC Desktop provides true global hotkeys so push-to-talk responds from any game, plus direct disk-to-disk transfers for 10GB+ files without browser memory limits.
               </p>
               <ul className="dh-spotlight-list">
                 <li><Check /> Global push-to-talk in any game or application</li>
-                <li><Check /> Fully customizable keybindings for player controls</li>
                 <li><Check /> Selective deafen: silence voices while keeping movie audio</li>
+                <li><Check /> Send 10GB+ files directly between SSDs with auto-resume</li>
               </ul>
             </div>
           </div>
@@ -291,20 +323,31 @@ export default function DesktopHome({
                       <strong>Local Video Player</strong>
                       <span>Decoding high-bitrate &amp; MKV files</span>
                     </td>
-                    <td>Browser HTML5 (Codec-limited)</td>
+                    <td>Browser HTML5 (Codec-limited, no HEVC/DTS)</td>
                     <td className="dh-highlight-col">
                       <strong className="dh-text-accent">Native mpv with GPU decoding</strong>
-                      <small className="dh-subtext">Plays any 4K/MKV, multi-track audio &amp; subs</small>
+                      <small className="dh-subtext">Plays any 4K/MKV, multi-track audio &amp; ASS subs</small>
                     </td>
                   </tr>
                   <tr>
                     <td className="dh-feature-cell">
-                      <strong>Screen Sharing</strong>
+                      <strong>Torrent &amp; Magnet Streaming</strong>
+                      <span>Stream directly from BitTorrent swarms</span>
+                    </td>
+                    <td>WebTorrent web seeds only (Limited swarm)</td>
+                    <td className="dh-highlight-col">
+                      <strong className="dh-text-accent">✓ Full BitTorrent swarm (DHT, PEX, TCP &amp; uTP)</strong>
+                      <small className="dh-subtext">Paste any magnet link to stream in real-time sync</small>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="dh-feature-cell">
+                      <strong>Screen Sharing &amp; Audio</strong>
                       <span>Sharing displays, games &amp; app sound</span>
                     </td>
                     <td>Standard browser screen capture</td>
                     <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ High-FPS capture + stereo game audio</strong>
+                      <strong className="dh-text-accent">✓ High-FPS capture + stereo game audio (WASAPI)</strong>
                       <small className="dh-subtext">Smooth, low-latency desktop &amp; window sharing</small>
                     </td>
                   </tr>
@@ -317,6 +360,28 @@ export default function DesktopHome({
                     <td className="dh-highlight-col">
                       <strong className="dh-text-accent">✓ Mouse &amp; keyboard control + Game Mode</strong>
                       <small className="dh-subtext">250Hz pointer aim + emergency take-back</small>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="dh-feature-cell">
+                      <strong>Background Performance</strong>
+                      <span>When gaming or Alt-Tabbed to another window</span>
+                    </td>
+                    <td>Throttled to 1Hz by browser (Voice/sync lag)</td>
+                    <td className="dh-highlight-col">
+                      <strong className="dh-text-accent">✓ Zero throttling</strong>
+                      <small className="dh-subtext">Persistent background voice &amp; WebRTC while gaming</small>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="dh-feature-cell">
+                      <strong>Video Hardware Encoding</strong>
+                      <span>GPU-accelerated screen capture pipeline</span>
+                    </td>
+                    <td>Software canvas capture (CPU heavy)</td>
+                    <td className="dh-highlight-col">
+                      <strong className="dh-text-accent">✓ NVENC / AMF / QSV GPU hardware encoder</strong>
+                      <small className="dh-subtext">Lag-free 60 FPS sharing with near-zero CPU usage</small>
                     </td>
                   </tr>
                   <tr>
@@ -343,6 +408,17 @@ export default function DesktopHome({
                   </tr>
                   <tr>
                     <td className="dh-feature-cell">
+                      <strong>Large File Transfers</strong>
+                      <span>Direct peer-to-peer file sharing limits</span>
+                    </td>
+                    <td>Browser RAM limit (~1–2 GB)</td>
+                    <td className="dh-highlight-col">
+                      <strong className="dh-text-accent">✓ 10GB+ native resumable transfers</strong>
+                      <small className="dh-subtext">Direct disk-to-disk streaming with no RAM limits</small>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="dh-feature-cell">
                       <strong>Player Shortcuts</strong>
                       <span>Customizing play/pause/seek keys</span>
                     </td>
@@ -362,8 +438,8 @@ export default function DesktopHome({
                       <strong>Resource Efficiency</strong>
                       <span>CPU and memory overhead</span>
                     </td>
-                    <td>Standard browser tab usage</td>
-                    <td className="dh-highlight-col"><strong>Ultra-lightweight native Rust app</strong></td>
+                    <td>Standard browser tab usage (~500MB–1.5GB)</td>
+                    <td className="dh-highlight-col"><strong>Ultra-lightweight native Rust (~40MB RAM)</strong></td>
                   </tr>
                   <tr>
                     <td className="dh-feature-cell">

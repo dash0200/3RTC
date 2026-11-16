@@ -98,6 +98,7 @@ pub(crate) struct TorrentService {
     session: Arc<Session>,
     http_port: u16,
     active_handle: Arc<Mutex<Option<Arc<ManagedTorrent>>>>,
+    active_cancel: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 impl TorrentService {
@@ -151,6 +152,7 @@ impl TorrentService {
             session,
             http_port,
             active_handle: Arc::new(Mutex::new(None)),
+            active_cancel: Arc::new(Mutex::new(None)),
         };
 
         let _ = TORRENT_SERVICE.set(svc.clone());
@@ -160,6 +162,29 @@ impl TorrentService {
     /// The base URL for HTTP range streaming (e.g. `http://127.0.0.1:54321`).
     pub(crate) fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.http_port)
+    }
+
+    /// Cancels any currently preloading or streaming torrent.
+    pub(crate) fn cancel_stream(runtime: &tokio::runtime::Handle) {
+        runtime.spawn(async {
+            if let Some(svc) = TORRENT_SERVICE.get() {
+                svc.stop_active().await;
+            }
+        });
+    }
+
+    /// Stops and removes the active torrent from the session.
+    pub(crate) async fn stop_active(&self) {
+        if let Ok(mut cancel) = self.active_cancel.lock()
+            && let Some(tx) = cancel.take()
+        {
+            let _ = tx.send(());
+        }
+        let handle = self.active_handle.lock().ok().and_then(|mut h| h.take());
+        if let Some(h) = handle {
+            info!("Stopping and removing active torrent {:?}", h.info_hash());
+            let _ = self.session.delete(h.id().into(), false).await;
+        }
     }
 
     /// Starts streaming from a magnet link or `.torrent` file.
@@ -174,7 +199,15 @@ impl TorrentService {
         runtime.spawn(async move {
             match Self::get().await {
                 Ok(svc) => {
-                    if let Err(e) = svc.run_stream(input, tx.clone()).await {
+                    // Stop any previous torrent first so only one torrent is ever active
+                    svc.stop_active().await;
+
+                    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+                    if let Ok(mut c) = svc.active_cancel.lock() {
+                        *c = Some(cancel_tx);
+                    }
+
+                    if let Err(e) = svc.run_stream(input, tx.clone(), cancel_rx).await {
                         error!("Torrent stream error: {e}");
                         let _ = tx.send(TorrentProgress::Error(e.to_string()));
                     }
@@ -191,6 +224,7 @@ impl TorrentService {
         &self,
         input: TorrentInput,
         tx: mpsc::UnboundedSender<TorrentProgress>,
+        mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
     ) -> anyhow::Result<()> {
         let title = match &input {
             TorrentInput::Magnet(m) => parse_magnet_dn(m).unwrap_or_else(|| "Magnet Video".to_owned()),
@@ -237,6 +271,10 @@ impl TorrentService {
 
         // Wait for metadata resolution (trackers/DHT)
         tokio::select! {
+            _ = &mut cancel_rx => {
+                info!("Torrent stream cancelled during metadata resolution.");
+                return Ok(());
+            }
             res = handle.wait_until_initialized() => {
                 res.map_err(|e| anyhow::anyhow!("Metadata resolution failed: {e}"))?;
             }
@@ -304,7 +342,13 @@ impl TorrentService {
         let mut ready_sent = false;
 
         loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::select! {
+                _ = &mut cancel_rx => {
+                    info!("Torrent stream cancelled during buffering.");
+                    return Ok(());
+                }
+                () = tokio::time::sleep(Duration::from_millis(500)) => {}
+            }
 
             let stats = handle.stats();
             let downloaded = stats.progress_bytes;

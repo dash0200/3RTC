@@ -28,6 +28,55 @@ use rtc_webrtc::libwebrtc::data_channel::{DataChannel, DataChannelState};
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
 
+/// Specification of a video file offered to the room.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareFileSpec {
+    /// Path on disk.
+    pub path: PathBuf,
+    /// Display name of the file (e.g. `video.mkv`).
+    pub name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Optional HTTP stream URL (e.g. `http://127.0.0.1:{port}/...` from librqbit).
+    pub stream_url: Option<String>,
+}
+
+impl ShareFileSpec {
+    /// Creates a spec for a local file without an HTTP stream URL.
+    #[must_use]
+    pub fn new(path: PathBuf, name: String, size: u64) -> Self {
+        Self {
+            path,
+            name,
+            size,
+            stream_url: None,
+        }
+    }
+
+    /// Creates a spec with an optional HTTP stream URL.
+    #[must_use]
+    pub fn with_stream_url(path: PathBuf, name: String, size: u64, stream_url: Option<String>) -> Self {
+        Self {
+            path,
+            name,
+            size,
+            stream_url,
+        }
+    }
+}
+
+impl From<(PathBuf, String, u64)> for ShareFileSpec {
+    fn from((path, name, size): (PathBuf, String, u64)) -> Self {
+        Self::new(path, name, size)
+    }
+}
+
+impl From<(PathBuf, String, u64, Option<String>)> for ShareFileSpec {
+    fn from((path, name, size, stream_url): (PathBuf, String, u64, Option<String>)) -> Self {
+        Self::with_stream_url(path, name, size, stream_url)
+    }
+}
+
 // ---- numbers from p2pStreamer.ts ------------------------------------------------------------------
 
 /// Pause a block stream above this much queued on the channel …
@@ -102,13 +151,69 @@ fn sha256_hex(data: &[u8]) -> String {
     out
 }
 
-/// One block of our file.
-fn read_block(file: &File, size: u64, block: u32) -> std::io::Result<Vec<u8>> {
+/// Reads an HTTP byte range from a stream URL (e.g. local librqbit server).
+fn read_http_range(url: &str, start: u64, len: usize) -> Result<Vec<u8>, String> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let end = start.saturating_add(len as u64).saturating_sub(1);
+    let resp = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .new_agent()
+        .get(url)
+        .header("Range", format!("bytes={start}-{end}"))
+        .call()
+        .map_err(|e| format!("http range request failed: {e}"))?;
+
+    let bytes = resp
+        .into_body()
+        .with_config()
+        .limit((len + 4096) as u64)
+        .read_to_vec()
+        .map_err(|e| format!("reading http response failed: {e}"))?;
+
+    if bytes.len() != len {
+        return Err(format!(
+            "expected {len} bytes, got {} bytes from stream url",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Reads one block of our file from HTTP stream url if available, falling back to disk file.
+fn read_block_source(
+    file: Option<&File>,
+    stream_url: Option<&str>,
+    size: u64,
+    block: u32,
+) -> std::io::Result<Vec<u8>> {
     let start = u64::from(block) * u64::from(RANGE_BLOCK_SIZE);
     let len = usize::try_from((size - start.min(size)).min(u64::from(RANGE_BLOCK_SIZE))).unwrap_or(0);
-    let mut buf = vec![0u8; len];
-    read_full(file, &mut buf, start)?;
-    Ok(buf)
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+
+    if let Some(url) = stream_url {
+        match read_http_range(url, start, len) {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => {
+                tracing::debug!("stream: http range read for block {block} failed: {e}");
+            }
+        }
+    }
+
+    if let Some(f) = file {
+        let mut buf = vec![0u8; len];
+        read_full(f, &mut buf, start)?;
+        Ok(buf)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no file or stream source available",
+        ))
+    }
 }
 
 // ---- the relay tree (streamTree.ts) -------------------------------------------------------------
@@ -249,7 +354,8 @@ struct Server {
 impl Server {
     fn start(
         channel: DataChannel,
-        file: Arc<File>,
+        file: Option<Arc<File>>,
+        stream_url: Option<String>,
         size: u64,
         stream_no: u32,
         hashes: Option<Arc<Mutex<HashMap<u32, String>>>>,
@@ -259,6 +365,7 @@ impl Server {
         let task = tokio::spawn(serve(
             channel.clone(),
             file,
+            stream_url,
             size,
             stream_no,
             Arc::clone(&q),
@@ -330,9 +437,11 @@ async fn drain(dc: &DataChannel, high: u64, low: u64, stop: &(dyn Fn() -> bool +
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve(
     dc: DataChannel,
-    file: Arc<File>,
+    file: Option<Arc<File>>,
+    stream_url: Option<String>,
     size: u64,
     stream_no: u32,
     q: Arc<Mutex<ServeQueue>>,
@@ -354,8 +463,13 @@ async fn serve(
             wake.notified().await;
             continue;
         };
-        let f = Arc::clone(&file);
-        let data = match tokio::task::spawn_blocking(move || read_block(&f, size, block)).await {
+        let f = file.clone();
+        let url = stream_url.clone();
+        let data = match tokio::task::spawn_blocking(move || {
+            read_block_source(f.as_deref(), url.as_deref(), size, block)
+        })
+        .await
+        {
             Ok(Ok(d)) => d,
             Ok(Err(e)) => {
                 tracing::warn!("stream: couldn't read block {block}: {e}");
@@ -390,7 +504,8 @@ async fn serve(
 /// The whole file in 16 KB chunks (`P2PStreamSender`): for browsers that can't play on demand.
 async fn push_whole(
     dc: DataChannel,
-    file: Arc<File>,
+    file: Option<Arc<File>>,
+    stream_url: Option<String>,
     size: u64,
     header: String,
     complete: String,
@@ -406,12 +521,24 @@ async fn push_whole(
         // read a batch of chunks at a time (fewer trips to the disk)
         let first = i;
         let batch = (chunks - i).min(64);
-        let f = Arc::clone(&file);
+        let f = file.clone();
+        let url = stream_url.clone();
         let start = first * STREAM_CHUNK_SIZE as u64;
         let len = usize::try_from((size - start).min(batch * STREAM_CHUNK_SIZE as u64)).unwrap_or(0);
         let Ok(Ok(data)) = tokio::task::spawn_blocking(move || {
-            let mut buf = vec![0u8; len];
-            read_full(&f, &mut buf, start).map(|()| buf)
+            if let Some(b) = url.as_deref().and_then(|u| read_http_range(u, start, len).ok()) {
+                return Ok(b);
+            }
+            if let Some(f) = &f {
+                let mut buf = vec![0u8; len];
+                read_full(f, &mut buf, start)?;
+                Ok(buf)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no file or stream available",
+                ))
+            }
         })
         .await
         else {
@@ -441,6 +568,7 @@ struct CacheState {
 }
 
 struct Shared {
+    name: String,
     size: u64,
     block_size: u32,
     state: Mutex<CacheState>,
@@ -474,6 +602,12 @@ impl StreamReader {
     #[must_use]
     pub fn size(&self) -> u64 {
         self.shared.size
+    }
+
+    /// The file's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.shared.name
     }
 
     /// Reads at `pos` into `buf` (at most to the end of a block), waiting for the data.
@@ -843,7 +977,8 @@ fn track_label(t: &serde_json::Value) -> String {
 
 /// Our file, offered to the room.
 struct Own {
-    file: Arc<File>,
+    file: Option<Arc<File>>,
+    stream_url: Option<String>,
     name: String,
     size: u64,
     stream_no: u32,
@@ -950,9 +1085,18 @@ impl Streams {
     }
 
     /// Our own file to offer (`None`: none now). Viewers of the old one are told it stopped.
-    pub(crate) fn share(&mut self, file: Option<(PathBuf, String, u64)>, links: &dyn Links) -> Vec<Out> {
+    pub(crate) fn share(&mut self, file: Option<ShareFileSpec>, links: &dyn Links) -> Vec<Out> {
         let same = match (&file, &self.own) {
-            (Some((_, name, size)), Some(o)) => *name == o.name && *size == o.size,
+            (Some(s), Some(o)) => {
+                s.name == o.name
+                    && s.size == o.size
+                    && s.stream_url == o.stream_url
+                    && self
+                        .own_format
+                        .as_ref()
+                        .is_some_and(|f| f["container"].as_str().is_some_and(|c| c != "unknown"))
+            }
+            (None, None) => true,
             _ => false,
         };
         if same {
@@ -962,35 +1106,45 @@ impl Streams {
         self.own_format = None;
         self.reports.clear();
         let mut out = vec![Out::Problems(Vec::new())];
-        self.own = file.and_then(|(path, name, size)| match File::open(&path) {
-            Ok(f) => Some(Own {
-                file: Arc::new(f),
-                name,
-                size,
+        self.own = file.and_then(|spec| {
+            let file_opt = File::open(&spec.path).ok().map(Arc::new);
+            if file_opt.is_none() && spec.stream_url.is_none() {
+                tracing::warn!("stream: can't open {} and no stream url", spec.path.display());
+                return None;
+            }
+            Some(Own {
+                file: file_opt,
+                stream_url: spec.stream_url,
+                name: spec.name,
+                size: spec.size,
                 stream_no: rand::random::<u32>(),
                 hashes: Arc::new(Mutex::new(HashMap::new())),
-            }),
-            Err(e) => {
-                tracing::warn!("stream: can't open {}: {e}", path.display());
-                None
-            }
+            })
         });
         // what's inside, for the viewers' format card (a few MB read at most)
         if let Some(own) = &self.own {
-            let file = Arc::clone(&own.file);
+            let file = own.file.clone();
+            let url = own.stream_url.clone();
             let format = rtc_core::files::probe(
                 &mut |pos, len| {
-                    let mut buf = vec![0u8; len];
-                    let n = read_at(&file, &mut buf, pos).ok()?;
-                    let mut total = n;
-                    while total < len {
-                        match read_at(&file, &mut buf[total..], pos + total as u64) {
-                            Ok(0) | Err(_) => break,
-                            Ok(k) => total += k,
-                        }
+                    if let Some(bytes) = url.as_deref().and_then(|u| read_http_range(u, pos, len).ok()) {
+                        return Some(bytes);
                     }
-                    buf.truncate(total);
-                    Some(buf)
+                    if let Some(f) = &file {
+                        let mut buf = vec![0u8; len];
+                        let n = read_at(f, &mut buf, pos).ok()?;
+                        let mut total = n;
+                        while total < len {
+                            match read_at(f, &mut buf[total..], pos + total as u64) {
+                                Ok(0) | Err(_) => break,
+                                Ok(k) => total += k,
+                            }
+                        }
+                        buf.truncate(total);
+                        Some(buf)
+                    } else {
+                        None
+                    }
                 },
                 own.size,
             );
@@ -1110,8 +1264,9 @@ impl Streams {
                 }
                 let label = track_label(t);
                 let scale = format["timecodeScale"].as_u64().unwrap_or(1_000_000);
-                let (file, size, back, busy) = (
-                    Arc::clone(&own.file),
+                let (file, stream_url, size, back, busy) = (
+                    own.file.clone(),
+                    own.stream_url.clone(),
                     own.size,
                     Arc::clone(&self.back),
                     Arc::clone(&self.extracting),
@@ -1129,16 +1284,26 @@ impl Streams {
                     let b2 = Arc::clone(&back);
                     let cues = rtc_core::files::extract_mkv_subtitles(
                         &mut |pos, len| {
-                            let mut buf = vec![0u8; len];
-                            let mut total = 0;
-                            while total < len {
-                                match read_at(&file, &mut buf[total..], pos + total as u64) {
-                                    Ok(0) | Err(_) => break,
-                                    Ok(k) => total += k,
-                                }
+                            if let Some(bytes) = stream_url
+                                .as_deref()
+                                .and_then(|u| read_http_range(u, pos, len).ok())
+                            {
+                                return Some(bytes);
                             }
-                            buf.truncate(total);
-                            Some(buf)
+                            if let Some(f) = &file {
+                                let mut buf = vec![0u8; len];
+                                let mut total = 0;
+                                while total < len {
+                                    match read_at(f, &mut buf[total..], pos + total as u64) {
+                                        Ok(0) | Err(_) => break,
+                                        Ok(k) => total += k,
+                                    }
+                                }
+                                buf.truncate(total);
+                                Some(buf)
+                            } else {
+                                None
+                            }
                         },
                         size,
                         track,
@@ -1345,7 +1510,8 @@ impl Streams {
                             from.clone(),
                             Server::start(
                                 channel,
-                                Arc::clone(&own.file),
+                                own.file.clone(),
+                                own.stream_url.clone(),
                                 own.size,
                                 own.stream_no,
                                 Some(Arc::clone(&own.hashes)),
@@ -1370,7 +1536,8 @@ impl Streams {
                                 from.clone(),
                                 Server::start(
                                     channel,
-                                    Arc::clone(&own.file),
+                                    own.file.clone(),
+                                    own.stream_url.clone(),
                                     own.size,
                                     own.stream_no,
                                     Some(Arc::clone(&own.hashes)),
@@ -1413,7 +1580,15 @@ impl Streams {
                     if let Some(old) = self.pushes.insert(from.clone(), Arc::clone(&stop)) {
                         old.store(true, Ordering::Relaxed);
                     }
-                    tokio::spawn(push_whole(channel, Arc::clone(&own.file), own.size, h, c, stop));
+                    tokio::spawn(push_whole(
+                        channel,
+                        own.file.clone(),
+                        own.stream_url.clone(),
+                        own.size,
+                        h,
+                        c,
+                        stop,
+                    ));
                     out.push(Out::Log(format!(
                         "📡 Peer \"{requester}\" requested video stream. Slicing and streaming chunks..."
                     )));
@@ -1455,7 +1630,8 @@ impl Streams {
                         from.clone(),
                         Server::start(
                             channel,
-                            Arc::clone(&own.file),
+                            own.file.clone(),
+                            own.stream_url.clone(),
                             own.size,
                             own.stream_no,
                             Some(Arc::clone(&own.hashes)),
@@ -1505,7 +1681,9 @@ impl Streams {
                 for group in rest.chunks(8) {
                     let mut hashes = Vec::new();
                     for b in group {
-                        if let Ok(data) = read_block(&own.file, own.size, *b) {
+                        if let Ok(data) =
+                            read_block_source(own.file.as_deref(), own.stream_url.as_deref(), own.size, *b)
+                        {
                             let hex = sha256_hex(&data);
                             lock(&own.hashes).insert(*b, hex.clone());
                             hashes.push((*b, hex));
@@ -1573,6 +1751,7 @@ impl Streams {
                 }));
                 let reader = StreamReader {
                     shared: Arc::new(Shared {
+                        name: name.clone(),
                         size,
                         block_size,
                         state: Mutex::new(CacheState {
@@ -1687,6 +1866,7 @@ mod tests {
     fn view(size: u64) -> View {
         let reader = StreamReader {
             shared: Arc::new(Shared {
+                name: "v.mp4".into(),
                 size,
                 block_size: RANGE_BLOCK_SIZE,
                 state: Mutex::new(CacheState {

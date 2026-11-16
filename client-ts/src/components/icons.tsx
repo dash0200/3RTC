@@ -154,6 +154,12 @@ const paths: Record<string, React.ReactNode> = {
       <path d="M11.5 4.3L21 3V11.5H11.5V4.3Z" fill="currentColor" />
       <path d="M11.5 12.5H21V21L11.5 19.7V12.5Z" fill="currentColor" />
     </>
+  ),
+  bolt: (
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+  ),
+  magnet: (
+    <path d="M4 7v6a8 8 0 0 0 16 0V7M4 7h4M16 7h4M4 11h4M16 11h4" />
   )
 };
 

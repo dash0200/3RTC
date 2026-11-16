@@ -453,31 +453,51 @@ impl RoomView {
                 player.borrow_mut().take();
                 self.watch.error = None;
                 let what = match &showing {
-                    Showing::Local { name, size, .. } => {
-                        if let Some(url) = self.watch.torrent_stream_url.take() {
-                            if let Some(path) = self.watch.local.path_for(name) {
-                                What::Torrent {
-                                    url,
-                                    path,
-                                    size: Some(*size),
+                    Showing::Local { name, size, from, .. } => {
+                        if from.is_none() {
+                            if let Some(url) = self.watch.torrent_stream_url.take() {
+                                if let Some(path) = self.watch.local.path_for(name) {
+                                    What::Torrent {
+                                        url,
+                                        path,
+                                        size: Some(*size),
+                                    }
+                                } else if let Some(path) = &self.watch.local.file {
+                                    What::Torrent {
+                                        url,
+                                        path: path.clone(),
+                                        size: Some(*size),
+                                    }
+                                } else {
+                                    What::File(self.watch.local.file.clone().unwrap_or_default())
                                 }
-                            } else if let Some(path) = &self.watch.local.file {
-                                What::Torrent {
-                                    url,
-                                    path: path.clone(),
-                                    size: Some(*size),
-                                }
+                            } else if let Some(path) = self.watch.local.path_for(name) {
+                                What::File(path)
+                            } else if let Some(reader) = self.watch.local.stream_for(name) {
+                                What::Stream(reader)
                             } else {
-                                What::File(self.watch.local.file.clone().unwrap_or_default())
+                                self.watch.error =
+                                    Some("Choose the video file again to play it here.".into());
+                                cx.notify();
+                                return;
                             }
-                        } else if let Some(path) = self.watch.local.path_for(name) {
-                            What::File(path)
-                        } else if let Some(reader) = self.watch.local.stream_for(name) {
-                            What::Stream(reader)
                         } else {
-                            self.watch.error = Some("Choose the video file again to play it here.".into());
-                            cx.notify();
-                            return;
+                            // We are streaming from a peer: cancel any local torrent in background
+                            crate::torrent::TorrentService::cancel_stream(&self.runtime);
+                            self.watch.torrent_stream_url = None;
+                            self.watch.torrent_stats = None;
+                            self.watch.torrent_status = None;
+
+                            if let Some(path) = self.watch.local.path_for(name) {
+                                What::File(path)
+                            } else if let Some(reader) = self.watch.local.stream_for(name) {
+                                What::Stream(reader)
+                            } else {
+                                self.watch.error =
+                                    Some("Choose the video file again to play it here.".into());
+                                cx.notify();
+                                return;
+                            }
                         }
                     }
                     other => match source(other) {
@@ -680,9 +700,15 @@ impl RoomView {
                                 return;
                             }
                             (Resolved::YouTube(id, title), false) => {
+                                crate::torrent::TorrentService::cancel_stream(&v.runtime);
+                                v.watch.torrent_status = None;
+                                v.watch.torrent_stats = None;
                                 v.watch_cmd(WatchCommand::PlayYouTube { id, title });
                             }
                             (Resolved::Media(m), false) => {
+                                crate::torrent::TorrentService::cancel_stream(&v.runtime);
+                                v.watch.torrent_status = None;
+                                v.watch.torrent_stats = None;
                                 v.watch_cmd(WatchCommand::PlayLink(m));
                             }
                             (Resolved::YouTube(id, title), true) => {
@@ -713,6 +739,16 @@ impl RoomView {
         cx.notify();
     }
 
+    /// Cancels active torrent streaming/preloading and clears status.
+    pub(crate) fn cancel_torrent(&mut self, cx: &mut Context<'_, Self>) {
+        crate::torrent::TorrentService::cancel_stream(&self.runtime);
+        self.watch.torrent_status = None;
+        self.watch.torrent_stats = None;
+        self.watch.torrent_stream_url = None;
+        self.watch.link_error = None;
+        cx.notify();
+    }
+
     /// Starts streaming and playback for a BitTorrent magnet link or `.torrent` file.
     pub(crate) fn play_torrent(&mut self, input: crate::torrent::TorrentInput, cx: &mut Context<'_, Self>) {
         if self.room.as_ref().is_some_and(locked_for_me) {
@@ -720,6 +756,10 @@ impl RoomView {
             cx.notify();
             return;
         }
+        // Cancel any currently running torrent stream first so only the new one loads
+        crate::torrent::TorrentService::cancel_stream(&self.runtime);
+        self.watch.torrent_stats = None;
+        self.watch.torrent_stream_url = None;
         self.watch.link_error = None;
         self.watch.torrent_status = Some("🧲 Connecting to BitTorrent swarm...".into());
         cx.notify();
@@ -746,8 +786,8 @@ impl RoomView {
                             v.watch.torrent_status =
                                 Some(format!("📁 “{filename}” ({size_fmt}) • {title}").into());
                             v.watch.local.file = Some(file_path.clone());
-                            v.watch.torrent_stream_url = Some(stream_url);
-                            v.share_own_file_sized(&file_path, Some(size));
+                            v.watch.torrent_stream_url = Some(stream_url.clone());
+                            v.share_own_torrent(&file_path, Some(&filename), Some(size), Some(stream_url));
                         }
                         crate::torrent::TorrentProgress::Buffering {
                             downloaded,
@@ -775,6 +815,10 @@ impl RoomView {
                         }
                         crate::torrent::TorrentProgress::ReadyToPlay { name, size } => {
                             v.watch.torrent_status = None;
+                            if let Some(path) = v.watch.local.file.clone() {
+                                let stream_url = v.watch.torrent_stream_url.clone();
+                                v.share_own_torrent(&path, Some(&name), Some(size), stream_url);
+                            }
                             v.watch_cmd(WatchCommand::PlayFile { name, size });
                         }
                         crate::torrent::TorrentProgress::LiveStats {
@@ -1422,14 +1466,44 @@ pub(crate) fn browser(view: &mut RoomView, room: &Snapshot, cx: &mut Context<'_,
 }
 
 /// Under the paste box: live torrent status or why a link can't be played.
-pub(crate) fn link_error(view: &RoomView) -> Option<AnyElement> {
+pub(crate) fn link_error(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Option<AnyElement> {
     if let Some(status) = view.watch.torrent_status.clone() {
         return Some(
             div()
-                .text_size(px(14.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(tokens::accent())
-                .child(status)
+                .flex()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .max_w(px(640.))
+                .px(px(14.))
+                .py(px(8.))
+                .rounded(px(10.))
+                .bg(tokens::surface())
+                .border_1()
+                .border_color(tokens::line())
+                .child(
+                    div()
+                        .text_size(px(13.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(tokens::accent())
+                        .child(status),
+                )
+                .child(
+                    div()
+                        .id("cancel-torrent-btn")
+                        .px(px(10.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .bg(tokens::raised())
+                        .border_1()
+                        .border_color(tokens::line_strong())
+                        .hover(|s| s.bg(tokens::danger_line()).text_color(tokens::danger_text()))
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::BOLD)
+                        .child("Cancel")
+                        .on_click(cx.listener(|v, _, _, cx| v.cancel_torrent(cx))),
+                )
                 .into_any_element(),
         );
     }

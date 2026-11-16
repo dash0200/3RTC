@@ -100,6 +100,24 @@ pub fn clean_mime(mime: &str) -> &'static str {
         .unwrap_or("image/png")
 }
 
+/// Whether a MIME type is a displayable image.
+#[must_use]
+pub fn is_image_mime(mime: &str) -> bool {
+    let m = mime.split(';').next().unwrap_or("").trim();
+    m.starts_with("image/") || MIME_TYPES.iter().any(|t| t.eq_ignore_ascii_case(m))
+}
+
+/// The MIME type to use for general file transfers.
+#[must_use]
+pub fn clean_file_mime(mime: &str) -> String {
+    let m = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    if m.is_empty() {
+        "application/octet-stream".to_owned()
+    } else {
+        m
+    }
+}
+
 /// The image type for a file name, by its extension (`None`: not an image we send).
 #[must_use]
 pub fn mime_for_name(name: &str) -> Option<&'static str> {
@@ -213,6 +231,13 @@ mod tests {
     fn names_types_and_sizes() {
         assert_eq!(clean_mime("IMAGE/JPEG; q=1"), "image/jpeg");
         assert_eq!(clean_mime("text/html"), "image/png");
+        assert_eq!(
+            super::clean_file_mime("application/x-bittorrent; charset=utf-8"),
+            "application/x-bittorrent"
+        );
+        assert_eq!(super::clean_file_mime(""), "application/octet-stream");
+        assert!(super::is_image_mime("image/png"));
+        assert!(!super::is_image_mime("application/x-bittorrent"));
         assert_eq!(format_size(512), "512 B");
         assert_eq!(format_size(1536), "1.5 KB");
         assert_eq!(format_size(3 * 1024 * 1024), "3.0 MB");
