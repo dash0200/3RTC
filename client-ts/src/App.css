@@ -6793,6 +6793,96 @@ video::cue {
   box-shadow: 0 0 6px rgba(56, 189, 248, 0.6);
 }
 
+.transfer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.transfer-action-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.transfer-action-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: #38bdf8;
+  color: #fff;
+}
+
+.transfer-action-btn.is-cancel:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
+.chat-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+  max-width: 280px;
+}
+
+.chat-file-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.chat-file-details {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+}
+
+.chat-file-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-file-size {
+  font-size: 0.7rem;
+  color: #94a3b8;
+}
+
+.chat-file-download-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #0284c7;
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.chat-file-download-btn:hover {
+  background: #0369a1;
+  color: #fff;
+}
+
 /* 5. Completed Image Thumbnail Card in Chat Message */
 .chat-image-card {
   position: relative;

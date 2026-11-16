@@ -175,6 +175,8 @@ pub enum Command {
     },
     /// Host only: lock playback to the host (or unlock it) (`useHostControls`).
     SetPlaybackLock(bool),
+    /// Host only: switch topology between "mesh" and "hub".
+    SetTopology(String),
     /// The watch party.
     Watch(WatchCommand),
     /// Activities and games.
@@ -370,6 +372,7 @@ pub struct Room {
     me: Identity,
     phase: Phase,
     host: Option<PeerId>,
+    topology: String,
     members: BTreeMap<PeerId, Member>,
     health: BTreeMap<PeerId, Health>,
     muted: bool,
@@ -403,6 +406,7 @@ impl Room {
             me,
             phase: Phase::Idle,
             host: None,
+            topology: String::new(),
             members: BTreeMap::new(),
             health: BTreeMap::new(),
             muted: true,
@@ -419,6 +423,16 @@ impl Room {
             host_gone_since: None,
             watch: watch::Watch::new(),
             activities: activity::Activities::new(),
+        }
+    }
+
+    /// Current room network topology ("mesh" or "hub").
+    #[must_use]
+    pub fn topology(&self) -> &str {
+        if self.topology.is_empty() {
+            "mesh"
+        } else {
+            &self.topology
         }
     }
 
@@ -649,6 +663,7 @@ impl Room {
             is_reply,
             playback_lock: self.is_host().then_some(self.playback_lock),
             client: Some(rtc_protocol::peer::CLIENT_DESKTOP.to_owned()),
+            topology: self.is_host().then(|| self.topology().to_owned()),
         }
     }
 
@@ -827,9 +842,13 @@ impl Room {
                     return;
                 }
                 self.playback_lock = on;
-                fx.push(Effect::Broadcast(
-                    self.envelope(PeerMessage::RoomSettings { playback_lock: on }, now_ms),
-                ));
+                fx.push(Effect::Broadcast(self.envelope(
+                    PeerMessage::RoomSettings {
+                        playback_lock: on,
+                        topology: Some(self.topology().to_owned()),
+                    },
+                    now_ms,
+                )));
                 self.log(
                     if on {
                         "🔒 You turned on host controls: only you can control playback."
@@ -847,6 +866,30 @@ impl Room {
                     .to_owned(),
                 )));
                 fx.push(Effect::Ui(UiEvent::Changed));
+            }
+            Command::SetTopology(next) => {
+                if !self.is_host() || next == self.topology() {
+                    return;
+                }
+                self.topology = next.clone();
+                let text = if next == "hub" {
+                    "🌐 Network topology switched to Host-Hub mode (Star Relay)."
+                } else {
+                    "🌐 Network topology switched to Full Mesh mode (P2P)."
+                };
+                self.log(text.to_owned(), fx);
+                fx.push(Effect::Ui(UiEvent::Notice(text.to_owned())));
+                fx.push(Effect::Ui(UiEvent::Changed));
+                fx.push(Effect::Send(ClientMessage::SetTopology {
+                    topology: next.clone(),
+                }));
+                fx.push(Effect::Broadcast(self.envelope(
+                    PeerMessage::RoomSettings {
+                        playback_lock: self.playback_lock,
+                        topology: Some(next),
+                    },
+                    now_ms,
+                )));
             }
             Command::Watch(w) => {
                 if matches!(self.phase, Phase::InRoom(_)) {
@@ -1018,8 +1061,12 @@ impl Room {
 
     /// Peers we don't know yet: open a connection and wait for their offer (they were here first).
     fn adopt_existing(&mut self, peers: Vec<PeerId>, now_ms: f64, fx: &mut Vec<Effect>) {
+        let is_hub = self.topology() == "hub";
         for peer in peers {
             if peer == self.me.peer_id || self.members.contains_key(&peer) {
+                continue;
+            }
+            if is_hub && !self.is_host() && self.host.as_ref() != Some(&peer) {
                 continue;
             }
             self.members.insert(peer.clone(), Member::default());
@@ -1039,12 +1086,16 @@ impl Room {
                 host_peer_id,
                 seat_token,
                 host_token,
+                topology,
                 ..
             } => {
                 self.phase = Phase::InRoom(room_id);
                 self.host = Some(host_peer_id);
                 self.seat_token = Some(seat_token);
                 self.host_token = Some(host_token);
+                if let Some(t) = topology {
+                    self.topology = t;
+                }
                 self.log(
                     format!("You created room {room_id} as \"{}\".", self.me.username),
                     fx,
@@ -1057,12 +1108,16 @@ impl Room {
                 host_peer_id,
                 seat_token,
                 host_token,
+                topology,
                 ..
             } => {
                 self.phase = Phase::InRoom(room_id);
                 self.host = Some(host_peer_id);
                 self.seat_token = Some(seat_token);
                 self.host_token = Some(host_token);
+                if let Some(t) = topology {
+                    self.topology = t;
+                }
                 self.adopt_existing(peers, now_ms, fx);
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
@@ -1072,6 +1127,7 @@ impl Room {
                 host_peer_id,
                 seat_token,
                 host_token,
+                topology,
                 ..
             } => {
                 let first = !matches!(self.phase, Phase::InRoom(_));
@@ -1080,6 +1136,9 @@ impl Room {
                 self.seat_token = Some(seat_token);
                 if host_token.is_some() {
                     self.host_token = host_token;
+                }
+                if let Some(t) = topology {
+                    self.topology = t;
                 }
                 if first {
                     self.log(
@@ -1117,6 +1176,9 @@ impl Room {
             ServerMessage::PeerJoined { peer_id } => {
                 let Phase::InRoom(room) = self.phase else { return };
                 if peer_id == self.me.peer_id {
+                    return;
+                }
+                if self.topology() == "hub" && !self.is_host() && self.host.as_ref() != Some(&peer_id) {
                     return;
                 }
                 // We were here first: we offer (as the web app does). A known peer is rebuilt.
@@ -1192,6 +1254,11 @@ impl Room {
                 code,
                 room_id,
             } => {
+                if message.to_lowercase().contains("set-topology") {
+                    // Signaling server (e.g. deployed production instance) doesn't implement set-topology yet.
+                    // The host continues operating Host-Hub / star relay locally.
+                    return;
+                }
                 if code == Some(ErrorCode::ResumeDenied)
                     && let Some(room) = room_id
                 {
@@ -1225,10 +1292,21 @@ impl Room {
                 }
                 fx.push(Effect::Ui(UiEvent::Notice(text)));
             }
-            ServerMessage::Pong
-            | ServerMessage::RoomFound { .. }
-            | ServerMessage::TopologyChanged { .. }
-            | ServerMessage::Unknown => {}
+            ServerMessage::TopologyChanged { topology, .. } => {
+                if self.topology == topology {
+                    return;
+                }
+                self.topology = topology.clone();
+                let text = if topology == "hub" {
+                    "🌐 Network topology switched to Host-Hub mode (Star Relay)."
+                } else {
+                    "🌐 Network topology switched to Full Mesh mode (P2P)."
+                };
+                self.log(text.to_owned(), fx);
+                fx.push(Effect::Ui(UiEvent::Notice(text.to_owned())));
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
+            ServerMessage::Pong | ServerMessage::RoomFound { .. } | ServerMessage::Unknown => {}
         }
     }
 
@@ -1281,11 +1359,53 @@ impl Room {
         fx.push(Effect::Ui(UiEvent::Changed));
     }
 
+    fn relay_to_others(&self, from: &PeerId, envelope: &Envelope, fx: &mut Vec<Effect>) {
+        if self.topology() == "hub" && self.is_host() {
+            for (peer, member) in &self.members {
+                if peer != from && member.connected {
+                    fx.push(Effect::SendToPeer {
+                        peer: peer.clone(),
+                        envelope: envelope.clone(),
+                    });
+                }
+            }
+        }
+    }
+
     fn peer(&mut self, from: PeerId, envelope: Envelope, now_ms: f64, fx: &mut Vec<Effect>) {
         if !self.members.contains_key(&from) {
             return;
         }
         let ts = envelope.timestamp.unwrap_or_default();
+        let is_broadcast_type = matches!(
+            &envelope.message,
+            PeerMessage::Chat { .. }
+                | PeerMessage::Reaction { .. }
+                | PeerMessage::SoundboardSfx { .. }
+                | PeerMessage::P2pImageStart { .. }
+                | PeerMessage::P2pFileStart { .. }
+                | PeerMessage::P2pFileControl { .. }
+                | PeerMessage::P2pFileSync { .. }
+                | PeerMessage::YtAction { .. }
+                | PeerMessage::MediaAction { .. }
+                | PeerMessage::YtRequestSync
+                | PeerMessage::YtSyncState { .. }
+                | PeerMessage::MediaSyncState { .. }
+                | PeerMessage::MediaHeartbeat { .. }
+                | PeerMessage::QueueAction { .. }
+                | PeerMessage::LocalVideoAction { .. }
+                | PeerMessage::LocalVideoSyncState { .. }
+                | PeerMessage::RoomState { .. }
+                | PeerMessage::RoomStateAction { .. }
+                | PeerMessage::RoomStateRequest { .. }
+                | PeerMessage::RoomStateGone { .. }
+                | PeerMessage::WbLive(..)
+                | PeerMessage::WbCursor(..)
+                | PeerMessage::NetTopologyReport { .. }
+        );
+        if is_broadcast_type {
+            self.relay_to_others(&from, &envelope, fx);
+        }
         match envelope.message {
             PeerMessage::PeerIdentity {
                 username,
@@ -1295,11 +1415,38 @@ impl Room {
                 client_id,
                 is_host,
                 playback_lock,
+                topology,
                 ..
             } => {
-                // the host's identity carries the lock, for people joining later
-                if is_host && let Some(lock) = playback_lock {
-                    self.playback_lock = lock;
+                // the host's identity carries the lock and active topology, for people joining later
+                if is_host {
+                    if let Some(lock) = playback_lock {
+                        self.playback_lock = lock;
+                    }
+                    if let Some(topo) = topology
+                        && !self.is_host()
+                        && topo != self.topology()
+                    {
+                        self.topology = topo.clone();
+                        let text = if topo == "hub" {
+                            "🌐 Network topology switched to Host-Hub mode (Star Relay)."
+                        } else {
+                            "🌐 Network topology switched to Full Mesh mode (P2P)."
+                        };
+                        self.log(text.to_owned(), fx);
+                        fx.push(Effect::Ui(UiEvent::Notice(text.to_owned())));
+                        if topo == "hub" {
+                            let to_drop: Vec<PeerId> = self
+                                .members
+                                .keys()
+                                .filter(|p| Some(*p) != self.host.as_ref())
+                                .cloned()
+                                .collect();
+                            for p in to_drop {
+                                self.drop_member(&p, fx);
+                            }
+                        }
+                    }
                 }
                 if let Some(m) = self.members.get_mut(&from) {
                     m.client_id = Some(client_id.as_str().to_owned());
@@ -1426,6 +1573,15 @@ impl Room {
                 mime_type,
                 caption,
                 ..
+            }
+            | PeerMessage::P2pFileStart {
+                id,
+                transfer_id,
+                file_name,
+                file_size,
+                mime_type,
+                caption,
+                ..
             } => {
                 if transfer_id.trim().is_empty() || transfer_id.len() > 64 {
                     return;
@@ -1467,8 +1623,38 @@ impl Room {
                 };
                 self.push_chat(line, fx);
             }
-            PeerMessage::RoomSettings { playback_lock } => {
-                if self.host.as_ref() != Some(&from) || playback_lock == self.playback_lock {
+            PeerMessage::RoomSettings {
+                playback_lock,
+                topology,
+            } => {
+                if self.host.as_ref() != Some(&from) {
+                    return;
+                }
+                if let Some(topo) = topology
+                    && !self.is_host()
+                    && topo != self.topology()
+                {
+                    self.topology = topo.clone();
+                    let text = if topo == "hub" {
+                        "🌐 Network topology switched to Host-Hub mode (Star Relay)."
+                    } else {
+                        "🌐 Network topology switched to Full Mesh mode (P2P)."
+                    };
+                    self.log(text.to_owned(), fx);
+                    fx.push(Effect::Ui(UiEvent::Notice(text.to_owned())));
+                    if topo == "hub" {
+                        let to_drop: Vec<PeerId> = self
+                            .members
+                            .keys()
+                            .filter(|p| Some(*p) != self.host.as_ref())
+                            .cloned()
+                            .collect();
+                        for p in to_drop {
+                            self.drop_member(&p, fx);
+                        }
+                    }
+                }
+                if playback_lock == self.playback_lock {
                     return;
                 }
                 self.playback_lock = playback_lock;
@@ -1522,7 +1708,11 @@ impl Room {
                     body,
                 }));
             }
-            PeerMessage::NetPong { .. } | PeerMessage::NetTopologyReport { .. } | PeerMessage::Unknown => {}
+            PeerMessage::NetPong { .. }
+            | PeerMessage::NetTopologyReport { .. }
+            | PeerMessage::P2pFileControl { .. }
+            | PeerMessage::P2pFileSync { .. }
+            | PeerMessage::Unknown => {}
         }
     }
 }

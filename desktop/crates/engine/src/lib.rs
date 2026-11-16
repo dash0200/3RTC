@@ -91,6 +91,8 @@ pub struct Snapshot {
     pub host_token: Option<String>,
     /// Only the host controls playback.
     pub playback_lock: bool,
+    /// Room network topology ("mesh" or "hub").
+    pub topology: String,
     /// The watch party: what's playing, the queue, skip votes.
     pub watch: rtc_core::WatchView,
     /// The open activity (a game), if any.
@@ -1120,13 +1122,13 @@ impl Engine {
     async fn send_image(&mut self, image: OutgoingImage) {
         if image.bytes.len() > rtc_protocol::image::MAX_SEND_BYTES {
             let _ = self.updates.send(Update::Notice(
-                "Image exceeds 15 MB limit. Please select a smaller file.".to_owned(),
+                "File exceeds 10 GB limit. Please select a smaller file.".to_owned(),
             ));
             return;
         }
         if self.peers.bulk_channels(self.room.members().keys()).is_empty() {
             let _ = self.updates.send(Update::Notice(
-                "Waiting for peer to connect before sending image".to_owned(),
+                "Waiting for peer to connect before sending file".to_owned(),
             ));
             return;
         }
@@ -1808,6 +1810,7 @@ impl Engine {
             real_audio: self.voice.is_device(),
             host_token: self.room.host_token().map(str::to_owned),
             playback_lock: self.room.playback_lock(),
+            topology: self.room.topology().to_owned(),
             watch: self.room.watch(),
             activity: self.room.activity(),
             stores: self

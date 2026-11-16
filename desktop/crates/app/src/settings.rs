@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use rtc_platform_win::keys::{Binding, Key};
 use serde::{Deserialize, Serialize};
 
-/// The real servers (`client-ts/src/App.tsx`): Oracle first, then the backups in order.
-pub(crate) const ORACLE: &str = "wss://orc.3rtc.me";
+/// The real servers (`client-ts/src/App.tsx`): GCP first, then the backups in order.
 pub(crate) const GCP: &str = "wss://gcp.3rtc.me";
+pub(crate) const ORACLE: &str = "wss://orc.3rtc.me";
 pub(crate) const BACKUPS: [&str; 2] = ["wss://signal.3rtc.me", "wss://34.57.36.145.sslip.io:443"];
 pub(crate) const LOCAL: &str = "ws://localhost:8080";
 
@@ -20,7 +20,7 @@ pub(crate) struct Settings {
     pub(crate) settings_version: u32,
     pub(crate) username: String,
     pub(crate) client_id: String,
-    /// The signaling server picked in Server settings (`""`: the default, Oracle).
+    /// The signaling server picked in Server settings (`""`: the default, GCP).
     pub(crate) signal_url: String,
     /// Microphone and speaker ids (`""`: the system default).
     pub(crate) input_device_id: String,
@@ -322,14 +322,14 @@ impl Settings {
             return vec![url];
         }
         let first = if self.signal_url.is_empty() {
-            ORACLE
+            GCP
         } else {
             self.signal_url.as_str()
         };
         let mut urls = vec![first.to_owned()];
         let rest: Vec<&str> = match first {
-            ORACLE => vec![GCP, BACKUPS[0], BACKUPS[1]],
             GCP => vec![ORACLE, BACKUPS[0], BACKUPS[1]],
+            ORACLE => vec![GCP, BACKUPS[0], BACKUPS[1]],
             _ => Vec::new(),
         };
         urls.extend(rest.into_iter().map(str::to_owned));

@@ -239,6 +239,7 @@ export interface PeerIdentityMessage extends BasePeerMessage {
   clientId: string;
   isReply?: boolean;
   playbackLock?: boolean;
+  topology?: RoomTopologyKind;
 }
 
 export interface PeerVoiceStatusMessage extends BasePeerMessage {
@@ -299,6 +300,35 @@ export interface P2PImageStartMessage extends BasePeerMessage {
   fileSize: number;
   mimeType: string;
   caption?: string;
+  totalChunks?: number;
+  sender?: string;
+  isHost?: boolean;
+}
+
+export interface P2PFileStartMessage extends BasePeerMessage {
+  type: 'p2p-file-start';
+  id: string;
+  transferId: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  totalChunks: number;
+  caption?: string;
+  sender?: string;
+  isHost?: boolean;
+}
+
+export interface P2PFileControlMessage extends BasePeerMessage {
+  type: 'p2p-file-control';
+  transferId: string;
+  action: 'pause' | 'resume' | 'cancel';
+  startChunk?: number;
+}
+
+export interface P2PFileSyncMessage extends BasePeerMessage {
+  type: 'p2p-file-sync';
+  transferId: string;
+  resumeFromChunk: number;
 }
 
 export interface ReactionMessage extends BasePeerMessage {
@@ -342,6 +372,7 @@ export interface LocalVideoActionMessage extends BasePeerMessage {
 export interface RoomSettingsMessage extends BasePeerMessage {
   type: 'room-settings';
   playbackLock: boolean;
+  topology?: RoomTopologyKind;
 }
 
 export interface YouTubeRequestSyncMessage extends BasePeerMessage {
@@ -586,6 +617,9 @@ export type PeerMessage =
   | NetTopologyReportMessage
   | ChatMessage
   | P2PImageStartMessage
+  | P2PFileStartMessage
+  | P2PFileControlMessage
+  | P2PFileSyncMessage
   | ReactionMessage
   | SoundboardSfxMessage
   | YouTubeActionMessage

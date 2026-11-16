@@ -75,12 +75,12 @@ export const ORACLE_SIGNAL_URL = 'wss://orc.3rtc.me';
 export const GCP_SIGNAL_URL = 'wss://gcp.3rtc.me';
 export const LOCAL_SIGNAL_URL = 'ws://localhost:8080';
 
-// Default primary server: Oracle Cloud (orc.3rtc.me) with automatic multi-cloud failover to GCP
-export const DEFAULT_SIGNAL_URL = ORACLE_SIGNAL_URL;
+// Default primary server: Google Cloud (gcp.3rtc.me) with automatic multi-cloud failover to Oracle
+export const DEFAULT_SIGNAL_URL = GCP_SIGNAL_URL;
 
-// Intelligent fallback pool: if orc.3rtc.me is not reachable, seamlessly fallback to GCP, then raw IP
+// Intelligent fallback pool: if gcp.3rtc.me is not reachable, seamlessly fallback to Oracle, then raw IP
 export const BACKUP_SIGNAL_URLS = [
-  GCP_SIGNAL_URL,
+  ORACLE_SIGNAL_URL,
   'wss://signal.3rtc.me',
   'wss://34.57.36.145.sslip.io:443'
 ];
@@ -757,6 +757,10 @@ export default function App() {
       systemLogs={notices.systemLogs}
       onSendMessage={chat.sendMessage}
       onSendImage={chat.sendImage}
+      onSendFile={chat.sendFile}
+      onPauseTransfer={chat.pauseTransfer}
+      onResumeTransfer={chat.resumeTransfer}
+      onCancelTransfer={chat.cancelTransfer}
       onClearLogs={notices.clearLogs}
       onTestSound={handleTestSound}
       isP2PConnected={isP2PConnected}

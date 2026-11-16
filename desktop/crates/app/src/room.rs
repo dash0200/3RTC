@@ -748,6 +748,8 @@ fn horizontal_tray(
                         .child(
                             div()
                                 .id("tray-reactions-scroll")
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
@@ -921,6 +923,8 @@ fn horizontal_tray(
                         .child(
                             div()
                                 .id("tray-sounds-scroll")
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
@@ -1336,6 +1340,8 @@ fn horizontal_tray(
                         .child(
                             div()
                                 .id("tray-games-scroll")
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
                                 .gap(px(8.))
@@ -1605,14 +1611,10 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
         ))
         .child(
             div()
-                .id("dock-center-scroll")
-                .flex_1()
-                .min_w_0()
                 .flex()
+                .flex_none()
                 .items_center()
-                .justify_center()
                 .gap(px(8.))
-                .overflow_x_scroll()
                 .child(mic)
                 .child(
                     dock_btn(
