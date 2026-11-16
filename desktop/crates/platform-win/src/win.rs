@@ -271,8 +271,11 @@ pub fn cursor_window_state(raw_hwnd: isize, threshold_px: i32) -> Option<(i32, i
     }
     // SAFETY: converts screen coordinates to client coordinates.
     let _ = unsafe { ScreenToClient(h, &raw mut pt) };
-    let inside = pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom;
-    let at_bottom = inside && pt.y >= (rect.bottom - threshold_px);
+    let inside = pt.x >= (rect.left - 16)
+        && pt.x <= (rect.right + 16)
+        && pt.y >= rect.top
+        && pt.y <= (rect.bottom + 24);
+    let at_bottom = inside && pt.y >= (rect.bottom - threshold_px.max(72));
     Some((pt.x, pt.y, at_bottom))
 }
 

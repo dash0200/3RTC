@@ -548,7 +548,7 @@ MBTN_FORWARD script-message 3rtc mouse_fwd
 fn input_conf() -> Option<String> {
     let path = std::env::temp_dir().join("3rtc-mpv-input.conf");
     std::fs::write(&path, INPUT_CONF).ok()?;
-    Some(path.to_string_lossy().into_owned())
+    Some(path.to_string_lossy().replace('\\', "/"))
 }
 
 // observed properties (reply ids)
@@ -598,6 +598,7 @@ fn setup(
         ("hwdec", "auto-safe"),
         ("sub-auto", "fuzzy"),
         ("cursor-autohide", "1500"),
+        ("cursor-autohide-fs-only", "no"),
         ("audio-display", "no"),
     ] {
         mpv.option(lib, k, v);
@@ -616,6 +617,16 @@ fn setup(
         // SAFETY: never initialised: destroy it here (no event thread yet).
         unsafe { (lib.terminate_destroy)(handle) };
         return Err(format!("The video player couldn't start ({}).", Mpv::err(lib, r)));
+    }
+    // Also explicitly bind mouse and keyboard actions so clicks and shortcuts never miss
+    for line in INPUT_CONF.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && let Some((key, cmd)) = trimmed.split_once(' ')
+        {
+            mpv.command(lib, &["keybind", key, cmd]);
+        }
     }
     let level = cstr("warn");
     // SAFETY: a live handle and a level name mpv copies.
@@ -638,6 +649,7 @@ fn setup(
     }
     let url = match source {
         VideoSource::File(path) => path.to_string_lossy().into_owned(),
+        VideoSource::Url(u) => u.clone(),
         VideoSource::Stream(s) => {
             let mut opener = Box::new(Arc::clone(s));
             let user: *mut Opener = &raw mut *opener;
