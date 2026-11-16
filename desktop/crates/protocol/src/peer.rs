@@ -47,6 +47,9 @@ pub enum PeerMessage {
         /// Host only: active room network topology ("mesh" or "hub").
         #[serde(default, skip_serializing_if = "Option::is_none")]
         topology: Option<String>,
+        /// Host only: active room capacity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_users: Option<u32>,
     },
     /// My mic was muted or unmuted.
     #[serde(rename_all = "camelCase")]
@@ -204,6 +207,9 @@ pub enum PeerMessage {
         /// Host only: active room network topology ("mesh" or "hub").
         #[serde(default, skip_serializing_if = "Option::is_none")]
         topology: Option<String>,
+        /// Host only: active room capacity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_users: Option<u32>,
     },
     /// A YouTube video loaded, played, paused, seeked or closed (`usePlayback.ts`).
     #[serde(rename_all = "camelCase")]
@@ -585,6 +591,7 @@ mod tests {
             playback_lock: None,
             client: Some(CLIENT_DESKTOP.into()),
             topology: None,
+            max_users: None,
         }
     }
 
@@ -731,6 +738,7 @@ mod tests {
                 message: PeerMessage::RoomSettings {
                     playback_lock: true,
                     topology: None,
+                    max_users: None,
                 },
             }
             .to_json()

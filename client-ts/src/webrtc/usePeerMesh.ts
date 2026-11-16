@@ -77,6 +77,8 @@ export interface PeerMeshHookResult {
   p2pStatusText: string;
   topology: 'mesh' | 'hub';
   switchTopology: (nextTopology: 'mesh' | 'hub') => void;
+  maxUsers: number;
+  setRoomMaxUsers: (limit: number) => void;
   createRoom: (resumeRoomId?: string | null, hostToken?: string | null) => void;
   joinRoom: (pin: string) => void;
   leaveRoom: () => void;
@@ -129,6 +131,13 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   const [topology, setTopology] = useState<'mesh' | 'hub'>('mesh');
   const topologyRef = useRef<'mesh' | 'hub'>('mesh');
   topologyRef.current = topology;
+  const [maxUsers, setMaxUsersState] = useState<number>(32);
+  const maxUsersRef = useRef<number>(32);
+  const setMaxUsers = useCallback((limit: number) => {
+    const parsed = Math.max(2, Math.floor(limit));
+    maxUsersRef.current = parsed;
+    setMaxUsersState(parsed);
+  }, []);
   const [networkHint, setNetworkHint] = useState<NetworkHint | null>(null);
   const dismissNetworkHint = useCallback(() => setNetworkHint(null), []);
 
@@ -196,7 +205,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
       });
       bus.broadcast('room-settings', {
         playbackLock: false,
-        topology: nextTopology
+        topology: nextTopology,
+        maxUsers: maxUsersRef.current
       });
       if (nextTopology === 'hub' && !isHostRef.current) {
         const hostId = hostPeerIdRef.current;
@@ -210,8 +220,28 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     [bus, cleanupPeer, hostPeerIdRef, isHostRef, peersRef, sendSignal]
   );
 
+  const setRoomMaxUsers = useCallback(
+    (limit: number) => {
+      const parsed = Math.max(2, Math.floor(limit));
+      setMaxUsers(parsed);
+      sendSignal({
+        type: 'set-room-size',
+        maxUsers: parsed
+      });
+      bus.broadcast('room-settings', {
+        playbackLock: false,
+        topology: topologyRef.current,
+        maxUsers: parsed
+      });
+    },
+    [bus, sendSignal, setMaxUsers]
+  );
+
   useEffect(() => {
-    const off = bus.onEvent<RoomSettingsMessage>('room-settings', (data) => {
+    const handleRoomSettings = (data: RoomSettingsMessage) => {
+      if (typeof data.maxUsers === 'number' && data.maxUsers >= 2) {
+        setMaxUsers(data.maxUsers);
+      }
       if (data.topology) {
         setTopology(data.topology);
         topologyRef.current = data.topology;
@@ -224,9 +254,15 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
           }
         }
       }
-    });
-    return off;
-  }, [bus, cleanupPeer, hostPeerIdRef, isHostRef, peersRef]);
+    };
+
+    const offEvent = bus.onEvent<RoomSettingsMessage>('room-settings', handleRoomSettings);
+    const offMsg = bus.on<RoomSettingsMessage>('room-settings', handleRoomSettings);
+    return () => {
+      offEvent();
+      offMsg();
+    };
+  }, [bus, cleanupPeer, hostPeerIdRef, isHostRef, peersRef, setMaxUsers]);
 
   /** What we tell each peer about ourselves when a channel opens. */
   const getIdentity = useCallback(
@@ -239,7 +275,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
       proto: PROTOCOL_VERSION,
       build: BUILD.number,
       clientId: getClientId(),
-      ...(isHostRef.current ? { topology: topologyRef.current } : {}),
+      ...(isHostRef.current ? { topology: topologyRef.current, maxUsers: maxUsersRef.current } : {}),
       ...(identityFieldsRef.current?.() || {})
     }),
     [peerIdRef, isHostRef, isMicMutedRef]
@@ -533,6 +569,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         sendSignal,
         setHostPeerId,
         setTopology,
+        setMaxUsers,
         hostPeerIdRef,
         topologyRef,
         setIsHost,
@@ -652,6 +689,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     p2pStatusText,
     topology,
     switchTopology,
+    maxUsers,
+    setRoomMaxUsers,
     createRoom,
     joinRoom,
     leaveRoom,

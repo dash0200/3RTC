@@ -93,6 +93,8 @@ pub struct Snapshot {
     pub playback_lock: bool,
     /// Room network topology ("mesh" or "hub").
     pub topology: String,
+    /// Configured maximum room peer capacity.
+    pub max_users: u32,
     /// The watch party: what's playing, the queue, skip votes.
     pub watch: rtc_core::WatchView,
     /// The open activity (a game), if any.
@@ -1811,6 +1813,7 @@ impl Engine {
             host_token: self.room.host_token().map(str::to_owned),
             playback_lock: self.room.playback_lock(),
             topology: self.room.topology().to_owned(),
+            max_users: self.room.max_users(),
             watch: self.room.watch(),
             activity: self.room.activity(),
             stores: self

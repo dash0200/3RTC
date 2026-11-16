@@ -177,6 +177,8 @@ pub enum Command {
     SetPlaybackLock(bool),
     /// Host only: switch topology between "mesh" and "hub".
     SetTopology(String),
+    /// Host only: set maximum peer capacity.
+    SetRoomSize(u32),
     /// The watch party.
     Watch(WatchCommand),
     /// Activities and games.
@@ -373,6 +375,7 @@ pub struct Room {
     phase: Phase,
     host: Option<PeerId>,
     topology: String,
+    max_users: u32,
     members: BTreeMap<PeerId, Member>,
     health: BTreeMap<PeerId, Health>,
     muted: bool,
@@ -407,6 +410,7 @@ impl Room {
             phase: Phase::Idle,
             host: None,
             topology: String::new(),
+            max_users: 0,
             members: BTreeMap::new(),
             health: BTreeMap::new(),
             muted: true,
@@ -433,6 +437,16 @@ impl Room {
             "mesh"
         } else {
             &self.topology
+        }
+    }
+
+    /// Configured maximum room peer capacity.
+    #[must_use]
+    pub fn max_users(&self) -> u32 {
+        if self.max_users == 0 {
+            if self.topology() == "hub" { 32 } else { 4 }
+        } else {
+            self.max_users
         }
     }
 
@@ -664,6 +678,7 @@ impl Room {
             playback_lock: self.is_host().then_some(self.playback_lock),
             client: Some(rtc_protocol::peer::CLIENT_DESKTOP.to_owned()),
             topology: self.is_host().then(|| self.topology().to_owned()),
+            max_users: self.is_host().then_some(self.max_users),
         }
     }
 
@@ -846,6 +861,7 @@ impl Room {
                     PeerMessage::RoomSettings {
                         playback_lock: on,
                         topology: Some(self.topology().to_owned()),
+                        max_users: Some(self.max_users),
                     },
                     now_ms,
                 )));
@@ -887,6 +903,27 @@ impl Room {
                     PeerMessage::RoomSettings {
                         playback_lock: self.playback_lock,
                         topology: Some(next),
+                        max_users: Some(self.max_users),
+                    },
+                    now_ms,
+                )));
+            }
+            Command::SetRoomSize(limit) => {
+                let limit = limit.max(2);
+                if !self.is_host() || self.max_users == limit {
+                    return;
+                }
+                self.max_users = limit;
+                let text = format!("Room capacity set to {limit} peers.");
+                self.log(text.clone(), fx);
+                fx.push(Effect::Ui(UiEvent::Notice(text)));
+                fx.push(Effect::Ui(UiEvent::Changed));
+                fx.push(Effect::Send(ClientMessage::SetRoomSize { max_users: limit }));
+                fx.push(Effect::Broadcast(self.envelope(
+                    PeerMessage::RoomSettings {
+                        playback_lock: self.playback_lock,
+                        topology: Some(self.topology().to_owned()),
+                        max_users: Some(limit),
                     },
                     now_ms,
                 )));
@@ -1087,6 +1124,7 @@ impl Room {
                 seat_token,
                 host_token,
                 topology,
+                max_users,
                 ..
             } => {
                 self.phase = Phase::InRoom(room_id);
@@ -1095,6 +1133,9 @@ impl Room {
                 self.host_token = Some(host_token);
                 if let Some(t) = topology {
                     self.topology = t;
+                }
+                if let Some(limit) = max_users {
+                    self.max_users = limit;
                 }
                 self.log(
                     format!("You created room {room_id} as \"{}\".", self.me.username),
@@ -1109,6 +1150,7 @@ impl Room {
                 seat_token,
                 host_token,
                 topology,
+                max_users,
                 ..
             } => {
                 self.phase = Phase::InRoom(room_id);
@@ -1117,6 +1159,9 @@ impl Room {
                 self.host_token = Some(host_token);
                 if let Some(t) = topology {
                     self.topology = t;
+                }
+                if let Some(limit) = max_users {
+                    self.max_users = limit;
                 }
                 self.adopt_existing(peers, now_ms, fx);
                 fx.push(Effect::Ui(UiEvent::Changed));
@@ -1128,6 +1173,7 @@ impl Room {
                 seat_token,
                 host_token,
                 topology,
+                max_users,
                 ..
             } => {
                 let first = !matches!(self.phase, Phase::InRoom(_));
@@ -1139,6 +1185,9 @@ impl Room {
                 }
                 if let Some(t) = topology {
                     self.topology = t;
+                }
+                if let Some(limit) = max_users {
+                    self.max_users = limit;
                 }
                 if first {
                     self.log(
@@ -1306,6 +1355,17 @@ impl Room {
                 fx.push(Effect::Ui(UiEvent::Notice(text.to_owned())));
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
+            ServerMessage::RoomSizeChanged { max_users, .. } => {
+                let limit = max_users.max(2);
+                if self.max_users == limit {
+                    return;
+                }
+                self.max_users = limit;
+                let text = format!("Room capacity set to {limit} peers.");
+                self.log(text.clone(), fx);
+                fx.push(Effect::Ui(UiEvent::Notice(text)));
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
             ServerMessage::Pong | ServerMessage::RoomFound { .. } | ServerMessage::Unknown => {}
         }
     }
@@ -1416,12 +1476,20 @@ impl Room {
                 is_host,
                 playback_lock,
                 topology,
+                max_users,
                 ..
             } => {
-                // the host's identity carries the lock and active topology, for people joining later
+                // the host's identity carries the lock, active topology, and capacity, for people joining later
                 if is_host {
                     if let Some(lock) = playback_lock {
                         self.playback_lock = lock;
+                    }
+                    if let Some(limit) = max_users
+                        && !self.is_host()
+                        && limit != self.max_users
+                    {
+                        self.max_users = limit;
+                        fx.push(Effect::Ui(UiEvent::Changed));
                     }
                     if let Some(topo) = topology
                         && !self.is_host()
@@ -1626,9 +1694,20 @@ impl Room {
             PeerMessage::RoomSettings {
                 playback_lock,
                 topology,
+                max_users,
             } => {
                 if self.host.as_ref() != Some(&from) {
                     return;
+                }
+                if let Some(limit) = max_users
+                    && !self.is_host()
+                    && limit != self.max_users
+                {
+                    self.max_users = limit;
+                    let text = format!("Room capacity set to {limit} peers.");
+                    self.log(text.clone(), fx);
+                    fx.push(Effect::Ui(UiEvent::Notice(text)));
+                    fx.push(Effect::Ui(UiEvent::Changed));
                 }
                 if let Some(topo) = topology
                     && !self.is_host()

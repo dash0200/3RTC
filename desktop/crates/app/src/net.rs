@@ -525,6 +525,252 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
         .into_any_element()
 }
 
+fn room_capacity_advisor_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    let room = view.room.as_ref();
+    let is_host = room.and_then(|r| r.host.as_ref()) == room.map(|r| &r.me);
+    let is_hub = room.is_some_and(|r| r.topology == "hub");
+    let current_max = room.map(|r| r.max_users).unwrap_or(if is_hub { 32 } else { 4 });
+
+    let s = summary(&view.net.peers);
+    let down_kbps = s.down;
+    let up_kbps = s.up;
+    let down_mbps = (down_kbps * 8.0) / 1024.0;
+    let up_mbps = (up_kbps * 8.0) / 1024.0;
+    let est_down_mbps = down_mbps.max(15.0);
+    let est_up_mbps = if up_mbps > 0.5 { up_mbps.max(6.0) } else { 10.0 };
+
+    let rec_peers: u32 = if is_hub {
+        if est_up_mbps < 8.0 {
+            6
+        } else if est_up_mbps < 15.0 {
+            8
+        } else if est_up_mbps < 25.0 {
+            12
+        } else if est_up_mbps < 45.0 {
+            18
+        } else if est_up_mbps < 80.0 {
+            25
+        } else {
+            (est_up_mbps / 2.2).floor() as u32 + 2
+        }
+    } else if est_up_mbps >= 12.0 {
+        6
+    } else {
+        4
+    };
+
+    let suggestion = if is_hub {
+        format!(
+            "Based on your ~{est_up_mbps:.1} Mbps upload & ~{est_down_mbps:.1} Mbps download, ~{rec_peers} peers can join smoothly in Hub mode."
+        )
+    } else {
+        format!("Mesh mode is best for ~{rec_peers} peers. Switch to Hub (HStar) mode for larger rooms.")
+    };
+
+    div()
+        .p(px(16.))
+        .rounded(px(12.))
+        .bg(tokens::surface())
+        .border_1()
+        .border_color(tokens::line())
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(tokens::text())
+                                .child("⚡ Room Peer Capacity & Dynamic Advisor"),
+                        )
+                        .child(
+                            div()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded_full()
+                                .bg(if is_hub {
+                                    Hsla {
+                                        a: 0.25,
+                                        ..tokens::focus()
+                                    }
+                                } else {
+                                    Hsla {
+                                        a: 0.15,
+                                        ..tokens::accent()
+                                    }
+                                })
+                                .text_color(if is_hub { tokens::focus() } else { tokens::accent() })
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(if is_hub {
+                                    "⭐ Host Hub Mode"
+                                } else {
+                                    "🕸️ Full Mesh"
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .text_size(px(12.))
+                        .text_color(tokens::text_2())
+                        .child(format!("⬇️ Avg Down: {est_down_mbps:.1} Mbps"))
+                        .child(format!("⬆️ Avg Up: {est_up_mbps:.1} Mbps")),
+                ),
+        )
+        .child(
+            div()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(tokens::bg())
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Max Room Peers:"),
+                        )
+                        .when(is_host, |el| {
+                            el.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        Button::new("peer-dec", "-")
+                                            .min_height(px(26.))
+                                            .padding_x(px(8.))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                let next = current_max.saturating_sub(1).max(2);
+                                                v.command(rtc_core::Command::SetRoomSize(next));
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(36.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(tokens::accent())
+                                            .text_size(px(14.))
+                                            .child(current_max.to_string()),
+                                    )
+                                    .child(
+                                        Button::new("peer-inc", "+")
+                                            .min_height(px(26.))
+                                            .padding_x(px(8.))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                let next = current_max + 1;
+                                                v.command(rtc_core::Command::SetRoomSize(next));
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(tokens::text_3())
+                                            .ml(px(6.))
+                                            .child("Presets:"),
+                                    )
+                                    .children([4u32, 8, 12, 16, 24, 32, 50].into_iter().map(|preset| {
+                                        let active = current_max == preset;
+                                        Button::new(format!("preset-{preset}"), preset.to_string())
+                                            .min_height(px(24.))
+                                            .padding_x(px(8.))
+                                            .font_size(px(11.))
+                                            .variant(if active { Variant::Primary } else { Variant::Ghost })
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                v.command(rtc_core::Command::SetRoomSize(preset));
+                                                cx.notify();
+                                            }))
+                                    })),
+                            )
+                        })
+                        .when(!is_host, |el| {
+                            el.child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(tokens::accent())
+                                    .child(format!("{current_max} peers (Host managed)")),
+                            )
+                        }),
+                )
+                .when(is_host && current_max != rec_peers, |el| {
+                    el.child(
+                        Button::new("apply-rec", format!("Apply Recommended: {rec_peers} Peers"))
+                            .min_height(px(26.))
+                            .padding_x(px(10.))
+                            .font_size(px(11.5))
+                            .variant(Variant::Primary)
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.command(rtc_core::Command::SetRoomSize(rec_peers));
+                                cx.notify();
+                            })),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .p(px(10.))
+                .rounded(px(8.))
+                .bg(Hsla {
+                    a: 0.1,
+                    ..tokens::accent()
+                })
+                .border_1()
+                .border_color(Hsla {
+                    a: 0.25,
+                    ..tokens::accent()
+                })
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(tokens::text())
+                        .child(format!("💡 {suggestion}")),
+                )
+                .when(is_host && !is_hub && rec_peers > 4, |el| {
+                    el.child(
+                        Button::new("hud-switch-hub", "Switch to Hub Mode")
+                            .min_height(px(24.))
+                            .padding_x(px(8.))
+                            .font_size(px(11.))
+                            .variant(Variant::Secondary)
+                            .on_click(cx.listener(|v, _, _, cx| {
+                                v.command(rtc_core::Command::SetTopology("hub".to_owned()));
+                                cx.notify();
+                            })),
+                    )
+                }),
+        )
+}
+
 fn hud_view(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
     let s = summary(&view.net.peers);
     let (_, color, g) = grade(s.avg, s.loss);
@@ -540,6 +786,7 @@ fn hud_view(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement
         .flex()
         .flex_col()
         .gap(px(14.))
+        .child(room_capacity_advisor_card(view, cx))
         .child(
             div()
                 .flex()

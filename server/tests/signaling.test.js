@@ -531,6 +531,32 @@ describe('signaling server', () => {
         guest1.close();
         guest2.close();
     });
+
+    it('supports host dynamically setting room capacity (maxUsers)', async () => {
+        const host = await connected('host-size-owner');
+        host.send({ type: 'create-room', peerId: host.peerId });
+        const { roomId, maxUsers: initialLimit } = await host.next('room-created');
+        assert.ok(initialLimit >= 4);
+
+        const guest1 = await connected('guest-sz-1');
+        guest1.send({ type: 'join', roomId, peerId: 'guest-sz-1' });
+        await guest1.next('joined');
+
+        // Host dynamically raises limit to 16
+        host.send({ type: 'set-room-size', maxUsers: 16 });
+        const hostChanged = await host.next('room-size-changed');
+        const guestChanged = await guest1.next('room-size-changed');
+        assert.equal(hostChanged.maxUsers, 16);
+        assert.equal(guestChanged.maxUsers, 16);
+
+        // Non-host cannot set room capacity
+        guest1.send({ type: 'set-room-size', maxUsers: 20 });
+        const err = await guest1.next('error');
+        assert.equal(err.code, 'not-host');
+
+        host.close();
+        guest1.close();
+    });
 });
 
 describe('isOriginAllowed (H-05)', () => {

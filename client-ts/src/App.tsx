@@ -253,7 +253,7 @@ export default function App() {
     identityFields: () => identityFieldsRef.current(),
     signalUrl, fallbackUrls, setSignalStatus, logLocalDebug, onRoomError: handleRoomError, onHostChanged: handleHostChanged
   });
-  const { roomId, isHost, peerCount, isP2PConnected, topology, switchTopology } = mesh;
+  const { roomId, isHost, peerCount, isP2PConnected, topology, switchTopology, maxUsers, setRoomMaxUsers } = mesh;
 
   const localUser = useMemo(() => (roomId ? {
     id: peerIdRef.current, peerId: peerIdRef.current, username, isHost, isMuted: isMicMuted, isSelf: true
@@ -966,6 +966,7 @@ export default function App() {
               isHost={isHost}
               username={username}
               activityStatus={shownActivityStatus}
+              maxUsers={maxUsers}
             />
             <div className="room-desktop-body">
               <div className="app-main-pane">
@@ -1037,6 +1038,8 @@ export default function App() {
           topology={topology}
           isHost={isHost}
           onSwitchTopology={switchTopology}
+          maxUsers={maxUsers}
+          onSetMaxUsers={setRoomMaxUsers}
         >
           <Suspense fallback={null}>
             <StreamDoctor bus={bus} peersRef={peersRef} peerNames={peerMetadata} selfName={username} />

@@ -120,12 +120,15 @@ interface PeerIncomingData {
           ...(typeof data.clientId === 'string' ? { clientId: data.clientId.slice(0, 64) } : {})
         }
       }));
-      if (Boolean(data.isHost) && (data.topology === 'hub' || data.topology === 'mesh')) {
-        bus.emitEvent('room-settings', {
-          type: 'room-settings',
-          playbackLock: Boolean(data.playbackLock),
-          topology: data.topology
-        });
+      if (Boolean(data.isHost)) {
+        if (data.topology === 'hub' || data.topology === 'mesh' || typeof data.maxUsers === 'number') {
+          bus.emitEvent('room-settings', {
+            type: 'room-settings',
+            playbackLock: Boolean(data.playbackLock),
+            ...(data.topology === 'hub' || data.topology === 'mesh' ? { topology: data.topology } : {}),
+            ...(typeof data.maxUsers === 'number' && data.maxUsers >= 2 ? { maxUsers: data.maxUsers } : {})
+          });
+        }
       }
       if (!data.isReply) {
         try {

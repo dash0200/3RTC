@@ -36,6 +36,8 @@ export interface CreateRoomMessage extends BaseSignalingMessage {
   roomId?: string;
   hostToken?: string;
   seatToken?: string;
+  topology?: RoomTopologyKind;
+  maxUsers?: number;
 }
 
 export interface JoinRoomMessage extends BaseSignalingMessage {
@@ -88,6 +90,12 @@ export interface SetTopologyMessage extends BaseSignalingMessage {
   topology: RoomTopologyKind;
 }
 
+/** The host dynamically sets maximum peers allowed in the room */
+export interface SetRoomSizeMessage extends BaseSignalingMessage {
+  type: 'set-room-size';
+  maxUsers: number;
+}
+
 // Server -> Browser
 export interface RoomCreatedMessage extends BaseSignalingMessage {
   type: 'room-created';
@@ -97,6 +105,7 @@ export interface RoomCreatedMessage extends BaseSignalingMessage {
   seatToken: string;
   hostToken: string;
   topology?: RoomTopologyKind;
+  maxUsers?: number;
 }
 
 export interface RoomResumedMessage extends BaseSignalingMessage {
@@ -108,6 +117,7 @@ export interface RoomResumedMessage extends BaseSignalingMessage {
   seatToken: string;
   hostToken: string;
   topology?: RoomTopologyKind;
+  maxUsers?: number;
 }
 
 export interface JoinedMessage extends BaseSignalingMessage {
@@ -119,6 +129,7 @@ export interface JoinedMessage extends BaseSignalingMessage {
   seatToken: string;
   hostToken?: string;
   topology?: RoomTopologyKind;
+  maxUsers?: number;
 }
 
 export interface HostUpdateMessage extends BaseSignalingMessage {
@@ -140,6 +151,13 @@ export interface TopologyChangedMessage extends BaseSignalingMessage {
   type: 'topology-changed';
   topology: RoomTopologyKind;
   hostPeerId: string;
+}
+
+/** Broadcast to all room peers when host changes room capacity */
+export interface RoomSizeChangedMessage extends BaseSignalingMessage {
+  type: 'room-size-changed';
+  maxUsers: number;
+  from?: string;
 }
 
 export interface PeerJoinedMessage extends BaseSignalingMessage {
@@ -196,7 +214,8 @@ export type OutgoingSignalingMessage =
   | SendIceCandidateMessage
   | PingMessage
   | TransferHostMessage
-  | SetTopologyMessage;
+  | SetTopologyMessage
+  | SetRoomSizeMessage;
 
 export type IncomingSignalingMessage =
   | RoomCreatedMessage
@@ -205,6 +224,7 @@ export type IncomingSignalingMessage =
   | HostUpdateMessage
   | HostTokenMessage
   | TopologyChangedMessage
+  | RoomSizeChangedMessage
   | PeerJoinedMessage
   | PeerLeftMessage
   | LeftMessage
@@ -240,6 +260,7 @@ export interface PeerIdentityMessage extends BasePeerMessage {
   isReply?: boolean;
   playbackLock?: boolean;
   topology?: RoomTopologyKind;
+  maxUsers?: number;
 }
 
 export interface PeerVoiceStatusMessage extends BasePeerMessage {
@@ -373,6 +394,7 @@ export interface RoomSettingsMessage extends BasePeerMessage {
   type: 'room-settings';
   playbackLock: boolean;
   topology?: RoomTopologyKind;
+  maxUsers?: number;
 }
 
 export interface YouTubeRequestSyncMessage extends BasePeerMessage {

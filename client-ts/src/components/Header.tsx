@@ -28,6 +28,7 @@ export interface HeaderProps {
   isHost?: boolean;
   username?: string;
   activityStatus?: ActivityStatus | null;
+  maxUsers?: number;
 }
 
 /**
@@ -54,7 +55,8 @@ export default function Header({
   connectedPeers = [],
   isHost = false,
   username = '',
-  activityStatus = null
+  activityStatus = null,
+  maxUsers
 }: HeaderProps) {
   const [copied, setCopied] = useState(false);
   const ping = networkStats?.avgPingMs;
@@ -153,7 +155,7 @@ export default function Header({
       <button type="button" className={`rh-invite ${alone ? 'is-primary' : ''}`} onClick={onOpenQrCode}>
         {alone && <Icon name="userPlus" size={17} strokeWidth={2.2} />}
         {alone ? 'Invite friends' : 'Invite'}
-        {!alone && <span className="rh-count">{peerCount} / {Math.max(MAX_ROOM_SIZE, peerCount)}</span>}
+        {!alone && <span className="rh-count">{peerCount} / {maxUsers || Math.max(MAX_ROOM_SIZE, peerCount)}</span>}
       </button>
       {onToggleChat && (
         <button
