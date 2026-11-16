@@ -419,7 +419,7 @@ export default function LiveChat({
     const items = e.clipboardData?.items;
     if (!items) return;
     for (let i = 0; i < items.length; i++) {
-      if (items[i].type && items[i].type.startsWith('image/')) {
+      if (items[i].kind === 'file') {
         const file = items[i].getAsFile();
         if (file) {
           e.preventDefault();
@@ -680,7 +680,7 @@ export default function LiveChat({
           <div className="chat-drag-overlay" role="alert">
             <div className="drag-overlay-card">
               <div className="drag-icon-pulse">🖼️</div>
-              <div className="drag-overlay-title">Drop image to share</div>
+              <div className="drag-overlay-title">Drop file or image to share</div>
               <div className="drag-overlay-subtitle">Direct peer-to-peer file transfer</div>
             </div>
           </div>

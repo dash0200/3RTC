@@ -410,7 +410,7 @@ fn stage(
     };
     let focused = view.link.read(cx).focus_handle(cx).is_focused(window);
     let picks = crate::watch::browser(view, room, cx);
-    let link_error = crate::watch::link_error(view);
+    let link_error = crate::watch::link_error(view, cx);
     let resolving = view.watch.resolving;
     div()
         .id("stage-idle")
@@ -2265,6 +2265,7 @@ fn panel(
         .bg(tokens::surface())
         .border_l_1()
         .border_color(tokens::line())
+        .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| v.dropped(paths, cx)))
         .child(bar)
         .child(div().flex_1().min_h_0().flex().flex_col().child(body))
         .into_any_element()
@@ -2496,6 +2497,7 @@ fn chat_tab(
         .min_h_0()
         .flex()
         .flex_col()
+        .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| v.dropped(paths, cx)))
         .child(if rows.is_empty() {
             div()
                 .flex_1()
@@ -2527,9 +2529,9 @@ fn chat_tab(
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .justify_end()
                 .p(px(16.))
                 .gap(px(4.))
+                .child(div().flex_1().min_h_0())
                 .children(rows)
                 .into_any_element()
         })

@@ -240,6 +240,10 @@ impl StreamSource for Streamed {
     fn close(&self) {
         self.0.close();
     }
+
+    fn name(&self) -> &str {
+        self.0.name()
+    }
 }
 
 /// Opens the waiting file in mpv over the stage (called once the stage has a size).
@@ -290,19 +294,37 @@ pub(crate) fn open_player(
 impl RoomView {
     /// Our own file plays: offer it to viewers who don't have it.
     pub(crate) fn share_own_file(&mut self, path: &Path) {
-        self.share_own_file_sized(path, None);
+        self.share_own_torrent(path, None, None, None);
     }
 
     /// Our own file plays with an optional known size (e.g. torrent metadata): offer it to viewers who don't have it.
     pub(crate) fn share_own_file_sized(&mut self, path: &Path, size: Option<u64>) {
-        let Ok(meta) = std::fs::metadata(path) else { return };
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let file_size = size.unwrap_or(meta.len());
+        self.share_own_torrent(path, None, size, None);
+    }
+
+    /// Offers our own file or torrent stream to the room.
+    pub(crate) fn share_own_torrent(
+        &mut self,
+        path: &Path,
+        name: Option<&str>,
+        size: Option<u64>,
+        stream_url: Option<String>,
+    ) {
+        let name = name.map(ToOwned::to_owned).unwrap_or_else(|| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        let file_size = size
+            .or_else(|| std::fs::metadata(path).ok().map(|m| m.len()))
+            .unwrap_or(0);
         if let Some(e) = &self.engine {
-            e.share_file(Some((path.to_path_buf(), name, file_size)));
+            e.share_file(Some(rtc_engine::ShareFileSpec {
+                path: path.to_path_buf(),
+                name,
+                size: file_size,
+                stream_url,
+            }));
             self.watch.local.sharing = true;
         }
     }
@@ -361,6 +383,10 @@ impl RoomView {
 
     /// "Stream from …": ask the room for its file.
     fn ask_stream(&mut self, name: String, cx: &mut Context<'_, Self>) {
+        crate::torrent::TorrentService::cancel_stream(&self.runtime);
+        self.watch.torrent_stream_url = None;
+        self.watch.torrent_stats = None;
+        self.watch.torrent_status = None;
         if let Some(e) = &self.engine {
             e.stream_from(name.clone());
             self.watch.local.asking = Some(name);
@@ -377,6 +403,10 @@ impl RoomView {
         reader: StreamReader,
         cx: &mut Context<'_, Self>,
     ) {
+        crate::torrent::TorrentService::cancel_stream(&self.runtime);
+        self.watch.torrent_stream_url = None;
+        self.watch.torrent_stats = None;
+        self.watch.torrent_status = None;
         if self.watch.local.asking.take().is_none() {
             reader.close();
             return;
@@ -657,6 +687,9 @@ impl RoomView {
             );
             return;
         }
+        crate::torrent::TorrentService::cancel_stream(&self.runtime);
+        self.watch.torrent_status = None;
+        self.watch.torrent_stats = None;
         let size = match std::fs::metadata(&path) {
             Ok(m) if m.is_file() => m.len(),
             _ => {

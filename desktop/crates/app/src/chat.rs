@@ -60,8 +60,9 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
-fn picture(mime: &str, bytes: &[u8]) -> Option<Arc<Image>> {
-    format_for(mime).map(|f| Arc::new(Image::from_bytes(f, bytes.to_vec())))
+fn picture(_mime: &str, bytes: &[u8]) -> Option<Arc<Image>> {
+    let fmt = sniff(bytes).and_then(format_for)?;
+    Some(Arc::new(Image::from_bytes(fmt, bytes.to_vec())))
 }
 
 /// Where pictures are saved by default.
@@ -155,12 +156,8 @@ impl RoomView {
                     return true;
                 }
                 gpui_kit::ClipboardEntry::ExternalPaths(p) => {
-                    if let Some(path) = p
-                        .paths()
-                        .iter()
-                        .find(|p| mime_for_name(&p.to_string_lossy()).is_some())
-                    {
-                        self.attach_file(&path.clone(), cx);
+                    if let Some(path) = p.paths().first() {
+                        self.attach_file(path, cx);
                         return true;
                     }
                 }
@@ -170,17 +167,13 @@ impl RoomView {
         false
     }
 
-    /// Files dropped on the window: the first picture is attached.
+    /// Files dropped on the chat or window: attached to send.
     pub(crate) fn dropped(&mut self, paths: &ExternalPaths, cx: &mut Context<'_, Self>) {
         if self.in_room().is_none() {
             return;
         }
-        if let Some(p) = paths
-            .paths()
-            .iter()
-            .find(|p| mime_for_name(&p.to_string_lossy()).is_some())
-        {
-            self.attach_file(&p.clone(), cx);
+        if let Some(p) = paths.paths().first() {
+            self.attach_file(p, cx);
         }
     }
 
@@ -241,7 +234,7 @@ impl RoomView {
             .iter()
             .rev()
             .find_map(|l| l.image.as_ref().filter(|i| i.transfer_id == transfer_id))
-            .map_or("image/png", |i| rtc_protocol::image::clean_mime(&i.mime));
+            .map_or("application/octet-stream", |i| i.mime.as_str());
         let p = self.pictures.entry(transfer_id.to_owned()).or_default();
         p.image = picture(mime, &bytes);
         p.bytes = Some(bytes);
@@ -392,6 +385,7 @@ pub(crate) fn picture_view(
     } else if !moving {
         // arrived, but not a type we can draw (non-image or AVIF): offer it to save
         let id = info.transfer_id.clone();
+        let save_id = id.clone();
         let icon = if info.file_name.rsplit('.').next().is_some_and(|ext| {
             matches!(
                 ext.to_ascii_lowercase().as_str(),
@@ -408,14 +402,57 @@ pub(crate) fn picture_view(
                 .px(px(12.))
                 .py(px(8.))
                 .rounded(px(12.))
-                .bg(tokens::raised())
+                .bg(tokens::surface())
+                .hover(|s| s.bg(tokens::raised()))
+                .border_1()
+                .border_color(tokens::line())
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
                 .cursor_pointer()
-                .on_click(cx.listener(move |v, _, _, cx| v.open_lightbox(id.clone(), cx)))
-                .child(format!(
-                    "{icon} {} ({})",
-                    info.file_name,
-                    format_size(info.file_size)
-                )),
+                .on_click(cx.listener(move |v, _, _, cx| v.save_picture(&save_id, cx)))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .min_w_0()
+                        .child(div().flex_none().text_size(px(18.)).child(icon))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(info.file_name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(tokens::text_2())
+                                        .child(format_size(info.file_size)),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(6.))
+                        .bg(tokens::panel())
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(tokens::text())
+                        .child("Save"),
+                ),
         );
     }
     Some(col.into_any_element())
@@ -442,8 +479,18 @@ pub(crate) fn pending_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> O
                     .rounded(px(8.))
                     .overflow_hidden()
                     .bg(tokens::raised())
-                    .when_some(p.image.clone(), |el, i| {
-                        el.child(img(i).size(px(48.)).object_fit(ObjectFit::Cover))
+                    .map(|el| {
+                        if let Some(i) = p.image.clone() {
+                            el.child(img(i).size(px(48.)).object_fit(ObjectFit::Cover))
+                                .into_any_element()
+                        } else {
+                            el.flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(22.))
+                                .child("📄")
+                                .into_any_element()
+                        }
                     }),
             )
             .child(

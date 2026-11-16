@@ -950,16 +950,31 @@ impl Room {
                     return;
                 }
                 let chunks = image.file_size.div_ceil(rtc_protocol::image::CHUNK as u64).max(1);
+                let is_image = rtc_protocol::image::is_image_mime(&image.mime)
+                    || rtc_protocol::image::mime_for_name(&image.file_name).is_some();
                 #[allow(clippy::cast_precision_loss)]
-                let start = PeerMessage::P2pImageStart {
-                    id: id.clone(),
-                    transfer_id: image.transfer_id.clone(),
-                    file_name: image.file_name.clone(),
-                    file_size: image.file_size as f64,
-                    mime_type: image.mime.clone(),
-                    total_chunks: chunks as f64,
-                    is_host: self.is_host(),
-                    caption: caption.clone(),
+                let start = if is_image {
+                    PeerMessage::P2pImageStart {
+                        id: id.clone(),
+                        transfer_id: image.transfer_id.clone(),
+                        file_name: image.file_name.clone(),
+                        file_size: image.file_size as f64,
+                        mime_type: image.mime.clone(),
+                        total_chunks: chunks as f64,
+                        is_host: self.is_host(),
+                        caption: caption.clone(),
+                    }
+                } else {
+                    PeerMessage::P2pFileStart {
+                        id: id.clone(),
+                        transfer_id: image.transfer_id.clone(),
+                        file_name: image.file_name.clone(),
+                        file_size: image.file_size as f64,
+                        mime_type: image.mime.clone(),
+                        total_chunks: chunks as f64,
+                        is_host: self.is_host(),
+                        caption: caption.clone(),
+                    }
                 };
                 fx.push(Effect::BroadcastBulk(self.envelope(start, now_ms)));
                 let line = ChatLine {
@@ -1641,15 +1656,6 @@ impl Room {
                 mime_type,
                 caption,
                 ..
-            }
-            | PeerMessage::P2pFileStart {
-                id,
-                transfer_id,
-                file_name,
-                file_size,
-                mime_type,
-                caption,
-                ..
             } => {
                 if transfer_id.trim().is_empty() || transfer_id.len() > 64 {
                     return;
@@ -1687,6 +1693,55 @@ impl Room {
                         file_name,
                         file_size,
                         mime: rtc_protocol::image::clean_mime(&mime_type).to_owned(),
+                    }),
+                };
+                self.push_chat(line, fx);
+            }
+            PeerMessage::P2pFileStart {
+                id,
+                transfer_id,
+                file_name,
+                file_size,
+                mime_type,
+                caption,
+                ..
+            } => {
+                if transfer_id.trim().is_empty() || transfer_id.len() > 64 {
+                    return;
+                }
+                let name = self.name_of(&from);
+                let is_host = self.host.as_ref() == Some(&from);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let file_size = if file_size.is_finite() && file_size > 0.0 {
+                    file_size as u64
+                } else {
+                    0
+                };
+                let file_name: String = if file_name.is_empty() {
+                    "file".to_owned()
+                } else {
+                    file_name.chars().take(120).collect()
+                };
+                let line = ChatLine {
+                    id: if id.is_empty() {
+                        transfer_id.clone()
+                    } else {
+                        id.chars().take(64).collect()
+                    },
+                    from,
+                    name,
+                    is_host,
+                    text: caption.chars().take(MAX_CHAT_CHARS).collect(),
+                    at: if ts > 0.0 {
+                        ts.min(now_ms + 60_000.0)
+                    } else {
+                        now_ms
+                    },
+                    image: Some(ChatImage {
+                        transfer_id,
+                        file_name,
+                        file_size,
+                        mime: rtc_protocol::image::clean_file_mime(&mime_type),
                     }),
                 };
                 self.push_chat(line, fx);

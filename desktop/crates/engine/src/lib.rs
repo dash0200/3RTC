@@ -32,7 +32,7 @@ pub use rtc_protocol::stream::{InputKind, ScreenInput};
 pub use rtc_webrtc::factory::IceServerConfig;
 pub use rtc_webrtc::voice::{Device, Devices, MicSource};
 pub use screen::{ScreenFeed, ScreenFrame, ScreenOptions, ScreenSource, ScreenStats, screen_sources};
-pub use stream::{StreamProgress, StreamReader};
+pub use stream::{ShareFileSpec, StreamProgress, StreamReader};
 
 use crate::peers::{PeerEvent, Peers};
 use rtc_webrtc::libwebrtc::peer_connection_factory::native::PeerConnectionFactoryExt as _;
@@ -276,8 +276,8 @@ enum Request {
     Isolation(bool),
     SendImage(OutgoingImage),
     NetStats,
-    /// Offer this file to viewers who ask (path, name, size); `None`: stop.
-    ShareFile(Option<(std::path::PathBuf, String, u64)>),
+    /// Offer this file to viewers who ask; `None`: stop.
+    ShareFile(Option<ShareFileSpec>),
     /// Ask the room for the file playing (by name).
     StreamFrom(String),
     /// Stop watching a stream.
@@ -374,7 +374,7 @@ impl Handle {
 
     /// Offers the video file playing here to viewers who don't have it (`None`: stops, and
     /// tells the ones watching).
-    pub fn share_file(&self, file: Option<(std::path::PathBuf, String, u64)>) {
+    pub fn share_file(&self, file: Option<ShareFileSpec>) {
         let _ = self.tx.send(Request::ShareFile(file));
     }
 
@@ -929,7 +929,10 @@ impl Engine {
                 peer,
                 generation,
                 text,
-            }) if text.contains("\"p2p-") && !text.contains("\"p2p-image-start\"") => {
+            }) if text.contains("\"p2p-")
+                && !text.contains("\"p2p-image-start\"")
+                && !text.contains("\"p2p-file-") =>
+            {
                 if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
                     return;
                 }
@@ -1064,22 +1067,25 @@ impl Engine {
                 }
             }
         };
-        if let Input::Peer {
-            from,
-            envelope:
-                Envelope {
-                    message:
-                        PeerMessage::P2pImageStart {
-                            transfer_id,
-                            total_chunks,
-                            ..
-                        },
-                    ..
-                },
-        } = &input
+        if let Input::Peer { from, envelope } = &input
             && self.room.members().contains_key(from)
         {
-            self.images.start(transfer_id, *total_chunks, now);
+            let (tid, chunks) = match &envelope.message {
+                PeerMessage::P2pImageStart {
+                    transfer_id,
+                    total_chunks,
+                    ..
+                }
+                | PeerMessage::P2pFileStart {
+                    transfer_id,
+                    total_chunks,
+                    ..
+                } => (Some(transfer_id.as_str()), Some(*total_chunks)),
+                _ => (None, None),
+            };
+            if let (Some(tid), Some(chunks)) = (tid, chunks) {
+                self.images.start(tid, chunks, now);
+            }
         }
         let fx = self.room.update(input, now);
         self.apply(fx).await;
@@ -1136,13 +1142,20 @@ impl Engine {
         }
         self.outgoing
             .insert(image.transfer_id.clone(), Arc::clone(&image.bytes));
+        let is_img = rtc_protocol::image::is_image_mime(&image.mime)
+            || rtc_protocol::image::mime_for_name(&image.file_name).is_some();
+        let mime = if is_img {
+            rtc_protocol::image::clean_mime(&image.mime).to_owned()
+        } else {
+            rtc_protocol::image::clean_file_mime(&image.mime)
+        };
         let command = Command::ImageSent {
             id: image.id,
             image: ChatImage {
                 transfer_id: image.transfer_id.clone(),
                 file_name: image.file_name,
                 file_size: image.bytes.len() as u64,
-                mime: rtc_protocol::image::clean_mime(&image.mime).to_owned(),
+                mime,
             },
             caption: image.caption,
         };
@@ -1155,7 +1168,9 @@ impl Engine {
     /// Sends a picture's announcement, then its frames, on every open bulk channel, waiting
     /// whenever a channel is backed up.
     fn send_frames(&mut self, envelope: &Envelope) {
-        let PeerMessage::P2pImageStart { transfer_id, .. } = &envelope.message else {
+        let (PeerMessage::P2pImageStart { transfer_id, .. } | PeerMessage::P2pFileStart { transfer_id, .. }) =
+            &envelope.message
+        else {
             return;
         };
         let Some(bytes) = self.outgoing.remove(transfer_id) else {
