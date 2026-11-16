@@ -70,6 +70,7 @@ export interface LocalVideoSyncPlayerProps {
   roomId?: string | number | null;
   isPttSpaceActive?: boolean;
   fileFormat?: UseFileFormatReturn | null;
+  playbackLock?: boolean;
 }
 
 export default function LocalVideoSyncPlayer({
@@ -91,8 +92,10 @@ export default function LocalVideoSyncPlayer({
   onSendReaction,
   roomId = null,
   isPttSpaceActive = false,
-  fileFormat = null // what's in the file, can it play here, its subtitle tracks (features/files)
+  fileFormat = null, // what's in the file, can it play here, its subtitle tracks (features/files)
+  playbackLock = false
 }: LocalVideoSyncPlayerProps) {
+  const isLockedForMe = Boolean(playbackLock && !_isHost);
   const initialUrlRef = useRef<string | null>(null);
   const [file, setFile] = useState<File | null>(initialFile);
   const [objectUrl, setObjectUrl] = useState<string | null>(() => {
@@ -1031,6 +1034,7 @@ export default function LocalVideoSyncPlayer({
 
   // 6. Manual UI Controls
   const togglePlayPause = () => {
+    if (isLockedForMe) return;
     const vid = videoRef.current;
     if (!vid) return;
     if (isFullscreen) {
@@ -1046,6 +1050,7 @@ export default function LocalVideoSyncPlayer({
   };
 
   const handleSeekDelta = (deltaSec: number) => {
+    if (isLockedForMe) return;
     const vid = videoRef.current;
     if (!vid) return;
     const target = Math.max(0, Math.min(vid.duration || 0, vid.currentTime + deltaSec));
@@ -1103,6 +1108,7 @@ export default function LocalVideoSyncPlayer({
   };
 
   const handleScrubberMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
+    if (isLockedForMe) return;
     const vid = videoRef.current;
     if (!vid || !durationSec || durationSec <= 0) return;
     isScrubbingRef.current = true;
@@ -1171,7 +1177,7 @@ export default function LocalVideoSyncPlayer({
     }
     setFile(null);
     setObjectUrl(null);
-    if (typeof onBroadcastAction === 'function') {
+    if (!isLockedForMe && typeof onBroadcastAction === 'function') {
       onBroadcastAction('close', { type: 'local-video-action' });
     }
     onClose();
@@ -1442,18 +1448,18 @@ export default function LocalVideoSyncPlayer({
       }
 
       if (e.code === 'Space') {
-        if (isPttSpaceActive) {
-          // Space is reserved for Push-to-Talk voice transmission
+        if (isPttSpaceActive || isLockedForMe) {
+          // Space is reserved for Push-to-Talk voice transmission or locked by host
           return;
         }
         e.preventDefault();
         togglePlayPause();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
-        handleSeekDelta(-5);
+        if (!isLockedForMe) handleSeekDelta(-5);
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
-        handleSeekDelta(5);
+        if (!isLockedForMe) handleSeekDelta(5);
       } else if (e.code === 'KeyM') {
         toggleMute();
       } else if (e.code === 'KeyF') {
@@ -1643,7 +1649,13 @@ export default function LocalVideoSyncPlayer({
               </div>
             </div>
             <div className="rd-offer-actions">
-              <button type="button" className="rd-btn rd-btn-primary rd-btn-xl" onClick={() => fileInputRef.current?.click()}>Choose a video file</button>
+              {isLockedForMe ? (
+                <p className="rd-offer-size" style={{ fontWeight: 600, color: 'var(--text-3)' }}>
+                  🔒 Host controls are on: only the host can start a video
+                </p>
+              ) : (
+                <button type="button" className="rd-btn rd-btn-primary rd-btn-xl" onClick={() => fileInputRef.current?.click()}>Choose a video file</button>
+              )}
             </div>
             <button type="button" className="rd-btn rd-btn-ghost rd-offer-back" onClick={handleExitVideo}>Not now</button>
           </div>
@@ -1923,40 +1935,56 @@ export default function LocalVideoSyncPlayer({
         }}
       >
         <div className="yt-screen-ctrls-left">
-          <button
-            type="button"
-            className="yt-screen-ctrl-icon yt-play-btn"
-            onClick={togglePlayPause}
-            aria-label={isPlaying ? 'Pause for everyone' : 'Play for everyone'}
-            title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-          >
-            {isPlaying ? (
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+          {isLockedForMe ? (
+            <span
+              className="yt-screen-ctrl-icon is-locked"
+              title="Host controls are on: only the host can control playback"
+              aria-label="Host controls are on"
+              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', opacity: 0.6, cursor: 'not-allowed' }}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
               </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            )}
-          </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="yt-screen-ctrl-icon yt-play-btn"
+              onClick={togglePlayPause}
+              aria-label={isPlaying ? 'Pause for everyone' : 'Play for everyone'}
+              title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+            >
+              {isPlaying ? (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              )}
+            </button>
+          )}
 
-          <button
-            type="button"
-            className="yt-screen-ctrl-icon rd-skip-btn"
-            onClick={() => handleSeekDelta(-10)}
-            aria-label="Back 10 seconds"
-            title="Back 10 seconds (←)"
-          >
-            −10
-          </button>
+          {!isLockedForMe && (
+            <button
+              type="button"
+              className="yt-screen-ctrl-icon rd-skip-btn"
+              onClick={() => handleSeekDelta(-10)}
+              aria-label="Back 10 seconds"
+              title="Back 10 seconds (←)"
+            >
+              −10
+            </button>
+          )}
           <span className="yt-screen-time-text rd-time-now">{formatTime(currentTimeSec)}</span>
         </div>
 
         {/* Center: Interactive Scrubber Timeline */}
         <div
           ref={scrubberTrackRef}
-          className="yt-screen-scrubber-track interactive"
+          className={`yt-screen-scrubber-track ${isLockedForMe ? 'is-locked' : 'interactive'}`}
+          style={isLockedForMe ? { cursor: 'default' } : undefined}
           onMouseDown={handleScrubberMouseDown}
           onTouchStart={handleScrubberMouseDown}
           onMouseMove={handleScrubberMouseMove}

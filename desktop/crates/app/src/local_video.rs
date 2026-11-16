@@ -126,6 +126,8 @@ pub(crate) struct LocalUi {
     pub(crate) fullscreen_controls: bool,
     /// When the cursor moved out of the panel in full screen.
     pub(crate) controls_left_at: Option<Instant>,
+    /// Last time play/pause was toggled, for debouncing multiple events.
+    pub(crate) last_play_toggle: Option<Instant>,
     /// Task that auto-hides controls or shows them when cursor reaches bottom in full screen.
     pub(crate) fullscreen_task: Option<Task<()>>,
     /// The offer card's note (the wrong file was chosen).
@@ -170,6 +172,7 @@ impl LocalUi {
             scale: 1.0,
             fullscreen_controls: false,
             controls_left_at: None,
+            last_play_toggle: None,
             fullscreen_task: None,
             offer_error: None,
             sharing: false,
@@ -738,6 +741,12 @@ impl RoomView {
         if self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
             return;
         }
+        if let Some(t) = self.watch.local.last_play_toggle
+            && t.elapsed() < Duration::from_millis(300)
+        {
+            return;
+        }
+        self.watch.local.last_play_toggle = Some(Instant::now());
         let playing = self.watch.local.playing;
         let mut done = false;
         if let Some(p) = self.watch.player.borrow().as_ref() {
@@ -959,14 +968,19 @@ impl RoomView {
         }
         self.watch.local.fullscreen_task = Some(cx.spawn(async move |this, cx| {
             let mut last_pos: Option<(i32, i32)> = None;
-            let mut last_moved = Instant::now();
+            let mut last_activity = Instant::now();
+            let mut cursor_hidden = false;
+            let hide_delay = FULLSCREEN_HIDE_DELAY;
+
             loop {
-                cx.background_executor().timer(Duration::from_millis(80)).await;
+                cx.background_executor().timer(Duration::from_millis(60)).await;
                 let done = this
                     .update(cx, |view, cx| {
                         if !view.watch.local.fullscreen {
                             view.watch.local.fullscreen_task = None;
-                            rtc_platform_win::set_cursor_visible(true);
+                            if cursor_hidden {
+                                rtc_platform_win::set_cursor_visible(true);
+                            }
                             return true;
                         }
                         let threshold_px =
@@ -978,39 +992,75 @@ impl RoomView {
                             let moved = last_pos != Some(pos);
                             if moved {
                                 last_pos = Some(pos);
-                                last_moved = Instant::now();
-                                rtc_platform_win::set_cursor_visible(true);
+                                last_activity = Instant::now();
+                                if cursor_hidden {
+                                    cursor_hidden = false;
+                                    rtc_platform_win::set_cursor_visible(true);
+                                }
+                            }
+
+                            // While a menu or dialog is open, keep controls and cursor visible
+                            if view.watch.local.menu.is_some() || view.dialog.is_some() {
+                                if cursor_hidden {
+                                    cursor_hidden = false;
+                                    rtc_platform_win::set_cursor_visible(true);
+                                }
+                                if !view.watch.local.fullscreen_controls {
+                                    view.watch.local.fullscreen_controls = true;
+                                    cx.notify();
+                                }
+                                view.watch.local.controls_left_at = None;
+                                return false;
                             }
 
                             if at_bottom {
                                 let change = !view.watch.local.fullscreen_controls;
                                 view.watch.local.fullscreen_controls = true;
                                 view.watch.local.controls_left_at = None;
-                                rtc_platform_win::set_cursor_visible(true);
                                 if change {
                                     cx.notify();
                                 }
-                            } else if view.watch.local.fullscreen_controls {
-                                if view.watch.local.menu.is_some() || view.dialog.is_some() {
-                                    rtc_platform_win::set_cursor_visible(true);
-                                    return false;
-                                }
-                                if view.watch.local.controls_left_at.is_none() {
-                                    view.watch.local.controls_left_at = Some(Instant::now());
-                                } else if view
-                                    .watch
-                                    .local
-                                    .controls_left_at
-                                    .is_some_and(|t| t.elapsed() >= FULLSCREEN_HIDE_DELAY)
-                                {
-                                    view.watch.local.fullscreen_controls = false;
-                                    view.watch.local.controls_left_at = None;
-                                    cx.notify();
+                                // If the user left the mouse at bottom with no movement for 3s, hide panel and cursor
+                                if last_activity.elapsed() >= Duration::from_millis(3000) {
+                                    if view.watch.local.fullscreen_controls {
+                                        view.watch.local.fullscreen_controls = false;
+                                        cx.notify();
+                                    }
+                                    if !cursor_hidden {
+                                        cursor_hidden = true;
+                                        rtc_platform_win::set_cursor_visible(false);
+                                    }
                                 }
                             } else {
-                                // Fullscreen panel is hidden: autohide cursor after 2s of stillness
-                                if last_moved.elapsed() >= Duration::from_millis(2000) {
-                                    rtc_platform_win::set_cursor_visible(false);
+                                // Mouse is not at bottom
+                                if view.watch.local.fullscreen_controls {
+                                    if view.watch.local.controls_left_at.is_none() {
+                                        view.watch.local.controls_left_at = Some(Instant::now());
+                                    } else if view
+                                        .watch
+                                        .local
+                                        .controls_left_at
+                                        .is_some_and(|t| t.elapsed() >= hide_delay)
+                                    {
+                                        view.watch.local.fullscreen_controls = false;
+                                        view.watch.local.controls_left_at = None;
+                                        cx.notify();
+                                    }
+                                }
+                                // Hide cursor along with the panel once stillness threshold is reached
+                                if (!view.watch.local.fullscreen_controls
+                                    || last_activity.elapsed() >= hide_delay)
+                                    && last_activity.elapsed() >= hide_delay
+                                {
+                                    if view.watch.local.fullscreen_controls {
+                                        view.watch.local.fullscreen_controls = false;
+                                        view.watch.local.controls_left_at = None;
+                                        cx.notify();
+                                    }
+                                    if !cursor_hidden {
+                                        cursor_hidden = true;
+                                        rtc_platform_win::set_cursor_visible(false);
+                                    }
                                 }
                             }
                         }
@@ -1195,18 +1245,6 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                     "Streaming from {peer_name}{} · {pct:.0}% here · {:.1} MB/s",
                     if p.relayed { " (relayed)" } else { "" },
                     p.speed
-                ))
-        }))
-        .children(view.watch.torrent_stats.map(|ts| {
-            let sp_mb = ts.speed_bps as f64 / (1024.0 * 1024.0);
-            div()
-                .flex_none()
-                .text_size(px(12.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(tokens::accent())
-                .child(format!(
-                    "🧲 s:{} p:{}({}) · {:.1} MB/s",
-                    ts.seeds, ts.peers, ts.total_peers, sp_mb
                 ))
         }))
         .children(view.watch.torrent_stats.map(|ts| {

@@ -160,6 +160,8 @@ export interface LiveChatProps {
   onSetActivityView?: (view: ActivityViewKind) => void;
   activityStatus?: ActivityStatus | null;
   embedded?: boolean;
+  isHost?: boolean;
+  playbackLock?: boolean;
 }
 
 export default function LiveChat({
@@ -222,8 +224,11 @@ export default function LiveChat({
   activityView = 'full',
   onSetActivityView,
   activityStatus = null,
-  embedded = false
+  embedded = false,
+  isHost = false,
+  playbackLock = false
 }: LiveChatProps) {
+  const isLockedForMe = Boolean(playbackLock && !(isHost || localUser?.isHost));
   const DEFAULT_WIDTH = 360;
   const MIN_WIDTH = 260;
   const MAX_WIDTH = 720;
@@ -1276,7 +1281,7 @@ export default function LiveChat({
                     <div className="now-playing-sub">
                       <span className="now-playing-sync-dot"></span>
                       <span>Synced P2P</span>
-                      {queue.length > 0 && typeof onPlayNextInQueue === 'function' && (
+                      {queue.length > 0 && !isLockedForMe && typeof onPlayNextInQueue === 'function' && (
                         <button
                           type="button"
                           className="btn-next-inline"
@@ -1297,7 +1302,7 @@ export default function LiveChat({
                     <div className="now-playing-sub">
                       <span className="now-playing-sync-dot"></span>
                       <span>Synced P2P</span>
-                      {queue.length > 0 && typeof onPlayNextInQueue === 'function' && (
+                      {queue.length > 0 && !isLockedForMe && typeof onPlayNextInQueue === 'function' && (
                         <button type="button" className="btn-next-inline" onClick={onPlayNextInQueue} title={`Skip immediately to: "${queue[0].title}"`}>
                           Next ⏭
                         </button>
@@ -1382,7 +1387,7 @@ export default function LiveChat({
                 <span>Up Next</span>
                 <span className="queue-count-pill">{queue.length}</span>
               </div>
-              {queue.length > 0 && typeof onClearQueue === 'function' && (
+              {queue.length > 0 && !isLockedForMe && typeof onClearQueue === 'function' && (
                 <button
                   type="button"
                   className="btn-clear-queue"
@@ -1432,44 +1437,46 @@ export default function LiveChat({
                         </div>
                       </div>
 
-                      <div className="queue-item-actions">
-                        <button
-                          type="button"
-                          className="btn-queue-action play"
-                          onClick={() => onPlayQueueItem(item.id)}
-                          title="Play this video now for everyone"
-                        >
-                          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
-                            <path d="M8 5v14l11-7z" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-queue-action move-up"
-                          onClick={() => handleMoveQueueItem(index, index - 1)}
-                          disabled={index === 0}
-                          title="Move up in queue"
-                        >
-                          ▲
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-queue-action move-down"
-                          onClick={() => handleMoveQueueItem(index, index + 1)}
-                          disabled={index === queue.length - 1}
-                          title="Move down in queue"
-                        >
-                          ▼
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-queue-action remove"
-                          onClick={() => onRemoveFromQueue(item.id)}
-                          title="Remove from queue"
-                        >
-                          ✕
-                        </button>
-                      </div>
+                      {!isLockedForMe && (
+                        <div className="queue-item-actions">
+                          <button
+                            type="button"
+                            className="btn-queue-action play"
+                            onClick={() => onPlayQueueItem(item.id)}
+                            title="Play this video now for everyone"
+                          >
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                              <path d="M8 5v14l11-7z" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-queue-action move-up"
+                            onClick={() => handleMoveQueueItem(index, index - 1)}
+                            disabled={index === 0}
+                            title="Move up in queue"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-queue-action move-down"
+                            onClick={() => handleMoveQueueItem(index, index + 1)}
+                            disabled={index === queue.length - 1}
+                            title="Move down in queue"
+                          >
+                            ▼
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-queue-action remove"
+                            onClick={() => onRemoveFromQueue(item.id)}
+                            title="Remove from queue"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

@@ -39,19 +39,23 @@ export default function PasteLinkForm({ onPlayLink, onPlayYouTube, onQueueLink, 
         }
     };
 
+    const canPlay = Boolean(onPlayLink || onPlayYouTube);
+
     return (
-        <form className="paste-link-form" onSubmit={(e) => { e.preventDefault(); go('play'); }}>
+        <form className="paste-link-form" onSubmit={(e) => { e.preventDefault(); go(canPlay ? 'play' : 'queue'); }}>
             <input
                 type="text"
                 className="paste-link-input"
-                placeholder="Paste a new link…"
+                placeholder={canPlay ? 'Paste a new link…' : 'Add to queue…'}
                 aria-label="Paste a new video link"
                 value={text}
                 onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
             />
-            <button type="submit" className="link-player-btn" disabled={busy || !text.trim()}>{busy ? '…' : 'Load'}</button>
+            {canPlay && (
+                <button type="submit" className="link-player-btn" disabled={busy || !text.trim()}>{busy ? '…' : 'Load'}</button>
+            )}
             {(onQueueLink || onQueueYouTube) && (
-                <button type="button" className="link-player-btn" disabled={busy || !text.trim()} onClick={() => go('queue')}>+ Queue</button>
+                <button type={canPlay ? 'button' : 'submit'} className="link-player-btn" disabled={busy || !text.trim()} onClick={() => go('queue')}>+ Queue</button>
             )}
             {error && <div className="paste-link-error" role="alert">{error}</div>}
         </form>

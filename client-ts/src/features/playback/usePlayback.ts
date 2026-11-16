@@ -68,6 +68,7 @@ export interface UsePlaybackRoom {
   log: (msg: string) => void;
   notify: (msg: string) => void;
   peerName: (id: string) => string;
+  isPeerHost?: (id: string) => boolean;
 }
 
 export interface UsePlaybackHostControls {
@@ -275,9 +276,13 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
     currentTime?: number;
     fromHost?: boolean;
   }>(bus, 'local-video-action', (data, from) => {
-    if (!hostControls.acceptRemotePlayback(data)) return;
-    lastChangeAtRef.current = Date.now();
     const who = room.peerName(from) || data.sender || 'Peer';
+    const isOwnerOrHost =
+      Boolean(data.fromHost) ||
+      Boolean(room.isPeerHost?.(from)) ||
+      Boolean(remoteLocalVideoMeta && (remoteLocalVideoMeta.sender === who || remoteLocalVideoMeta.sender === data.sender));
+    if (!isOwnerOrHost && !hostControls.acceptRemotePlayback(data)) return;
+    lastChangeAtRef.current = Date.now();
     if (data.action === 'load') {
       // If WE already have this file loaded locally as owner, keep our localVideoFile!
       if (localVideoFileRef.current && localVideoFileRef.current.name === data.fileName) {
@@ -294,6 +299,8 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       localVideoFileRef.current = null;
       setLocalVideoFile(null);
       setRemoteLocalVideoMeta(null);
+      stopReceiving();
+      stopSending();
       mediaChanged();
       setRemoteAction(data as PlayerAction);
       room.log(`📁 ${who} exited the local video`);
@@ -425,6 +432,10 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
   const selectLocalFile = useCallback(
     (file: File | null) => {
       if (!file) return;
+      if (hostControls.isLockedForMe()) {
+        hostControls.onBlocked();
+        return;
+      }
       localVideoFileRef.current = file;
       stopReceiving();
       setActiveVideoId(null);
@@ -437,7 +448,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       room.notify(`Loaded "${file.name}"`);
       broadcastAction('load', { type: 'local-video-action', fileName: file.name, fileSize: file.size });
     },
-    [broadcastAction, room, stopReceiving, mediaChanged, setActiveMedia]
+    [broadcastAction, hostControls, room, stopReceiving, mediaChanged, setActiveMedia]
   );
 
   const closeLocalVideo = useCallback(() => {
@@ -490,6 +501,10 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
   );
 
   const exitVideo = useCallback(() => {
+    if (hostControls.isLockedForMe()) {
+      hostControls.onBlocked();
+      return;
+    }
     if (activeMediaRef.current) {
       setActiveMedia(null);
       mediaChanged();
@@ -503,6 +518,7 @@ export function usePlayback({ room, hostControls }: UsePlaybackProps): UsePlayba
       broadcastAction('close', {});
     }
   }, [
+    hostControls,
     localVideoFile,
     remoteLocalVideoMeta,
     streamVideoUrl,
