@@ -30,6 +30,7 @@ fn hosting() -> Room {
             seat_token: "seat".into(),
             host_token: "host".into(),
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -266,6 +267,7 @@ fn a_guest_follows_the_hosts_state_and_sends_its_moves_there() {
             seat_token: "seat".into(),
             host_token: None,
             topology: None,
+            max_users: None,
         }),
         0.0,
     );

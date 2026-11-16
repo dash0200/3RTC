@@ -53,6 +53,7 @@ fn connected_to(r: &mut Room, peer: &str, name: &str) {
                 playback_lock: None,
                 client: None,
                 topology: None,
+                max_users: None,
             },
         ),
         0.0,
@@ -70,6 +71,7 @@ fn hosting_with(peers: &[(&str, &str)]) -> Room {
             seat_token: "seat".into(),
             host_token: "host".into(),
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -94,6 +96,7 @@ fn guest_of(host: &str) -> Room {
             seat_token: "s".into(),
             host_token: None,
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -469,6 +472,7 @@ fn the_host_lock_stops_guests_and_puts_them_back() {
             PeerMessage::RoomSettings {
                 playback_lock: true,
                 topology: None,
+                max_users: None,
             },
         ),
         1.0,

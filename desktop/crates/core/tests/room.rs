@@ -36,6 +36,7 @@ fn hosting() -> Room {
             seat_token: "seat".into(),
             host_token: "host".into(),
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -58,6 +59,7 @@ fn identity_of(peer: &str, name: &str, is_reply: bool) -> Envelope {
             playback_lock: None,
             client: None,
             topology: None,
+            max_users: None,
         },
     }
 }
@@ -102,6 +104,7 @@ fn a_joiner_waits_for_offers() {
             seat_token: "s".into(),
             host_token: None,
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -418,6 +421,7 @@ fn room_events_go_to_the_logs_in_the_web_apps_words() {
             seat_token: "s".into(),
             host_token: "h".into(),
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -979,6 +983,7 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
             seat_token: "s".into(),
             host_token: None,
             topology: None,
+            max_users: None,
         }),
         0.0,
     );
@@ -990,6 +995,7 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
             PeerMessage::RoomSettings {
                 playback_lock: true,
                 topology: None,
+                max_users: None,
             },
         ),
         1.0,
@@ -1001,6 +1007,7 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
             PeerMessage::RoomSettings {
                 playback_lock: true,
                 topology: None,
+                max_users: None,
             },
         ),
         2.0,
@@ -1072,6 +1079,7 @@ fn host_can_switch_topology() {
             seat_token: "s".into(),
             host_token: None,
             topology: Some("hub".into()),
+            max_users: None,
         }),
         1.0,
     );

@@ -59,13 +59,15 @@ export function attachSignaling(server) {
    * @param {string | null} hostPeerId
    * @param {number} [hostGen]
    * @param {'mesh' | 'hub'} [topology]
+   * @param {number} [maxUsers]
    */
-  function openRoom(roomId, epoch, hostPeerId, hostGen = 0, topology = 'mesh') {
+  function openRoom(roomId, epoch, hostPeerId, hostGen = 0, topology = 'mesh', maxUsers = undefined) {
     /** @type {Map<string, import('./types/protocol.d.ts').SignalingSocket>} */
     const room = new Map();
     rooms.set(roomId, room);
+    const limit = maxUsers && Number(maxUsers) >= 2 ? Math.floor(Number(maxUsers)) : (topology === 'hub' ? 32 : MAX_ROOM_USERS);
     // hostGen: how many times the host has handed the room on (host tokens name it; older ones stop working)
-    roomInfo.set(roomId, { epoch, hostPeerId, hostGen, topology });
+    roomInfo.set(roomId, { epoch, hostPeerId, hostGen, topology, maxUsers: limit });
     return room;
   }
 
@@ -245,8 +247,10 @@ export function attachSignaling(server) {
               safeSend(ws, { type: 'error', code: 'seat-taken', message: 'That seat is in use' });
               return;
             }
-            if (room.size >= MAX_ROOM_USERS && !room.has(peerId)) {
-              safeSend(ws, { type: 'error', code: 'room-full', message: `Room ${resumeRoomId} is full (maximum ${MAX_ROOM_USERS} people)` });
+            const currentInfo = roomInfo.get(resumeRoomId);
+            const limit = currentInfo?.maxUsers || (currentInfo?.topology === 'hub' ? 32 : MAX_ROOM_USERS);
+            if (room.size >= limit && !room.has(peerId)) {
+              safeSend(ws, { type: 'error', code: 'room-full', message: `Room ${resumeRoomId} is full (maximum ${limit} people)` });
               return;
             }
             if (ws.roomId && ws.roomId !== resumeRoomId) leaveRoom(ws);
@@ -255,7 +259,6 @@ export function attachSignaling(server) {
             if (previous && previous !== ws) previous.roomId = null; // its close won't remove us
             room.set(peerId, ws);
             ws.roomId = resumeRoomId;
-            const currentInfo = roomInfo.get(resumeRoomId);
             if (currentInfo) {
               currentInfo.hostPeerId = peerId;
               currentInfo.hostGen = Math.max(currentInfo.hostGen || 0, host.gen);
@@ -271,6 +274,7 @@ export function attachSignaling(server) {
               peers: otherPeers.map((p) => p.peerId),
               hostPeerId: peerId,
               topology,
+              maxUsers: currentInfo?.maxUsers || limit,
               ...tokensFor(resumeRoomId, peerId, true)
             });
             for (const peer of otherPeers) {
@@ -310,10 +314,13 @@ export function attachSignaling(server) {
           if (isValidPeerId(data.peerId)) ws.peerId = data.peerId;
 
           const topology = data.topology === 'hub' ? 'hub' : 'mesh';
-          openRoom(generatedRoomId, newEpoch(), ws.peerId, 0, topology).set(ws.peerId, ws);
+          const customLimit = data.maxUsers && Number(data.maxUsers) >= 2 ? Math.floor(Number(data.maxUsers)) : undefined;
+          openRoom(generatedRoomId, newEpoch(), ws.peerId, 0, topology, customLimit).set(ws.peerId, ws);
           ws.roomId = generatedRoomId;
+          const info = roomInfo.get(generatedRoomId);
+          const maxUsers = info?.maxUsers ?? (topology === 'hub' ? 32 : MAX_ROOM_USERS);
 
-          log('CREATE', `Peer ${ws.peerId} created room "${generatedRoomId}" (topology: ${topology})`);
+          log('CREATE', `Peer ${ws.peerId} created room "${generatedRoomId}" (topology: ${topology}, limit: ${maxUsers})`);
 
           safeSend(ws, {
             type: 'room-created',
@@ -322,6 +329,7 @@ export function attachSignaling(server) {
             peers: [],
             hostPeerId: ws.peerId,
             topology,
+            maxUsers,
             ...tokensFor(generatedRoomId, ws.peerId, true)
           });
           break;
@@ -420,11 +428,12 @@ export function attachSignaling(server) {
             return;
           }
           // A peer rejoining after a signaling drop already has its seat
-          if (room.size >= MAX_ROOM_USERS && !room.has(peerId)) {
+          const roomLimit = info?.maxUsers || (info?.topology === 'hub' ? 32 : MAX_ROOM_USERS);
+          if (room.size >= roomLimit && !room.has(peerId)) {
             safeSend(ws, {
               type: 'error',
               code: 'room-full',
-              message: `Room ${roomId} is full (maximum ${MAX_ROOM_USERS} people)`
+              message: `Room ${roomId} is full (maximum ${roomLimit} people)`
             });
             return;
           }
@@ -462,6 +471,7 @@ export function attachSignaling(server) {
             peers: peerIdsInRoom,
             hostPeerId,
             topology: currentTopology,
+            maxUsers: info?.maxUsers || roomLimit,
             ...tokensFor(roomId, ws.peerId, isHost)
           });
 
@@ -502,6 +512,28 @@ export function attachSignaling(server) {
           safeSend(target, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
           for (const [, clientWs] of room.entries()) {
             safeSend(clientWs, { type: 'host', hostPeerId: targetId, from: ws.peerId });
+          }
+          break;
+        }
+
+        case 'set-room-size': {
+          const roomId = ws.roomId;
+          const info = roomId ? roomInfo.get(roomId) : null;
+          const room = roomId ? rooms.get(roomId) : null;
+          if (!roomId || !info || !room || info.hostPeerId !== ws.peerId || room.get(ws.peerId) !== ws) {
+            safeSend(ws, { type: 'error', code: 'not-host', message: 'Only the host can set room capacity' });
+            return;
+          }
+          const rawLimit = Number(data.maxUsers);
+          const nextLimit = rawLimit && rawLimit >= 2 ? Math.floor(rawLimit) : (info.topology === 'hub' ? 32 : MAX_ROOM_USERS);
+          info.maxUsers = nextLimit;
+          log('ROOM-SIZE', `Host ${ws.peerId} set room "${roomId}" capacity to ${nextLimit}`);
+          for (const [, clientWs] of room.entries()) {
+            safeSend(clientWs, {
+              type: 'room-size-changed',
+              maxUsers: nextLimit,
+              from: ws.peerId
+            });
           }
           break;
         }

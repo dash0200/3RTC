@@ -202,6 +202,9 @@ fn header(
                 .text_color(tone_fg)
                 .text_size(px(14.))
                 .font_weight(FontWeight::SEMIBOLD)
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.85))
+                .on_click(cx.listener(|v, _, _, cx| v.open_net(cx)))
                 .child(icon_bold(Icon::Signal, px(16.), tone_fg))
                 .child(text),
         )
@@ -228,6 +231,7 @@ fn header(
                     .child("Invite friends")
             } else {
                 let n = room.members.len() + 1;
+                let limit = room.max_users.max(n as u32);
                 el.px(px(16.))
                     .bg(tokens::surface())
                     .border_color(tokens::line())
@@ -238,7 +242,7 @@ fn header(
                         div()
                             .text_color(tokens::text_3())
                             .font_weight(FontWeight::MEDIUM)
-                            .child(format!("{n} / {}", n.max(4))),
+                            .child(format!("{n} / {limit}")),
                     )
             }
         })

@@ -291,6 +291,99 @@ fn qr(
                         .on_click(cx.listener(move |v, _, _, cx| v.copy(copy_link.clone(), "qr-link", cx))),
                 ),
         )
+        .child({
+            let room_ref = view.room.as_ref();
+            let is_host = room_ref.and_then(|r| r.host.as_ref()) == room_ref.map(|r| &r.me);
+            let current_max = room_ref.map(|r| r.max_users).unwrap_or(32);
+            div()
+                .px(px(16.))
+                .pb(px(14.))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(tokens::text_2())
+                                .child("Max Room Peers:"),
+                        )
+                        .when(is_host, |el| {
+                            el.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .child(
+                                        Button::new("qr-peer-dec", "-")
+                                            .min_height(px(24.))
+                                            .padding_x(px(6.))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                let next = current_max.saturating_sub(1).max(2);
+                                                v.command(rtc_core::Command::SetRoomSize(next));
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(px(32.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(tokens::accent())
+                                            .text_size(px(13.))
+                                            .child(current_max.to_string()),
+                                    )
+                                    .child(
+                                        Button::new("qr-peer-inc", "+")
+                                            .min_height(px(24.))
+                                            .padding_x(px(6.))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                let next = current_max + 1;
+                                                v.command(rtc_core::Command::SetRoomSize(next));
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .children([4u32, 8, 12, 16, 24, 32].into_iter().map(|preset| {
+                                        let active = current_max == preset;
+                                        Button::new(format!("qr-preset-{preset}"), preset.to_string())
+                                            .min_height(px(22.))
+                                            .padding_x(px(6.))
+                                            .font_size(px(11.))
+                                            .variant(if active { Variant::Primary } else { Variant::Ghost })
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                v.command(rtc_core::Command::SetRoomSize(preset));
+                                                cx.notify();
+                                            }))
+                                    })),
+                            )
+                        })
+                        .when(!is_host, |el| {
+                            el.child(
+                                div()
+                                    .text_size(px(12.5))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(tokens::accent())
+                                    .child(format!("{current_max} (Host managed)")),
+                            )
+                        }),
+                )
+                .child(
+                    Button::new("qr-open-net", "⚡ Network HUD")
+                        .min_height(px(26.))
+                        .padding_x(px(8.))
+                        .font_size(px(11.5))
+                        .variant(Variant::Secondary)
+                        .on_click(cx.listener(|v, _, _, cx| v.open_net(cx))),
+                )
+        })
         .child(
             div()
                 .p(px(16.))

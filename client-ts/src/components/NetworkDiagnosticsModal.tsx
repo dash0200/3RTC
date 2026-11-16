@@ -1,5 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { getNetworkHealthGrade, generateDiagnosticReport } from '../utils/networkMonitor';
+import { evaluateBandwidthAdvisor } from '../utils/bandwidthAdvisor';
 import { copyToClipboard } from '../utils/clipboard';
 import type { NetworkStatsSummary, PeerNetworkStatsRecord, TopologyDistanceMatrix } from '../hooks/useNetworkStats';
 import NetworkTopologyMap from './NetworkTopologyMap';
@@ -19,6 +20,8 @@ export interface NetworkDiagnosticsModalProps {
   topology?: 'mesh' | 'hub';
   isHost?: boolean;
   onSwitchTopology?: (topology: 'mesh' | 'hub') => void;
+  maxUsers?: number;
+  onSetMaxUsers?: (limit: number) => void;
   /** extra panels at the end (the Stream doctor) */
   children?: ReactNode;
 }
@@ -38,6 +41,8 @@ export default function NetworkDiagnosticsModal({
   topology = 'mesh',
   isHost = false,
   onSwitchTopology,
+  maxUsers = 32,
+  onSetMaxUsers,
   children
 }: NetworkDiagnosticsModalProps) {
   const [copied, setCopied] = useState(false);
@@ -57,6 +62,13 @@ export default function NetworkDiagnosticsModal({
 
   const avgPing = networkStats.avgPingMs ?? null;
   const health = getNetworkHealthGrade(avgPing, networkStats.maxPacketLoss ?? 0);
+  const advisor = evaluateBandwidthAdvisor({
+    totalDownloadKBps: networkStats.totalDownloadKBps || 0,
+    totalUploadKBps: networkStats.totalUploadKBps || 0,
+    activePeerCount: peersStats.length + 1,
+    currentTopology: topology,
+    isHost
+  });
 
   // Aggregated ping history for sparkline
   const combinedHistory =
@@ -233,6 +245,212 @@ export default function NetworkDiagnosticsModal({
           />
         ) : (
           <>
+            {/* Room Capacity & Live Bandwidth Advisor */}
+            <div
+              className="hud-advisor-card"
+              style={{
+                background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.95) 100%)',
+                border: '1px solid #334155',
+                borderRadius: '12px',
+                padding: '16px',
+                marginBottom: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
+                    ⚡ Room Peer Capacity & Dynamic Advisor
+                  </span>
+                  <span
+                    style={{
+                      background: topology === 'hub' ? '#581c87' : '#0369a1',
+                      color: '#f8fafc',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: '12px'
+                    }}
+                  >
+                    {topology === 'hub' ? '⭐ Host Hub Mode' : '🕸️ Full Mesh'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', fontSize: '13px', color: '#94a3b8' }}>
+                  <span>
+                    ⬇️ Avg Down: <strong style={{ color: '#38bdf8' }}>{advisor.avgDownloadMbps} Mbps</strong>
+                  </span>
+                  <span>
+                    ⬆️ Avg Up: <strong style={{ color: '#34d399' }}>{advisor.avgUploadMbps} Mbps</strong>
+                  </span>
+                </div>
+              </div>
+
+              {/* Dynamic Capacity Controls */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                  background: 'rgba(15, 23, 42, 0.6)',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid #1e293b'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e8f0' }}>Max Room Peers:</span>
+                  {isHost && onSetMaxUsers ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => onSetMaxUsers(Math.max(2, maxUsers - 1))}
+                        style={{
+                          background: '#334155',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          width: '28px',
+                          height: '28px',
+                          cursor: 'pointer',
+                          fontWeight: 'bold',
+                          fontSize: '14px'
+                        }}
+                        title="Decrease room limit"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        min="2"
+                        max="200"
+                        value={maxUsers}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          if (!isNaN(val) && val >= 2) onSetMaxUsers(val);
+                        }}
+                        style={{
+                          width: '56px',
+                          textAlign: 'center',
+                          background: '#0f172a',
+                          border: '1px solid #475569',
+                          borderRadius: '4px',
+                          color: '#38bdf8',
+                          fontWeight: 700,
+                          fontSize: '14px',
+                          padding: '4px'
+                        }}
+                        title="Enter any custom peer limit (uncapped)"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onSetMaxUsers(maxUsers + 1)}
+                        style={{
+                          background: '#334155',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          width: '28px',
+                          height: '28px',
+                          cursor: 'pointer',
+                          fontWeight: 'bold',
+                          fontSize: '14px'
+                        }}
+                        title="Increase room limit"
+                      >
+                        +
+                      </button>
+
+                      {/* Quick presets */}
+                      <span style={{ fontSize: '11px', color: '#64748b', marginLeft: '6px' }}>Presets:</span>
+                      {[4, 8, 12, 16, 24, 32, 50].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => onSetMaxUsers(preset)}
+                          style={{
+                            background: maxUsers === preset ? '#0284c7' : '#1e293b',
+                            color: maxUsers === preset ? '#fff' : '#94a3b8',
+                            border: '1px solid #334155',
+                            borderRadius: '4px',
+                            padding: '2px 8px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}>
+                      {maxUsers} peers {isHost ? '' : '(Host managed)'}
+                    </span>
+                  )}
+                </div>
+
+                {isHost && onSetMaxUsers && maxUsers !== advisor.recommendedPeers && (
+                  <button
+                    type="button"
+                    onClick={() => onSetMaxUsers(advisor.recommendedPeers)}
+                    style={{
+                      background: 'linear-gradient(90deg, #0284c7 0%, #2563eb 100%)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                    title="Apply recommended room peer count"
+                  >
+                    Apply Recommended: {advisor.recommendedPeers} Peers
+                  </button>
+                )}
+              </div>
+
+              {/* Bandwidth Suggestion Line */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(56, 189, 248, 0.08)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  borderRadius: '8px',
+                  padding: '8px 12px',
+                  fontSize: '12.5px',
+                  color: '#e0f2fe'
+                }}
+              >
+                <span>💡 {advisor.suggestionText}</span>
+                {isHost && onSwitchTopology && topology === 'mesh' && advisor.recommendedTopology === 'hub' && (
+                  <button
+                    type="button"
+                    onClick={() => onSwitchTopology('hub')}
+                    style={{
+                      background: '#581c87',
+                      color: '#f8fafc',
+                      border: '1px solid #a855f7',
+                      borderRadius: '4px',
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    Switch to Hub Mode
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* 4 Primary Metric Cards */}
         <div className="hud-metrics-grid">
           {/* Tile 1: Ping / Latency */}

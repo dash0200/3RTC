@@ -1100,10 +1100,10 @@
   position: relative; z-index: 30;
 }
 .stage-section.is-watching .dock {
-  height: 68px; padding: 0 14px; background: rgba(10, 10, 13, 0.75);
+  height: 68px; padding: 0 20px; background: var(--rd-panel);
   backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid var(--rd-line); border-radius: 14px; margin: 8px 12px 10px;
-  gap: 10px;
+  border-top: 1px solid var(--rd-raised); border-radius: 0; margin: 0;
+  gap: 14px;
 }
 .dock-people-group {
   flex: 1 1 0%;
@@ -1562,19 +1562,40 @@
 @media (max-width: 1200px) { .qp-browser .qp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 /* ==========================================================================
-   Room, watching (desktop): padded stage, rounded video, people on the video
+   Room, watching (desktop): edge-to-edge flush stage matching desktop app
    ========================================================================== */
 .app-container:not(.phone-app) .stage-section.is-watching {
-  padding: 16px 16px 0; gap: 12px;
+  padding: 0; gap: 0;
   position: relative;
-  overflow: visible;
+  overflow: hidden;
+  height: 100%;
 }
 .app-container:not(.phone-app) .stage-section.is-watching .stage-canvas {
   position: relative;
   z-index: 2 !important;
-  border-radius: 16px; overflow: hidden;
+  border-radius: 0 !important; overflow: hidden;
   background: #000000 !important;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.75);
+  box-shadow: none !important;
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
+}
+.app-container:not(.phone-app) .stage-section.is-watching .yt-fullstage-player,
+.app-container:not(.phone-app) .stage-section.is-watching .local-fullstage-player,
+.app-container:not(.phone-app) .stage-section.is-watching .link-player,
+.app-container:not(.phone-app) .stage-section.is-watching .screen-share-stage {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.app-container:not(.phone-app) .stage-section.is-watching .yt-stage-canvas-viewport {
+  width: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0% !important;
 }
 .stage-section.is-watching .rd-sync-pill {
   display: none !important;

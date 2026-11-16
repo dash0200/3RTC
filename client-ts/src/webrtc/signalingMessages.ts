@@ -28,6 +28,7 @@ export interface SignalingContext {
   sendSignal: (msg: OutgoingSignalingMessage | Record<string, unknown>) => void;
   setHostPeerId?: (hostPeerId: string | null | undefined) => void;
   setTopology?: (topology: 'mesh' | 'hub') => void;
+  setMaxUsers?: (maxUsers: number) => void;
   hostPeerIdRef?: { current: string | null | undefined };
   topologyRef?: { current: 'mesh' | 'hub' };
   roomTokensRef?: { current: RoomTokens };
@@ -86,6 +87,9 @@ export async function processSignalingMessage(
     setHostPeerId?.('hostPeerId' in msg && typeof msg.hostPeerId === 'string' ? msg.hostPeerId : null);
     if ('topology' in msg && msg.topology) {
       ctx.setTopology?.(msg.topology);
+    }
+    if ('maxUsers' in msg && typeof msg.maxUsers === 'number') {
+      ctx.setMaxUsers?.(msg.maxUsers);
     }
   }
 
@@ -267,9 +271,9 @@ export async function processSignalingMessage(
         const answerAudioSdp = extractAudioSdp(tunedAnswer.sdp);
         const tInfo = pc.getTransceivers
           ? pc
-              .getTransceivers()
-              .map((t) => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`)
-              .join(', ')
+            .getTransceivers()
+            .map((t) => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`)
+            .join(', ')
           : 'none';
         logLocalDebug(
           'ANSWER_SENT',
@@ -330,9 +334,9 @@ export async function processSignalingMessage(
           const answerAudioSdp = extractAudioSdp(msg.answer?.sdp);
           const tInfo = pc.getTransceivers
             ? pc
-                .getTransceivers()
-                .map((t) => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`)
-                .join(', ')
+              .getTransceivers()
+              .map((t) => `${t.mid || 'mid?'}:${t.direction}->${t.currentDirection || 'none'}`)
+              .join(', ')
             : 'none';
           logLocalDebug(
             'ANSWER_PROCESSED',
@@ -423,6 +427,13 @@ export async function processSignalingMessage(
       break;
     }
 
+    case 'room-size-changed': {
+      ctx.setMaxUsers?.(msg.maxUsers);
+      addSystemMessage(`Room capacity set to ${msg.maxUsers} peers.`);
+      showToast(`Capacity: ${msg.maxUsers} peers`);
+      break;
+    }
+
     case 'host': {
       setHostPeerId?.(msg.hostPeerId ?? null);
       const selfId = peerIdRef?.current;
@@ -459,7 +470,7 @@ export async function processSignalingMessage(
         sendSignal({
           type: 'join',
           roomId: String(msg.roomId),
-          peerId: peerIdRef?.current,
+          peerId: peerIdRef?.current || '',
           rejoin: true,
           ...(tokens.seat ? { seatToken: tokens.seat } : {})
         });
