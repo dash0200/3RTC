@@ -12,7 +12,7 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px,
 };
 use rtc_engine::{ChatLine, OutgoingImage};
-use rtc_protocol::image::{MAX_SEND_BYTES, format_size, mime_for_name, save_name};
+use rtc_protocol::image::{MAX_SEND_BYTES, format_size, mime_for_name};
 use rtc_ui::button::{Button, Variant};
 use rtc_ui::{Icon, icon, tokens};
 
@@ -78,7 +78,7 @@ impl RoomView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Send an image".into()),
+            prompt: Some("Send a file or image".into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = pick.await
@@ -90,7 +90,7 @@ impl RoomView {
         .detach();
     }
 
-    /// A file picked or dropped: attach it if it's a picture.
+    /// A file picked or dropped: attach it.
     pub(crate) fn attach_file(&mut self, path: &Path, cx: &mut Context<'_, Self>) {
         let name = path
             .file_name()
@@ -98,7 +98,7 @@ impl RoomView {
             .unwrap_or_default();
         match std::fs::metadata(path) {
             Ok(m) if m.len() > MAX_SEND_BYTES as u64 => {
-                self.show_toast("Image exceeds 15 MB limit. Please select a smaller file.", cx);
+                self.show_toast("File exceeds 10 GB limit. Please select a smaller file.", cx);
                 return;
             }
             Err(_) => return,
@@ -110,18 +110,21 @@ impl RoomView {
         }
     }
 
-    /// Bytes of a picture to send with the next message.
+    /// Bytes of a file or picture to send with the next message.
     pub(crate) fn attach(&mut self, name: String, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
-        let Some(mime) = sniff(&bytes).or_else(|| mime_for_name(&name)) else {
-            self.show_toast("Only images can be sent in the chat (PNG, JPEG, WebP, GIF)", cx);
-            return;
-        };
+        let mime = sniff(&bytes)
+            .or_else(|| mime_for_name(&name))
+            .unwrap_or("application/octet-stream");
         if bytes.len() > MAX_SEND_BYTES {
-            self.show_toast("Image exceeds 15 MB limit. Please select a smaller file.", cx);
+            self.show_toast("File exceeds 10 GB limit. Please select a smaller file.", cx);
             return;
         }
         let name = if name.is_empty() {
-            "screenshot.png".to_owned()
+            if mime.starts_with("image/") {
+                "screenshot.png".to_owned()
+            } else {
+                "file.bin".to_owned()
+            }
         } else {
             name
         };
@@ -260,13 +263,13 @@ impl RoomView {
         let Some(bytes) = self.pictures.get(transfer_id).and_then(|p| p.bytes.clone()) else {
             return;
         };
-        let name = save_name(&image.file_name, &image.mime);
+        let name = rtc_protocol::image::safe_file_save_name(&image.file_name, &image.mime);
         let ask = cx.prompt_for_new_path(&downloads(), Some(&name));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(path))) = ask.await {
                 let said = match std::fs::write(&path, &bytes) {
                     Ok(()) => format!("Saved {}", path.display()),
-                    Err(e) => format!("Couldn't save the image: {e}"),
+                    Err(e) => format!("Couldn't save the file: {e}"),
                 };
                 let _ = this.update(cx, |v, cx| v.show_toast(said, cx));
             }
@@ -285,8 +288,18 @@ impl RoomView {
     }
 }
 
-/// A picture on its way (`.chat-image-transfer-card`).
+/// A picture or file on its way (`.chat-image-transfer-card`).
 fn transfer_card(name: &str, size: u64, percent: u8, sending: bool) -> impl IntoElement {
+    let icon = if name.rsplit('.').next().is_some_and(|ext| {
+        matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+        )
+    }) {
+        "🖼️"
+    } else {
+        "📁"
+    };
     div()
         .w(px(240.))
         .p(px(10.))
@@ -302,7 +315,7 @@ fn transfer_card(name: &str, size: u64, percent: u8, sending: bool) -> impl Into
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .child(div().text_size(px(18.)).child("🖼️"))
+                .child(div().text_size(px(18.)).child(icon))
                 .child(
                     div()
                         .min_w_0()
@@ -377,8 +390,18 @@ pub(crate) fn picture_view(
                 ),
         );
     } else if !moving {
-        // arrived, but not a type we can draw (AVIF): offer it to save
+        // arrived, but not a type we can draw (non-image or AVIF): offer it to save
         let id = info.transfer_id.clone();
+        let icon = if info.file_name.rsplit('.').next().is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+            )
+        }) {
+            "🖼️"
+        } else {
+            "📁"
+        };
         col = col.child(
             div()
                 .id(SharedString::from(format!("pic-{}", info.transfer_id)))
@@ -388,7 +411,11 @@ pub(crate) fn picture_view(
                 .bg(tokens::raised())
                 .cursor_pointer()
                 .on_click(cx.listener(move |v, _, _, cx| v.open_lightbox(id.clone(), cx)))
-                .child(format!("🖼️ {} ({})", info.file_name, format_size(info.file_size))),
+                .child(format!(
+                    "{icon} {} ({})",
+                    info.file_name,
+                    format_size(info.file_size)
+                )),
         );
     }
     Some(col.into_any_element())

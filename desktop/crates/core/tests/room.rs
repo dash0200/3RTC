@@ -57,6 +57,7 @@ fn identity_of(peer: &str, name: &str, is_reply: bool) -> Envelope {
             is_reply,
             playback_lock: None,
             client: None,
+            topology: None,
         },
     }
 }
@@ -933,7 +934,10 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
     assert!(fx.iter().any(|e| matches!(
         e,
         Effect::Broadcast(Envelope {
-            message: PeerMessage::RoomSettings { playback_lock: true },
+            message: PeerMessage::RoomSettings {
+                playback_lock: true,
+                ..
+            },
             ..
         })
     )));
@@ -981,12 +985,24 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
     connected_to(&mut g, "host");
     connected_to(&mut g, "other");
     g.update(
-        from("other", PeerMessage::RoomSettings { playback_lock: true }),
+        from(
+            "other",
+            PeerMessage::RoomSettings {
+                playback_lock: true,
+                topology: None,
+            },
+        ),
         1.0,
     );
     assert!(!g.playback_lock(), "not from the host");
     let fx = g.update(
-        from("host", PeerMessage::RoomSettings { playback_lock: true }),
+        from(
+            "host",
+            PeerMessage::RoomSettings {
+                playback_lock: true,
+                topology: None,
+            },
+        ),
         2.0,
     );
     assert!(g.playback_lock());
@@ -1000,4 +1016,123 @@ fn the_host_can_lock_playback_and_guests_learn_it() {
     let fx = g.update(Input::Tick, 4.0 + 4000.0);
     assert!(!g.playback_lock());
     assert!(fx.iter().any(|e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n == "🔓 The host left: everyone can control playback")));
+}
+
+#[test]
+fn host_can_switch_topology() {
+    let mut h = hosting();
+    assert_eq!(h.topology(), "mesh");
+
+    // Non-host or same topology has no effect
+    let fx = h.update(Input::Command(Command::SetTopology("mesh".into())), 1.0);
+    assert!(fx.is_empty());
+
+    // Host switches to hub
+    let fx = h.update(Input::Command(Command::SetTopology("hub".into())), 2.0);
+    assert!(fx.contains(&Effect::Send(ClientMessage::SetTopology {
+        topology: "hub".into(),
+    })));
+    assert_eq!(h.topology(), "hub");
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n.contains("Host-Hub")))
+    );
+
+    // Server sends legacy error (older signaling server without set-topology): ignored gracefully
+    let fx = h.update(
+        Input::Server(ServerMessage::Error {
+            message: "Unknown message type: \"set-topology\"".into(),
+            code: None,
+            room_id: None,
+        }),
+        2.5,
+    );
+    assert!(fx.is_empty(), "legacy signaling error is gracefully ignored");
+    assert_eq!(h.topology(), "hub");
+
+    // Server confirms topology change
+    let _ = h.update(
+        Input::Server(ServerMessage::TopologyChanged {
+            topology: "hub".into(),
+            host_peer_id: pid("me"),
+        }),
+        3.0,
+    );
+    assert_eq!(h.topology(), "hub");
+
+    // A guest cannot switch topology
+    let mut g = me();
+    g.update(Input::Command(Command::Join(room_id())), 0.0);
+    g.update(
+        Input::Server(ServerMessage::Joined {
+            room_id: room_id(),
+            peer_id: pid("me"),
+            host_peer_id: pid("host"),
+            peers: vec![pid("host")],
+            seat_token: "s".into(),
+            host_token: None,
+            topology: Some("hub".into()),
+        }),
+        1.0,
+    );
+    assert_eq!(g.topology(), "hub");
+    let fx = g.update(Input::Command(Command::SetTopology("mesh".into())), 2.0);
+    assert!(fx.is_empty(), "guests cannot switch topology");
+}
+
+#[test]
+fn host_hub_relays_broadcast_messages() {
+    let mut h = hosting();
+    connected_to(&mut h, "riya");
+    connected_to(&mut h, "alex");
+
+    let chat = Envelope {
+        sender: Some(pid("riya").to_string()),
+        timestamp: Some(1234.0),
+        message: PeerMessage::Chat {
+            id: "msg-1".into(),
+            is_host: false,
+            text: "Hello from Riya".into(),
+        },
+    };
+
+    // In mesh mode: host receives chat but does NOT relay
+    let fx = h.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: chat.clone(),
+        },
+        1.0,
+    );
+    assert!(!fx.iter().any(|e| matches!(e, Effect::SendToPeer { .. })));
+
+    // Switch to Host-Hub mode
+    h.update(
+        Input::Server(ServerMessage::TopologyChanged {
+            topology: "hub".into(),
+            host_peer_id: pid("me"),
+        }),
+        2.0,
+    );
+    assert_eq!(h.topology(), "hub");
+
+    // In hub mode: host relays chat to alex, but not back to riya
+    let fx = h.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: chat.clone(),
+        },
+        3.0,
+    );
+    let relays: Vec<_> = fx
+        .iter()
+        .filter_map(|e| match e {
+            Effect::SendToPeer { peer, envelope } => Some((peer.clone(), envelope.clone())),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(relays.len(), 1);
+    assert_eq!(relays[0].0, pid("alex"));
+    assert_eq!(relays[0].1.message, chat.message);
 }

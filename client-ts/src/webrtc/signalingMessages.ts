@@ -28,6 +28,8 @@ export interface SignalingContext {
   sendSignal: (msg: OutgoingSignalingMessage | Record<string, unknown>) => void;
   setHostPeerId?: (hostPeerId: string | null | undefined) => void;
   setTopology?: (topology: 'mesh' | 'hub') => void;
+  hostPeerIdRef?: { current: string | null | undefined };
+  topologyRef?: { current: 'mesh' | 'hub' };
   roomTokensRef?: { current: RoomTokens };
   peerIdRef?: { current: string | null };
   /** "Room not found" here: look for it on the other servers. True if a search started (it tells
@@ -53,6 +55,7 @@ export async function processSignalingMessage(
     currentRoomRef,
     currentScreenTrackRef,
     getOrCreatePeerConnection,
+    hostPeerIdRef,
     isHostRef,
     isMicMutedRef,
     localStreamRef,
@@ -67,6 +70,7 @@ export async function processSignalingMessage(
     setPeerCount,
     setRoomId,
     showToast,
+    topologyRef,
     username
   } = ctx;
 
@@ -124,7 +128,12 @@ export async function processSignalingMessage(
 
       if (msg.peers && msg.peers.length > 0) {
         setP2pStatusText('Connecting direct P2P data channels...');
+        const isHub = ('topology' in msg && msg.topology === 'hub') || topologyRef?.current === 'hub';
+        const hostId = ('hostPeerId' in msg && typeof msg.hostPeerId === 'string' ? msg.hostPeerId : hostPeerIdRef?.current) || null;
         for (const peerId of msg.peers) {
+          if (isHub && !isHostRef.current && hostId && peerId !== hostId) {
+            continue; // In Hub mode, non-host guests only connect to the host
+          }
           const known = peersRef.current.get(peerId);
           if (known) {
             known.signalingGone = false;
@@ -137,6 +146,12 @@ export async function processSignalingMessage(
     }
 
     case 'peer-joined': {
+      const isHub = topologyRef?.current === 'hub';
+      const hostId = hostPeerIdRef?.current;
+      if (isHub && !isHostRef.current && hostId && msg.peerId !== hostId) {
+        // In Hub mode, non-host guests do not connect directly to other non-hosts
+        break;
+      }
       const knownEntry = peersRef.current.get(msg.peerId);
       if (knownEntry) {
         knownEntry.signalingGone = false;
@@ -389,7 +404,16 @@ export async function processSignalingMessage(
 
     case 'topology-changed': {
       ctx.setTopology?.(msg.topology);
+      if (topologyRef) topologyRef.current = msg.topology;
       setHostPeerId?.(msg.hostPeerId);
+      if (msg.topology === 'hub' && !isHostRef.current) {
+        const hostId = msg.hostPeerId || hostPeerIdRef?.current;
+        for (const [peerId] of peersRef.current) {
+          if (peerId !== hostId) {
+            cleanupPeer(peerId);
+          }
+        }
+      }
       addSystemMessage(
         msg.topology === 'hub'
           ? 'Network topology switched to Host-Hub mode.'

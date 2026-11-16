@@ -139,19 +139,19 @@ export default function ServerSettingsModal({
           <div className="quick-servers">
             <button
               type="button"
+              className={`server-preset-btn ${url === GCP_URL ? 'active' : ''}`}
+              onClick={() => handlePreset(GCP_URL)}
+            >
+              <span className="preset-name">Google Cloud (Default)</span>
+              <span className="preset-url">{GCP_URL}</span>
+            </button>
+            <button
+              type="button"
               className={`server-preset-btn ${url === ORACLE_URL ? 'active' : ''}`}
               onClick={() => handlePreset(ORACLE_URL)}
             >
               <span className="preset-name">Oracle Cloud (Always Free)</span>
               <span className="preset-url">{ORACLE_URL}</span>
-            </button>
-            <button
-              type="button"
-              className={`server-preset-btn ${url === GCP_URL ? 'active' : ''}`}
-              onClick={() => handlePreset(GCP_URL)}
-            >
-              <span className="preset-name">Google Cloud (GCP)</span>
-              <span className="preset-url">{GCP_URL}</span>
             </button>
             <button
               type="button"

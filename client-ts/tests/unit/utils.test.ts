@@ -10,7 +10,9 @@ import { parseSrt, parseVtt, timeStringToSeconds, secondsToVttTimestamp, getActi
 import {
   sanitizeImageMimeType,
   safeImageDownloadName,
+  safeFileDownloadName,
   formatFileSize,
+  getFileIcon,
   createImagePacket,
   parseImagePacket,
   P2PImageReceiver
@@ -180,7 +182,19 @@ describe('TypeScript p2pImageShare', () => {
     assert.equal(sanitizeImageMimeType('image/png'), 'image/png');
     assert.equal(sanitizeImageMimeType('text/html'), 'image/png');
     assert.equal(safeImageDownloadName('../../hack.exe', 'image/png'), 'hack.png');
+    assert.equal(safeFileDownloadName('../../archive.tar.gz', 'application/gzip'), 'archive.tar.gz');
     assert.equal(formatFileSize(1048576), '1.0 MB');
+    assert.equal(formatFileSize(1.5 * 1024 * 1024 * 1024), '1.50 GB');
+  });
+
+  it('determines friendly file icons based on extension and MIME', () => {
+    assert.equal(getFileIcon('image.png', 'image/png'), '🖼️');
+    assert.equal(getFileIcon('movie.mp4', 'video/mp4'), '🎥');
+    assert.equal(getFileIcon('audio.mp3', 'audio/mpeg'), '🎵');
+    assert.equal(getFileIcon('archive.zip', 'application/zip'), '📦');
+    assert.equal(getFileIcon('doc.pdf', 'application/pdf'), '📕');
+    assert.equal(getFileIcon('app.exe', 'application/x-msdownload'), '💾');
+    assert.equal(getFileIcon('data.dat'), '📁');
   });
 
   it('packs and unpacks binary image packets', () => {
@@ -202,6 +216,17 @@ describe('TypeScript p2pImageShare', () => {
 
     receiver.handleStart({ transferId: 't-valid', totalChunks: 3 });
     assert.equal(receiver.transfers.has('t-valid'), true);
+  });
+
+  it('P2PImageReceiver tracks pause, resume, and calculates resume chunks', () => {
+    const receiver = new P2PImageReceiver();
+    receiver.handleStart({ transferId: 't-resume', totalChunks: 5, fileName: 'data.zip', fileSize: 300000 });
+    assert.equal(receiver.getResumeChunk('t-resume'), 0);
+    assert.equal(receiver.isPaused('t-resume'), false);
+    receiver.pause('t-resume');
+    assert.equal(receiver.isPaused('t-resume'), true);
+    receiver.resume('t-resume');
+    assert.equal(receiver.isPaused('t-resume'), false);
   });
 });
 

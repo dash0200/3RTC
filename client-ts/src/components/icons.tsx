@@ -124,7 +124,37 @@ const paths: Record<string, React.ReactNode> = {
       <path d="M2 3l20 20M9 3h11a2 2 0 0 1 2 2v10a2 2 0 0 1-1.2 1.8M2 7v8a2 2 0 0 0 2 2h10M8 21h8M12 17v4" />
     </>
   ),
-  laserPointer: <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+  laserPointer: <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />,
+  pointer: <path d="M3 3l7 18 3-7 7-3L3 3z" />,
+  chevronDown: <path d="M6 9l6 6 6-6" />,
+  minus: <path d="M5 12h14" />,
+  tv: (
+    <>
+      <rect x="2" y="7" width="20" height="15" rx="2" />
+      <path d="M17 2l-5 5-5-5" />
+    </>
+  ),
+  keyboard: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8" />
+    </>
+  ),
+  layers: (
+    <>
+      <path d="M12 2L2 7l10 5 10-5-10-5z" />
+      <path d="M2 17l10 5 10-5" />
+      <path d="M2 12l10 5 10-5" />
+    </>
+  ),
+  windows: (
+    <>
+      <path d="M3 5.5L10.5 4.5V11.5H3V5.5Z" fill="currentColor" />
+      <path d="M3 12.5H10.5V19.5L3 18.5V12.5Z" fill="currentColor" />
+      <path d="M11.5 4.3L21 3V11.5H11.5V4.3Z" fill="currentColor" />
+      <path d="M11.5 12.5H21V21L11.5 19.7V12.5Z" fill="currentColor" />
+    </>
+  )
 };
 
 const filled: Record<string, React.ReactNode> = {

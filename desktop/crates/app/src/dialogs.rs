@@ -59,7 +59,7 @@ pub(crate) fn render(
             dialog("image-dialog", px(900.), crate::chat::lightbox(view, cx), dismiss).into_any_element()
         }
         Dialog::Network => {
-            dialog("net-dialog", px(720.), crate::net::dialog(view, cx), dismiss).into_any_element()
+            dialog("net-dialog", px(800.), crate::net::dialog(view, cx), dismiss).into_any_element()
         }
         Dialog::Screen => dialog(
             "screen-dialog",
@@ -504,7 +504,7 @@ fn server(
     cx: &mut Context<'_, RoomView>,
 ) -> impl IntoElement {
     let current = if view.settings.signal_url.is_empty() {
-        ORACLE.to_owned()
+        GCP.to_owned()
     } else {
         view.settings.signal_url.clone()
     };
@@ -520,11 +520,7 @@ fn server(
             .cursor_pointer()
             .hover(|s| s.border_color(tokens::line_strong()))
             .on_click(cx.listener(move |v, _, _, cx| {
-                v.settings.signal_url = if url == ORACLE {
-                    String::new()
-                } else {
-                    url.to_owned()
-                };
+                v.settings.signal_url = if url == GCP { String::new() } else { url.to_owned() };
                 v.settings.save();
                 v.close_dialog(cx);
                 v.restart_engine(cx);
@@ -563,8 +559,8 @@ fn server(
                 .flex()
                 .flex_col()
                 .gap(px(10.))
-                .child(choice("srv-oracle", "Oracle Cloud (default)", ORACLE))
-                .child(choice("srv-gcp", "Google Cloud", GCP))
+                .child(choice("srv-gcp", "Google Cloud (default)", GCP))
+                .child(choice("srv-oracle", "Oracle Cloud", ORACLE))
                 .child(choice("srv-local", "This PC (development)", LOCAL))
                 .child(
                     div()

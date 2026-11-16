@@ -52,6 +52,7 @@ fn connected_to(r: &mut Room, peer: &str, name: &str) {
                 is_reply: true,
                 playback_lock: None,
                 client: None,
+                topology: None,
             },
         ),
         0.0,
@@ -463,7 +464,13 @@ fn the_reference_keeps_everyone_within_a_second_and_a_half() {
 fn the_host_lock_stops_guests_and_puts_them_back() {
     let mut g = guest_of("host");
     g.update(
-        from("host", PeerMessage::RoomSettings { playback_lock: true }),
+        from(
+            "host",
+            PeerMessage::RoomSettings {
+                playback_lock: true,
+                topology: None,
+            },
+        ),
         1.0,
     );
     let fx = g.update(

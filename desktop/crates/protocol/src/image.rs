@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 pub const MAGIC: [u8; 4] = *b"IMG1";
 /// Bytes of the image per frame (60 KB, under SCTP's 64 KB message limit).
 pub const CHUNK: usize = 61_440;
-/// Most frames one image may have (about 120 MB).
-pub const MAX_CHUNKS: u32 = 2048;
-/// The largest image the app sends (the web app's limit).
-pub const MAX_SEND_BYTES: usize = 15 * 1024 * 1024;
+/// Most frames one transfer may have (~30 GB at 60 KB chunks).
+pub const MAX_CHUNKS: u32 = 500_000;
+/// The largest file the app sends (10 GB).
+pub const MAX_SEND_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
 /// The image types accepted (anything else is treated as PNG, as the web app does).
 pub const MIME_TYPES: [&str; 7] = [
@@ -114,7 +114,7 @@ pub fn mime_for_name(name: &str) -> Option<&'static str> {
     })
 }
 
-/// "512 B", "1.5 KB", "2.3 MB" (`formatFileSize`).
+/// "512 B", "1.5 KB", "2.3 MB", "1.20 GB" (`formatFileSize`).
 #[must_use]
 pub fn format_size(bytes: u64) -> String {
     #[allow(clippy::cast_precision_loss)]
@@ -125,9 +125,34 @@ pub fn format_size(bytes: u64) -> String {
         format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", b / 1024.0)
-    } else {
+    } else if bytes < 1024 * 1024 * 1024 {
         format!("{:.1} MB", b / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", b / (1024.0 * 1024.0 * 1024.0))
     }
+}
+
+/// A safe file name to save any received file or image as.
+#[must_use]
+pub fn safe_file_save_name(name: &str, mime: &str) -> String {
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    let clean_stem: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | ' ' | '-'))
+        .collect();
+    let clean_stem: String = clean_stem.trim().chars().take(50).collect();
+    let base = if clean_stem.is_empty() {
+        "shared-file"
+    } else {
+        clean_stem.as_str()
+    };
+    if let Some((_, ext)) = name.rsplit_once('.') {
+        let clean_ext: String = ext.chars().filter(char::is_ascii_alphanumeric).take(10).collect();
+        if !clean_ext.is_empty() {
+            return format!("{base}.{clean_ext}");
+        }
+    }
+    save_name(name, mime)
 }
 
 /// A safe file name to save a received image as (`safeImageDownloadName`).

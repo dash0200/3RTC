@@ -10,7 +10,7 @@ import { resolvePastedLink } from '../features/media/resolveLink';
 import { PeerVoicePanel, getInitials } from './PeerVoiceRoster';
 import SoundboardTray from './SoundboardTray';
 import ImageLightboxModal, { type LightboxImage } from './ImageLightboxModal';
-import { formatFileSize, isImageFile } from '../utils/p2pImageShare';
+import { formatFileSize, isImageFile, getFileIcon } from '../utils/p2pImageShare';
 import { useBackLayer } from '../core/backStack';
 import InvitePanel from './room/InvitePanel';
 import type { QueueItem } from '../features/queue/useQueue';
@@ -104,6 +104,10 @@ export interface LiveChatProps {
   systemLogs?: SystemLogEntry[];
   onSendMessage: (text: string) => void;
   onSendImage?: (file: File, caption?: string) => void;
+  onSendFile?: (file: File, caption?: string) => void;
+  onPauseTransfer?: (transferId: string) => void;
+  onResumeTransfer?: (transferId: string) => void;
+  onCancelTransfer?: (transferId: string) => void;
   onClearLogs?: () => void;
   onTestSound?: () => void;
   isP2PConnected: boolean;
@@ -164,6 +168,10 @@ export default function LiveChat({
   systemLogs = [],
   onSendMessage,
   onSendImage,
+  onSendFile,
+  onPauseTransfer,
+  onResumeTransfer,
+  onCancelTransfer,
   onClearLogs,
   onTestSound,
   isP2PConnected,
@@ -379,11 +387,12 @@ export default function LiveChat({
   }, [pendingImage]);
 
   const handleSelectImageFile = (file: File) => {
-    if (!file || !isImageFile(file)) return;
+    if (!file) return;
     if (pendingImage?.previewUrl) {
       URL.revokeObjectURL(pendingImage.previewUrl);
     }
-    const previewUrl = URL.createObjectURL(file);
+    const isImg = isImageFile(file);
+    const previewUrl = isImg ? URL.createObjectURL(file) : '';
     setPendingImage({ file, previewUrl });
     setActiveTab('chat');
     if (textareaRef.current) {
@@ -435,12 +444,7 @@ export default function LiveChat({
     setIsDragOver(false);
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
-      for (let i = 0; i < files.length; i++) {
-        if (isImageFile(files[i])) {
-          handleSelectImageFile(files[i]);
-          break;
-        }
-      }
+      handleSelectImageFile(files[0]);
     }
   };
 
@@ -600,7 +604,9 @@ export default function LiveChat({
     if (!isP2PConnected) return;
 
     if (pendingImage) {
-      if (typeof onSendImage === 'function') {
+      if (typeof onSendFile === 'function') {
+        onSendFile(pendingImage.file, clean);
+      } else if (typeof onSendImage === 'function') {
         onSendImage(pendingImage.file, clean);
       }
       handleClearPendingImage();
@@ -885,31 +891,66 @@ export default function LiveChat({
                               <span className="cm-time">{timeStr}</span>
                             </div>
                           )}
-                          {/* Image Transfer in Progress */}
+                          {/* File or Image Transfer in Progress */}
                           {msg.imageTransfer && (
                             <div className="chat-image-transfer-card">
                               <div className="transfer-header">
-                                <span className="transfer-icon">🖼️</span>
+                                <span className="transfer-icon">{getFileIcon(msg.imageTransfer.fileName, msg.imageTransfer.mimeType)}</span>
                                 <div className="transfer-details">
                                   <span className="transfer-filename" title={msg.imageTransfer.fileName}>
                                     {msg.imageTransfer.fileName}
                                   </span>
                                   <span className="transfer-status">
-                                    {msg.isSelf ? 'Sending' : 'Receiving'} • {msg.imageTransfer.percent || 0}% ({formatFileSize(msg.imageTransfer.fileSize)})
+                                    {msg.imageTransfer.isPaused
+                                      ? '⏸️ Paused'
+                                      : `${msg.isSelf ? 'Sending' : 'Receiving'} • ${msg.imageTransfer.percent || 0}% (${formatFileSize(msg.imageTransfer.fileSize)})`}
                                   </span>
                                 </div>
                               </div>
                               <div className="transfer-progress-track">
                                 <div
                                   className="transfer-progress-fill"
-                                  style={{ width: `${Math.max(4, msg.imageTransfer.percent || 0)}%` }}
+                                  style={{
+                                    width: `${Math.max(4, msg.imageTransfer.percent || 0)}%`,
+                                    filter: msg.imageTransfer.isPaused ? 'grayscale(0.8)' : undefined
+                                  }}
                                 />
+                              </div>
+                              {/* Pause / Resume & Cancel Controls */}
+                              <div className="transfer-actions">
+                                {msg.imageTransfer.isPaused ? (
+                                  <button
+                                    type="button"
+                                    className="transfer-action-btn"
+                                    onClick={() => onResumeTransfer?.(msg.transferId || '')}
+                                    title="Resume transfer"
+                                  >
+                                    ▶ Resume
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="transfer-action-btn"
+                                    onClick={() => onPauseTransfer?.(msg.transferId || '')}
+                                    title="Pause transfer"
+                                  >
+                                    ⏸ Pause
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="transfer-action-btn is-cancel"
+                                  onClick={() => onCancelTransfer?.(msg.transferId || '')}
+                                  title="Cancel transfer"
+                                >
+                                  ✕ Cancel
+                                </button>
                               </div>
                             </div>
                           )}
 
                           {/* Completed Image Thumbnail */}
-                          {msg.image?.url && (
+                          {msg.image?.url && (msg.image.isImage !== false && isImageFile({ type: msg.image.mimeType, name: msg.image.name } as File)) && (
                             <div
                               className="chat-image-card"
                               onClick={() => {
@@ -944,6 +985,28 @@ export default function LiveChat({
                             </div>
                           )}
 
+                          {/* Completed Non-Image File Card */}
+                          {msg.image?.url && (msg.image.isImage === false || !isImageFile({ type: msg.image.mimeType, name: msg.image.name } as File)) && (
+                            <div className="chat-file-card">
+                              <span className="chat-file-icon">{getFileIcon(msg.image.name, msg.image.mimeType)}</span>
+                              <div className="chat-file-details">
+                                <span className="chat-file-name" title={msg.image.name}>{msg.image.name}</span>
+                                <span className="chat-file-size">{formatFileSize(msg.image.size)}</span>
+                              </div>
+                              <a
+                                href={msg.image.url}
+                                download={msg.image.name || 'download'}
+                                className="chat-file-download-btn"
+                                title={`Download ${msg.image.name || 'file'}`}
+                              >
+                                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                                  <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z" />
+                                </svg>
+                                <span>Save</span>
+                              </a>
+                            </div>
+                          )}
+
                           {msg.text && <p className={`cm-text ${emojiOnly ? 'is-emoji' : ''}`}>{renderMessageText(msg.text, onSeekTo)}</p>}
                         </div>
                       </div>
@@ -968,7 +1031,11 @@ export default function LiveChat({
               {pendingImage && (
                 <div className="chat-pending-image-card">
                   <div className="pending-image-thumb-wrap">
-                    <img src={pendingImage.previewUrl} alt="Pending upload preview" className="pending-image-thumb" />
+                    {pendingImage.previewUrl ? (
+                      <img src={pendingImage.previewUrl} alt="Pending upload preview" className="pending-image-thumb" />
+                    ) : (
+                      <span style={{ fontSize: '22px' }}>{getFileIcon(pendingImage.file.name, pendingImage.file.type)}</span>
+                    )}
                   </div>
                   <div className="pending-image-info">
                     <span className="pending-image-name" title={pendingImage.file.name}>{pendingImage.file.name}</span>
@@ -978,8 +1045,8 @@ export default function LiveChat({
                     type="button"
                     className="pending-image-cancel-btn"
                     onClick={handleClearPendingImage}
-                    title="Remove attached image"
-                    aria-label="Remove attached image"
+                    title="Remove attached file"
+                    aria-label="Remove attached file"
                   >
                     ✕
                   </button>
@@ -1116,11 +1183,10 @@ export default function LiveChat({
                   </span>
                 )}
 
-                {/* Attach image */}
+                {/* Attach file or image */}
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
                   style={{ display: 'none' }}
                   onChange={handleFileInputChange}
                 />
@@ -1129,8 +1195,8 @@ export default function LiveChat({
                   className="chat-pill-attach-btn"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={!isP2PConnected}
-                  title="Send an image"
-                  aria-label="Send an image"
+                  title="Attach a file or image"
+                  aria-label="Attach a file or image"
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                     <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z" />

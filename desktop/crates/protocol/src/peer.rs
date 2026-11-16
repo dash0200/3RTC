@@ -44,6 +44,9 @@ pub enum PeerMessage {
         /// `"desktop"` for the desktop app; absent for the web app.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client: Option<String>,
+        /// Host only: active room network topology ("mesh" or "hub").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        topology: Option<String>,
     },
     /// My mic was muted or unmuted.
     #[serde(rename_all = "camelCase")]
@@ -147,11 +150,60 @@ pub enum PeerMessage {
         #[serde(default)]
         caption: String,
     },
+    /// A chat file follows on the bulk channel, as `IMG1` frames ([`crate::image`]).
+    #[serde(rename = "p2p-file-start", rename_all = "camelCase")]
+    P2pFileStart {
+        /// The chat message's id.
+        #[serde(default)]
+        id: String,
+        /// The transfer the frames carry.
+        transfer_id: String,
+        /// The file's name.
+        #[serde(default)]
+        file_name: String,
+        /// Its size in bytes.
+        #[serde(default)]
+        file_size: f64,
+        /// MIME type.
+        #[serde(default)]
+        mime_type: String,
+        /// How many frames.
+        #[serde(default)]
+        total_chunks: f64,
+        /// Sent by the host.
+        #[serde(default)]
+        is_host: bool,
+        /// Text sent with it.
+        #[serde(default)]
+        caption: String,
+    },
+    /// Pause, resume, or cancel a P2P file transfer.
+    #[serde(rename = "p2p-file-control", rename_all = "camelCase")]
+    P2pFileControl {
+        /// Transfer session identifier.
+        transfer_id: String,
+        /// Control action: "pause", "resume", or "cancel".
+        action: String,
+        /// Optional start chunk index when resuming.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_chunk: Option<u32>,
+    },
+    /// Request to resume an interrupted transfer from a specific chunk index upon reconnect.
+    #[serde(rename = "p2p-file-sync", rename_all = "camelCase")]
+    P2pFileSync {
+        /// Transfer session identifier.
+        transfer_id: String,
+        /// Next chunk index requested.
+        resume_from_chunk: u32,
+    },
     /// The host locked (or unlocked) playback to themselves.
     #[serde(rename_all = "camelCase")]
     RoomSettings {
         /// Only the host controls playback.
         playback_lock: bool,
+        /// Host only: active room network topology ("mesh" or "hub").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        topology: Option<String>,
     },
     /// A YouTube video loaded, played, paused, seeked or closed (`usePlayback.ts`).
     #[serde(rename_all = "camelCase")]
@@ -532,6 +584,7 @@ mod tests {
             is_reply: false,
             playback_lock: None,
             client: Some(CLIENT_DESKTOP.into()),
+            topology: None,
         }
     }
 
@@ -675,7 +728,10 @@ mod tests {
             &Envelope {
                 sender: None,
                 timestamp: None,
-                message: PeerMessage::RoomSettings { playback_lock: true },
+                message: PeerMessage::RoomSettings {
+                    playback_lock: true,
+                    topology: None,
+                },
             }
             .to_json()
             .unwrap(),

@@ -23,7 +23,7 @@ import { BUILD } from '../version';
 import { useSignalingConnection, type SignalStatus, type RoomTokens } from '../hooks/useSignalingConnection';
 import { candidateType, type NetworkHint } from './networkHint';
 import { findRoomOn, sameServer } from './findRoom';
-import type { IncomingSignalingMessage, OutgoingSignalingMessage, RoomBus } from '../types';
+import type { IncomingSignalingMessage, OutgoingSignalingMessage, RoomBus, RoomSettingsMessage } from '../types';
 import type { PeerEntryRecord } from './peerEntry';
 import type { PeerMetadataRecord } from './peerMessages';
 
@@ -127,6 +127,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   const [isP2PConnected, setIsP2PConnected] = useState<boolean>(false);
   const [p2pStatusText, setP2pStatusText] = useState<string>(WAITING_TEXT);
   const [topology, setTopology] = useState<'mesh' | 'hub'>('mesh');
+  const topologyRef = useRef<'mesh' | 'hub'>('mesh');
+  topologyRef.current = topology;
   const [networkHint, setNetworkHint] = useState<NetworkHint | null>(null);
   const dismissNetworkHint = useCallback(() => setNetworkHint(null), []);
 
@@ -166,17 +168,6 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     }
   }, []);
 
-  const switchTopology = useCallback(
-    (nextTopology: 'mesh' | 'hub') => {
-      setTopology(nextTopology);
-      sendSignal({
-        type: 'set-topology',
-        topology: nextTopology
-      });
-    },
-    [sendSignal]
-  );
-
   const cleanupPeer = useCallback(
     (targetPeerId: string) => {
       const entry = peersRef.current.get(targetPeerId);
@@ -195,6 +186,48 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
     [bus, peersRef, setPeerMetadata, updateP2PStatus]
   );
 
+  const switchTopology = useCallback(
+    (nextTopology: 'mesh' | 'hub') => {
+      setTopology(nextTopology);
+      topologyRef.current = nextTopology;
+      sendSignal({
+        type: 'set-topology',
+        topology: nextTopology
+      });
+      bus.broadcast('room-settings', {
+        playbackLock: false,
+        topology: nextTopology
+      });
+      if (nextTopology === 'hub' && !isHostRef.current) {
+        const hostId = hostPeerIdRef.current;
+        for (const [peerId] of peersRef.current) {
+          if (peerId !== hostId) {
+            cleanupPeer(peerId);
+          }
+        }
+      }
+    },
+    [bus, cleanupPeer, hostPeerIdRef, isHostRef, peersRef, sendSignal]
+  );
+
+  useEffect(() => {
+    const off = bus.onEvent<RoomSettingsMessage>('room-settings', (data) => {
+      if (data.topology) {
+        setTopology(data.topology);
+        topologyRef.current = data.topology;
+        if (data.topology === 'hub' && !isHostRef.current) {
+          const hostId = hostPeerIdRef.current;
+          for (const [peerId] of peersRef.current) {
+            if (peerId !== hostId) {
+              cleanupPeer(peerId);
+            }
+          }
+        }
+      }
+    });
+    return off;
+  }, [bus, cleanupPeer, hostPeerIdRef, isHostRef, peersRef]);
+
   /** What we tell each peer about ourselves when a channel opens. */
   const getIdentity = useCallback(
     () => ({
@@ -206,6 +239,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
       proto: PROTOCOL_VERSION,
       build: BUILD.number,
       clientId: getClientId(),
+      ...(isHostRef.current ? { topology: topologyRef.current } : {}),
       ...(identityFieldsRef.current?.() || {})
     }),
     [peerIdRef, isHostRef, isMicMutedRef]
@@ -499,6 +533,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         sendSignal,
         setHostPeerId,
         setTopology,
+        hostPeerIdRef,
+        topologyRef,
         setIsHost,
         setP2pStatusText,
         setPeerCount,

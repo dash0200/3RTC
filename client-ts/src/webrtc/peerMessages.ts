@@ -120,6 +120,13 @@ interface PeerIncomingData {
           ...(typeof data.clientId === 'string' ? { clientId: data.clientId.slice(0, 64) } : {})
         }
       }));
+      if (Boolean(data.isHost) && (data.topology === 'hub' || data.topology === 'mesh')) {
+        bus.emitEvent('room-settings', {
+          type: 'room-settings',
+          playbackLock: Boolean(data.playbackLock),
+          topology: data.topology
+        });
+      }
       if (!data.isReply) {
         try {
           dc.send(JSON.stringify({ ...getIdentity(), isReply: true }));

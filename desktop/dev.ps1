@@ -10,7 +10,7 @@
   Also start the web app (Vite) and open it on the local server, to test desktop and web together.
 
 .PARAMETER Prod
-  Use the real server (wss://orc.3rtc.me) instead of a local one.
+  Use the real server (wss://gcp.3rtc.me) instead of a local one.
 
 .PARAMETER Release
   Build optimised (slow to compile, fast to run).
@@ -63,7 +63,7 @@ if ($Check) {
 try {
     if ($Prod) {
         Remove-Item Env:RTC_SIGNAL_URL -ErrorAction SilentlyContinue
-        Write-Host 'Using the real server (wss://orc.3rtc.me).' -ForegroundColor Yellow
+        Write-Host 'Using the real server (wss://gcp.3rtc.me).' -ForegroundColor Yellow
     } else {
         Need node 'Install Node.js 22 from https://nodejs.org, or run with -Prod to use the real server.'
         $serverDir = Join-Path $repo 'server'
