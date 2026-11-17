@@ -103,6 +103,8 @@ async fn two_apps_connect_and_chat() {
             id: "m1".into(),
             is_host: true,
             text: "hello from desktop".into(),
+            reply_to: None,
+            mentions: Vec::new(),
         },
     };
     // the channel may still be opening: retry the send briefly

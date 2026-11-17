@@ -7,9 +7,11 @@
 
 #![deny(missing_docs)]
 
+pub mod chat_format;
 pub mod files;
 pub mod fun;
 pub mod ice_diagnosis;
+pub mod quic;
 pub mod recovery;
 mod room;
 pub mod shared;
@@ -17,6 +19,6 @@ pub mod shared;
 pub use room::{
     ActivityCommand, ActivityView, BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect,
     HEARTBEAT_MS, Identity, Input, LinkState, MAX_CHAT_CHARS, Member, NAME_MAX, Phase, PlayerCmd,
-    PlayerReport, Reaction, RemoteSignal, Room, Showing, Sound, StoreView, UiEvent, UserAction, WatchCommand,
-    WatchView, clean_name,
+    PlayerReport, Quote, Reaction, RemoteSignal, Room, Showing, Sound, StoreView, UiEvent, UserAction,
+    WatchCommand, WatchView, clean_name,
 };

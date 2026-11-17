@@ -3,12 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use rtc_protocol::peer::{Envelope, PeerMessage};
+use rtc_protocol::peer::{Envelope, PeerMessage, ReplyRef};
 use rtc_protocol::sdp::{IceCandidate, SessionDescription};
 use rtc_protocol::signaling::{ClientMessage, ErrorCode, ServerMessage};
 use rtc_protocol::{ClientId, PROTOCOL_VERSION, PeerId, RoomId};
 use serde_json::Value;
 
+use crate::chat_format;
 use crate::fun::{Fun, is_single_emoji};
 use crate::recovery::{Action, Health};
 
@@ -49,6 +50,8 @@ pub struct Member {
     pub connected: bool,
     /// They're on the desktop app.
     pub desktop: bool,
+    /// Their app takes files over QUIC (ADR 0009).
+    pub quic: bool,
     /// Their voice is coming through right now.
     pub speaking: bool,
     /// Their app's install id, once their identity arrives (stable across rooms and restarts:
@@ -73,6 +76,23 @@ pub struct ChatLine {
     pub at: f64,
     /// A picture sent with it (the text is then its caption); its bytes come separately.
     pub image: Option<ChatImage>,
+    /// The message it replies to.
+    pub reply: Option<Quote>,
+    /// It mentions us (@our name).
+    pub mentions_me: bool,
+}
+
+/// The message a chat line replies to, as shown above it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quote {
+    /// The quoted message's id (to scroll to it).
+    pub id: String,
+    /// Who wrote it.
+    pub name: String,
+    /// A short plain snippet of it.
+    pub text: String,
+    /// We wrote it (shown as "You").
+    pub mine: bool,
 }
 
 /// A chat picture (`p2p-image-start`).
@@ -137,6 +157,8 @@ pub enum Command {
         id: String,
         /// The text.
         text: String,
+        /// The id of the chat line it replies to, if any.
+        reply_to: Option<String>,
     },
     /// Mute or unmute the mic.
     SetMuted(bool),
@@ -683,6 +705,7 @@ impl Room {
             client: Some(rtc_protocol::peer::CLIENT_DESKTOP.to_owned()),
             topology: self.is_host().then(|| self.topology().to_owned()),
             max_users: self.is_host().then_some(self.max_users),
+            quic: Some(rtc_protocol::peer::QUIC_VERSION),
         }
     }
 
@@ -749,17 +772,26 @@ impl Room {
                 self.reset(fx);
                 self.log("You left the room.", fx);
             }
-            Command::SendChat { id, text } => {
+            Command::SendChat { id, text, reply_to } => {
                 let text = text.trim().to_owned();
                 if text.is_empty() || !matches!(self.phase, Phase::InRoom(_)) {
                     return;
                 }
                 let is_host = self.is_host();
+                // @Name mentions of people in the room, and the line it replies to (as we see it)
+                let mentions = chat_format::mentioned_peer_ids(&text, &self.mention_targets());
+                let reply = reply_to.and_then(|rid| self.quote_of(&rid));
                 fx.push(Effect::Broadcast(self.envelope(
                     PeerMessage::Chat {
                         id: id.clone(),
                         is_host,
                         text: text.clone(),
+                        reply_to: reply.as_ref().map(|q| ReplyRef {
+                            id: q.id.clone(),
+                            sender: q.name.clone(),
+                            text: q.text.clone(),
+                        }),
+                        mentions,
                     },
                     now_ms,
                 )));
@@ -771,6 +803,8 @@ impl Room {
                     text,
                     at: now_ms,
                     image: None,
+                    reply,
+                    mentions_me: false,
                 };
                 self.push_chat(line, fx);
             }
@@ -989,6 +1023,8 @@ impl Room {
                     text: caption.chars().take(MAX_CHAT_CHARS).collect(),
                     at: now_ms,
                     image: Some(image),
+                    reply: None,
+                    mentions_me: false,
                 };
                 self.push_chat(line, fx);
             }
@@ -1217,9 +1253,26 @@ impl Room {
                 self.adopt_existing(peers, now_ms, fx);
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
-            ServerMessage::Host { host_peer_id, from } => {
+            ServerMessage::Host {
+                host_peer_id,
+                from,
+                reason,
+            } => {
                 if self.host.as_ref() == Some(&host_peer_id) {
                     return;
+                }
+                if from.is_none() && reason.as_deref() == Some("host-left") {
+                    // The host left and didn't come back: the server picked the next host
+                    let text = if host_peer_id == self.me.peer_id {
+                        "👑 The host left. You're the host now".to_owned()
+                    } else {
+                        format!(
+                            "👑 The host left. {} is now the host",
+                            self.name_of(&host_peer_id)
+                        )
+                    };
+                    self.log(text.clone(), fx);
+                    fx.push(Effect::Ui(UiEvent::Notice(text)));
                 }
                 if let Some(from) = from {
                     let me = &self.me.peer_id;
@@ -1389,6 +1442,38 @@ impl Room {
         }
     }
 
+    /// Who can be @mentioned: the people in the room.
+    fn mention_targets(&self) -> Vec<chat_format::MentionTarget> {
+        self.members
+            .iter()
+            .filter_map(|(id, m)| {
+                Some(chat_format::MentionTarget {
+                    peer_id: id.as_str().to_owned(),
+                    name: m.username.clone()?,
+                    is_self: false,
+                })
+            })
+            .collect()
+    }
+
+    /// A chat line we have, as a reply quote.
+    fn quote_of(&self, id: &str) -> Option<Quote> {
+        let line = self.chat.iter().rev().find(|l| l.id == id)?;
+        let text = if line.text.trim().is_empty() {
+            line.image
+                .as_ref()
+                .map_or_else(String::new, |i| format!("🖼️ {}", i.file_name))
+        } else {
+            chat_format::plain_snippet(&line.text, chat_format::REPLY_SNIPPET_CHARS)
+        };
+        Some(Quote {
+            id: line.id.clone(),
+            name: line.name.clone(),
+            text,
+            mine: line.from == self.me.peer_id,
+        })
+    }
+
     fn name_of(&self, peer: &PeerId) -> String {
         if peer == &self.me.peer_id {
             return self.me.username.clone();
@@ -1496,6 +1581,7 @@ impl Room {
                 playback_lock,
                 topology,
                 max_users,
+                quic,
                 ..
             } => {
                 // the host's identity carries the lock, active topology, and capacity, for people joining later
@@ -1540,6 +1626,7 @@ impl Room {
                     m.username = Some(clean_name(&username));
                     m.muted = is_muted;
                     m.desktop = client.as_deref() == Some(rtc_protocol::peer::CLIENT_DESKTOP);
+                    m.quic = m.desktop && quic.is_some_and(|v| v >= rtc_protocol::peer::QUIC_VERSION);
                 }
                 if !is_reply {
                     let reply = self.envelope(self.identity_message(true), ts);
@@ -1567,7 +1654,13 @@ impl Room {
                     envelope: pong,
                 });
             }
-            PeerMessage::Chat { id, text, .. } => {
+            PeerMessage::Chat {
+                id,
+                text,
+                reply_to,
+                mentions,
+                ..
+            } => {
                 // older apps post each reaction as a chat line too: skip that copy
                 if self
                     .last_reaction
@@ -1580,6 +1673,27 @@ impl Room {
                 let name = self.name_of(&from);
                 let is_host = self.host.as_ref() == Some(&from);
                 let text: String = text.chars().take(MAX_CHAT_CHARS).collect();
+                // A reply quotes our own copy of the message when we have it (names can't be faked
+                // there); else what the sender says it quoted, cut to size
+                let reply = reply_to.filter(|r| r.id.chars().count() <= 64).map(|r| {
+                    self.quote_of(&r.id).unwrap_or_else(|| Quote {
+                        id: r.id,
+                        name: r.sender.chars().take(40).collect(),
+                        text: chat_format::plain_snippet(&r.text, chat_format::REPLY_SNIPPET_CHARS),
+                        mine: false,
+                    })
+                });
+                let mentions_me = mentions
+                    .iter()
+                    .take(chat_format::MAX_MENTIONS)
+                    .any(|m| *m == self.me.peer_id.as_str());
+                if mentions_me {
+                    let notice = format!(
+                        "💬 {name} mentioned you: {}",
+                        chat_format::plain_snippet(&text, 80)
+                    );
+                    fx.push(Effect::Ui(UiEvent::Notice(notice)));
+                }
                 let line = ChatLine {
                     id,
                     from,
@@ -1588,6 +1702,8 @@ impl Room {
                     text,
                     at: if ts > 0.0 { ts } else { 0.0 },
                     image: None,
+                    reply,
+                    mentions_me,
                 };
                 self.push_chat(line, fx);
             }
@@ -1698,6 +1814,8 @@ impl Room {
                         file_size,
                         mime: rtc_protocol::image::clean_mime(&mime_type).to_owned(),
                     }),
+                    reply: None,
+                    mentions_me: false,
                 };
                 self.push_chat(line, fx);
             }
@@ -1747,6 +1865,8 @@ impl Room {
                         file_size,
                         mime: rtc_protocol::image::clean_file_mime(&mime_type),
                     }),
+                    reply: None,
+                    mentions_me: false,
                 };
                 self.push_chat(line, fx);
             }
@@ -1850,6 +1970,10 @@ impl Room {
             | PeerMessage::NetTopologyReport { .. }
             | PeerMessage::P2pFileControl { .. }
             | PeerMessage::P2pFileSync { .. }
+            // QUIC transfers are the engine's (ADR 0009); the room logic has nothing to do
+            | PeerMessage::QuicOffer { .. }
+            | PeerMessage::QuicAnswer { .. }
+            | PeerMessage::QuicFallback { .. }
             | PeerMessage::Unknown => {}
         }
     }

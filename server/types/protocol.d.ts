@@ -12,6 +12,8 @@ export interface SignalingSocket extends WebSocket {
   failedJoins: number[];
   msgTokens: number;
   lastTokenRefill: number;
+  /** Byte budget of this connection (ABUSE_LIMITS in signaling.js). */
+  bytes: { take(n: number, at?: number): boolean };
   ip: string;
   clientIp: string;
 }

@@ -10,6 +10,11 @@
 mod control;
 mod images;
 mod peers;
+// QUIC file transfer between desktop apps (ADR 0009): the transport, and the chat's use of it
+mod outgoing;
+#[allow(dead_code)]
+mod quic;
+mod quic_flow;
 mod screen;
 mod stream;
 
@@ -218,6 +223,13 @@ pub enum Update {
         /// The file's bytes.
         bytes: Arc<[u8]>,
     },
+    /// A chat file arrived over QUIC and is saved here (ADR 0009).
+    FileSaved {
+        /// Its transfer.
+        transfer_id: String,
+        /// Where it is (in Downloads).
+        path: std::path::PathBuf,
+    },
 }
 
 /// One connection, for the connection details.
@@ -248,6 +260,15 @@ pub struct OutgoingImage {
     pub bytes: Arc<[u8]>,
     /// Text sent with it.
     pub caption: String,
+    /// Where it is on disk, when it was picked from a file: big files go to other desktop apps
+    /// over QUIC from there (ADR 0009).
+    pub path: Option<std::path::PathBuf>,
+    /// Set (with `path`) when the file wasn't read into `bytes`: it's sent from disk, read as it
+    /// goes (big files, folders). Its size.
+    pub disk_size: Option<u64>,
+    /// In a folder being sent: its path inside it (`Photos/2026/a.jpg`), so other desktop apps
+    /// put it in the same place.
+    pub relative_path: Option<String>,
 }
 
 /// One viewer of our screen share.
@@ -277,6 +298,8 @@ enum Request {
     TestSound,
     Isolation(bool),
     SendImage(OutgoingImage),
+    /// A folder's files, sent one after the other.
+    SendFolder(Vec<OutgoingImage>),
     NetStats,
     /// Offer this file to viewers who ask; `None`: stop.
     ShareFile(Option<ShareFileSpec>),
@@ -372,6 +395,12 @@ impl Handle {
     /// line comes back as [`Update::Chat`], progress as [`Update::ImageProgress`].
     pub fn send_image(&self, image: OutgoingImage) {
         let _ = self.tx.send(Request::SendImage(image));
+    }
+
+    /// Sends a folder's files one after the other (each as a chat file; other desktop apps keep
+    /// the folder's layout).
+    pub fn send_folder(&self, files: Vec<OutgoingImage>) {
+        let _ = self.tx.send(Request::SendFolder(files));
     }
 
     /// Offers the video file playing here to viewers who don't have it (`None`: stops, and
@@ -475,6 +504,10 @@ enum Msg {
     Stream(stream::Back),
     /// The sharer took remote control back (from the control thread).
     TakeBack(rtc_platform_win::TakeBack),
+    /// A QUIC file transfer's background task (ADR 0009).
+    Quic(quic_flow::Event),
+    /// A file's frames are all sent (or the sending stopped).
+    FramesDone(String),
 }
 
 /// A fresh peer id for this launch (the server ties seats to it).
@@ -585,6 +618,10 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
         }),
         outgoing: HashMap::new(),
         sending: Vec::new(),
+        quic: quic_flow::QuicState::default(),
+        inflight: HashMap::new(),
+        folder_queue: std::collections::VecDeque::new(),
+        folder_current: None,
     };
     if config.mic == MicSource::Device && !engine.voice.is_device() {
         let _ = engine.updates.send(Update::Notice(NO_SOUND_CARD.to_owned()));
@@ -637,14 +674,21 @@ struct Engine {
     stream_ticks: u32,
     /// Screen sharing, both ways.
     screen: ScreenState,
-    /// Our pictures waiting for their announcement to go out, by transfer id.
-    outgoing: HashMap<String, Arc<[u8]>>,
+    /// Our files waiting for their announcement to go out, by transfer id.
+    outgoing: HashMap<String, outgoing::Source>,
+    /// Ways each of our transfers is still being sent (frames, QUIC per peer).
+    inflight: HashMap<String, u32>,
+    /// A folder being sent: the files still to go, and the one going now.
+    folder_queue: std::collections::VecDeque<OutgoingImage>,
+    folder_current: Option<String>,
     /// Our pictures being sent.
     sending: Vec<tokio::task::JoinHandle<()>>,
     /// Each connection's last details and when (for the data rates).
     net_before: HashMap<PeerId, (rtc_webrtc::stats::Net, f64)>,
     /// Remote control of the shared screen, both ways.
     control: control::Control,
+    /// Chat files over QUIC with other desktop apps.
+    quic: quic_flow::QuicState,
 }
 
 /// Pause sending picture frames while a channel holds more than this (as the web app).
@@ -779,6 +823,21 @@ impl Engine {
             }
             Msg::Ui(Request::SendImage(image)) => {
                 self.send_image(image).await;
+                return;
+            }
+            Msg::Ui(Request::SendFolder(files)) => {
+                if self.folder_current.is_some() || !self.folder_queue.is_empty() {
+                    let _ = self.updates.send(Update::Notice(
+                        "A folder is still being sent: wait for it to finish".to_owned(),
+                    ));
+                    return;
+                }
+                self.folder_queue = files.into();
+                self.next_folder_file();
+                return;
+            }
+            Msg::FramesDone(transfer_id) => {
+                self.part_done(&transfer_id);
                 return;
             }
             Msg::Ui(Request::ShareFile(file)) => {
@@ -955,6 +1014,10 @@ impl Engine {
                 let _ = self.updates.send(Update::ImageProgress { transfer_id, percent });
                 return;
             }
+            Msg::Quic(event) => {
+                self.quic_event(event);
+                return;
+            }
             Msg::Peer(PeerEvent::Binary {
                 peer,
                 generation,
@@ -1071,6 +1134,12 @@ impl Engine {
         };
         if let Input::Peer { from, envelope } = &input
             && self.room.members().contains_key(from)
+            && self.quic_message(from, &envelope.message)
+        {
+            return;
+        }
+        if let Input::Peer { from, envelope } = &input
+            && self.room.members().contains_key(from)
         {
             let (tid, chunks) = match &envelope.message {
                 PeerMessage::P2pImageStart {
@@ -1130,22 +1199,42 @@ impl Engine {
     /// Starts sending one of our pictures: the room logic adds the chat line and announces it;
     /// the frames follow from [`Effect::BroadcastBulk`].
     async fn send_image(&mut self, image: OutgoingImage) {
-        if image.bytes.len() > rtc_protocol::image::MAX_SEND_BYTES {
+        // a big file or a folder's file stays on disk until it's sent
+        let source = match (image.disk_size, &image.path) {
+            (Some(size), Some(path)) => outgoing::Source::Disk {
+                path: path.clone(),
+                size,
+            },
+            _ => outgoing::Source::Memory(Arc::clone(&image.bytes)),
+        };
+        let size = source.size();
+        if size > rtc_protocol::image::MAX_SEND_BYTES as u64 {
             let _ = self.updates.send(Update::Notice(
                 "File exceeds 10 GB limit. Please select a smaller file.".to_owned(),
             ));
+            self.folder_stopped(&image.transfer_id);
             return;
         }
         if self.peers.bulk_channels(self.room.members().keys()).is_empty() {
             let _ = self.updates.send(Update::Notice(
                 "Waiting for peer to connect before sending file".to_owned(),
             ));
+            self.folder_stopped(&image.transfer_id);
             return;
         }
-        self.outgoing
-            .insert(image.transfer_id.clone(), Arc::clone(&image.bytes));
+        self.outgoing.insert(image.transfer_id.clone(), source);
         let is_img = rtc_protocol::image::is_image_mime(&image.mime)
             || rtc_protocol::image::mime_for_name(&image.file_name).is_some();
+        // big files from disk go to other desktop apps over QUIC (ADR 0009); a folder's
+        // pictures too, so the folder arrives whole
+        self.quic_plan(
+            &image.transfer_id,
+            &image.file_name,
+            size,
+            image.path.as_deref(),
+            is_img && image.relative_path.is_none(),
+            image.relative_path.clone(),
+        );
         let mime = if is_img {
             rtc_protocol::image::clean_mime(&image.mime).to_owned()
         } else {
@@ -1156,7 +1245,7 @@ impl Engine {
             image: ChatImage {
                 transfer_id: image.transfer_id.clone(),
                 file_name: image.file_name,
-                file_size: image.bytes.len() as u64,
+                file_size: size,
                 mime,
             },
             caption: image.caption,
@@ -1165,6 +1254,27 @@ impl Engine {
         self.apply(fx).await;
         // not sent (not in a room): nothing to keep
         self.outgoing.remove(&image.transfer_id);
+        // nothing went out for it (no announcement): a folder moves on
+        if !self.inflight.contains_key(&image.transfer_id)
+            && self.folder_current.as_deref() == Some(image.transfer_id.as_str())
+        {
+            self.folder_current = None;
+            self.next_folder_file();
+        }
+    }
+
+    /// A folder's file couldn't be sent: the rest of the folder isn't either.
+    fn folder_stopped(&mut self, transfer_id: &str) {
+        if self.folder_current.as_deref() == Some(transfer_id) {
+            self.folder_current = None;
+            let left = self.folder_queue.len();
+            self.folder_queue.clear();
+            if left > 0 {
+                let _ = self.updates.send(Update::Notice(format!(
+                    "{left} more files of the folder weren't sent"
+                )));
+            }
+        }
     }
 
     /// Sends a picture's announcement, then its frames, on every open bulk channel, waiting
@@ -1175,67 +1285,130 @@ impl Engine {
         else {
             return;
         };
-        let Some(bytes) = self.outgoing.remove(transfer_id) else {
+        let Some(source) = self.outgoing.remove(transfer_id) else {
             return;
         };
-        let channels = self.peers.bulk_channels(self.room.members().keys());
+        let all = self.peers.bulk_channels(self.room.members().keys());
         let Ok(start) = envelope.to_json() else { return };
-        for dc in &channels {
+        for dc in &all {
             if let Err(e) = dc.send(start.as_bytes(), false) {
                 tracing::debug!("picture announcement: {e:?}");
             }
         }
+        // Desktop peers getting it over QUIC (ADR 0009) have the announcement, not the frames
+        let quic_peers = self.quic_peers(transfer_id);
+        if quic_peers.is_empty() {
+            self.spawn_frames(all, source, transfer_id.clone());
+            return;
+        }
+        let channels = self
+            .peers
+            .bulk_channels(self.room.members().keys().filter(|p| !quic_peers.contains(*p)));
         let transfer_id = transfer_id.clone();
+        self.quic_start(&transfer_id, envelope, &source, channels.is_empty());
+        if !channels.is_empty() {
+            self.spawn_frames(channels, source, transfer_id);
+        }
+    }
+
+    /// Sends a picture's frames on `channels` (its announcement already went), waiting whenever
+    /// a channel is backed up.
+    fn spawn_frames(
+        &mut self,
+        channels: Vec<rtc_webrtc::libwebrtc::data_channel::DataChannel>,
+        source: outgoing::Source,
+        transfer_id: String,
+    ) {
+        *self.inflight.entry(transfer_id.clone()).or_default() += 1;
         let progress = self.queue_tx.clone();
         self.sending.push(tokio::spawn(async move {
             use rtc_protocol::image::{CHUNK, pack};
             use rtc_webrtc::libwebrtc::data_channel::DataChannelState;
-            let pieces: Vec<&[u8]> = if bytes.is_empty() {
-                vec![&[]]
-            } else {
-                bytes.chunks(CHUNK).collect()
+            let frames = async {
+                let total = u32::try_from(source.size().div_ceil(CHUNK as u64).max(1)).unwrap_or(u32::MAX);
+                let mut reader = source.reader();
+                let mut last = 0u8;
+                for index in 0..total {
+                    loop {
+                        let open: Vec<_> = channels
+                            .iter()
+                            .filter(|dc| dc.state() == DataChannelState::Open)
+                            .collect();
+                        if open.is_empty() {
+                            tracing::info!(
+                                "❌ Image transfer failed: All peer connections dropped during image transfer"
+                            );
+                            return;
+                        }
+                        if open.iter().all(|dc| dc.buffered_amount() <= BULK_HIGH_WATER) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    // read as it goes (a big file is never all in memory)
+                    let piece = match reader.next(CHUNK).await {
+                        Ok(piece) => piece,
+                        Err(e) => {
+                            tracing::info!("❌ File transfer failed: couldn't read the file: {e}");
+                            return;
+                        }
+                    };
+                    let frame = pack(&transfer_id, index, total, &piece);
+                    for dc in &channels {
+                        if dc.state() == DataChannelState::Open {
+                            let _ = dc.send(&frame, true);
+                        }
+                    }
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
+                    let percent = ((f64::from(index + 1) / f64::from(total)) * 100.0)
+                        .round()
+                        .min(100.0) as u8;
+                    if percent != last {
+                        last = percent;
+                        let _ = progress.send(Msg::ImageSending(transfer_id.clone(), percent));
+                    }
+                    tokio::task::yield_now().await;
+                }
             };
-            let total = u32::try_from(pieces.len()).unwrap_or(u32::MAX);
-            let mut last = 0u8;
-            for (i, piece) in pieces.iter().enumerate() {
-                loop {
-                    let open: Vec<_> = channels
-                        .iter()
-                        .filter(|dc| dc.state() == DataChannelState::Open)
-                        .collect();
-                    if open.is_empty() {
-                        tracing::info!(
-                            "❌ Image transfer failed: All peer connections dropped during image transfer"
-                        );
-                        return;
-                    }
-                    if open.iter().all(|dc| dc.buffered_amount() <= BULK_HIGH_WATER) {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
-                let index = u32::try_from(i).unwrap_or(u32::MAX);
-                let frame = pack(&transfer_id, index, total, piece);
-                for dc in &channels {
-                    if dc.state() == DataChannelState::Open {
-                        let _ = dc.send(&frame, true);
-                    }
-                }
-                #[allow(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    clippy::cast_precision_loss
-                )]
-                let percent = ((f64::from(index + 1) / f64::from(total)) * 100.0)
-                    .round()
-                    .min(100.0) as u8;
-                if percent != last {
-                    last = percent;
-                    let _ = progress.send(Msg::ImageSending(transfer_id.clone(), percent));
-                }
-                tokio::task::yield_now().await;
-            }
+            frames.await;
+            // finished (or given up): the next file of a folder can go
+            let _ = progress.send(Msg::FramesDone(transfer_id));
         }));
+    }
+
+    /// One way of sending this transfer finished (the frames, or QUIC to one peer). When none is
+    /// left, the next file of a folder being sent starts.
+    fn part_done(&mut self, transfer_id: &str) {
+        let left = match self.inflight.get_mut(transfer_id) {
+            Some(n) => {
+                *n = n.saturating_sub(1);
+                *n
+            }
+            None => 0,
+        };
+        if left == 0 {
+            self.inflight.remove(transfer_id);
+            if self.folder_current.as_deref() == Some(transfer_id) {
+                self.folder_current = None;
+                self.next_folder_file();
+            }
+        }
+    }
+
+    /// Sends the next file of the folder being sent, if any (one at a time).
+    fn next_folder_file(&mut self) {
+        if self.folder_current.is_some() {
+            return;
+        }
+        let Some(next) = self.folder_queue.pop_front() else {
+            return;
+        };
+        self.folder_current = Some(next.transfer_id.clone());
+        let _ = self.queue_tx.send(Msg::Ui(Request::SendImage(next)));
     }
 
     async fn apply(&mut self, fx: Vec<Effect>) {
@@ -1251,9 +1424,11 @@ impl Engine {
                     // Before any ClosePeer that follows: the stats need the connection open
                     if let Some((d, log)) = self.peers.diagnose(&peer).await {
                         tracing::warn!("{log}");
-                        let _ = self
-                            .updates
-                            .send(Update::Log(format!("🔎 Why: {} {}", d.summary, d.details.join(" "))));
+                        let _ = self.updates.send(Update::Log(format!(
+                            "🔎 Why: {} {}",
+                            d.summary,
+                            d.details.join(" ")
+                        )));
                         let _ = self.updates.send(Update::ConnectionLog(log));
                     }
                 }
@@ -1289,6 +1464,10 @@ impl Engine {
                     if *self.room.phase() == Phase::Idle {
                         // left: pictures half-way in or out are dropped
                         self.images.reset();
+                        self.quic_reset();
+                        self.inflight.clear();
+                        self.folder_queue.clear();
+                        self.folder_current = None;
                         self.outgoing.clear();
                         self.stop_capture();
                         self.screen.sharer = None;

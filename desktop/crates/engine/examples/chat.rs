@@ -64,6 +64,21 @@ async fn main() -> anyhow::Result<()> {
     let mut drivers: std::collections::HashMap<String, rtc_games::driver::Driver> =
         std::collections::HashMap::new();
     let (game_tx, mut game_rx) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+    // Sketch: the deciding app keeps time (`tick` twice a second while a turn is on)
+    let sketch_on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (on, tx) = (std::sync::Arc::clone(&sketch_on), game_tx.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if on.load(std::sync::atomic::Ordering::Relaxed)
+                    && tx.send((rtc_games::sketch::KEY.to_owned(), rtc_games::sketch::act::tick())).is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
     // remote control: what we were last told (the sharer answers by name)
     let mut control = rtc_engine::ControlView::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -127,6 +142,17 @@ async fn main() -> anyhow::Result<()> {
                                 println!("{a}");
                                 last_activity = a;
                             }
+                            sketch_on.store(
+                                s.stores.iter().any(|(k, v)| {
+                                    k == rtc_games::sketch::KEY
+                                        && v.presence.authority.as_ref() == Some(&s.me)
+                                        && matches!(
+                                            v.state.get("phase").and_then(serde_json::Value::as_str),
+                                            Some("picking" | "drawing" | "reveal")
+                                        )
+                                }),
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
                             for (key, v) in &s.stores {
                                 let line = format!(
                                     "STORE {key} v={} authority={} state={}",
@@ -166,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Update::Sound(s) => println!("SOUND {} {}", s.name, s.sound_id),
                     Update::ImageProgress { transfer_id, percent } => println!("IMAGE_PROGRESS {transfer_id} {percent}"),
+                    Update::FileSaved { transfer_id, path } => println!("FILE_SAVED {transfer_id} {}", path.display()),
                     Update::ImageReady { transfer_id, bytes } => {
                         println!("IMAGE_READY {transfer_id} {} {:016x}", bytes.len(), fnv(&bytes));
                     }
@@ -303,6 +330,9 @@ async fn main() -> anyhow::Result<()> {
                                     .unwrap_or_default(),
                                 mime: rtc_protocol::image::mime_for_name(path).unwrap_or("image/png").to_owned(),
                                 bytes: bytes.into(),
+                                path: Some(std::path::PathBuf::from(path)),
+                                disk_size: None,
+                                relative_path: None,
                                 caption: caption.to_owned(),
                             }),
                             Err(e) => println!("NOTICE can't read {path}: {e}"),
@@ -508,7 +538,7 @@ async fn main() -> anyhow::Result<()> {
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         break;
                     }
-                    Some(l) => engine.command(Command::SendChat { id: Handle::new_message_id(), text: l }),
+                    Some(l) => engine.command(Command::SendChat { id: Handle::new_message_id(), text: l, reply_to: None }),
                     None => {}
                 }
             }

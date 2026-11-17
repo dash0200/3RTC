@@ -41,6 +41,8 @@ pub(crate) struct ActivityUi {
     pub(crate) tycoon: crate::tycoon::TycoonUi,
     /// The whiteboard on this device.
     pub(crate) board: crate::whiteboard::BoardUi,
+    /// Sketch on this device.
+    pub(crate) sketch: crate::sketch::SketchUi,
     /// What each game's state wants this app to do on its own (`rtc_games::driver`).
     drivers: std::collections::HashMap<String, rtc_games::driver::Driver>,
 }
@@ -321,6 +323,7 @@ fn game(
         ("lastcard", Some(s)) => crate::lastcard::view(view, room, s, cx),
         ("tycoon", Some(s)) => crate::tycoon::view(view, room, s, cx),
         ("whiteboard", Some(s)) => crate::whiteboard::view(view, room, s, cx),
+        ("sketch", Some(s)) => crate::sketch::view(view, room, s, cx),
         _ => div()
             .p(px(24.))
             .text_color(tokens::text_2())
@@ -405,6 +408,8 @@ pub(crate) fn bubble(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, Room
         view.lastcard_attention()
     } else if a.current.id == "tycoon" {
         view.tycoon_attention()
+    } else if a.current.id == "sketch" {
+        view.sketch_attention()
     } else {
         None
     };

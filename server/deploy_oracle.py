@@ -43,7 +43,7 @@ DEFAULT_PORT = "443"
 ALT_PORT = "8443"
 SERVICE_USER = "webrtc"
 SERVICE_FILE = "webrtc-signaling.service"
-SERVER_FILES = ["server.js", "signaling.js", "seats.js", "rateLimit.js", "quickPicks.js", "log.js", "package.json"]
+SERVER_FILES = ["server.js", "signaling.js", "seats.js", "rateLimit.js", "quickPicks.js", "linkPreview.js", "log.js", "package.json"]
 CACHE_FILE_NAME = ".oracle_deploy_cache.json"
 
 PROBE_REGIONS = [

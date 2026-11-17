@@ -141,6 +141,16 @@ const Icon = {
       <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M12 9v6M9 12h6" />
     </svg>
   ),
+  camera: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="6" width="14" height="12" rx="2" /><path d="M16 10l6-3v10l-6-3" />
+    </svg>
+  ),
+  cameraOff: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3l18 18M16 16H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2M10 6h4a2 2 0 0 1 2 2v4M16 10l6-3v10l-6-3" />
+    </svg>
+  ),
   more: (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" />
@@ -159,6 +169,8 @@ export interface PhoneActionBarProps {
   onToggleBlockAudio?: () => void;
   onOpenAddVideo?: () => void;
   onOpenMore?: () => void;
+  isCameraOn?: boolean;
+  onToggleCamera?: () => void;
 }
 
 /** Phone bottom bar: mic (or hold-to-talk), speaker, add video, more. */
@@ -172,7 +184,9 @@ export function PhoneActionBar({
   isAudioBlocked = false,
   onToggleBlockAudio,
   onOpenAddVideo,
-  onOpenMore
+  onOpenMore,
+  isCameraOn = false,
+  onToggleCamera
 }: PhoneActionBarProps) {
   const micLive = isPttMode ? isPttActive : !isMicMuted;
   const micLabel = isPttMode ? (isPttActive ? 'Talking' : 'Hold to talk') : (isMicMuted ? 'Mic off' : 'Mic on');
@@ -187,7 +201,7 @@ export function PhoneActionBar({
     : { onClick: onToggleMic };
 
   return (
-    <nav className="phone-actionbar" aria-label="Call controls">
+    <nav className={`phone-actionbar ${onToggleCamera ? 'has-camera' : ''}`} aria-label="Call controls">
       <button
         type="button"
         className={`phone-action ${micLive ? 'is-live' : 'is-off'}`}
@@ -206,6 +220,17 @@ export function PhoneActionBar({
         <span className="phone-action-icon">{isAudioBlocked ? Icon.speakerOff : Icon.speaker}</span>
         {isAudioBlocked ? 'Sound off' : 'Speaker'}
       </button>
+      {onToggleCamera && (
+        <button
+          type="button"
+          className={`phone-action ${isCameraOn ? 'is-live' : 'is-off'}`}
+          aria-pressed={isCameraOn}
+          onClick={onToggleCamera}
+        >
+          <span className="phone-action-icon">{isCameraOn ? Icon.camera : Icon.cameraOff}</span>
+          {isCameraOn ? 'Camera on' : 'Camera'}
+        </button>
+      )}
       <button type="button" className="phone-action" onClick={onOpenAddVideo}>
         <span className="phone-action-icon">{Icon.addVideo}</span>
         Add video

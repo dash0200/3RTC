@@ -10,6 +10,7 @@ pub mod driver;
 pub mod lastcard;
 pub mod ludo;
 pub mod sample;
+pub mod sketch;
 pub mod tycoon;
 pub mod whiteboard;
 
@@ -84,7 +85,7 @@ pub struct ActivityDef {
 /// (the web app lists them in development builds).
 #[must_use]
 pub fn activities(dev: bool) -> Vec<ActivityDef> {
-    let mut out: Vec<ActivityDef> = vec![ludo::DEF, chess::DEF, lastcard::DEF, whiteboard::DEF, tycoon::DEF];
+    let mut out: Vec<ActivityDef> = vec![ludo::DEF, chess::DEF, lastcard::DEF, whiteboard::DEF, sketch::DEF, tycoon::DEF];
     if dev {
         out.push(sample::DEF);
     }
@@ -110,6 +111,12 @@ pub fn reducer_for(key: &str) -> Option<Box<dyn Reducer>> {
         "act:tycoon" => Some(Box::new(tycoon::Tycoon)),
         whiteboard::KEY => Some(Box::new(whiteboard::IndexRules)),
         k if k.starts_with("act:whiteboard:") => Some(Box::new(whiteboard::ChunkRules)),
+        sketch::KEY => Some(Box::new(sketch::Sketch)),
+        // each turn's board: `act:sketch:t<turn>` (a whiteboard index) and its chunks
+        k if k.strip_prefix("act:sketch:t").is_some_and(|rest| rest.contains(':')) => {
+            Some(Box::new(whiteboard::ChunkRules))
+        }
+        k if k.starts_with("act:sketch:t") => Some(Box::new(whiteboard::IndexRules)),
         _ => None,
     }
 }

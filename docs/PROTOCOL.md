@@ -30,7 +30,7 @@ file/video frames on the bulk channel.
 ### Chat, reactions, soundboard
 | type | fields |
 |---|---|
-| `chat` | `id, sender, isHost, text` |
+| `chat` | `id, sender, isHost, text, replyTo?, mentions?` — `text` may use simple markdown (`**bold**`, `*italic*`/`_italic_`, `~~struck~~`, `` `code` ``) and `@Name` mentions, which older apps just show as typed. `replyTo {id, sender, text}`: the message it answers (`text` a plain snippet of at most 140 characters; receivers quote their own copy when they have it). `mentions`: the peer ids named with @Name (at most 10); those people get a notice. Malformed `replyTo`/`mentions` are dropped, the message kept. |
 | `p2p-image-start` (bulk) | `id, transferId, fileName, fileSize, mimeType, caption, …`, then binary frames starting with `IMG1` |
 | `reaction` | `id, emoji, lane, combo` (any single emoji: each person picks their own set of up to 10; receivers allow ~10 a second per person) |
 | `soundboard-sfx` | `soundId, soundName, emoji` |
@@ -155,6 +155,34 @@ audio m-line after the first. The receiver tells it from the voice by that strea
 get the line (the web app takes any incoming audio for the person's voice), and `hasAudio` in
 `screen-share-status` is true only in the copy sent to desktop viewers.
 
+**Webcam (`features/camera`, `webrtc/cameraLine.ts`).** An app that can show cameras says
+`camera: true` in `peer-identity`. Between two such apps, the side that made the connection adds a
+**second video line** once (after both identities are in) and sends a new offer for it; line order is
+fixed, so on both ends the first video line is the shared screen and the next one is the camera.
+Turning a camera on or off only swaps the track on that line (nothing is sent while it's off: no new
+offer). A camera sends at most 640×360, 24 fps, 350 kbps. Apps that don't say `camera` never get the
+line: they take any incoming video for the shared screen, so it must never reach them.
+| type | direction | fields |
+|---|---|---|
+| `camera-status` | anyone → everyone, and to each newcomer while on | `on` (true or false) |
+
+A tile is shown only when `camera-status` says on and the camera line's picture has arrived.
+
+**QUIC file transfer (desktop → desktop only, `desktop/docs/adr/0009`).** Between two desktop apps,
+files of 8 MB or more can go over a direct QUIC connection instead of the `bulk` channel. The web app
+neither sends nor reads these (its types are listed in `types/protocol.ts` only to keep the lists the
+same).
+| type | direction | fields |
+|---|---|---|
+| `quic-offer` | sender → one receiver | `transferId, fileName, fileSize, sha256` (hex), `addrs` (`ip:port`, LAN and public), `certSha256` (hex: the only certificate the receiver accepts), `token` (hex, one-time), `relativePath?` (a folder's file: its path inside the folder, e.g. `Photos/2026/a.jpg`; the receiver cleans it and saves under Downloads) |
+| `quic-answer` | receiver → sender | `transferId, addrs`, `offset` (bytes it already has, to resume; else 0) |
+| `quic-fallback` | either way | `transferId, reason`: QUIC didn't connect (or was turned down); the file goes over the `bulk` channel as usual |
+
+Both sides send a few small UDP packets to each other's `addrs` (hole punching), then the receiver
+connects (ALPN `3rtc-file/1`), accepts only the certificate whose SHA-256 is `certSha256`, and sends
+`token` and the 8-byte offset first on a stream; the sender checks the token before sending anything.
+The receiver checks the whole file's SHA-256 at the end. Within 8 s of no connection: `quic-fallback`.
+
 **Remote control (desktop → desktop only).** The web app neither sends nor reads these; a desktop app
 offers it only when the sharer is on the desktop app.
 | type | direction | fields |
@@ -195,8 +223,9 @@ Browser → server: `create-room {peerId}`, `create-room {roomId, peerId, hostTo
 
 Server → browser: `room-created {roomId, peerId, hostPeerId, seatToken, hostToken}`,
 `room-resumed {roomId, peerId, peers, hostPeerId, seatToken, hostToken}`,
-`joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId, from?}` (the host got the room back,
-maybe with a new peer id; with `from`: `from` handed the room to `hostPeerId`), `host-token {roomId, hostToken}`
+`joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId, from?, reason?}` (the host got the room back,
+maybe with a new peer id; with `from`: `from` handed the room to `hostPeerId`; with `reason: "host-left"`:
+the host left and the server picked the next host), `host-token {roomId, hostToken}`
 (to the new host after a transfer), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
 `pong`, `room-found {roomId, exists}`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`,
 `room-full`, `not-found`, `server-busy`, `rate-limited`, `not-host`, `target-not-found`).
@@ -222,6 +251,14 @@ old host can't take the room back (its seat token still works: it stays as a gue
 restart a room brought back by a guest has no generation yet: the first valid host token sets it, and a
 later generation still wins.
 
+**When the host leaves** (its connection ends while others are still in the room), the server keeps
+the room for it for `HOST_HANDOVER_GRACE_MS` (20 s): a host that comes back in time (Wi-Fi blip,
+reload, Leave then Rejoin with its host token) stays host. Otherwise whoever has been in the room
+longest becomes the host, as with `transfer-host`: the host generation goes up, the new host gets
+`host-token`, and everyone gets `host {hostPeerId, reason: "host-left"}` (no `from`, so apps that
+don't know `reason` just update the host without a notice). The old host can come back as a guest. A
+hub room becomes a mesh again (`topology-changed`), since its hub is gone.
+
 **Several servers** (Oracle first, then GCP): rooms live in the memory of the server they were made
 on. Both servers must use the **same secret** (the deploy scripts upload `server/.signal-secret`,
 made once and git-ignored, to each), so when the app falls back to the other server the host's and
@@ -236,5 +273,7 @@ with "is this connection the server's host" (`webrtc/peerMessages.js`), so the H
 controls and the shared-state tiebreak can't be claimed. Chat and image messages take the sender's
 name and host flag from the connection and keep only their own fields; names from peers are cleaned
 (`utils/names.js`). With an older server that doesn't send `hostPeerId`, peers' claims are used.
+
+HTTP: `GET /api/link-preview?url=…` (chat link previews, `server/linkPreview.js`): `{ url, title, description, image, siteName }` from the page's Open Graph tags or `<title>` (YouTube through oEmbed), 404 when there's none, 429 past 30 a minute per address. The server fetches only public http(s) addresses on standard ports (checked again after DNS and on each redirect), reads at most 512 KB, and caches results; `image` is https only.
 
 HTTP: `GET /api/quick-picks?region=IN` (cached YouTube picks, CORS open): `{ updatedAt, region, regions, categories }`. Trending rows are that country's charts (`region` is one of `regions`), or a worldwide mix (`region: 'GLOBAL'`) for any other or no country; the app asks for the worldwide mix unless the viewer picked a country in "Trending in".

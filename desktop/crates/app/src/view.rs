@@ -125,6 +125,8 @@ pub(crate) struct RoomView {
     pub(crate) name: Entity<InputState>,
     pub(crate) code: Entity<CodeInput>,
     pub(crate) message: Entity<InputState>,
+    /// Sketch's guess box.
+    pub(crate) sketch_guess: Entity<InputState>,
     pub(crate) link: Entity<InputState>,
     pub(crate) server_url: Entity<InputState>,
     pub(crate) join_error: Option<SharedString>,
@@ -179,6 +181,8 @@ pub(crate) struct RoomView {
     /// Chat pictures by transfer id, and the one attached to the next message.
     pub(crate) pictures: HashMap<String, crate::chat::Picture>,
     pub(crate) pending: Option<crate::chat::Pending>,
+    /// The chat line the next message replies to.
+    pub(crate) reply_to: Option<rtc_core::Quote>,
     /// The picture the lightbox shows.
     pub(crate) lightbox: Option<String>,
     /// Connection details.
@@ -234,6 +238,7 @@ impl RoomView {
         });
         let code = cx.new(CodeInput::new);
         let message = cx.new(|cx| InputState::new(window, cx).placeholder("Message the room"));
+        let sketch_guess = cx.new(|cx| InputState::new(window, cx).placeholder("Your guess"));
         let link = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Paste a YouTube, magnet:?, Vimeo, Twitch or video link")
         });
@@ -256,6 +261,13 @@ impl RoomView {
             cx.subscribe_in(&message, window, |this, _, e: &InputEvent, window, cx| {
                 if matches!(e, InputEvent::PressEnter { .. }) {
                     this.send_chat(window, cx);
+                }
+            }),
+            cx.subscribe_in(&sketch_guess, window, |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::PressEnter { .. }) {
+                    this.sk_guess(window, cx);
+                } else if matches!(e, InputEvent::Change) {
+                    cx.notify();
                 }
             }),
             cx.subscribe_in(&name, window, |this, _, e: &InputEvent, _, cx| {
@@ -348,6 +360,7 @@ impl RoomView {
             name,
             code,
             message,
+            sketch_guess,
             link,
             server_url,
             join_error: None,
@@ -386,6 +399,7 @@ impl RoomView {
             emoji_search,
             pictures: HashMap::new(),
             pending: None,
+            reply_to: None,
             lightbox: None,
             net: crate::net::NetState::default(),
             update: crate::update::Status::Idle,
@@ -520,6 +534,7 @@ impl RoomView {
                 self.ludo_after(cx);
                 self.games_after(cx);
                 self.tycoon_after(cx);
+                self.sketch_after(cx);
                 self.whiteboard_after(cx);
                 if entered {
                     self.tab = if alone { Tab::Invite } else { Tab::Chat };
@@ -588,6 +603,7 @@ impl RoomView {
             Update::Board { from, live, body } => self.on_board(from.as_str(), live, &body, cx),
             Update::ImageProgress { transfer_id, percent } => self.picture_progress(transfer_id, percent),
             Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes),
+            Update::FileSaved { transfer_id, path } => self.file_saved(transfer_id, path, cx),
             Update::Net(peers) => self.on_net(peers),
             Update::Log(text) => self.log(text),
             Update::ConnectionLog(text) => self.connection_log = Some(text),
@@ -678,9 +694,11 @@ impl RoomView {
         if text.trim().is_empty() {
             return;
         }
+        let reply_to = self.reply_to.take().map(|q| q.id);
         self.command(Command::SendChat {
             id: Handle::new_message_id(),
             text,
+            reply_to,
         });
         self.message.update(cx, |m, cx| m.set_value("", window, cx));
         self.scroll_chat_to_bottom(cx);

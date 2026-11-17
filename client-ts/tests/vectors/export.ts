@@ -6,9 +6,10 @@ import { chess } from './players/chess.ts';
 import { ludo } from './players/ludo.ts';
 import { lastcard } from './players/lastcard.ts';
 import { tycoon } from './players/tycoon.ts';
+import { sketch } from './players/sketch.ts';
 import { whiteboardChunk, whiteboardIndex } from './players/whiteboard.ts';
 
-const PLAYERS: Player<any, any>[] = [activity, sample, chess, ludo, lastcard, tycoon, whiteboardIndex, whiteboardChunk];
+const PLAYERS: Player<any, any>[] = [activity, sample, chess, ludo, lastcard, tycoon, sketch, whiteboardIndex, whiteboardChunk];
 
 const wanted = process.argv.slice(2);
 for (const p of PLAYERS) {

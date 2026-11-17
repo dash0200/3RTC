@@ -22,6 +22,7 @@ import { processSignalingMessage } from './signalingMessages';
 import { BUILD } from '../version';
 import { useSignalingConnection, type SignalStatus, type RoomTokens } from '../hooks/useSignalingConnection';
 import { candidateType, type NetworkHint } from './networkHint';
+import { CAMERA_CAPABILITY_FIELD, cameraTransceiverOf, limitCameraSender, screenTransceiverOf } from './cameraLine';
 import { findRoomOn, sameServer } from './findRoom';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage, RoomBus, RoomSettingsMessage } from '../types';
 import type { PeerEntryRecord } from './peerEntry';
@@ -66,7 +67,7 @@ export interface PeerMeshContext {
   /** See SignalingContext.onRoomError */
   onRoomError?: (message: string, roomId: string | null) => boolean;
   /** See SignalingContext.onHostChanged */
-  onHostChanged?: (hostPeerId: string, fromPeerId: string) => void;
+  onHostChanged?: (hostPeerId: string, fromPeerId: string | null) => void;
 }
 
 export interface PeerMeshHookResult {
@@ -275,6 +276,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
       proto: PROTOCOL_VERSION,
       build: BUILD.number,
       clientId: getClientId(),
+      // We understand the camera line (webrtc/cameraLine.ts)
+      [CAMERA_CAPABILITY_FIELD]: true,
       ...(isHostRef.current ? { topology: topologyRef.current, maxUsers: maxUsersRef.current } : {}),
       ...(identityFieldsRef.current?.() || {})
     }),
@@ -282,6 +285,62 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
   );
 
   const currentScreenTrackRef = useRef<MediaStreamTrack | null>(null);
+  // Our camera (null: off), sent on each connection's camera line (webrtc/cameraLine.ts)
+  const currentCameraTrackRef = useRef<MediaStreamTrack | null>(null);
+
+  useEffect(() => {
+    const off = bus.onEvent<MediaStreamTrack | null>('set-camera-track', (track) => {
+      currentCameraTrackRef.current = track;
+      for (const peer of peersRef.current.values()) {
+        const line = cameraTransceiverOf(peer.pc);
+        if (line?.sender) {
+          line.sender.replaceTrack(track).catch(() => {});
+          void limitCameraSender(line.sender);
+        }
+      }
+    });
+    return off;
+  }, [bus, peersRef]);
+
+  // The other app understands the camera line: the side that made the connection adds it, once
+  // (the first video line stays the screen's), and sends a new offer for it.
+  useEffect(() => {
+    const off = bus.onEvent<{ peerId: string }>('peer-camera-capable', ({ peerId }) => {
+      const entry = peersRef.current.get(peerId);
+      const pc = entry?.pc;
+      if (!entry || !pc || !entry.isInitiator || entry.cameraLineAdded || cameraTransceiverOf(pc)) return;
+      if (pc.connectionState === 'closed' || !screenTransceiverOf(pc)) return;
+      entry.cameraLineAdded = true;
+      try {
+        const line = pc.addTransceiver('video', { direction: 'sendrecv' });
+        line.sender.replaceTrack(currentCameraTrackRef.current).catch(() => {});
+      } catch (err: unknown) {
+        logLocalDebug('CAMERA_LINE_ERR', err instanceof Error ? err.message : String(err));
+        return;
+      }
+      // Offer it once the connection is between offers (an ICE restart may be under way)
+      let tries = 0;
+      const offer = async () => {
+        if (peersRef.current.get(peerId) !== entry || pc.signalingState === 'closed') return;
+        if (pc.signalingState !== 'stable') {
+          if (++tries <= 20) setTimeout(offer, 500);
+          return;
+        }
+        try {
+          const o = await pc.createOffer();
+          const tuned = { type: o.type, sdp: tuneSdpForDiscordAudio(o.sdp) };
+          await pc.setLocalDescription(tuned);
+          sendSignal({ type: 'offer', targetId: peerId, offer: tuned });
+          const line = cameraTransceiverOf(pc);
+          if (line?.sender) void limitCameraSender(line.sender);
+        } catch (err: unknown) {
+          logLocalDebug('CAMERA_OFFER_ERR', err instanceof Error ? err.message : String(err));
+        }
+      };
+      void offer();
+    });
+    return off;
+  }, [bus, peersRef, sendSignal, logLocalDebug]);
 
   // Sync screen share track across all active peer connections when local user shares or stops
   useEffect(() => {
@@ -393,6 +452,9 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         },
         onRemoteScreenAudioStream: (peerId, stream, track) => {
           bus.emitEvent('remote-screen-audio', { peerId, stream, track });
+        },
+        onRemoteCameraStream: (peerId, stream, track) => {
+          bus.emitEvent('remote-camera-stream', { peerId, stream, track });
         }
       });
 
@@ -559,6 +621,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         cleanupPeer,
         currentRoomRef,
         currentScreenTrackRef,
+        currentCameraTrackRef,
         getOrCreatePeerConnection,
         isHostRef,
         isMicMutedRef,
@@ -581,7 +644,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         username,
         findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage),
         onRoomError: (message: string, room: string | null) => onRoomErrorRef.current?.(message, room) ?? false,
-        onHostChanged: (hostId: string, fromId: string) => onHostChangedRef.current?.(hostId, fromId)
+        onHostChanged: (hostId: string, fromId: string | null) => onHostChangedRef.current?.(hostId, fromId)
       }),
     [
       peerIdRef,

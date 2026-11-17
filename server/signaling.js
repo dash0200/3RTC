@@ -24,6 +24,62 @@ export const RATE_LIMIT = {
   maxMessagesPerSec: 60      // Max signaling messages per second per socket
 };
 
+const envNumber = (name, fallback) => {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+// Abuse limits: what one connection, one address and the whole server may send through here.
+// Real use is far below them: joining a 4-person room is about 150 KB in all, an offer or answer
+// 5–10 KB, a candidate under 1 KB, keep-alives a few bytes every 25 s. They stop someone using
+// the server to push data (outbound data costs money on the cloud VM) or to run it out of memory.
+export const ABUSE_LIMITS = {
+  // Bytes one connection may send: a burst, refilled at a steady rate
+  bytesPerSec: envNumber('SIGNAL_BYTES_PER_SEC', 64 * 1024),
+  burstBytes: envNumber('SIGNAL_BURST_BYTES', 512 * 1024),
+  // Bytes all connections together may send (the same, server-wide)
+  globalBytesPerSec: envNumber('SIGNAL_GLOBAL_BYTES_PER_SEC', 2 * 1024 * 1024),
+  globalBurstBytes: envNumber('SIGNAL_GLOBAL_BURST_BYTES', 8 * 1024 * 1024),
+  // Largest offer, answer or candidate passed on to someone
+  maxRelayBytes: envNumber('SIGNAL_MAX_RELAY_BYTES', 32 * 1024),
+  // Open connections from one address (high: a mobile network puts many people behind one)
+  maxConnectionsPerIp: envNumber('SIGNAL_MAX_CONNECTIONS_PER_IP', 32),
+  // Open connections in all
+  maxConnections: envNumber('SIGNAL_MAX_CONNECTIONS', 2000)
+};
+
+// The host's connection ended and others are still in the room: how long to keep the room for the
+// host (a Wi-Fi blip, a reload, Leave then Rejoin) before the longest-present person becomes host.
+export const HOST_HANDOVER_GRACE_MS = envNumber('HOST_HANDOVER_GRACE_MS', 20000);
+
+/**
+ * A token bucket for bytes: `take(n)` is true (and spends n) while the bucket holds n.
+ * @param {number} perSec @param {number} burst
+ */
+export function createByteBucket(perSec, burst, now = Date.now()) {
+  let tokens = burst;
+  let last = now;
+  return {
+    take(n, at = Date.now()) {
+      tokens = Math.min(burst, tokens + (Math.max(0, at - last) / 1000) * perSec);
+      last = at;
+      if (n > tokens) return false;
+      tokens -= n;
+      return true;
+    }
+  };
+}
+
+/** The client's address: the first X-Forwarded-For entry (set by Caddy in front), else the socket's. */
+function clientIpOf(req) {
+  const forwardedHeader = req?.headers?.['x-forwarded-for'];
+  const forwarded = Array.isArray(forwardedHeader) ? forwardedHeader[0] : forwardedHeader;
+  return forwarded?.split(',')[0]?.trim() || req?.socket?.remoteAddress || 'unknown';
+}
+
+/** A message type as echoed back in an error: short, so an error is never bigger than a message. */
+const shortType = (type) => String(type).slice(0, 40);
+
 export function isOriginAllowed(origin) {
   return !origin || isAllowedOrigin(origin);
 }
@@ -37,6 +93,14 @@ export function attachSignaling(server) {
       const origin = info.origin || info.req?.headers?.origin;
       // Allow non-browser clients (tests, curl, CLI) or verified 3RTC origins
       if (isOriginAllowed(origin)) {
+        // Too many open connections (from this address, or in all): turned away before the
+        // WebSocket opens; the app's normal reconnect backoff tries again later
+        const ip = clientIpOf(info.req);
+        const fromIp = connectionsPerIp.get(ip) || 0;
+        if (fromIp >= ABUSE_LIMITS.maxConnectionsPerIp || openConnections >= ABUSE_LIMITS.maxConnections) {
+          log('WARN', `Refused connection from ${ip}: ${fromIp} open from it, ${openConnections} in all`);
+          return callback(false, 503, 'Too many connections');
+        }
         return callback(true);
       }
       log('WARN', `Rejected WebSocket upgrade from unauthorized origin: ${origin}`);
@@ -52,6 +116,48 @@ export function attachSignaling(server) {
   const roomInfo = new Map();
   const seats = createSeats(loadSecret({ dir: path.dirname(fileURLToPath(import.meta.url)) }));
   const rateLimiter = createRateLimiter();
+  // Open connections per address, and the server-wide byte budget (ABUSE_LIMITS)
+  /** @type {Map<string, number>} */
+  const connectionsPerIp = new Map();
+  let openConnections = 0;
+  // Map<roomId, timer>: rooms whose host left, waiting for HOST_HANDOVER_GRACE_MS
+  /** @type {Map<string, ReturnType<typeof setTimeout>>} */
+  const handovers = new Map();
+
+  /**
+   * The host left `roomId`: if it isn't back in time, the person in the room longest becomes the
+   * host (as `transfer-host` does: a new host token of the next generation, so the old host's
+   * token no longer takes the room back; it can still come back as a guest). A hub room becomes a
+   * mesh again (its hub is gone).
+   * @param {string} roomId @param {string} oldHostId
+   */
+  function scheduleHandover(roomId, oldHostId) {
+    clearTimeout(handovers.get(roomId));
+    const timer = setTimeout(() => {
+      handovers.delete(roomId);
+      const info = roomInfo.get(roomId);
+      const room = rooms.get(roomId);
+      // Gone, back (same or new peer id), or someone was made host meanwhile
+      if (!info || !room || info.hostPeerId !== oldHostId || room.has(oldHostId)) return;
+      const next = [...room.entries()].find(([, peerWs]) => peerWs.readyState === WebSocket.OPEN);
+      if (!next) return;
+      const [nextId, nextWs] = next;
+      info.hostGen = (info.hostGen || 0) + 1;
+      info.hostPeerId = nextId;
+      log('HOST', `Host ${oldHostId} left room "${roomId}": ${nextId} is the host now (generation ${info.hostGen})`);
+      safeSend(nextWs, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
+      const wasHub = info.topology === 'hub';
+      if (wasHub) info.topology = 'mesh';
+      for (const [, clientWs] of room.entries()) {
+        // No `from`: it wasn't handed on. Apps that don't know `reason` just update the host.
+        safeSend(clientWs, { type: 'host', hostPeerId: nextId, reason: 'host-left' });
+        if (wasHub) safeSend(clientWs, { type: 'topology-changed', topology: 'mesh', hostPeerId: nextId });
+      }
+    }, HOST_HANDOVER_GRACE_MS);
+    timer.unref?.();
+    handovers.set(roomId, timer);
+  }
+  const globalBytes = createByteBucket(ABUSE_LIMITS.globalBytesPerSec, ABUSE_LIMITS.globalBurstBytes);
 
   /**
    * @param {string} roomId
@@ -164,7 +270,11 @@ export function attachSignaling(server) {
       if (room.size === 0) {
         rooms.delete(roomId);
         roomInfo.delete(roomId);
+        clearTimeout(handovers.get(roomId));
+        handovers.delete(roomId);
         log('INFO', `Room "${roomId}" closed (empty)`);
+      } else if (roomInfo.get(roomId)?.hostPeerId === peerId) {
+        scheduleHandover(roomId, peerId);
       }
     }
 
@@ -180,10 +290,22 @@ export function attachSignaling(server) {
     ws.failedJoins = [];
     ws.msgTokens = RATE_LIMIT.maxMessagesPerSec;
     ws.lastTokenRefill = Date.now();
-    const forwardedHeader = req?.headers?.['x-forwarded-for'];
-    const forwarded = Array.isArray(forwardedHeader) ? forwardedHeader[0] : forwardedHeader;
-    ws.ip = forwarded?.split(',')[0]?.trim() || req?.socket?.remoteAddress || 'unknown';
+    ws.ip = clientIpOf(req);
     ws.clientIp = ws.ip;
+
+    // Count it (checked in verifyClient) until it closes
+    connectionsPerIp.set(ws.ip, (connectionsPerIp.get(ws.ip) || 0) + 1);
+    openConnections += 1;
+    let counted = true;
+    ws.on('close', () => {
+      if (!counted) return;
+      counted = false;
+      openConnections -= 1;
+      const left = (connectionsPerIp.get(ws.ip) || 1) - 1;
+      if (left > 0) connectionsPerIp.set(ws.ip, left);
+      else connectionsPerIp.delete(ws.ip);
+    });
+    ws.bytes = createByteBucket(ABUSE_LIMITS.bytesPerSec, ABUSE_LIMITS.burstBytes);
 
     log('CONN', `New client connected, assigned peerId: ${ws.peerId} from ${ws.ip}`);
 
@@ -210,6 +332,12 @@ export function attachSignaling(server) {
         return;
       }
       ws.msgTokens -= 1;
+
+      // Byte budgets: this connection's, then the server's
+      if (!ws.bytes.take(rawLen, now) || !globalBytes.take(rawLen, now)) {
+        safeSend(ws, { type: 'error', code: 'rate-limited', message: 'Data rate limit exceeded. Please slow down.' });
+        return;
+      }
 
       let data;
       try {
@@ -592,6 +720,11 @@ export function attachSignaling(server) {
             return;
           }
 
+          if (rawLen > ABUSE_LIMITS.maxRelayBytes) {
+            safeSend(ws, { type: 'error', message: 'Signal too large' });
+            return;
+          }
+
           const normalizedType = type === 'candidate' ? 'ice-candidate' : type;
           const targetId = data.targetId || data.target;
           const room = rooms.get(currentRoomId);
@@ -618,7 +751,7 @@ export function attachSignaling(server) {
               safeSend(targetWs, outgoingPayload);
               log('SIGNAL', `${normalizedType.toUpperCase()} from ${ws.peerId} -> ${targetId}`);
             } else {
-              safeSend(ws, { type: 'error', message: `Target peer ${targetId} not found in room` });
+              safeSend(ws, { type: 'error', message: `Target peer ${shortType(targetId)} not found in room` });
             }
             return;
           }
@@ -650,7 +783,7 @@ export function attachSignaling(server) {
         }
 
         default:
-          safeSend(ws, { type: 'error', message: `Unknown message type: "${type}"` });
+          safeSend(ws, { type: 'error', message: `Unknown message type: "${shortType(type)}"` });
           break;
       }
     });
@@ -684,6 +817,8 @@ export function attachSignaling(server) {
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
+    for (const timer of handovers.values()) clearTimeout(timer);
+    handovers.clear();
   });
 
   return wss;

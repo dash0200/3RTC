@@ -19,6 +19,9 @@ import { sound } from './utils/sound';
 import { copyToClipboard } from './utils/clipboard';
 import { micPipeline } from './utils/micPipeline';
 import { loadQuickPicks } from './utils/quickPicks';
+import { setPreviewServers } from './features/chat/linkPreviewClient';
+import { useCamera } from './features/camera/useCamera';
+import CameraTiles from './features/camera/CameraTiles';
 import { createRoomBus } from './core/roomBus';
 import type { RoomBus } from './types';
 import { pickAuthority } from './core/sharedState';
@@ -54,7 +57,7 @@ import { useNewVersionNotice } from './pwa/useNewVersionNotice';
 import { useBackLayer, useRoomBackGuard } from './core/backStack';
 import LeaveRoomDialog from './components/LeaveRoomDialog';
 import TabTitle from './components/TabTitle';
-import { saveLastRoom, readLastRoom, forgetLastRoom, type SavedLastRoom } from './utils/lastRoom';
+import { saveLastRoom, readLastRoom, forgetLastRoom, sameLastRoom, type SavedLastRoom } from './utils/lastRoom';
 import NetworkBlockedBanner from './components/NetworkBlockedBanner';
 import { useDriftSync } from './features/playback/useDriftSync';
 import type { PeerVoiceEntry, RoomSettings } from './types';
@@ -136,6 +139,7 @@ export default function App() {
   useEffect(() => {
     const urls = [signalUrl, ...(fallbackUrls || [])];
     loadQuickPicks(urls);
+    setPreviewServers(urls); // chat link previews come from the same servers
     // Reads the server's saved list (no YouTube quota); the server refreshes it every few hours
     const timer = setInterval(() => loadQuickPicks(urls), 60 * 60 * 1000);
     return () => clearInterval(timer);
@@ -235,11 +239,13 @@ export default function App() {
     return true;
   }, []);
 
-  // The host handed the room on: tell everyone who is host now
-  const handleHostChanged = useCallback((newHostId: string, fromId: string) => {
+  // The host handed the room on (or left, fromId null): tell everyone who is host now
+  const handleHostChanged = useCallback((newHostId: string, fromId: string | null) => {
     const self = peerIdRef.current;
     const nameOf = (id: string) => peerMetadataRef.current[id]?.username || 'Someone';
-    const text = newHostId === self
+    const text = fromId === null
+      ? (newHostId === self ? "👑 The host left. You're the host now" : `👑 The host left. ${nameOf(newHostId)} is now the host`)
+      : newHostId === self
       ? `👑 ${nameOf(fromId)} made you the host`
       : fromId === self
         ? `👑 ${nameOf(newHostId)} is now the host`
@@ -260,6 +266,7 @@ export default function App() {
   } : null), [roomId, username, isHost, isMicMuted]);
 
   const screenShare = useScreenShare(bus, { localUser });
+  const camera = useCamera(bus, showToast);
   const isScreenSharingActive = Boolean(screenShare.isScreenShareActive);
 
   // ---- features ----------------------------------------------------------------------------
@@ -512,14 +519,22 @@ export default function App() {
   useBackLayer(isPhone && activityOn && activityView === 'full', () => setActivityView('bubble'));
 
   const [lastRoom, setLastRoom] = useState<SavedLastRoom | null>(() => readLastRoom());
+  // `mesh` is a new object every render: read it through a ref, so the effects below run when the
+  // room or host changes, not on every render (re-reading the saved room on each one looped)
+  const meshRef = useRef(mesh);
+  meshRef.current = mesh;
   useEffect(() => {
     if (!roomId) {
-      setLastRoom(readLastRoom());
+      // Back home: show the saved room (the same object when nothing changed, so no re-render)
+      setLastRoom((prev) => {
+        const next = readLastRoom();
+        return sameLastRoom(prev, next) ? prev : next;
+      });
       return undefined;
     }
     let hostToken: string | null = null;
     const save = () => {
-      hostToken = mesh.getHostToken() || hostToken;
+      hostToken = meshRef.current.getHostToken() || hostToken;
       saveLastRoom(roomId, isHost, hostToken);
     };
     save();
@@ -530,7 +545,7 @@ export default function App() {
       clearInterval(timer);
       window.removeEventListener('pagehide', save);
     };
-  }, [roomId, isHost, mesh]);
+  }, [roomId, isHost]);
 
   const rejoin = !roomId && lastRoom ? {
     ...lastRoom,
@@ -604,6 +619,12 @@ export default function App() {
     }
   }, [connectedPeers.length, sidebarTab]);
 
+  // Names on camera tiles: who the connection says they are
+  const cameraNameOf = useCallback(
+    (peerId: string) => connectedPeers.find((p) => p.peerId === peerId)?.username || 'Someone',
+    [connectedPeers]
+  );
+
   const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock, signalUrl }),
     [room, roomId, isHost, username, connectedPeers, playbackLock, signalUrl]);
 
@@ -666,6 +687,7 @@ export default function App() {
       isP2PConnected={isP2PConnected}
       rejoin={rejoin}
       screenShare={screenShare}
+      camera={camera}
       bus={bus}
       onCopyRoom={handleCopyRoom}
       onLeaveRoom={handleLeaveRoom}
@@ -860,6 +882,7 @@ export default function App() {
             {roomId ? (
               <>
                 {renderStage({ layout: 'phone', onOpenAddVideo: () => setPhoneSheet('add') })}
+                <CameraTiles layout="phone" localStream={camera.localStream} remote={camera.remote} nameOf={cameraNameOf} />
                 {renderChat({ embedded: true, isOpen: true })}
                 <PhoneActionBar
                   isMicMuted={isMicMuted}
@@ -872,6 +895,8 @@ export default function App() {
                   onToggleBlockAudio={toggleBlockAudio}
                   onOpenAddVideo={() => setPhoneSheet('add')}
                   onOpenMore={() => setPhoneSheet('more')}
+                  isCameraOn={camera.isOn}
+                  onToggleCamera={camera.toggle}
                 />
               </>
             ) : showInvite ? (
@@ -974,7 +999,8 @@ export default function App() {
                   {renderStage({
                     onOpenAddVideo: () => setPhoneSheet('add'),
                     onUpdateAudioSettings: handleUpdateAudioSettings,
-                    onSelectOutput: selectOutputDevice
+                    onSelectOutput: selectOutputDevice,
+                    cameraTiles: <CameraTiles localStream={camera.localStream} remote={camera.remote} nameOf={cameraNameOf} />
                   })}
                 </main>
               </div>
