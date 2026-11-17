@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachSignaling, MAX_ROOM_USERS } from './signaling.js';
 import { startQuickPicks, serveQuickPicks } from './quickPicks.js';
+import { serveLinkPreview } from './linkPreview.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Development only: serve the built app (npm run build in client-ts/) next to signaling
@@ -35,6 +36,14 @@ const server = http.createServer((req, res) => {
     const rawUrl = req.url || '/';
     let reqPath = rawUrl.split('?')[0];
     if (reqPath === '/api/quick-picks') return serveQuickPicks(req, res);
+    if (reqPath === '/api/link-preview') {
+      const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+      serveLinkPreview(req, res, forwarded || req.socket?.remoteAddress || 'unknown').catch(() => {
+        if (!res.headersSent) res.writeHead(500, SECURITY_HEADERS);
+        res.end();
+      });
+      return;
+    }
 
     // In production the website is 3rtc.me (Vercel); this server only does signaling. Browser visits
     // (signal.3rtc.me, the sslip.io address, old invite links) go to the app, keeping ?room=…

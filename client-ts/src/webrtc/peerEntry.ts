@@ -33,6 +33,8 @@ export interface PeerEntryRecord {
   /** ICE candidate lines we sent and received, for the connection-failure diagnosis. */
   localCandidates?: string[];
   remoteCandidates?: string[];
+  /** We added the camera line on this connection (webrtc/cameraLine.ts) */
+  cameraLineAdded?: boolean;
   [key: string]: unknown;
 }
 

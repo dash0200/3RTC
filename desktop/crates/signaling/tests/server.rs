@@ -237,3 +237,37 @@ async fn a_wss_server_is_tried_without_panicking() {
     .await;
     assert_eq!(found, None);
 }
+
+/// A socket that stays open but goes quiet (a network change can leave one like that for minutes)
+/// counts as down after the silence limit, not at the next ping, and the client reconnects.
+#[tokio::test]
+async fn a_silent_socket_is_dropped_soon_after_the_silence_limit() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = listener.accept().await {
+            // Accept the WebSocket, then never read or answer (no pongs)
+            if let Ok(ws) = tokio_tungstenite::accept_async(sock).await {
+                held.push(ws);
+            }
+        }
+    });
+    let mut c = Config::new(format!("ws://127.0.0.1:{port}"));
+    c.backoff = Backoff::new(Duration::from_millis(50), Duration::from_millis(100));
+    c.ping_every = Duration::from_secs(30);
+    c.silence_limit = Duration::from_millis(300);
+    let (_h, mut events) = spawn(c);
+    assert!(matches!(next(&mut events).await, Event::Up { .. }));
+    let started = std::time::Instant::now();
+    assert_eq!(next(&mut events).await, Event::Down);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "noticed after {:?} (the ping is 30 s away)",
+        started.elapsed()
+    );
+    assert!(
+        matches!(next(&mut events).await, Event::Up { .. }),
+        "and it reconnects"
+    );
+}

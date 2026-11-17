@@ -115,6 +115,62 @@ When a first connection to someone never comes up, both apps now say why and kee
 - The Logs tab shows "Copy connection log" once there is one. No protocol change.
 - Not yet verified: `cargo fmt`, `clippy` and `cargo test` after this change (owner to run).
 
+## Host migration and quicker reconnects (17 Nov 2026)
+
+- **Host migration** (server): when the host's connection ends and others remain, the server waits
+  `HOST_HANDOVER_GRACE_MS` (20 s) and then makes whoever was in the room longest the host
+  (`host {hostPeerId, reason: "host-left"}`, no `from`; see `docs/PROTOCOL.md`). Desktop: the
+  `reason` field on `ServerMessage::Host`, and core says "👑 The host left. X is now the host".
+- **Dead signaling sockets** are noticed sooner: `crates/signaling` drops a socket after 35 s of
+  silence (was 60 s), checked every 5 s (was at each 25 s ping). The web app checks that its ping is
+  answered within 8 s and probes at once on a network change (`webrtc/liveness.ts`).
+- Not yet verified: `cargo fmt`, `clippy` and `cargo test` (new tests:
+  `a_host_who_left_is_replaced_as_the_web_app_says`, `a_silent_socket_is_dropped_soon_after_the_silence_limit`).
+
+## Rich chat (17 Nov 2026)
+
+- Formatting, links and @mentions: `crates/core/src/chat_format.rs` (the web app's
+  `utils/chatFormat.ts` rules), drawn as styled text with clickable links (`app/src/chat.rs`
+  `rich_text`).
+- `chat` carries `replyTo` and `mentions` (`protocol/src/peer.rs`, read leniently). Core quotes its
+  own copy of a replied-to line (`ChatLine::reply`), sets `mentions_me` and posts a notice. The app
+  has a Reply button on each bubble and a "Replying to …" bar above the composer.
+- Not on desktop yet: link preview cards and the @name suggestion list (typing `@Name` works).
+- Not yet verified: `cargo fmt --all`, `clippy`, `cargo test` (owner to run; new tests in
+  `chat_format.rs`, `rich_chat_replies_and_mentions_as_the_web_app_sends_them`,
+  `chat_reply_and_mentions_are_read_leniently`).
+
+## QUIC file transfer, stage 1 (17 Nov 2026, ADR 0009)
+
+- Messages `quic-offer`, `quic-answer`, `quic-fallback` (`protocol/src/peer.rs`; core ignores them).
+- `crates/core/src/quic.rs`: when to use QUIC (8 MB and up, desktop peers), folder path cleaning,
+  hex, a STUN binding request/answer, peer address checks, with unit tests.
+- `crates/engine/src/quic.rs`: STUN, hole punching, a per-transfer certificate pinned by its SHA-256,
+  a one-time token, 1 MB blocks from and to disk, resume, SHA-256 check. Loopback tests. Not wired
+  to the chat yet (`#[allow(dead_code)]` until stage 2). Owner ran fmt, clippy, test, deny: all
+  pass (deny after ignoring two old advisories, see `deny.toml`).
+- New dependencies: `quinn` 0.11 (already in the lockfile), `rcgen` 0.14 (ring only).
+- Not yet verified: `cargo fmt`, `clippy`, `cargo test`, `cargo deny check` (owner to run).
+
+## QUIC file transfer, stage 2 (17 Nov 2026)
+
+- `quic: 1` in `peer-identity` (`QUIC_VERSION`); `Member::quic` only for desktop apps that say it.
+- `crates/engine/src/quic_flow.rs`: big files (8 MB+, from disk, not pictures) go to QUIC peers over
+  QUIC, everyone else over the bulk channel as before; fallback to the bulk channel per peer on any
+  failure; received files land in Downloads (`.3rtc-part` while coming in); `Update::FileSaved`, and
+  the chat card's "Show" opens the folder.
+- Owner ran fmt, clippy and test after stage 2: all pass. Not yet tried: a real run between two
+  PCs (same Wi-Fi for QUIC, one on mobile data to see the fallback).
+
+## QUIC extras (17 Nov 2026): big files from disk, folders
+
+- `crates/engine/src/outgoing.rs`: a file's bytes in memory or on disk; frames and QUIC read big
+  files in chunks (the app no longer reads files of 8 MB+ that aren't pictures).
+- Folders: 📁 button next to the paperclip, or drop a folder; `folder_files` (500 files, 10 GB);
+  the engine sends them one at a time (`folder_queue`, `inflight`, `Msg::FramesDone`); QUIC
+  receivers keep the layout (`relativePath`).
+- Not yet verified: `cargo fmt`, `clippy`, `cargo test`, and a run sending a folder between two PCs.
+
 ## Known limits (accepted)
 
 - Remote control can't type into apps running as administrator, or on the secure desktop (UAC

@@ -214,6 +214,10 @@ pub enum ServerMessage {
         /// Who handed it on (a transfer), if anyone.
         #[serde(default)]
         from: Option<PeerId>,
+        /// Why, when not a transfer: `host-left` (the host left and didn't come back in time, so
+        /// the server made whoever was in the room longest the host).
+        #[serde(default)]
+        reason: Option<String>,
     },
     /// You're the new host: your host token.
     #[serde(rename_all = "camelCase")]
@@ -451,7 +455,18 @@ mod tests {
             h,
             ServerMessage::Host {
                 host_peer_id: pid("b"),
-                from: Some(pid("a"))
+                from: Some(pid("a")),
+                reason: None
+            }
+        );
+        let left =
+            ServerMessage::from_json(r#"{"type":"host","hostPeerId":"b","reason":"host-left"}"#).unwrap();
+        assert_eq!(
+            left,
+            ServerMessage::Host {
+                host_peer_id: pid("b"),
+                from: None,
+                reason: Some("host-left".to_owned())
             }
         );
     }

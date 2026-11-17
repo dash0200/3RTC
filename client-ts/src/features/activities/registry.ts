@@ -58,6 +58,14 @@ const SHIPPED: ActivityDefinition[] = [
     load: () => import('./whiteboard/index')
   },
   {
+    id: 'sketch',
+    name: 'Sketch',
+    icon: '✏️',
+    description: 'One draws, everyone guesses the word, 2–10 players',
+    minPeople: 2,
+    load: () => import('./sketch/index')
+  },
+  {
     id: 'tycoon',
     name: 'Tycoon',
     icon: '🏙️',

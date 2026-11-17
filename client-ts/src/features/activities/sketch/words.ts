@@ -1,0 +1,27 @@
+/** Words to draw: simple things anyone can sketch in a minute (lower case). */
+export const WORDS: string[] = [
+  'apple', 'banana', 'mango', 'grapes', 'pineapple', 'watermelon', 'carrot', 'tomato', 'onion',
+  'potato', 'corn', 'mushroom', 'pizza', 'burger', 'sandwich', 'ice cream', 'cake', 'cookie',
+  'donut', 'popcorn', 'noodles', 'samosa', 'dosa', 'idli', 'chai', 'coffee', 'teapot', 'cup',
+  'bottle', 'spoon', 'fork', 'knife', 'plate', 'bowl', 'cat', 'dog', 'cow', 'horse', 'elephant',
+  'tiger', 'lion', 'monkey', 'giraffe', 'zebra', 'rabbit', 'mouse', 'snake', 'frog', 'turtle',
+  'fish', 'shark', 'whale', 'dolphin', 'octopus', 'crab', 'bird', 'parrot', 'peacock', 'owl',
+  'penguin', 'duck', 'chicken', 'butterfly', 'bee', 'spider', 'ant', 'snail', 'camel', 'kangaroo',
+  'sun', 'moon', 'star', 'cloud', 'rain', 'rainbow', 'snowman', 'lightning', 'tree', 'flower',
+  'rose', 'leaf', 'mountain', 'volcano', 'island', 'beach', 'river', 'waterfall', 'desert',
+  'cactus', 'house', 'castle', 'tent', 'bridge', 'tower', 'lighthouse', 'school', 'hospital',
+  'temple', 'church', 'windmill', 'igloo', 'pyramid', 'car', 'bus', 'train', 'bicycle',
+  'motorcycle', 'airplane', 'helicopter', 'rocket', 'boat', 'ship', 'truck', 'tractor',
+  'auto rickshaw', 'scooter', 'submarine', 'ball', 'bat', 'cricket', 'football', 'kite', 'balloon',
+  'guitar', 'drum', 'piano', 'flute', 'trumpet', 'violin', 'clock', 'watch', 'phone', 'laptop',
+  'television', 'camera', 'headphones', 'remote', 'keyboard', 'computer', 'robot', 'lamp',
+  'candle', 'umbrella', 'glasses', 'hat', 'crown', 'shoe', 'sock', 'shirt', 'dress', 'backpack',
+  'key', 'lock', 'door', 'window', 'chair', 'table', 'bed', 'sofa', 'ladder', 'bucket', 'broom',
+  'scissors', 'pencil', 'book', 'envelope', 'gift', 'heart', 'smile', 'ghost', 'dragon', 'unicorn',
+  'mermaid', 'pirate', 'wizard', 'ninja', 'superhero', 'alien', 'astronaut', 'king', 'queen',
+  'clown', 'fire', 'tornado', 'snowflake', 'anchor', 'sword', 'shield', 'bow', 'arrow', 'treasure',
+  'map', 'compass', 'magnet', 'battery', 'bulb', 'toothbrush', 'toilet', 'bathtub', 'shower',
+  'mirror', 'comb', 'ring', 'necklace', 'wallet', 'coin', 'money', 'goal', 'swing', 'slide',
+  'seesaw', 'tennis', 'basketball', 'bowling', 'medal', 'trophy', 'selfie', 'birthday', 'wedding',
+  'diwali', 'holi', 'fireworks'
+];

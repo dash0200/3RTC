@@ -7,6 +7,15 @@ yanked = "deny"
 # "Unmaintained" notices fail the build only for crates we depend on directly. The ones deep inside
 # GPUI (instant, paste, rustybuzz, zbus...) are not ours to replace; real vulnerabilities still fail.
 unmaintained = "workspace"
+ignore = [
+  # ringbuf 0.4 double free when an element's Drop panics. Only librqbit-utp (torrents) uses it, and
+  # it pins ^0.4; its ring buffer holds bytes (SharedRb<Heap<u8>>), whose Drop can't panic, so the
+  # bug can't happen here. Drop this once librqbit moves to ringbuf 0.5.2+.
+  { id = "RUSTSEC-2026-0293", reason = "only u8 elements (librqbit-utp): Drop can't panic" },
+  # chrono is unmaintained (no vulnerability). GPUI depends on it too; our own uses (chat times,
+  # dates) can move to `time` or `jiff` later.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no vulnerability; GPUI uses it as well" },
+]
 
 [licenses]
 version = 2

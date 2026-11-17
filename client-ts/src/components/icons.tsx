@@ -11,6 +11,17 @@ const paths: Record<string, React.ReactNode> = {
   micOff: (
     <path d="M3 3l18 18M9 9v2a3 3 0 0 0 5 2M15 10V6a3 3 0 0 0-6 0M5 11a7 7 0 0 0 11 5M19 11a7 7 0 0 1-.6 2.8M12 18v3" />
   ),
+  camera: (
+    <>
+      <rect x="2" y="6" width="14" height="12" rx="2" />
+      <path d="M16 10l6-3v10l-6-3" />
+    </>
+  ),
+  cameraOff: (
+    <>
+      <path d="M3 3l18 18M16 16H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2M10 6h4a2 2 0 0 1 2 2v4M16 10l6-3v10l-6-3" />
+    </>
+  ),
   headphones: (
     <>
       <path d="M3 14v-2a9 9 0 0 1 18 0v2" />

@@ -107,7 +107,10 @@ pub fn summarize_side(lines: &[String]) -> SideSummary {
         } else {
             String::new()
         };
-        ports.entry(format!("{}|{base}", c.address)).or_default().insert(c.port);
+        ports
+            .entry(format!("{}|{base}", c.address))
+            .or_default()
+            .insert(c.port);
     }
     let mapping = if !cands.is_empty() && srflx == 0 && relay == 0 {
         NatMapping::Blocked
@@ -234,7 +237,8 @@ pub struct Diagnosis {
     pub pairs: Option<PairStats>,
 }
 
-const RELAY_FIX: &str = "A TURN relay server fixes this; until then, one of you can switch to another network.";
+const RELAY_FIX: &str =
+    "A TURN relay server fixes this; until then, one of you can switch to another network.";
 
 fn describe(side: &SideSummary) -> String {
     if side.candidates == 0 {
@@ -280,7 +284,8 @@ pub fn diagnose(local: &[String], remote: &[String], pairs: Option<PairStats>) -
     } else if pairs.is_some_and(|p| p.succeeded > 0) {
         (
             C::PathOkSetupFailed,
-            "A network path to them was found, but the secure connection on top of it failed to start.".to_owned(),
+            "A network path to them was found, but the secure connection on top of it failed to start."
+                .to_owned(),
         )
     } else {
         match (l.mapping, r.mapping) {
@@ -325,7 +330,10 @@ pub fn diagnose(local: &[String], remote: &[String], pairs: Option<PairStats>) -
             ),
         }
     };
-    let mut details = vec![format!("You: {}.", describe(&l)), format!("Them: {}.", describe(&r))];
+    let mut details = vec![
+        format!("You: {}.", describe(&l)),
+        format!("Them: {}.", describe(&r)),
+    ];
     if let Some(p) = pairs {
         details.push(format!(
             "Connection checks: {} path{} tried, {} worked, {} test packets sent, {} answered.",
@@ -368,11 +376,19 @@ pub fn mask_candidate(line: &str) -> String {
 
 fn mask_address(word: &str) -> String {
     let dots: Vec<&str> = word.split('.').collect();
-    if dots.len() == 4 && dots.iter().all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit())) {
+    if dots.len() == 4
+        && dots
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()))
+    {
         return format!("{}.{}.{}.x", dots[0], dots[1], dots[2]);
     }
     let colons: Vec<&str> = word.split(':').collect();
-    if colons.len() >= 4 && colons.iter().all(|p| p.len() <= 4 && p.bytes().all(|b| b.is_ascii_hexdigit())) {
+    if colons.len() >= 4
+        && colons
+            .iter()
+            .all(|p| p.len() <= 4 && p.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
         return format!("{}:{}:{}:…", colons[0], colons[1], colons[2]);
     }
     word.to_owned()
@@ -485,7 +501,11 @@ mod tests {
     }
 
     fn strict() -> Vec<String> {
-        vec![HOST.to_owned(), srflx("106.200.5.7", 40001), srflx("106.200.5.7", 40377)]
+        vec![
+            HOST.to_owned(),
+            srflx("106.200.5.7", 40001),
+            srflx("106.200.5.7", 40377),
+        ]
     }
 
     fn blocked() -> Vec<String> {
@@ -494,13 +514,17 @@ mod tests {
 
     #[test]
     fn parses_a_candidate() {
-        let c = parse_candidate(
-            "a=candidate:2 1 UDP 1 1.2.3.4 5000 typ srflx raddr 192.168.1.5 rport 6000",
-        )
-        .unwrap();
+        let c = parse_candidate("a=candidate:2 1 UDP 1 1.2.3.4 5000 typ srflx raddr 192.168.1.5 rport 6000")
+            .unwrap();
         assert_eq!(c.protocol, "udp");
-        assert_eq!((c.address.as_str(), c.port, c.kind.as_str()), ("1.2.3.4", 5000, "srflx"));
-        assert_eq!((c.related_address.as_str(), c.related_port), ("192.168.1.5", 6000));
+        assert_eq!(
+            (c.address.as_str(), c.port, c.kind.as_str()),
+            ("1.2.3.4", 5000, "srflx")
+        );
+        assert_eq!(
+            (c.related_address.as_str(), c.related_port),
+            ("192.168.1.5", 6000)
+        );
         assert!(parse_candidate("").is_none());
         assert!(parse_candidate("candidate:1 1 udp").is_none());
     }
@@ -557,9 +581,21 @@ mod tests {
         };
         let log = format_report(&d, &info);
         assert!(log.contains("Cause: local-strict-nat"), "{log}");
-        assert!(log.contains("106.200.5.x 40001") && log.contains("106.200.5.x 40377"), "{log}");
-        assert!(log.contains("srflx/udp -> srflx/udp failed, 7 sent, 0 answered"), "{log}");
-        assert!(!log.contains("106.200.5.7") && !log.contains("49.36.1.10") && !log.contains("ufrag"), "{log}");
-        assert_eq!(mask_candidate("x 2001:db8:85a3:0:0:8a2e:370:7334 y"), "x 2001:db8:85a3:… y");
+        assert!(
+            log.contains("106.200.5.x 40001") && log.contains("106.200.5.x 40377"),
+            "{log}"
+        );
+        assert!(
+            log.contains("srflx/udp -> srflx/udp failed, 7 sent, 0 answered"),
+            "{log}"
+        );
+        assert!(
+            !log.contains("106.200.5.7") && !log.contains("49.36.1.10") && !log.contains("ufrag"),
+            "{log}"
+        );
+        assert_eq!(
+            mask_candidate("x 2001:db8:85a3:0:0:8a2e:370:7334 y"),
+            "x 2001:db8:85a3:… y"
+        );
     }
 }

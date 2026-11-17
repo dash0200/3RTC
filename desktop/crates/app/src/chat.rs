@@ -1,17 +1,20 @@
 //! Chat pictures and the composer's extras (`LiveChat.tsx`, `features/chat/useChat.ts`): attach,
 //! paste or drop a picture, its progress either way, the lightbox, the emoji picker and the
-//! quick reactions row.
+//! quick reactions row; rich chat text (`features/chat/RichText.tsx`): formatting, links,
+//! @mentions and replies.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui_kit::{
-    AnyElement, Context, ExternalPaths, FontWeight, Hsla, Image, ImageFormat, InteractiveElement as _,
-    IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, Window, div, img,
-    prelude::FluentBuilder as _, px,
+    AnyElement, Context, ExternalPaths, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
+    InteractiveElement as _, InteractiveText, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions,
+    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _,
+    StyledText, UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
 };
-use rtc_engine::{ChatLine, OutgoingImage};
+use rtc_core::Quote;
+use rtc_core::chat_format::{MentionTarget, format_chat};
+use rtc_engine::{ChatLine, OutgoingImage, Snapshot};
 use rtc_protocol::image::{MAX_SEND_BYTES, format_size, mime_for_name};
 use rtc_ui::button::{Button, Variant};
 use rtc_ui::{Icon, icon, tokens};
@@ -26,6 +29,8 @@ pub(crate) struct Picture {
     pub(crate) bytes: Option<Arc<[u8]>>,
     /// Still on its way (in or out).
     pub(crate) moving: bool,
+    /// Received over QUIC and saved here (ADR 0009): the card opens its folder.
+    pub(crate) saved: Option<PathBuf>,
 }
 
 /// A picture attached to the next message.
@@ -34,6 +39,74 @@ pub(crate) struct Pending {
     pub(crate) mime: &'static str,
     pub(crate) bytes: Arc<[u8]>,
     pub(crate) image: Option<Arc<Image>>,
+    /// Where it is on disk (a picked file), so big files can go over QUIC.
+    pub(crate) path: Option<PathBuf>,
+    /// Its size (the bytes may be left on disk).
+    pub(crate) size: u64,
+    /// A big file left on disk (not in `bytes`): sent from there, read as it goes.
+    pub(crate) on_disk: bool,
+    /// A folder: its files, sent one after the other.
+    pub(crate) folder: Option<Vec<FolderFile>>,
+}
+
+/// One file of a folder being sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FolderFile {
+    /// Where it is.
+    pub(crate) path: PathBuf,
+    /// Its path inside the folder, the folder's name first (`Photos/2026/a.jpg`).
+    pub(crate) relative: String,
+    /// Its size.
+    pub(crate) size: u64,
+}
+
+/// Most files a folder may have to be sent.
+pub(crate) const FOLDER_MAX_FILES: usize = 500;
+
+/// A folder's files (in its subfolders too, links not followed), in order, with their sizes.
+/// An error when there are none, too many, or more than the send limit in all.
+pub(crate) fn folder_files(root: &Path) -> Result<Vec<FolderFile>, String> {
+    let top = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "folder".to_owned());
+    let mut out = Vec::new();
+    let mut total: u64 = 0;
+    let mut stack = vec![(root.to_owned(), top)];
+    while let Some((dir, rel)) = stack.pop() {
+        let mut entries: Vec<_> = std::fs::read_dir(&dir)
+            .map_err(|e| format!("Couldn't open {rel}: {e}"))?
+            .filter_map(Result::ok)
+            .collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries.into_iter().rev() {
+            let Ok(kind) = entry.file_type() else { continue };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let child = format!("{rel}/{name}");
+            if kind.is_dir() {
+                stack.push((entry.path(), child));
+            } else if kind.is_file() {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                total = total.saturating_add(size);
+                out.push(FolderFile {
+                    path: entry.path(),
+                    relative: child,
+                    size,
+                });
+                if out.len() > FOLDER_MAX_FILES {
+                    return Err(format!("That folder has more than {FOLDER_MAX_FILES} files"));
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("That folder has no files".to_owned());
+    }
+    if total > MAX_SEND_BYTES as u64 {
+        return Err("That folder is over 10 GB".to_owned());
+    }
+    out.sort_by(|a, b| a.relative.cmp(&b.relative));
+    Ok(out)
 }
 
 /// The format to show bytes as, from the type sent (`None`: we can't draw it, e.g. AVIF).
@@ -91,28 +164,104 @@ impl RoomView {
         .detach();
     }
 
-    /// A file picked or dropped: attach it.
+    /// The folder button: pick a folder to send.
+    pub(crate) fn attach_folder_clicked(&mut self, cx: &mut Context<'_, Self>) {
+        let pick = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Send a folder".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = pick.await
+                && let Some(p) = paths.into_iter().next()
+            {
+                let _ = this.update(cx, |v, cx| v.attach_file(&p, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// A folder picked or dropped: attach all its files.
+    fn attach_folder(&mut self, path: &Path, cx: &mut Context<'_, Self>) {
+        match folder_files(path) {
+            Ok(files) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "folder".to_owned());
+                let size = files.iter().map(|f| f.size).sum();
+                let count = files.len();
+                self.set_pending(
+                    Pending {
+                        name: format!("{name} · {count} file{}", if count == 1 { "" } else { "s" }),
+                        mime: "application/octet-stream",
+                        bytes: Arc::from(Vec::new()),
+                        image: None,
+                        path: Some(path.to_owned()),
+                        size,
+                        on_disk: true,
+                        folder: Some(files),
+                    },
+                    cx,
+                );
+            }
+            Err(e) => self.show_toast(e, cx),
+        }
+    }
+
+    fn set_pending(&mut self, pending: Pending, cx: &mut Context<'_, Self>) {
+        self.pending = Some(pending);
+        if self.tab != crate::view::Tab::Chat {
+            self.set_tab(crate::view::Tab::Chat, cx);
+        }
+        cx.notify();
+    }
+
+    /// A file picked or dropped: attach it (a folder: all its files).
     pub(crate) fn attach_file(&mut self, path: &Path, cx: &mut Context<'_, Self>) {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        match std::fs::metadata(path) {
-            Ok(m) if m.len() > MAX_SEND_BYTES as u64 => {
-                self.show_toast("File exceeds 10 GB limit. Please select a smaller file.", cx);
-                return;
-            }
-            Err(_) => return,
-            Ok(_) => {}
+        let Ok(meta) = std::fs::metadata(path) else { return };
+        if meta.is_dir() {
+            return self.attach_folder(path, cx);
+        }
+        if meta.len() > MAX_SEND_BYTES as u64 {
+            self.show_toast("File exceeds 10 GB limit. Please select a smaller file.", cx);
+            return;
+        }
+        // a big file (not a picture) stays on disk: it's read as it's sent
+        if meta.len() >= rtc_core::quic::QUIC_MIN_BYTES && mime_for_name(&name).is_none() {
+            return self.set_pending(
+                Pending {
+                    name,
+                    mime: "application/octet-stream",
+                    bytes: Arc::from(Vec::new()),
+                    image: None,
+                    path: Some(path.to_owned()),
+                    size: meta.len(),
+                    on_disk: true,
+                    folder: None,
+                },
+                cx,
+            );
         }
         match std::fs::read(path) {
-            Ok(bytes) => self.attach(name, bytes, cx),
+            Ok(bytes) => self.attach(name, bytes, Some(path.to_owned()), cx),
             Err(e) => self.show_toast(format!("Couldn't open {name}: {e}"), cx),
         }
     }
 
     /// Bytes of a file or picture to send with the next message.
-    pub(crate) fn attach(&mut self, name: String, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
+    pub(crate) fn attach(
+        &mut self,
+        name: String,
+        bytes: Vec<u8>,
+        path: Option<PathBuf>,
+        cx: &mut Context<'_, Self>,
+    ) {
         let mime = sniff(&bytes)
             .or_else(|| mime_for_name(&name))
             .unwrap_or("application/octet-stream");
@@ -130,16 +279,20 @@ impl RoomView {
             name
         };
         let image = picture(mime, &bytes);
-        self.pending = Some(Pending {
-            name,
-            mime,
-            bytes: bytes.into(),
-            image,
-        });
-        if self.tab != crate::view::Tab::Chat {
-            self.set_tab(crate::view::Tab::Chat, cx);
-        }
-        cx.notify();
+        let size = bytes.len() as u64;
+        self.set_pending(
+            Pending {
+                name,
+                mime,
+                bytes: bytes.into(),
+                image,
+                path,
+                size,
+                on_disk: false,
+                folder: None,
+            },
+            cx,
+        );
     }
 
     /// A paste into the message box: a picture (or a picture file) is attached; text pastes
@@ -152,7 +305,7 @@ impl RoomView {
         for entry in item.entries() {
             match entry {
                 gpui_kit::ClipboardEntry::Image(i) => {
-                    self.attach(String::new(), i.bytes.clone(), cx);
+                    self.attach(String::new(), i.bytes.clone(), None, cx);
                     return true;
                 }
                 gpui_kit::ClipboardEntry::ExternalPaths(p) => {
@@ -177,17 +330,68 @@ impl RoomView {
         }
     }
 
-    /// Sends the attached picture with `caption`.
+    /// Sends the attached picture, file or folder with `caption`.
     pub(crate) fn send_picture(&mut self, caption: String, cx: &mut Context<'_, Self>) {
         let Some(p) = self.pending.take() else { return };
-        let transfer_id = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+        let new_transfer = || format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+        if let Some(files) = p.folder {
+            // one chat file each, sent one after the other; the first says what it is
+            let folder = p
+                .path
+                .as_ref()
+                .and_then(|d| d.file_name())
+                .map_or_else(|| "folder".to_owned(), |n| n.to_string_lossy().into_owned());
+            let count = files.len();
+            let mut first = format!("📁 {folder}: {count} file{}", if count == 1 { "" } else { "s" });
+            if !caption.trim().is_empty() {
+                first = format!("{first}\n{caption}");
+            }
+            let mut out = Vec::new();
+            for (i, f) in files.into_iter().enumerate() {
+                let transfer_id = new_transfer();
+                self.pictures.insert(
+                    transfer_id.clone(),
+                    Picture {
+                        moving: true,
+                        saved: Some(f.path.clone()),
+                        ..Picture::default()
+                    },
+                );
+                let name = f
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                out.push(OutgoingImage {
+                    id: rtc_engine::Handle::new_message_id(),
+                    transfer_id,
+                    mime: mime_for_name(&name)
+                        .unwrap_or("application/octet-stream")
+                        .to_owned(),
+                    file_name: name,
+                    bytes: Arc::from(Vec::new()),
+                    caption: if i == 0 { first.clone() } else { String::new() },
+                    path: Some(f.path),
+                    disk_size: Some(f.size),
+                    relative_path: Some(f.relative),
+                });
+            }
+            if let Some(e) = &self.engine {
+                e.send_folder(out);
+            }
+            cx.notify();
+            return;
+        }
+        let transfer_id = new_transfer();
         self.pictures.insert(
             transfer_id.clone(),
             Picture {
                 percent: 0,
                 image: p.image,
-                bytes: Some(Arc::clone(&p.bytes)),
+                bytes: (!p.on_disk).then(|| Arc::clone(&p.bytes)),
                 moving: true,
+                // a file sent from disk: its card shows it in its folder
+                saved: if p.on_disk { p.path.clone() } else { None },
             },
         );
         if let Some(e) = &self.engine {
@@ -198,6 +402,9 @@ impl RoomView {
                 mime: p.mime.to_owned(),
                 bytes: p.bytes,
                 caption,
+                disk_size: p.on_disk.then_some(p.size),
+                path: p.path,
+                relative_path: None,
             });
         }
         cx.notify();
@@ -223,9 +430,24 @@ impl RoomView {
     pub(crate) fn picture_progress(&mut self, transfer_id: String, percent: u8) {
         let p = self.pictures.entry(transfer_id).or_default();
         p.percent = percent;
-        if percent >= 100 && p.bytes.is_some() {
+        // ours (the bytes, or a file sent from disk) is done; theirs waits for the last frame
+        if percent >= 100 && (p.bytes.is_some() || p.saved.is_some()) {
             p.moving = false;
         }
+    }
+
+    /// A file arrived over QUIC and is saved in Downloads (ADR 0009).
+    pub(crate) fn file_saved(&mut self, transfer_id: String, path: PathBuf, cx: &mut Context<'_, Self>) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let p = self.pictures.entry(transfer_id).or_default();
+        p.percent = 100;
+        p.moving = false;
+        p.saved = Some(path);
+        self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
+        self.show_toast(format!("Saved {name} in Downloads"), cx);
     }
 
     pub(crate) fn picture_ready(&mut self, transfer_id: &str, bytes: Arc<[u8]>) {
@@ -253,6 +475,11 @@ impl RoomView {
             return;
         };
         let Some(image) = &line.image else { return };
+        // already saved (it came over QUIC): show it in its folder
+        if let Some(path) = self.pictures.get(transfer_id).and_then(|p| p.saved.clone()) {
+            cx.reveal_path(&path);
+            return;
+        }
         let Some(bytes) = self.pictures.get(transfer_id).and_then(|p| p.bytes.clone()) else {
             return;
         };
@@ -457,7 +684,11 @@ pub(crate) fn picture_view(
                         .text_size(px(12.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(tokens::text())
-                        .child("Save"),
+                        .child(if state.is_some_and(|p| p.saved.is_some()) {
+                            "Show"
+                        } else {
+                            "Save"
+                        }),
                 ),
         );
     }
@@ -494,7 +725,7 @@ pub(crate) fn pending_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> O
                                 .items_center()
                                 .justify_center()
                                 .text_size(px(22.))
-                                .child("📄")
+                                .child(if p.folder.is_some() { "📁" } else { "📄" })
                                 .into_any_element()
                         }
                     }),
@@ -518,7 +749,7 @@ pub(crate) fn pending_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> O
                         div()
                             .text_size(px(12.))
                             .text_color(tokens::text_2())
-                            .child(format_size(p.bytes.len() as u64)),
+                            .child(format_size(p.size)),
                     ),
             )
             .child(
@@ -782,9 +1013,200 @@ pub(crate) fn lightbox(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
         .into_any_element()
 }
 
+/// Who can be @mentioned in this room (and us), for drawing mentions.
+pub(crate) fn mention_targets(room: &Snapshot) -> Vec<MentionTarget> {
+    let mut targets: Vec<MentionTarget> = room
+        .members
+        .iter()
+        .filter_map(|(id, m)| {
+            Some(MentionTarget {
+                peer_id: id.as_str().to_owned(),
+                name: m.username.clone()?,
+                is_self: false,
+            })
+        })
+        .collect();
+    targets.push(MentionTarget {
+        peer_id: room.me.as_str().to_owned(),
+        name: room.username.clone(),
+        is_self: true,
+    });
+    targets
+}
+
+/// A message's text with its formatting: bold, italic, struck, `code`, @mentions, and links that
+/// open in the browser (`rtc_core::chat_format`).
+pub(crate) fn rich_text(id: SharedString, text: &str, targets: &[MentionTarget]) -> AnyElement {
+    let mut shown = String::new();
+    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    let mut links: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for piece in format_chat(text, targets) {
+        let start = shown.len();
+        shown.push_str(&piece.text);
+        let range = start..shown.len();
+        if range.is_empty() {
+            continue;
+        }
+        let mut style = HighlightStyle::default();
+        if piece.bold || piece.mention.is_some() {
+            style.font_weight = Some(FontWeight::BOLD);
+        }
+        if piece.italic {
+            style.font_style = Some(FontStyle::Italic);
+        }
+        if piece.strike {
+            style.strikethrough = Some(StrikethroughStyle {
+                thickness: px(1.),
+                color: None,
+            });
+        }
+        if piece.code {
+            style.background_color = Some(tokens::surface());
+        }
+        if piece.mention.is_some() {
+            style.color = Some(tokens::focus());
+            if piece.mentions_self {
+                style.background_color = Some(tokens::focus().opacity(0.25));
+            }
+        }
+        if let Some(href) = piece.link {
+            style.color = Some(tokens::focus());
+            style.underline = Some(UnderlineStyle {
+                thickness: px(1.),
+                color: None,
+                wavy: false,
+            });
+            links.push((range.clone(), href));
+        }
+        if style != HighlightStyle::default() {
+            highlights.push((range, style));
+        }
+    }
+    let styled = StyledText::new(shown).with_highlights(highlights);
+    if links.is_empty() {
+        return styled.into_any_element();
+    }
+    let ranges: Vec<std::ops::Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
+    let hrefs: Vec<String> = links.into_iter().map(|(_, h)| h).collect();
+    InteractiveText::new(id, styled)
+        .on_click(ranges, move |ix, _, cx| {
+            if let Some(href) = hrefs.get(ix) {
+                cx.open_url(href);
+            }
+        })
+        .into_any_element()
+}
+
+/// The message a chat line replies to, above its bubble.
+pub(crate) fn quote_view(q: &Quote) -> impl IntoElement {
+    div()
+        .max_w(px(260.))
+        .px(px(10.))
+        .py(px(4.))
+        .rounded(px(6.))
+        .border_l_2()
+        .border_color(tokens::focus())
+        .bg(tokens::raised().opacity(0.5))
+        .flex()
+        .flex_col()
+        .gap(px(1.))
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(tokens::focus())
+                .child(if q.mine { "You".to_owned() } else { q.name.clone() }),
+        )
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(tokens::text_2())
+                .truncate()
+                .child(if q.text.is_empty() {
+                    "…".to_owned()
+                } else {
+                    q.text.clone()
+                }),
+        )
+}
+
+/// "Replying to …" above the composer, until sent or dismissed.
+pub(crate) fn reply_bar(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Option<impl IntoElement> {
+    let q = view.reply_to.as_ref()?;
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .mb(px(8.))
+            .pl(px(12.))
+            .pr(px(6.))
+            .py(px(6.))
+            .rounded(px(8.))
+            .border_l_2()
+            .border_color(tokens::focus())
+            .bg(tokens::surface())
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(tokens::text_2())
+                            .child(format!(
+                                "Replying to {}",
+                                if q.mine { "yourself" } else { q.name.as_str() }
+                            )),
+                    )
+                    .child(div().text_size(px(13.)).truncate().child(q.text.clone())),
+            )
+            .child(
+                div()
+                    .id("reply-cancel")
+                    .size(px(26.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(tokens::raised()))
+                    .text_color(tokens::text_2())
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        v.reply_to = None;
+                        cx.notify();
+                    }))
+                    .child("✕"),
+            ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sniff;
+    use super::{folder_files, sniff};
+
+    #[test]
+    fn a_folder_lists_its_files_in_order_with_their_paths() {
+        let root = std::env::temp_dir()
+            .join(format!("3rtc-folder-{}", std::process::id()))
+            .join("Photos");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("2026")).unwrap();
+        std::fs::write(root.join("b.txt"), b"bb").unwrap();
+        std::fs::write(root.join("a.jpg"), b"a").unwrap();
+        std::fs::write(root.join("2026").join("c.png"), b"ccc").unwrap();
+        let files = folder_files(&root).unwrap();
+        let rel: Vec<&str> = files.iter().map(|f| f.relative.as_str()).collect();
+        assert_eq!(rel, vec!["Photos/2026/c.png", "Photos/a.jpg", "Photos/b.txt"]);
+        assert_eq!(files.iter().map(|f| f.size).sum::<u64>(), 6);
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(folder_files(&empty).is_err());
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
+    }
 
     #[test]
     fn picture_types_from_their_bytes() {

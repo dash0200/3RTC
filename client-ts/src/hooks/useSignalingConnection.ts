@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage } from '../types';
+import { createLiveness, SIGNAL_LIVENESS, type Liveness } from '../webrtc/liveness';
 
 export interface SignalStatus {
   connected: boolean;
@@ -74,6 +75,8 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): (url: s
     let isCancelled = false;
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
     let pingInterval: ReturnType<typeof setInterval> | null = null;
+    // Whether the open socket still answers (webrtc/liveness.ts)
+    let liveness: Liveness | null = null;
     if (roomServerRef.current && roomServerRef.current.base !== signalUrl) roomServerRef.current = null;
 
     const safeCloseSocket = (socket: WebSocket | null) => {
@@ -192,20 +195,30 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): (url: s
           }
         }
 
-        clearInterval(pingInterval!);
-        pingInterval = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
+        liveness?.stop();
+        liveness = createLiveness({
+          sendPing: () => {
             try {
               ws.send(JSON.stringify({ type: 'ping' }));
+              return true;
             } catch {
-              // ignore
+              return false;
             }
+          },
+          isHidden: () => document.visibilityState === 'hidden',
+          onDead: () => {
+            if (wsRef.current === ws) reconnectNow();
           }
-        }, 25000);
+        });
+        clearInterval(pingInterval!);
+        // The keep-alive ping, which must be answered: a socket that went dead without closing
+        // (after a network change) is noticed within seconds instead of minutes
+        pingInterval = setInterval(() => liveness?.probe(true), SIGNAL_LIVENESS.pingEveryMs);
       };
 
       ws.onmessage = (event) => {
         if (isCancelled) return;
+        liveness?.heard();
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'pong') return;
@@ -217,6 +230,8 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): (url: s
 
       ws.onclose = (event) => {
         if (pingInterval) clearInterval(pingInterval);
+        liveness?.stop();
+        liveness = null;
         if (isCancelled) return;
 
         if (event.code === 1000) {
@@ -252,11 +267,61 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): (url: s
       };
     };
 
+    // The current socket is dead though it looks open: drop it quietly and connect again now (the
+    // room is resumed on open, and broken direct connections recovered, as after any reconnect)
+    const reconnectNow = () => {
+      if (isCancelled) return;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (pingInterval) clearInterval(pingInterval);
+      liveness?.stop();
+      liveness = null;
+      const old = wsRef.current;
+      if (old) {
+        old.onopen = null;
+        old.onmessage = null;
+        old.onerror = null;
+        old.onclose = null;
+        try {
+          old.close(4000, 'No answer');
+        } catch {
+          // already closed
+        }
+        wsRef.current = null;
+      }
+      setSignalStatus({ connected: false, label: 'Reconnecting...' });
+      connect();
+    };
+
+    // After a network change or coming back to the tab: check the socket now, or, while waiting to
+    // reconnect, don't wait out the delay (the network is back)
+    const probe = () => {
+      if (isCancelled) return;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        liveness?.probe();
+      } else if (reconnectTimeout && (!ws || ws.readyState === WebSocket.CLOSED)) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+        connect();
+      }
+    };
+
+    const onNetworkChange = () => probe();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') probe();
+    };
+    const connection = (navigator as Navigator & { connection?: EventTarget }).connection;
+    window.addEventListener('online', onNetworkChange);
+    document.addEventListener('visibilitychange', onVisible);
+    connection?.addEventListener?.('change', onNetworkChange);
+
     switchServerRef.current = (url: string) => {
       if (isCancelled) return;
       roomServerRef.current = { url, base: signalUrl };
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (pingInterval) clearInterval(pingInterval);
+      liveness?.stop();
+      liveness = null;
       const old = wsRef.current;
       if (old) {
         // Quietly: its close must not set the status or schedule a reconnect
@@ -279,8 +344,12 @@ export function useSignalingConnection(ctx: SignalingConnectionContext): (url: s
     return () => {
       isCancelled = true;
       switchServerRef.current = null;
+      window.removeEventListener('online', onNetworkChange);
+      document.removeEventListener('visibilitychange', onVisible);
+      connection?.removeEventListener?.('change', onNetworkChange);
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (pingInterval) clearInterval(pingInterval);
+      liveness?.stop();
       if (wsRef.current) {
         safeCloseSocket(wsRef.current);
         wsRef.current = null;
