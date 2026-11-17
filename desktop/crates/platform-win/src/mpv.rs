@@ -650,7 +650,12 @@ fn setup(
                 tracing::warn!("video: stream protocol: {}", Mpv::err(lib, r));
             }
             *shared.opener.lock().unwrap_or_else(PoisonError::into_inner) = Some(opener);
-            format!("{STREAM_PROTOCOL}://video")
+            let ext = s.name().rsplit('.').next().unwrap_or("");
+            if ext.is_empty() || ext == s.name() {
+                format!("{STREAM_PROTOCOL}://video")
+            } else {
+                format!("{STREAM_PROTOCOL}://video.{ext}")
+            }
         }
     };
     *shared.mpv.lock().unwrap_or_else(PoisonError::into_inner) = Some(mpv);

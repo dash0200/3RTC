@@ -346,7 +346,7 @@ async fn main() -> anyhow::Result<()> {
                         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         engine.command(Command::Watch(WatchCommand::PlayFile { name: name.clone(), size }));
-                        engine.share_file(Some((path, name, size)));
+                        engine.share_file(Some((path, name, size).into()));
                     }
                     Some(l) if l.starts_with("/stream ") => engine.stream_from(l["/stream ".len()..].trim().to_owned()),
                     Some(l) if l == "/unshare" => engine.share_file(None),
