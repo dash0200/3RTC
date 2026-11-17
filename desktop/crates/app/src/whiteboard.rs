@@ -19,8 +19,7 @@ use gpui_kit::{
 use rtc_core::ActivityCommand;
 use rtc_engine::Snapshot;
 use rtc_games::whiteboard::{
-    self, BOARD_H, BOARD_W, CHUNK_MAX, Chunk, Index, MAX_CHUNKS, Stroke, chunk_key, clean_stroke, hits,
-    simplify,
+    self, BOARD_H, BOARD_W, CHUNK_MAX, Chunk, Index, MAX_CHUNKS, Stroke, clean_stroke, hits, simplify,
 };
 use rtc_ui::tokens;
 use serde_json::{Value, json};
@@ -96,6 +95,29 @@ pub(crate) struct BoardUi {
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The game area.
     area: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The board's index key: empty for the whiteboard (`act:whiteboard`), a game's board
+    /// (`act:sketch:t3`) otherwise.
+    pub(crate) base: String,
+    /// The board everything above is about (a new one starts clean).
+    shown: String,
+}
+
+/// How a board is used (`Whiteboard` props): the whiteboard itself, or a game's.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Mode {
+    /// Look only: no toolbar, no drawing (a game's guessers).
+    pub(crate) read_only: bool,
+    /// A game's board: no light / dark, no footer; `can_clear` decides clearing.
+    pub(crate) game: bool,
+    /// With `game`: this person may clear the board.
+    pub(crate) can_clear: bool,
+    /// What an empty board says.
+    pub(crate) empty: Option<String>,
+}
+
+/// A chunk's key on the board `base`.
+fn chunk_in(base: &str, epoch: i64, n: i64) -> String {
+    format!("{base}:{epoch}:{n}")
 }
 
 impl std::fmt::Debug for BoardUi {
@@ -311,9 +333,20 @@ fn paint_live(window: &mut gpui_kit::Window, origin: Point<Pixels>, scale: f32, 
 }
 
 impl RoomView {
+    /// The board's index key.
+    pub(crate) fn wb_base(&self) -> String {
+        let b = &self.activity.board.base;
+        if b.is_empty() {
+            whiteboard::KEY.to_owned()
+        } else {
+            b.clone()
+        }
+    }
+
     fn wb_index(&self) -> Option<Index> {
         let r = self.room.as_ref()?;
-        let (_, v) = r.stores.iter().find(|(k, _)| k == whiteboard::KEY)?;
+        let base = self.wb_base();
+        let (_, v) = r.stores.iter().find(|(k, _)| *k == base)?;
         Index::from_value(&v.state)
     }
 
@@ -323,7 +356,7 @@ impl RoomView {
             return (Vec::new(), Vec::new());
         };
         let mut chunks: Vec<(i64, String, Chunk)> = Vec::new();
-        let prefix = format!("{}:{}:", whiteboard::KEY, ix.epoch);
+        let prefix = format!("{}:{}:", self.wb_base(), ix.epoch);
         for (k, v) in &r.stores {
             if let Some(n) = k.strip_prefix(&prefix).and_then(|n| n.parse::<i64>().ok())
                 && let Some(c) = Chunk::from_value(&v.state)
@@ -349,6 +382,24 @@ impl RoomView {
 
     /// After every room update: the open epoch's chunks are open, an old epoch's dropped.
     pub(crate) fn whiteboard_after(&mut self, cx: &mut Context<'_, Self>) {
+        let base = self.wb_base();
+        if self.activity.board.shown != base {
+            // another board (a game's next turn): start clean
+            let b = &mut self.activity.board;
+            b.shown.clone_from(&base);
+            b.epoch = None;
+            b.opened.clear();
+            b.mine = None;
+            b.erasing.clear();
+            b.gone.clear();
+            b.eraser_at = None;
+            b.pending.clear();
+            b.live.clear();
+            b.cursors.clear();
+            b.undo.clear();
+            b.redo.clear();
+            b.confirm_clear = false;
+        }
         let Some(ix) = self.wb_index() else {
             self.activity.board.epoch = None;
             self.activity.board.opened.clear();
@@ -361,7 +412,7 @@ impl RoomView {
         if self.activity.board.epoch != Some(ix.epoch) {
             if let Some(old) = self.activity.board.epoch {
                 self.activity_command(
-                    ActivityCommand::Release(format!("{}:{old}:", whiteboard::KEY)),
+                    ActivityCommand::Release(format!("{base}:{old}:")),
                     cx,
                 );
             }
@@ -375,7 +426,7 @@ impl RoomView {
             b.pending.clear();
         }
         for n in 0..ix.chunks.min(MAX_CHUNKS) {
-            let key = chunk_key(ix.epoch, n);
+            let key = chunk_in(&base, ix.epoch, n);
             if self.activity.board.opened.insert(key.clone()) {
                 self.activity_command(ActivityCommand::Open(key), cx);
             }
@@ -467,7 +518,8 @@ impl RoomView {
     fn wb_add(&mut self, list: &[Stroke], cx: &mut Context<'_, Self>) {
         let Some(ix) = self.wb_index() else { return };
         let (_, chunks) = self.wb_strokes(&ix);
-        let last_key = chunk_key(ix.epoch, ix.chunks - 1);
+        let base = self.wb_base();
+        let last_key = chunk_in(&base, ix.epoch, ix.chunks - 1);
         let in_last = chunks
             .iter()
             .find(|(k, _)| *k == last_key)
@@ -485,11 +537,7 @@ impl RoomView {
         let n = list.len();
         self.wb_dispatch(last_key, json!({ "kind": "add", "strokes": list }), cx);
         if in_last + n >= CHUNK_MAX {
-            self.wb_dispatch(
-                whiteboard::KEY.to_owned(),
-                json!({ "kind": "grow", "from": ix.chunks - 1 }),
-                cx,
-            );
+            self.wb_dispatch(base, json!({ "kind": "grow", "from": ix.chunks - 1 }), cx);
         }
     }
 
@@ -787,33 +835,50 @@ fn text_btn(
 }
 
 /// The whiteboard.
-#[allow(clippy::too_many_lines)]
 pub(crate) fn view(
     view: &RoomView,
     room: &Snapshot,
     store: &Value,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
+    board(view, room, store, &Mode::default(), cx)
+}
+
+/// A board (the whiteboard's, or a game's: [`Mode`]).
+#[allow(clippy::too_many_lines)]
+pub(crate) fn board(
+    view: &RoomView,
+    room: &Snapshot,
+    store: &Value,
+    mode: &Mode,
+    cx: &mut Context<'_, RoomView>,
+) -> AnyElement {
     let Some(ix) = Index::from_value(store) else {
         return div().into_any_element();
     };
     let ui = &view.activity.board;
+    let base = view.wb_base();
+    let read_only = mode.read_only;
     let present: Vec<String> = room
         .stores
         .iter()
-        .find(|(k, _)| k == whiteboard::KEY)
+        .find(|(k, _)| *k == base)
         .map(|(_, v)| v.presence.members.iter().map(|p| p.as_str().to_owned()).collect())
         .unwrap_or_default();
     let host_here = room
         .host
         .as_ref()
         .is_some_and(|h| *h == room.me || present.iter().any(|p| p == h.as_str()));
-    let can_manage = room.host.as_ref() == Some(&room.me) || !host_here;
+    let can_manage = if mode.game {
+        mode.can_clear
+    } else {
+        room.host.as_ref() == Some(&room.me) || !host_here
+    };
     let (strokes, chunks) = view.wb_strokes(&ix);
     let total = strokes.len();
     let last_full = chunks
         .iter()
-        .find(|(k, _)| *k == chunk_key(ix.epoch, ix.chunks - 1))
+        .find(|(k, _)| *k == chunk_in(&base, ix.epoch, ix.chunks - 1))
         .is_some_and(|(_, ids)| ids.len() >= CHUNK_MAX);
     let full = ix.chunks >= MAX_CHUNKS && last_full;
     let bg = if ix.bg == "dark" { "#15161b" } else { "#fbfbf8" };
@@ -866,7 +931,8 @@ pub(crate) fn view(
 
     let area = ui.area.get();
     let avail_w = area.map_or(900.0, |a| f32::from(a.size.width) - 32.0);
-    let avail_h = area.map_or(560.0, |a| f32::from(a.size.height) - 120.0);
+    let chrome = if read_only { 28.0 } else if mode.game { 80.0 } else { 120.0 };
+    let avail_h = area.map_or(560.0, |a| f32::from(a.size.height) - chrome);
     #[allow(clippy::cast_possible_truncation)]
     let scale = (avail_w / BOARD_W as f32).min(avail_h / BOARD_H as f32).max(0.05);
     #[allow(clippy::cast_possible_truncation)]
@@ -874,6 +940,10 @@ pub(crate) fn view(
     let bounds_cell = Rc::clone(&ui.bounds);
     let cursors: Vec<(f64, f64, String)> = ui.cursors.values().map(|c| (c.0, c.1, c.2.clone())).collect();
     let empty = total == 0 && ui.mine.is_none() && ui.live.is_empty();
+    let empty_text = mode
+        .empty
+        .clone()
+        .unwrap_or_else(|| "Draw anything. Everyone in the room sees it live.".to_owned());
     #[allow(clippy::cast_possible_truncation)]
     let board = div()
         .id("wb-board")
@@ -883,7 +953,7 @@ pub(crate) fn view(
         .h(px(bh))
         .rounded(px(10.))
         .overflow_hidden()
-        .cursor_crosshair()
+        .when(!read_only, |el| el.cursor_crosshair())
         .child(img(picture).absolute().w(px(bw)).h(px(bh)))
         .child(
             canvas(
@@ -958,27 +1028,29 @@ pub(crate) fn view(
                     } else {
                         tokens::hex(0x6b_6e78)
                     })
-                    .child("Draw anything. Everyone in the room sees it live."),
+                    .child(empty_text),
             )
         })
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |v, e: &MouseDownEvent, _, cx| {
-                if !full {
-                    v.wb_down(e, cx);
+        .when(!read_only, |el| {
+            el.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |v, e: &MouseDownEvent, _, cx| {
+                    if !full {
+                        v.wb_down(e, cx);
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| v.wb_move(e, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, cx| v.wb_up(cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, cx| v.wb_up(cx)))
+            .on_hover(cx.listener(|v, hovered: &bool, _, cx| {
+                if !*hovered {
+                    v.activity.board.eraser_at = None;
+                    v.wb_send(false, json!({ "gone": true }));
+                    cx.notify();
                 }
-            }),
-        )
-        .on_mouse_move(cx.listener(|v, e: &MouseMoveEvent, _, cx| v.wb_move(e, cx)))
-        .on_mouse_up(MouseButton::Left, cx.listener(|v, _, _, cx| v.wb_up(cx)))
-        .on_mouse_up_out(MouseButton::Left, cx.listener(|v, _, _, cx| v.wb_up(cx)))
-        .on_hover(cx.listener(|v, hovered: &bool, _, cx| {
-            if !*hovered {
-                v.activity.board.eraser_at = None;
-                v.wb_send(false, json!({ "gone": true }));
-                cx.notify();
-            }
-        }));
+            }))
+        });
 
     // the toolbar
     let mut tools = div()
@@ -1049,6 +1121,7 @@ pub(crate) fn view(
         );
     }
     let mut actions = div().flex().items_center().gap(px(6.));
+    let bg_key = base.clone();
     actions = actions
         .child(
             text_btn("wb-undo", "Undo", false)
@@ -1060,7 +1133,7 @@ pub(crate) fn view(
                 .when(ui.redo.is_empty(), |el| el.opacity(0.4))
                 .on_click(cx.listener(|v, _, _, cx| v.wb_undo(true, cx))),
         )
-        .child(
+        .when(!mode.game, |el| el.child(
             text_btn(
                 "wb-bg",
                 if ix.bg == "light" {
@@ -1076,20 +1149,17 @@ pub(crate) fn view(
                 } else {
                     "light"
                 };
-                v.wb_dispatch(whiteboard::KEY.to_owned(), json!({ "kind": "bg", "bg": bg }), cx);
+                v.wb_dispatch(bg_key.clone(), json!({ "kind": "bg", "bg": bg }), cx);
             })),
-        );
-    if ui.confirm_clear {
+        ));
+    if ui.confirm_clear && can_manage {
+        let clear_key = base.clone();
         actions = actions
             .child(
-                text_btn("wb-clear-yes", "Clear for everyone", true).on_click(cx.listener(|v, _, _, cx| {
+                text_btn("wb-clear-yes", "Clear for everyone", true).on_click(cx.listener(move |v, _, _, cx| {
                     let name = v.room.as_ref().map(|r| r.username.clone()).unwrap_or_default();
                     v.activity.board.confirm_clear = false;
-                    v.wb_dispatch(
-                        whiteboard::KEY.to_owned(),
-                        json!({ "kind": "clear", "name": name }),
-                        cx,
-                    );
+                    v.wb_dispatch(clear_key.clone(), json!({ "kind": "clear", "name": name }), cx);
                 })),
             )
             .child(
@@ -1139,20 +1209,22 @@ pub(crate) fn view(
                 .items_center()
                 .gap(px(10.))
                 .p(px(14.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(8.))
-                        .child(tools)
-                        .child(colors)
-                        .child(sizes)
-                        .child(actions),
-                )
+                .when(!read_only, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .items_center()
+                            .justify_center()
+                            .gap(px(8.))
+                            .child(tools)
+                            .child(colors)
+                            .child(sizes)
+                            .child(actions),
+                    )
+                })
                 .child(board)
-                .child(
+                .when(!mode.game, |el| el.child(
                     div()
                         .flex()
                         .gap(px(10.))
@@ -1167,7 +1239,7 @@ pub(crate) fn view(
                                     .child("The board is full: save it and clear it to keep drawing."),
                             )
                         }),
-                ),
+                )),
         )
         .into_any_element()
 }

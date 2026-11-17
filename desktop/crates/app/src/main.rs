@@ -26,6 +26,7 @@ mod room;
 mod screen;
 mod settings;
 mod single;
+mod sketch;
 mod sounds;
 mod torrent;
 mod tycoon;
