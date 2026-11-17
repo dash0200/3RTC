@@ -3,10 +3,10 @@
 //! right order, and turning libwebrtc's callbacks into engine messages.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rtc_core::{Input, LinkState, RemoteSignal};
+use rtc_core::{Input, LinkState, RemoteSignal, ice_diagnosis};
 use rtc_protocol::PeerId;
 use rtc_protocol::peer::Envelope;
 use rtc_protocol::sdp::{IceCandidate, SessionDescription};
@@ -20,6 +20,7 @@ use rtc_webrtc::libwebrtc::peer_connection::{
 use rtc_webrtc::libwebrtc::rtp_parameters::{Priority, RtpCodecCapability};
 use rtc_webrtc::libwebrtc::rtp_sender::RtpSender;
 use rtc_webrtc::libwebrtc::session_description::SessionDescription as RtcDescription;
+use rtc_webrtc::libwebrtc::stats::{IceCandidatePairState, IceCandidateType, RtcStats};
 use rtc_webrtc::stats::{self, Levels};
 use rtc_webrtc::{channels, convert, factory::Factory, sdp};
 
@@ -102,6 +103,77 @@ struct Link {
     levels: tokio::task::JoinHandle<()>,
     /// Our screen's sound goes on this connection (added once, kept).
     screen_sound: bool,
+    /// ICE candidate lines we sent and received, for the connection-failure diagnosis.
+    local_candidates: Arc<Mutex<Vec<String>>>,
+    remote_candidates: Vec<String>,
+}
+
+/// Seconds since 1970 (for the connection-failure log).
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The candidate pairs libwebrtc tried, for the connection-failure log.
+fn paths_tried(report: &[RtcStats]) -> Vec<ice_diagnosis::PathTried> {
+    let mut candidates = HashMap::new();
+    for s in report {
+        match s {
+            RtcStats::LocalCandidate(c) => {
+                candidates.insert(c.rtc.id.as_str(), &c.local_candidate);
+            }
+            RtcStats::RemoteCandidate(c) => {
+                candidates.insert(c.rtc.id.as_str(), &c.remote_candidate);
+            }
+            _ => {}
+        }
+    }
+    let end = |id: &str| {
+        candidates.get(id).map_or_else(
+            || "?".to_owned(),
+            |c| {
+                let kind = match c.candidate_type {
+                    Some(IceCandidateType::Host) => "host",
+                    Some(IceCandidateType::Srflx) => "srflx",
+                    Some(IceCandidateType::Prflx) => "prflx",
+                    Some(IceCandidateType::Relay) => "relay",
+                    None => "?",
+                };
+                format!("{kind}/{}", c.protocol)
+            },
+        )
+    };
+    report
+        .iter()
+        .filter_map(|s| match s {
+            RtcStats::CandidatePair(p) => Some(&p.candidate_pair),
+            _ => None,
+        })
+        .map(|p| ice_diagnosis::PathTried {
+            local: end(&p.local_candidate_id),
+            remote: end(&p.remote_candidate_id),
+            state: match p.state {
+                Some(IceCandidatePairState::Frozen) => "frozen",
+                Some(IceCandidatePairState::Waiting) => "waiting",
+                Some(IceCandidatePairState::InProgress) => "in-progress",
+                Some(IceCandidatePairState::Failed) => "failed",
+                Some(IceCandidatePairState::Succeeded) => "succeeded",
+                None => "?",
+            }
+            .to_owned(),
+            nominated: p.nominated,
+            requests_sent: p.requests_sent,
+            responses_received: p.responses_received,
+        })
+        .collect()
+}
+
+/// Keeps a candidate line for the diagnosis (deduplicated, at most 40).
+fn remember(list: &mut Vec<String>, line: &str) {
+    if !line.is_empty() && list.len() < 40 && !list.iter().any(|l| l == line) {
+        list.push(line.to_owned());
+    }
 }
 
 pub(crate) struct Peers {
@@ -172,10 +244,16 @@ impl Peers {
         let generation = self.next_generation;
         let signaling = self.signaling.clone();
         let target = peer.clone();
+        let local_candidates = Arc::new(Mutex::new(Vec::new()));
+        let sent = Arc::clone(&local_candidates);
         pc.on_ice_candidate(Some(Box::new(move |c| {
+            let candidate = convert::candidate_out(&c);
+            if let Ok(mut list) = sent.lock() {
+                remember(&mut list, &candidate.candidate);
+            }
             signaling.send(ClientMessage::IceCandidate {
                 target_id: target.clone(),
-                candidate: convert::candidate_out(&c),
+                candidate,
             });
         })));
         let sink = Arc::clone(&self.sink);
@@ -253,6 +331,8 @@ impl Peers {
             pending: Vec::new(),
             levels,
             screen_sound: false,
+            local_candidates,
+            remote_candidates: Vec::new(),
         };
         Some(self.links.entry(peer.clone()).insert_entry(link).into_mut())
     }
@@ -312,6 +392,39 @@ impl Peers {
     pub(crate) async fn stats(&self, peer: &PeerId) -> Option<Vec<rtc_webrtc::libwebrtc::stats::RtcStats>> {
         let pc = self.links.get(peer)?.pc.clone();
         pc.get_stats().await.ok()
+    }
+
+    /// Why the connection to `peer` never came up: its candidates (ours and theirs), the paths
+    /// libwebrtc tried and its states, as a diagnosis and the full log (`rtc_core::ice_diagnosis`).
+    pub(crate) async fn diagnose(&self, peer: &PeerId) -> Option<(ice_diagnosis::Diagnosis, String)> {
+        let link = self.links.get(peer)?;
+        let local = match link.local_candidates.lock() {
+            Ok(list) => list.clone(),
+            Err(_) => Vec::new(),
+        };
+        let remote = link.remote_candidates.clone();
+        let pc = link.pc.clone();
+        let states = vec![
+            ("connection".to_owned(), format!("{:?}", pc.connection_state()).to_lowercase()),
+            ("ice".to_owned(), format!("{:?}", pc.ice_connection_state()).to_lowercase()),
+            ("gathering".to_owned(), format!("{:?}", pc.ice_gathering_state()).to_lowercase()),
+        ];
+        let report = pc.get_stats().await.unwrap_or_default();
+        let paths = paths_tried(&report);
+        let d = ice_diagnosis::diagnose(&local, &remote, Some(ice_diagnosis::PairStats::of(&paths)));
+        let log = ice_diagnosis::format_report(
+            &d,
+            &ice_diagnosis::ReportInfo {
+                peer_id: peer.as_str().to_owned(),
+                time: format!("{} (unix seconds)", unix_now()),
+                app: format!("desktop {}", env!("CARGO_PKG_VERSION")),
+                states,
+                paths,
+                local_candidates: local,
+                remote_candidates: remote,
+            },
+        );
+        Some((d, log))
     }
 
     /// The open bulk channels to these peers (chat pictures go on them).
@@ -415,6 +528,7 @@ impl Peers {
                 let Some(link) = self.links.get_mut(&peer) else {
                     return;
                 };
+                remember(&mut link.remote_candidates, &c.candidate);
                 if link.has_remote {
                     Self::add(link, &c).await;
                 } else {

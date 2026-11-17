@@ -6,7 +6,7 @@ import { micPipeline } from '../utils/micPipeline';
 import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp';
 import type { IncomingSignalingMessage, OutgoingSignalingMessage } from '../types';
 import type { RoomTokens } from '../hooks/useSignalingConnection';
-import type { PeerEntryRecord } from './peerEntry';
+import { rememberCandidate, type PeerEntryRecord } from './peerEntry';
 
 export interface SignalingContext {
   setRoomId: (id: string | null) => void;
@@ -366,6 +366,7 @@ export async function processSignalingMessage(
       const senderId = msg.from;
       const peerEntry = peersRef.current.get(senderId);
       if (peerEntry && msg.candidate) {
+        rememberCandidate((peerEntry.remoteCandidates ||= []), msg.candidate.candidate);
         const pc = peerEntry.pc;
         if (
           pc &&

@@ -9,6 +9,7 @@
 
 pub mod files;
 pub mod fun;
+pub mod ice_diagnosis;
 pub mod recovery;
 mod room;
 pub mod shared;

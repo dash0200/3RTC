@@ -4,9 +4,11 @@
  * the connection from scratch once. The other side just answers the offers it receives.
  */
 
-import { RECOVERY } from './config';
+import { ICE_SERVERS, RECOVERY } from './config';
+import { BUILD_LABEL } from '../version';
 import { tuneSdpForDiscordAudio } from './sdp';
 import { blockedNetworkHint, type NetworkHint } from './networkHint';
+import { describePairs, diagnoseIce, formatIceReport, summarizePairs } from './iceDiagnosis';
 
 export interface PeerRecoveryEntry {
   pc?: RTCPeerConnection | null;
@@ -27,6 +29,8 @@ export interface PeerRecoveryEntry {
   wasInterrupted?: boolean;
   isConnected?: boolean;
   localCandidateTypes?: Set<string> | string[];
+  localCandidates?: string[];
+  remoteCandidates?: string[];
   [key: string]: unknown;
 }
 
@@ -102,9 +106,55 @@ export function attachPeerRecovery(
     peerEntry.recoveryTimer = setTimeout(runRecovery, delayMs);
   };
 
+  // Work out why (both sides' candidates + what the browser tried) and put it in the room log.
+  // Started before any cleanup closes the connection; the stats are optional.
+  const explainFailure = () => {
+    let stats: Promise<RTCStatsReport | null> = Promise.resolve(null);
+    try {
+      if (typeof pc.getStats === 'function') stats = pc.getStats().catch(() => null);
+    } catch {
+      // closed already: diagnose from the candidates alone
+    }
+    const states = {
+      connection: pc.connectionState,
+      ice: pc.iceConnectionState,
+      gathering: pc.iceGatheringState,
+      signaling: pc.signalingState
+    };
+    void stats.then((report) => {
+      const reportItems = report as Iterable<unknown> | null;
+      const diagnosis = diagnoseIce({
+        localCandidates: peerEntry.localCandidates,
+        remoteCandidates: peerEntry.remoteCandidates,
+        pairs: summarizePairs(reportItems)
+      });
+      const log = formatIceReport(diagnosis, {
+        peerId: targetPeerId,
+        app: `web ${BUILD_LABEL}`,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+        iceServers: ICE_SERVERS.flatMap((s) => (Array.isArray(s.urls) ? s.urls : [s.urls])),
+        states,
+        pairLines: describePairs(reportItems),
+        localCandidates: peerEntry.localCandidates,
+        remoteCandidates: peerEntry.remoteCandidates
+      });
+      logLocalDebug('CONNECTION_DIAGNOSIS', `Peer ${targetPeerId}: ${diagnosis.cause}`);
+      console.warn(log);
+      addSystemMessage(`🔎 Why: ${diagnosis.summary} ${diagnosis.details.join(' ')}`);
+      // The banner shows the reason and offers the full log to copy (unless it connected meanwhile)
+      if (peerEntry.everConnected) return;
+      setNetworkHint?.({
+        ...blockedNetworkHint(peerEntry.localCandidateTypes ? [...peerEntry.localCandidateTypes] : []),
+        why: diagnosis.summary,
+        log
+      });
+    });
+  };
+
   const noteBlocked = () => {
     if (peerEntry.everConnected || peerEntry.blockedNoted) return;
     peerEntry.blockedNoted = true;
+    explainFailure();
     if (Date.now() - lastBlockedNotice < 60000) return;
     lastBlockedNotice = Date.now();
     const hint = blockedNetworkHint(

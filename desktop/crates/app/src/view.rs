@@ -117,6 +117,8 @@ pub(crate) struct RoomView {
     pub(crate) chat_unread_count: usize,
     pub(crate) chat_first_unread: Option<usize>,
     pub(crate) logs: Vec<LogLine>,
+    /// The full log of the last connection that failed (Logs tab: "Copy connection log").
+    pub(crate) connection_log: Option<String>,
     pub(crate) unread: usize,
     pub(crate) logs_unseen: usize,
     pub(crate) devices: Devices,
@@ -339,6 +341,7 @@ impl RoomView {
             chat_unread_count: 0,
             chat_first_unread: None,
             logs: Vec::new(),
+            connection_log: None,
             unread: 0,
             logs_unseen: 0,
             devices: Devices::default(),
@@ -587,6 +590,7 @@ impl RoomView {
             Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes),
             Update::Net(peers) => self.on_net(peers),
             Update::Log(text) => self.log(text),
+            Update::ConnectionLog(text) => self.connection_log = Some(text),
             Update::Notice(n) => {
                 if self.in_room().is_some() {
                     self.show_toast(n, cx);

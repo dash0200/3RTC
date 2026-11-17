@@ -30,7 +30,16 @@ export interface PeerEntryRecord {
   failedCount?: number;
   iceFailedAt?: number;
   localCandidateTypes?: Set<string>;
+  /** ICE candidate lines we sent and received, for the connection-failure diagnosis. */
+  localCandidates?: string[];
+  remoteCandidates?: string[];
   [key: string]: unknown;
+}
+
+/** Keeps a candidate line for the diagnosis (deduplicated, at most 40). */
+export function rememberCandidate(list: string[], line?: string | null): void {
+  if (!line || list.length >= 40 || list.includes(line)) return;
+  list.push(line);
 }
 
 /**

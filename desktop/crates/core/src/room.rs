@@ -338,6 +338,9 @@ pub enum Effect {
     IceRestart(PeerId),
     /// Close a peer connection.
     ClosePeer(PeerId),
+    /// A first connection to this peer never came up: work out why from its candidates and
+    /// stats and put the reason and the full log in the Logs tab (`ice_diagnosis`).
+    DiagnoseLink(PeerId),
     /// Send to one peer.
     SendToPeer {
         /// To whom.
@@ -640,6 +643,7 @@ impl Room {
                 Action::Blocked => {
                     self.log(BLOCKED_MESSAGE, fx);
                     fx.push(Effect::Ui(UiEvent::Notice(BLOCKED_TOAST.to_owned())));
+                    fx.push(Effect::DiagnoseLink(peer.clone()));
                 }
                 Action::System(text) => self.log(text, fx),
                 Action::Toast(text) => fx.push(Effect::Ui(UiEvent::Notice(text.to_owned()))),
