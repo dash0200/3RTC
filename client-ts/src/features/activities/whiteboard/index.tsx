@@ -108,16 +108,26 @@ type UndoEntry = { type: 'add' | 'erase'; strokes: Stroke[] };
 
 export interface WhiteboardProps {
   activityId: string;
+  /** Look only: no toolbar, no drawing (a game's guessers) */
+  readOnly?: boolean;
+  /** A game's board: no text tool (no writing the word), no light/dark, no saving; `canClear` decides clearing */
+  game?: boolean;
+  /** With `game`: this person may clear the board (the drawer) */
+  canClear?: boolean;
+  /** What an empty board says */
+  emptyText?: string;
 }
 
-export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element {
+export default function Whiteboard({ activityId, readOnly = false, game = false, canClear, emptyText }: WhiteboardProps): JSX.Element {
   const room = useRoom();
   const baseKey = `act:${activityId}`;
   const [index, dispatchIndex] = useSharedState<BoardIndex, IndexAction>(baseKey, { initial: INDEX_INITIAL, reducer: indexReducer });
   const myName = room.getSelf().username || 'Someone';
   const hostId = room.getHostPeerId();
   const hostHere = Boolean(hostId && room.peers.some((p) => (p.peerId || p.id) === hostId));
-  const canManage = canManageMeta({ by: room.getSelfId() || '', isHost: room.getSelf().isHost, hostId, present: hostHere && hostId ? [hostId] : [] });
+  const canManage = game
+    ? Boolean(canClear)
+    : canManageMeta({ by: room.getSelfId() || '', isHost: room.getSelf().isHost, hostId, present: hostHere && hostId ? [hostId] : [] });
 
   // your own undo / redo (cleared when the board is cleared)
   const undoRef = useRef<UndoEntry[]>([]);
@@ -538,9 +548,9 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
       {Array.from({ length: index.chunks }, (_, i) => (
         <ChunkSync key={`${index.epoch}:${i}`} storeKey={`${baseKey}:${index.epoch}:${i}`} index={i} onState={onChunk} />
       ))}
-      <div className="wb-toolbar" role="toolbar" aria-label="Drawing tools">
+      {!readOnly && <div className="wb-toolbar" role="toolbar" aria-label="Drawing tools">
         <div className="wb-group">
-          {(['pen', 'hl', 'eraser', 'line', 'arrow', 'rect', 'ell', 'text'] as const).map((t) => (
+          {(game ? (['pen', 'hl', 'eraser', 'line', 'arrow', 'rect', 'ell'] as const) : (['pen', 'hl', 'eraser', 'line', 'arrow', 'rect', 'ell', 'text'] as const)).map((t) => (
             <button key={t} type="button" className={`wb-btn${tool === t ? ' is-on' : ''}`} onClick={() => setTool(t)} title={TOOL_LABELS[t]} aria-label={TOOL_LABELS[t]} aria-pressed={tool === t}>
               <Icon name={t} />
             </button>
@@ -567,8 +577,8 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
         <div className="wb-group">
           <button type="button" className="wb-btn" onClick={undo} disabled={!undoRef.current.length} title="Undo (your own)" aria-label="Undo"><Icon name="undo" /></button>
           <button type="button" className="wb-btn" onClick={redo} disabled={!redoRef.current.length} title="Redo" aria-label="Redo"><Icon name="redo" /></button>
-          <button type="button" className="wb-btn" onClick={() => dispatchIndex({ kind: 'bg', bg: index.bg === 'light' ? 'dark' : 'light' })} title="Light or dark board" aria-label="Light or dark board"><Icon name="bg" /></button>
-          <button type="button" className="wb-btn" onClick={save} title="Save as a picture" aria-label="Save as a picture"><Icon name="save" /></button>
+          {!game && <button type="button" className="wb-btn" onClick={() => dispatchIndex({ kind: 'bg', bg: index.bg === 'light' ? 'dark' : 'light' })} title="Light or dark board" aria-label="Light or dark board"><Icon name="bg" /></button>}
+          {!game && <button type="button" className="wb-btn" onClick={save} title="Save as a picture" aria-label="Save as a picture"><Icon name="save" /></button>}
           {confirmClear ? (
             <>
               <button type="button" className="wb-text-btn is-danger" onClick={() => { dispatchIndex({ kind: 'clear', name: myName }); setConfirmClear(false); }}>Clear for everyone</button>
@@ -578,20 +588,20 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
             <button type="button" className="wb-btn" onClick={() => setConfirmClear(true)} disabled={!canManage || !total} title={canManage ? 'Clear the board' : 'The host can clear the board'} aria-label="Clear the board"><Icon name="clear" /></button>
           )}
         </div>
-      </div>
+      </div>}
 
       <div className="wb-stage" ref={wrapRef}>
         <div className="wb-board" style={{ width: fit.w, height: fit.h }}>
           <canvas ref={baseRef} className="wb-canvas" style={{ width: fit.w, height: fit.h }} aria-hidden="true" />
           <canvas
             ref={overRef}
-            className={`wb-canvas wb-over wb-tool-${tool}`}
+            className={`wb-canvas wb-over ${readOnly ? 'wb-readonly' : `wb-tool-${tool}`}`}
             style={{ width: fit.w, height: fit.h }}
-            onPointerDown={onDown}
-            onPointerMove={onMove}
-            onPointerUp={onUp}
-            onPointerCancel={onCancel}
-            onPointerLeave={onLeave}
+            onPointerDown={readOnly ? undefined : onDown}
+            onPointerMove={readOnly ? undefined : onMove}
+            onPointerUp={readOnly ? undefined : onUp}
+            onPointerCancel={readOnly ? undefined : onCancel}
+            onPointerLeave={readOnly ? undefined : onLeave}
             role="img"
             aria-label={`Whiteboard with ${total} drawing${total === 1 ? '' : 's'}`}
           />
@@ -620,13 +630,13 @@ export default function Whiteboard({ activityId }: WhiteboardProps): JSX.Element
               onBlur={commitText}
             />
           )}
-          {!total && !textDraft && !mineRef.current && !liveRef.current.size && <div className="wb-empty">Draw anything. Everyone in the room sees it live.</div>}
+          {!total && !textDraft && !mineRef.current && !liveRef.current.size && <div className="wb-empty">{emptyText ?? 'Draw anything. Everyone in the room sees it live.'}</div>}
         </div>
       </div>
-      <div className="wb-foot">
+      {!game && <div className="wb-foot">
         <span>{index.clearedBy && !total ? `Cleared by ${index.clearedBy}. ` : ''}{total} drawing{total === 1 ? '' : 's'}{isShape ? ' · hold Shift for a square or circle' : ''}</span>
         {full && <span className="wb-full">The board is full: save it and clear it to keep drawing.</span>}
-      </div>
+      </div>}
     </div>
   );
 }

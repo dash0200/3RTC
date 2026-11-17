@@ -13,9 +13,11 @@ rtc-protocol.workspace = true
 rtc-core.workspace = true
 rtc-signaling.workspace = true
 rtc-webrtc.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
 rand.workspace = true
+quinn.workspace = true
+rcgen.workspace = true
 sha2 = "0.10"
 serde_json.workspace = true
 futures-util.workspace = true

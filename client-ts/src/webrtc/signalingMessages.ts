@@ -7,6 +7,8 @@ import { extractAudioSdp, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp'
 import type { IncomingSignalingMessage, OutgoingSignalingMessage } from '../types';
 import type { RoomTokens } from '../hooks/useSignalingConnection';
 import { rememberCandidate, type PeerEntryRecord } from './peerEntry';
+import { hostChangeNotice } from './hostChange';
+import { isCameraTransceiver, limitCameraSender } from './cameraLine';
 
 export interface SignalingContext {
   setRoomId: (id: string | null) => void;
@@ -22,6 +24,8 @@ export interface SignalingContext {
   cleanupPeer: (peerId: string) => void;
   currentRoomRef: { current: string | null };
   currentScreenTrackRef?: { current: MediaStreamTrack | null };
+  /** Our camera, for the camera line (webrtc/cameraLine.ts) */
+  currentCameraTrackRef?: { current: MediaStreamTrack | null };
   localStreamRef: { current: MediaStream | null };
   isMicMutedRef: { current: boolean };
   logLocalDebug: (tag: string, detail: string) => void;
@@ -40,7 +44,8 @@ export interface SignalingContext {
    *  True if shown there (then no toast). */
   onRoomError?: (message: string, roomId: string | null) => boolean;
   /** The host handed the room to `hostPeerId` (`fromPeerId` did it) */
-  onHostChanged?: (hostPeerId: string, fromPeerId: string) => void;
+  /** The host changed: handed on by `fromPeerId`, or (null) the host left and the server picked the next */
+  onHostChanged?: (hostPeerId: string, fromPeerId: string | null) => void;
 }
 
 // Errors that mean "you didn't get into the room"
@@ -55,6 +60,7 @@ export async function processSignalingMessage(
     cleanupPeer,
     currentRoomRef,
     currentScreenTrackRef,
+    currentCameraTrackRef,
     getOrCreatePeerConnection,
     hostPeerIdRef,
     isHostRef,
@@ -224,7 +230,14 @@ export async function processSignalingMessage(
           for (const t of allTransceivers) {
             const isVideo =
               t.receiver?.track?.kind === 'video' || t.sender?.track?.kind === 'video';
-            if (isVideo) {
+            if (isVideo && isCameraTransceiver(pc, t)) {
+              // The second video line: the camera (only between apps that both have it)
+              t.direction = 'sendrecv';
+              if (t.sender) {
+                t.sender.replaceTrack(currentCameraTrackRef?.current ?? null).catch(() => {});
+                void limitCameraSender(t.sender);
+              }
+            } else if (isVideo) {
               peerEntry.videoTransceiver = t;
               t.direction = 'sendrecv';
               if (currentScreenTrackRef?.current && t.sender) {
@@ -321,7 +334,8 @@ export async function processSignalingMessage(
                 t.sender?.track?.kind === 'video' ||
                 t.receiver?.track?.kind === 'video'
               ) {
-                peerEntry.videoTransceiver = t;
+                // the first video line is the screen's (a second one is the camera's)
+                if (!isCameraTransceiver(pc, t)) peerEntry.videoTransceiver = t;
               } else if (
                 t.sender?.track?.kind === 'audio' ||
                 t.receiver?.track?.kind === 'audio'
@@ -450,7 +464,8 @@ export async function processSignalingMessage(
         isHostRef.current = false;
         if (roomTokensRef?.current) roomTokensRef.current = { ...roomTokensRef.current, host: null };
       }
-      if (msg.from) ctx.onHostChanged?.(msg.hostPeerId, msg.from);
+      const change = hostChangeNotice(msg);
+      if (change) ctx.onHostChanged?.(change.host, change.from);
       break;
     }
 

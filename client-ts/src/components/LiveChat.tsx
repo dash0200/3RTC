@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { splitTimestamps } from '../utils/chatTimestamps';
-import { splitLinks } from '../utils/chatLinks';
+import { RichText } from '../features/chat/RichText';
+import { LinkPreview } from '../features/chat/LinkPreview';
+import { firstLink } from '../features/chat/linkPreviewClient';
+import { mentionedPeerIds, mentionQueryAt, plainSnippet, type MentionTarget } from '../utils/chatFormat';
 import QuickPicksModal from './QuickPicksModal';
 import { getAvatarColor } from '../utils/sound';
 import { EMOJI_CATEGORIES } from '../utils/emoji';
@@ -21,7 +23,7 @@ import type { ActiveSoundboardSfx } from '../features/soundboard/useSoundboard';
 import type { ActivityInfo } from '../features/activities/activityState';
 import type { ActivityDefinition } from '../features/activities/registry';
 import type { ActivityStatus, ActivityViewKind } from '../features/activities/activityHost';
-import type { ChatMessage } from '../features/chat/useChat';
+import type { ChatMessage, ChatReplyRef } from '../features/chat/useChat';
 import type { MediaItem, ConnectedPeer, SelfInfo } from '../types';
 import type { QuickPickVideo } from '../utils/quickPicks';
 
@@ -44,37 +46,6 @@ function isEmojiOnly(text: string): boolean {
     return true;
   }
   return [...text.trim()].length <= 6;
-}
-
-// Web links open in a new tab (right-click to copy them); "Look at 12:34": video timestamps become
-// links that jump everyone there (while a video is loaded)
-function renderTimestamps(text: string, onSeekTo?: (sec: number) => void, keyBase: string | number = 't') {
-  if (!onSeekTo) return text;
-  const parts = splitTimestamps(text);
-  if (parts.length === 1 && parts[0].seconds === undefined) return text;
-  return parts.map((part, idx) => (part.seconds === undefined ? (
-    <React.Fragment key={`${keyBase}-${idx}`}>{part.text}</React.Fragment>
-  ) : (
-    <button
-      key={`${keyBase}-${idx}`}
-      type="button"
-      className="chat-timestamp"
-      onClick={() => onSeekTo(part.seconds!)}
-      title={`Jump everyone to ${part.text}`}
-    >
-      {part.text}
-    </button>
-  )));
-}
-
-function renderMessageText(text: string, onSeekTo?: (sec: number) => void) {
-  const pieces = splitLinks(text);
-  if (pieces.length === 1 && !pieces[0].href) return renderTimestamps(text, onSeekTo, 't');
-  return pieces.map((piece, idx) => (piece.href ? (
-    <a key={idx} className="chat-link" href={piece.href} target="_blank" rel="noopener noreferrer nofollow">{piece.text}</a>
-  ) : (
-    <React.Fragment key={idx}>{renderTimestamps(piece.text, onSeekTo, idx)}</React.Fragment>
-  )));
 }
 
 export interface LiveChatMessage {
@@ -102,7 +73,7 @@ export interface LiveChatProps {
   onSeekTo?: (seconds: number) => void;
   messages?: ChatMessage[];
   systemLogs?: SystemLogEntry[];
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string, extras?: { replyTo?: ChatReplyRef | null; mentions?: string[] }) => void;
   onSendImage?: (file: File, caption?: string) => void;
   onSendFile?: (file: File, caption?: string) => void;
   onPauseTransfer?: (transferId: string) => void;
@@ -329,6 +300,10 @@ export default function LiveChat({
   const [showReactions, setShowReactions] = useState(false);
   const [unreadLogsCount, setUnreadLogsCount] = useState(0);
   const [inputText, setInputText] = useState('');
+  // Rich chat: the message being replied to, and the @name being typed (its suggestions)
+  const [replyTarget, setReplyTarget] = useState<(ChatReplyRef & { mine?: boolean }) | null>(null);
+  const [mentionQuery, setMentionQuery] = useState<{ query: string; start: number } | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const [showScrollPill, setShowScrollPill] = useState(false);
   const [logsCopied, setLogsCopied] = useState(false);
 
@@ -512,6 +487,60 @@ export default function LiveChat({
     return (systemLogs || []).filter((log) => log.category !== 'debug').slice(-15);
   }, [systemLogs]);
   const prevMsgCountRef = useRef(messages.length);
+
+  // Who can be @mentioned: the people in the room, and us (to highlight our own name)
+  const peerTargets = useMemo<MentionTarget[]>(
+    () => connectedPeers.filter((p) => p.username).map((p) => ({ peerId: p.peerId, name: p.username })),
+    [connectedPeers]
+  );
+  const mentionTargets = useMemo<MentionTarget[]>(
+    () => (username ? [...peerTargets, { peerId: localUser?.peerId || 'self', name: username, self: true }] : peerTargets),
+    [peerTargets, username, localUser?.peerId]
+  );
+  const mentionSuggestions = useMemo(() => {
+    if (!mentionQuery) return [];
+    const q = mentionQuery.query.toLowerCase();
+    return peerTargets
+      .filter((p) => p.name.toLowerCase().startsWith(q) || p.name.toLowerCase().includes(` ${q}`))
+      .slice(0, 6);
+  }, [mentionQuery, peerTargets]);
+
+  const insertMention = (name: string) => {
+    if (!mentionQuery) return;
+    const before = inputText.slice(0, mentionQuery.start);
+    const after = inputText.slice(mentionQuery.start + 1 + mentionQuery.query.length);
+    const next = `${before}@${name} ${after.replace(/^ /, '')}`;
+    setInputText(next);
+    setMentionQuery(null);
+    const caret = before.length + name.length + 2;
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(caret, caret);
+      }
+    });
+  };
+
+  const startReply = (msg: ChatMessage) => {
+    setReplyTarget({
+      id: msg.id,
+      // the real name goes out ("You" is only how we show it)
+      sender: msg.isSelf ? username : msg.sender,
+      mine: msg.isSelf,
+      text: plainSnippet(msg.text || (msg.file ? `📎 ${msg.file.name}` : msg.image ? '🖼️ Picture' : ''))
+    });
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  const jumpToMessage = (id: string) => {
+    const el = chatContainerRef.current?.querySelector<HTMLElement>(`[data-msg-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('cm-flash');
+    void el.offsetWidth;
+    el.classList.add('cm-flash');
+  };
   const prevLogsCountRef = useRef(displayLogs.length);
 
   const handleCopyLogs = async () => {
@@ -628,7 +657,12 @@ export default function LiveChat({
     }
 
     if (clean) {
-      onSendMessage(clean);
+      onSendMessage(clean, {
+        replyTo: replyTarget ? { id: replyTarget.id, sender: replyTarget.sender, text: replyTarget.text } : null,
+        mentions: mentionedPeerIds(clean, peerTargets)
+      });
+      setReplyTarget(null);
+      setMentionQuery(null);
       setInputText('');
       setActiveTab('chat');
       setUnreadChatCount(0);
@@ -642,6 +676,27 @@ export default function LiveChat({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // @name suggestions: arrows move, Enter or Tab picks, Esc closes
+    if (mentionQuery && mentionSuggestions.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        setMentionIndex((i) => (i + step + mentionSuggestions.length) % mentionSuggestions.length);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertMention(mentionSuggestions[Math.min(mentionIndex, mentionSuggestions.length - 1)].name);
+        return;
+      }
+    }
+    if (e.key === 'Escape' && (mentionQuery || replyTarget)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (mentionQuery) setMentionQuery(null);
+      else setReplyTarget(null);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -650,6 +705,9 @@ export default function LiveChat({
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputText(e.target.value);
+    const query = mentionQueryAt(e.target.value, e.target.selectionStart ?? e.target.value.length);
+    setMentionQuery(query);
+    if (!query || query.query !== mentionQuery?.query) setMentionIndex(0);
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 80)}px`;
   };
@@ -884,11 +942,26 @@ export default function LiveChat({
                     const emojiOnly = emojiOnlyIds.has(msg.id);
 
                     return (
-                      <div key={msg.id} className={`cm-row ${startsGroup ? 'group-start' : ''} ${msg.isSelf ? 'is-self' : ''}`}>
+                      <div
+                        key={msg.id}
+                        data-msg-id={msg.id}
+                        className={`cm-row ${startsGroup ? 'group-start' : ''} ${msg.isSelf ? 'is-self' : ''} ${msg.mentionsMe ? 'mentions-me' : ''}`}
+                      >
                         {startsGroup
                           ? <div className="rd-av cm-av" style={{ ['--av']: msgAvatarBg } as React.CSSProperties} aria-hidden="true">{msgInitial}</div>
                           : <div className="cm-av-spacer" />}
                         <div className="cm-body">
+                          {!msg.imageTransfer && (
+                            <button
+                              type="button"
+                              className="cm-reply-btn"
+                              onClick={() => startReply(msg)}
+                              title="Reply"
+                              aria-label={`Reply to ${msg.isSelf ? 'your message' : msg.sender}`}
+                            >
+                              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z" /></svg>
+                            </button>
+                          )}
                           {startsGroup && (
                             <div className="cm-meta">
                               <span className="cm-name" style={{ color: msgNameColor }}>{msg.isSelf ? 'You' : msg.sender}</span>
@@ -1012,7 +1085,23 @@ export default function LiveChat({
                             </div>
                           )}
 
-                          {msg.text && <p className={`cm-text ${emojiOnly ? 'is-emoji' : ''}`}>{renderMessageText(msg.text, onSeekTo)}</p>}
+                          {msg.replyTo && (
+                            <button
+                              type="button"
+                              className="cm-reply-quote"
+                              onClick={() => jumpToMessage(msg.replyTo!.id)}
+                              title="Show the message this replies to"
+                            >
+                              <span className="cm-reply-quote-name">{msg.replyTo.sender || 'Message'}</span>
+                              <span className="cm-reply-quote-text">{msg.replyTo.text || '…'}</span>
+                            </button>
+                          )}
+                          {msg.text && (
+                            <p className={`cm-text ${emojiOnly ? 'is-emoji' : ''}`}>
+                              <RichText text={msg.text} targets={mentionTargets} onSeekTo={onSeekTo} />
+                            </p>
+                          )}
+                          {msg.text && !emojiOnly && firstLink(msg.text) && <LinkPreview url={firstLink(msg.text)!} />}
                         </div>
                       </div>
                     );
@@ -1148,6 +1237,49 @@ export default function LiveChat({
                   >
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" /></svg>
                   </button>
+                </div>
+              )}
+
+              {/* Replying to: the quoted message, until sent or dismissed */}
+              {replyTarget && (
+                <div className="chat-reply-bar">
+                  <div className="chat-reply-bar-body">
+                    <span className="chat-reply-bar-label">Replying to <strong>{replyTarget.mine ? 'yourself' : replyTarget.sender}</strong></span>
+                    <span className="chat-reply-bar-text">{replyTarget.text || '…'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="chat-reply-bar-close"
+                    onClick={() => setReplyTarget(null)}
+                    title="Cancel reply (Esc)"
+                    aria-label="Cancel reply"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* @name suggestions while typing a mention */}
+              {mentionQuery && mentionSuggestions.length > 0 && (
+                <div className="chat-mention-list" role="listbox" aria-label="Mention someone">
+                  {mentionSuggestions.map((p, idx) => (
+                    <button
+                      key={p.peerId}
+                      type="button"
+                      role="option"
+                      aria-selected={idx === mentionIndex}
+                      className={`chat-mention-option ${idx === mentionIndex ? 'active' : ''}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        insertMention(p.name);
+                      }}
+                    >
+                      <span className="rd-av chat-mention-av" style={{ ['--av']: getAvatarColor(p.name) } as React.CSSProperties} aria-hidden="true">
+                        {getInitials(p.name)}
+                      </span>
+                      {p.name}
+                    </button>
+                  ))}
                 </div>
               )}
 

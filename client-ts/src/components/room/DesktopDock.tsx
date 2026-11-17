@@ -42,6 +42,10 @@ export interface DesktopDockProps {
   screenSharer?: { peerId?: string | null; username?: string } | null;
   isScreenShareDismissed?: boolean;
   onToggleScreenShare?: () => void;
+  /** Webcam (features/camera) */
+  isCameraOn?: boolean;
+  isCameraStarting?: boolean;
+  onToggleCamera?: () => void;
   activityMenu?: ActivityMenuItem[];
   onStartActivity?: (id: string) => void;
   playbackLock?: boolean;
@@ -85,6 +89,9 @@ export default function DesktopDock({
   screenSharer = null,
   isScreenShareDismissed = false,
   onToggleScreenShare,
+  isCameraOn = false,
+  isCameraStarting = false,
+  onToggleCamera,
   activityMenu = [],
   onStartActivity,
   playbackLock = false,
@@ -213,6 +220,20 @@ export default function DesktopDock({
             </div>
           )}
         </div>
+
+        {typeof onToggleCamera === 'function' && (
+          <button
+            type="button"
+            className={`dock-btn ${isCameraOn ? 'is-active' : ''}`}
+            aria-pressed={isCameraOn}
+            aria-label={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
+            title={isCameraStarting ? 'Starting camera…' : isCameraOn ? 'Turn camera off' : 'Turn camera on'}
+            disabled={isCameraStarting}
+            onClick={onToggleCamera}
+          >
+            <Icon name={isCameraOn ? 'camera' : 'cameraOff'} />
+          </button>
+        )}
 
         <button
           type="button"

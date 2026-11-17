@@ -179,6 +179,21 @@ All identified vulnerabilities across **room authentication, authorization bound
 
 ---
 
+### M-06: Signaling Server Used as a Data Pump (Outbound Bandwidth Cost)
+
+- **CWE:** CWE-770: Allocation of Resources Without Limits or Throttling
+- **Affected Code:** [`server/signaling.js`](../server/signaling.js) (`ABUSE_LIMITS`)
+- **Status:** **RESOLVED** (17 Nov 2026)
+- **Resolution Summary:**
+  Messages were limited in count (60/s) and size (64 KB) but not in bytes, connections per address or connections in all, so one client could have the server relay ~3.8 MB/s to another, from as many connections as it liked. Outbound data is billed on the cloud VM. Added, each configurable by environment variable and far above real use (a 4-person room setup is ~150 KB, an offer 5–10 KB):
+  - a byte budget per connection (64 KB/s, 512 KB burst) and server-wide (2 MB/s, 8 MB burst);
+  - a 32 KB cap on a relayed offer, answer or candidate;
+  - at most 32 open connections per address and 2,000 in all (refused with HTTP 503 before the WebSocket opens);
+  - errors no longer echo a message type or peer id of any length.
+- **Verification:** `server/tests/abuseLimits.test.js`: a 4-person room setup with an ICE restart meets no limit; each limit stops flooding when set low.
+
+---
+
 ## 5. Low Severity Vulnerabilities & Defensive Hardening
 
 ### L-01: Absence of HTTP Security Headers & Clickjacking Risk

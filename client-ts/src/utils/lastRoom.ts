@@ -49,3 +49,10 @@ export function forgetLastRoom(): void {
     /* private mode */
   }
 }
+
+/** Two saved rooms are the same record (so state can keep the one it has). */
+export function sameLastRoom(a: LastRoomRecord | null, b: LastRoomRecord | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.roomId === b.roomId && a.wasHost === b.wasHost && a.at === b.at && a.hostToken === b.hostToken;
+}

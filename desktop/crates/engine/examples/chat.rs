@@ -166,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Update::Sound(s) => println!("SOUND {} {}", s.name, s.sound_id),
                     Update::ImageProgress { transfer_id, percent } => println!("IMAGE_PROGRESS {transfer_id} {percent}"),
+                    Update::FileSaved { transfer_id, path } => println!("FILE_SAVED {transfer_id} {}", path.display()),
                     Update::ImageReady { transfer_id, bytes } => {
                         println!("IMAGE_READY {transfer_id} {} {:016x}", bytes.len(), fnv(&bytes));
                     }
@@ -303,6 +304,9 @@ async fn main() -> anyhow::Result<()> {
                                     .unwrap_or_default(),
                                 mime: rtc_protocol::image::mime_for_name(path).unwrap_or("image/png").to_owned(),
                                 bytes: bytes.into(),
+                                path: Some(std::path::PathBuf::from(path)),
+                                disk_size: None,
+                                relative_path: None,
                                 caption: caption.to_owned(),
                             }),
                             Err(e) => println!("NOTICE can't read {path}: {e}"),
@@ -508,7 +512,7 @@ async fn main() -> anyhow::Result<()> {
                         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         break;
                     }
-                    Some(l) => engine.command(Command::SendChat { id: Handle::new_message_id(), text: l }),
+                    Some(l) => engine.command(Command::SendChat { id: Handle::new_message_id(), text: l, reply_to: None }),
                     None => {}
                 }
             }

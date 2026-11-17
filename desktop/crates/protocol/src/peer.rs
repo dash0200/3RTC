@@ -13,6 +13,9 @@ use crate::ids::{ClientId, PeerId};
 /// The kind of app on the other end, sent in `peer-identity` (older apps leave it out: web).
 pub const CLIENT_DESKTOP: &str = "desktop";
 
+/// The QUIC file transfer version this app speaks, sent in `peer-identity` (ADR 0009).
+pub const QUIC_VERSION: u32 = 1;
+
 /// One peer message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
@@ -50,6 +53,9 @@ pub enum PeerMessage {
         /// Host only: active room capacity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_users: Option<u32>,
+        /// Desktop app: the QUIC file transfer version it speaks (ADR 0009); absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quic: Option<u32>,
     },
     /// My mic was muted or unmuted.
     #[serde(rename_all = "camelCase")]
@@ -98,6 +104,20 @@ pub enum PeerMessage {
         is_host: bool,
         /// The text.
         text: String,
+        /// The message it replies to (dropped, not refused, when malformed).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "lenient_reply"
+        )]
+        reply_to: Option<ReplyRef>,
+        /// Peer ids mentioned with @Name (only the strings are kept).
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            deserialize_with = "lenient_strings"
+        )]
+        mentions: Vec<String>,
     },
     /// A floating emoji reaction (`features/reactions/useReactions.ts`).
     Reaction {
@@ -414,6 +434,51 @@ pub enum PeerMessage {
     WbLive(Box<BoardLive>),
     /// Whiteboard: where someone's pointer is (`wb-cursor`), see [`BoardCursor`].
     WbCursor(Box<BoardCursor>),
+    /// QUIC file transfer, desktop to desktop (ADR 0009): the sender offers a file and how to
+    /// reach it. Sent to one peer.
+    #[serde(rename_all = "camelCase")]
+    QuicOffer {
+        /// This transfer.
+        transfer_id: String,
+        /// The file's name (cleaned before use).
+        file_name: String,
+        /// Its size in bytes.
+        file_size: u64,
+        /// Its SHA-256, lower-case hex.
+        sha256: String,
+        /// Where the sender listens: `ip:port`, LAN and public.
+        addrs: Vec<String>,
+        /// SHA-256 of the sender's certificate (lower-case hex): the only one accepted.
+        cert_sha256: String,
+        /// A one-time secret (hex) the receiver presents first on the QUIC stream.
+        token: String,
+        /// In a folder being sent: the file's path inside it (`Photos/2026/a.jpg`), cleaned by
+        /// the receiver before use.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relative_path: Option<String>,
+    },
+    /// QUIC file transfer: the receiver's addresses (for hole punching) and where to start (0, or
+    /// how much it already has, to resume).
+    #[serde(rename_all = "camelCase")]
+    QuicAnswer {
+        /// The transfer answered.
+        transfer_id: String,
+        /// Where the receiver's packets come from: `ip:port`.
+        addrs: Vec<String>,
+        /// Bytes already received (resume), else 0.
+        #[serde(default)]
+        offset: u64,
+    },
+    /// QUIC file transfer didn't connect, or was turned down: the file goes over the data
+    /// channel instead (either side may send it).
+    #[serde(rename_all = "camelCase")]
+    QuicFallback {
+        /// The transfer.
+        transfer_id: String,
+        /// Why, for the log.
+        #[serde(default)]
+        reason: String,
+    },
     /// A message type this app doesn't handle: ignored (protocol rule 1).
     #[serde(other, skip_serializing)]
     Unknown,
@@ -490,6 +555,43 @@ pub struct BoardCursor {
     /// The pointer left the board.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gone: Option<Value>,
+}
+
+/// The message a chat reply quotes: its id, and its sender's name and a short plain snippet of it
+/// as the replier saw them (`replyTo` in `docs/PROTOCOL.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ReplyRef {
+    /// The quoted message's id.
+    pub id: String,
+    /// Its sender's name.
+    #[serde(default)]
+    pub sender: String,
+    /// A short plain snippet of it.
+    #[serde(default)]
+    pub text: String,
+}
+
+/// `replyTo`, or nothing when it isn't a well-formed object (the message itself still counts).
+fn lenient_reply<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<ReplyRef>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(serde_json::from_value::<ReplyRef>(v)
+        .ok()
+        .filter(|r| !r.id.is_empty()))
+}
+
+/// A list of strings, keeping only the strings (anything else: an empty list).
+fn lenient_strings<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(match v {
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(|i| match i {
+                Value::String(s) => Some(s),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 
 /// A peer message with the fields every message carries: who sent it and when.
@@ -592,6 +694,7 @@ mod tests {
             client: Some(CLIENT_DESKTOP.into()),
             topology: None,
             max_users: None,
+            quic: None,
         }
     }
 
@@ -637,7 +740,9 @@ mod tests {
             PeerMessage::Chat {
                 id: "m1".into(),
                 is_host: false,
-                text: "hi".into()
+                text: "hi".into(),
+                reply_to: None,
+                mentions: Vec::new()
             }
         );
         assert_eq!(c.sender.as_deref(), Some("Riya"));
@@ -652,6 +757,8 @@ mod tests {
                 id: "m2".into(),
                 is_host: true,
                 text: "hello".into(),
+                reply_to: None,
+                mentions: Vec::new(),
             },
         };
         let v: Value = serde_json::from_str(&e.to_json().unwrap()).unwrap();
@@ -673,6 +780,101 @@ mod tests {
                 is_muted: false
             }
         );
+    }
+
+    #[test]
+    fn chat_reply_and_mentions_are_read_leniently() {
+        let e = Envelope::from_json(
+            r#"{"type":"chat","id":"c1","text":"hi @Riya","replyTo":{"id":"m0","sender":"Riya","text":"yo"},
+                "mentions":["p-riya", 7, null, "p-arjun"],"sender":"Darshan"}"#,
+        )
+        .unwrap();
+        let PeerMessage::Chat {
+            reply_to, mentions, ..
+        } = e.message
+        else {
+            panic!("not chat")
+        };
+        assert_eq!(reply_to.map(|r| r.id), Some("m0".to_owned()));
+        assert_eq!(mentions, vec!["p-riya".to_owned(), "p-arjun".to_owned()]);
+        // malformed: the message still arrives, without them
+        for bad in [
+            r#""replyTo":"m0","mentions":"all""#,
+            r#""replyTo":{"id":""},"mentions":{}"#,
+            r#""replyTo":null"#,
+        ] {
+            let e =
+                Envelope::from_json(&format!(r#"{{"type":"chat","id":"c2","text":"ok",{bad}}}"#)).unwrap();
+            let PeerMessage::Chat {
+                text,
+                reply_to,
+                mentions,
+                ..
+            } = e.message
+            else {
+                panic!("not chat: {bad}")
+            };
+            assert_eq!(text, "ok");
+            assert!(reply_to.is_none() && mentions.is_empty(), "{bad}");
+        }
+        // none of it is written when unused (older apps see the same message as before)
+        let plain = Envelope {
+            sender: None,
+            timestamp: None,
+            message: PeerMessage::Chat {
+                id: "c3".into(),
+                is_host: false,
+                text: "t".into(),
+                reply_to: None,
+                mentions: Vec::new(),
+            },
+        };
+        let json = plain.to_json().unwrap();
+        assert!(!json.contains("replyTo") && !json.contains("mentions"), "{json}");
+    }
+
+    #[test]
+    fn quic_messages_use_the_documented_names() {
+        let offer = Envelope {
+            sender: None,
+            timestamp: None,
+            message: PeerMessage::QuicOffer {
+                transfer_id: "t1".into(),
+                file_name: "film.mkv".into(),
+                file_size: 9_000_000,
+                sha256: "ab".repeat(32),
+                addrs: vec!["192.168.1.5:5000".into()],
+                cert_sha256: "cd".repeat(32),
+                token: "ef".repeat(32),
+                relative_path: Some("Photos/a.jpg".into()),
+            },
+        };
+        let v: Value = serde_json::from_str(&offer.to_json().unwrap()).unwrap();
+        assert_eq!(v["type"], "quic-offer");
+        for key in [
+            "transferId",
+            "fileName",
+            "fileSize",
+            "sha256",
+            "addrs",
+            "certSha256",
+            "token",
+            "relativePath",
+        ] {
+            assert!(v.get(key).is_some(), "{key}");
+        }
+        let answer =
+            Envelope::from_json(r#"{"type":"quic-answer","transferId":"t1","addrs":["1.2.3.4:5"]}"#).unwrap();
+        assert_eq!(
+            answer.message,
+            PeerMessage::QuicAnswer {
+                transfer_id: "t1".into(),
+                addrs: vec!["1.2.3.4:5".into()],
+                offset: 0
+            }
+        );
+        let fallback = Envelope::from_json(r#"{"type":"quic-fallback","transferId":"t1"}"#).unwrap();
+        assert!(matches!(fallback.message, PeerMessage::QuicFallback { reason, .. } if reason.is_empty()));
     }
 
     #[test]
@@ -872,7 +1074,7 @@ mod tests {
         #[test]
         fn chat_round_trips(text in ".*", sender in ".{1,40}", id in "[a-z0-9]{1,16}") {
             let e = Envelope { sender: Some(sender), timestamp: Some(5.0),
-                               message: PeerMessage::Chat { id, is_host: false, text } };
+                               message: PeerMessage::Chat { id, is_host: false, text, reply_to: None, mentions: Vec::new() } };
             let back = Envelope::from_json(&e.to_json().unwrap()).unwrap();
             proptest::prop_assert_eq!(back, e);
         }

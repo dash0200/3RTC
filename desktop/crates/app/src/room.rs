@@ -2436,6 +2436,7 @@ fn chat_tab(
 ) -> impl IntoElement {
     use chrono::TimeZone as _;
     let focused = view.message.read(cx).focus_handle(cx).is_focused(window);
+    let targets = crate::chat::mention_targets(room);
     let mut rows = Vec::new();
     let mut prev: Option<(&PeerId, f64)> = None;
     let mut prev_date: Option<chrono::NaiveDate> = None;
@@ -2573,9 +2574,23 @@ fn chat_tab(
                             )
                         })
                         .children(crate::chat::picture_view(view, line, mine, cx))
+                        .children(line.reply.as_ref().map(crate::chat::quote_view))
                         .when(!line.text.is_empty(), |el| {
-                            let text = line.text.clone();
+                            let text = crate::chat::rich_text(
+                                SharedString::from(format!("msg-text-{i}")),
+                                &line.text,
+                                &targets,
+                            );
                             let copy_text = line.text.clone();
+                            let quote = rtc_core::Quote {
+                                id: line.id.clone(),
+                                name: line.name.clone(),
+                                text: rtc_core::chat_format::plain_snippet(
+                                    &line.text,
+                                    rtc_core::chat_format::REPLY_SNIPPET_CHARS,
+                                ),
+                                mine,
+                            };
                             el.child(
                                 div()
                                     .id(SharedString::from(format!("bubble-{i}")))
@@ -2591,7 +2606,9 @@ fn chat_tab(
                                         tokens::raised()
                                     })
                                     .border_1()
-                                    .border_color(if mine {
+                                    .border_color(if line.mentions_me {
+                                        tokens::focus()
+                                    } else if mine {
                                         tokens::focus().opacity(0.3)
                                     } else {
                                         tokens::line()
@@ -2623,12 +2640,38 @@ fn chat_tab(
                                             .items_center()
                                             .justify_center()
                                             .opacity(0.0)
-                                            .group_hover(bubble_group, |s| s.opacity(1.0))
+                                            .group_hover(bubble_group.clone(), |s| s.opacity(1.0))
                                             .on_click(cx.listener(move |v, _, _, cx| {
                                                 v.copy(copy_text.clone(), "chat-msg", cx);
                                                 v.show_toast("Message copied", cx);
                                             }))
                                             .child(icon(Icon::Copy, px(12.), tokens::text_2())),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!("reply-msg-{i}")))
+                                            .absolute()
+                                            .top(px(4.))
+                                            .right(px(28.))
+                                            .size(px(20.))
+                                            .rounded(px(4.))
+                                            .bg(tokens::surface().opacity(0.9))
+                                            .hover(|s| s.bg(tokens::raised()))
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_size(px(12.))
+                                            .text_color(tokens::text_2())
+                                            .opacity(0.0)
+                                            .group_hover(bubble_group, |s| s.opacity(1.0))
+                                            .on_click(cx.listener(move |v, _, window, cx| {
+                                                v.reply_to = Some(quote.clone());
+                                                let input = v.message.read(cx).focus_handle(cx);
+                                                input.focus(window, cx);
+                                                cx.notify();
+                                            }))
+                                            .child("↩"),
                                     ),
                             )
                         }),
@@ -2754,6 +2797,7 @@ fn chat_tab(
                 .border_t_1()
                 .border_color(tokens::raised())
                 .children(crate::chat::pending_card(view, cx))
+                .children(crate::chat::reply_bar(view, cx))
                 .when(view.emoji_open, |el| {
                     el.child(crate::chat::emoji_picker(view, cx))
                 })
@@ -2819,6 +2863,20 @@ fn chat_tab(
                                 .hover(|s| s.bg(tokens::raised()))
                                 .on_click(cx.listener(|v, _, _, cx| v.attach_clicked(cx)))
                                 .child(icon(Icon::Image, px(18.), tokens::text_2())),
+                        )
+                        .child(
+                            div()
+                                .id("attach-folder")
+                                .size(px(36.))
+                                .flex_none()
+                                .rounded(px(10.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(tokens::raised()))
+                                .on_click(cx.listener(|v, _, _, cx| v.attach_folder_clicked(cx)))
+                                .child(icon(Icon::Folder, px(18.), tokens::text_2())),
                         )
                         .child(
                             div()
@@ -3108,7 +3166,11 @@ fn logs_tab(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement
                 .text_size(px(12.))
                 .text_color(tokens::text_2())
                 .child(div().size(px(6.)).rounded_full().bg(tokens::focus()))
-                .child(div().flex_1().child(format!("{} events recorded", view.logs.len())))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(format!("{} events recorded", view.logs.len())),
+                )
                 .when_some(connection_log, |el, log| {
                     el.child(
                         Button::new(

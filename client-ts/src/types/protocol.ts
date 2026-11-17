@@ -137,6 +137,8 @@ export interface HostUpdateMessage extends BaseSignalingMessage {
   hostPeerId: string;
   /** Set when the host handed the room on: who did it */
   from?: string;
+  /** 'host-left': the host left and didn't come back in time, so the server picked the next host */
+  reason?: string;
 }
 
 /** To the new host after a transfer: its host token */
@@ -311,6 +313,45 @@ export interface ChatMessage extends BasePeerMessage {
   sender: string;
   isHost?: boolean;
   text: string;
+  /** The message it answers (features/chat/chatFields.ts) */
+  replyTo?: { id: string; sender: string; text: string };
+  /** Peer ids named with @Name */
+  mentions?: string[];
+}
+
+export interface CameraStatusMessage extends BasePeerMessage {
+  type: 'camera-status';
+  on: boolean;
+}
+
+/**
+ * QUIC file transfer, desktop app to desktop app only (desktop/docs/adr/0009). The web app never
+ * sends or reads these; they're here so both apps' message lists stay the same.
+ */
+export interface QuicOfferMessage extends BasePeerMessage {
+  type: 'quic-offer';
+  transferId: string;
+  fileName: string;
+  fileSize: number;
+  sha256: string;
+  addrs: string[];
+  certSha256: string;
+  token: string;
+  /** In a folder being sent: the file's path inside it */
+  relativePath?: string;
+}
+
+export interface QuicAnswerMessage extends BasePeerMessage {
+  type: 'quic-answer';
+  transferId: string;
+  addrs: string[];
+  offset?: number;
+}
+
+export interface QuicFallbackMessage extends BasePeerMessage {
+  type: 'quic-fallback';
+  transferId: string;
+  reason?: string;
 }
 
 export interface P2PImageStartMessage extends BasePeerMessage {
@@ -674,4 +715,8 @@ export type PeerMessage =
   | RoomStateMessage
   | RoomStateActionMessage
   | RoomStateRequestMessage
-  | RoomStateGoneMessage;
+  | RoomStateGoneMessage
+  | CameraStatusMessage
+  | QuicOfferMessage
+  | QuicAnswerMessage
+  | QuicFallbackMessage;

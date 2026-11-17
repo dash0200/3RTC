@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { extractYouTubeId } from '../../src/utils/youtubeId.ts';
 import { splitTimestamps } from '../../src/utils/chatTimestamps.ts';
 import { splitLinks } from '../../src/utils/chatLinks.ts';
-import { saveLastRoom, readLastRoom, forgetLastRoom, LAST_ROOM_FRESH_MS } from '../../src/utils/lastRoom.ts';
+import { saveLastRoom, readLastRoom, forgetLastRoom, sameLastRoom, LAST_ROOM_FRESH_MS } from '../../src/utils/lastRoom.ts';
 import { isSingleEmoji, splitEmojis } from '../../src/utils/emoji.ts';
 import { generateQrMatrix, getServerTag, getMobileJoinUrl } from '../../src/utils/qrCode.ts';
 import { parseSrt, parseVtt, timeStringToSeconds, secondsToVttTimestamp, getActiveCues } from '../../src/utils/subtitleParser.ts';
@@ -101,6 +101,11 @@ describe('TypeScript lastRoom', () => {
       const staleRec = readLastRoom(now + LAST_ROOM_FRESH_MS + 1000);
       assert.equal(staleRec, null);
 
+      // Each read is a new object, but the same record: state keeps what it has (no re-render loop)
+      const again = readLastRoom(now);
+      assert.notEqual(again, rec);
+      assert.equal(sameLastRoom(rec, again), true);
+
       forgetLastRoom();
       assert.equal(readLastRoom(now), null);
     } finally {
@@ -109,6 +114,19 @@ describe('TypeScript lastRoom', () => {
         configurable: true,
         writable: true
       });
+    }
+  });
+});
+
+describe('sameLastRoom', () => {
+  it('compares saved rooms by their fields', () => {
+    const a = { roomId: '12345', wasHost: true, at: 1, hostToken: 't' };
+    assert.equal(sameLastRoom(a, { ...a }), true);
+    assert.equal(sameLastRoom(null, null), true);
+    assert.equal(sameLastRoom(a, null), false);
+    assert.equal(sameLastRoom(null, a), false);
+    for (const change of [{ roomId: '54321' }, { wasHost: false }, { at: 2 }, { hostToken: 'u' }, { hostToken: undefined }]) {
+      assert.equal(sameLastRoom(a, { ...a, ...change }), false, JSON.stringify(change));
     }
   });
 });

@@ -36,7 +36,8 @@ pub struct Config {
 }
 
 impl Config {
-    /// Defaults matching the web app: ping every 25 s, dead after 60 s of silence.
+    /// Defaults matching the web app: ping every 25 s, dead after 35 s of silence (a ping not
+    /// answered within 10 s: after a network change the old socket can look open for minutes).
     #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         Self::with_fallbacks(vec![url.into()])
@@ -48,12 +49,15 @@ impl Config {
         Self {
             urls,
             ping_every: Duration::from_secs(25),
-            silence_limit: Duration::from_secs(60),
+            silence_limit: Duration::from_secs(35),
             connect_timeout: Duration::from_secs(10),
             backoff: Backoff::default(),
         }
     }
 }
+
+/// How often the session checks for silence.
+const SILENCE_CHECK_EVERY: Duration = Duration::from_secs(5);
 
 /// What the client reports.
 #[derive(Debug, Clone, PartialEq)]
@@ -272,6 +276,9 @@ where
     let (mut write, mut read) = socket.split();
     let mut ping = interval(config.ping_every);
     ping.tick().await;
+    // Silence is checked often, so a dead socket is noticed soon after the limit (not at the next ping)
+    let mut check = interval(SILENCE_CHECK_EVERY.min(config.silence_limit));
+    check.tick().await;
     let mut heard = Instant::now();
     loop {
         tokio::select! {
@@ -302,6 +309,12 @@ where
                     },
                     Some(Ok(Message::Close(_)) | Err(_)) | None => return End::Lost,
                     Some(Ok(_)) => {}
+                }
+            }
+            _ = check.tick() => {
+                if heard.elapsed() > config.silence_limit {
+                    tracing::info!("signaling silent for {:?}: reconnecting", heard.elapsed());
+                    return End::Lost;
                 }
             }
             _ = ping.tick() => {

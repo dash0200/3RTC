@@ -60,6 +60,7 @@ fn identity_of(peer: &str, name: &str, is_reply: bool) -> Envelope {
             client: None,
             topology: None,
             max_users: None,
+            quic: None,
         },
     }
 }
@@ -186,6 +187,7 @@ fn chat_goes_out_and_comes_in_once() {
         Input::Command(Command::SendChat {
             id: "m1".into(),
             text: "  hi all ".into(),
+            reply_to: None,
         }),
         9.0,
     );
@@ -194,6 +196,7 @@ fn chat_goes_out_and_comes_in_once() {
         Input::Command(Command::SendChat {
             id: "m2".into(),
             text: "   ".into(),
+            reply_to: None,
         }),
         9.0,
     );
@@ -206,6 +209,8 @@ fn chat_goes_out_and_comes_in_once() {
             id: "r1".into(),
             is_host: true,
             text: "hey".into(),
+            reply_to: None,
+            mentions: Vec::new(),
         },
     };
     let fx = r.update(
@@ -333,6 +338,7 @@ fn transfer_host_only_when_hosting_and_to_a_member() {
         Input::Server(ServerMessage::Host {
             host_peer_id: pid("riya"),
             from: Some(pid("me")),
+            reason: None,
         }),
         0.0,
     );
@@ -504,7 +510,9 @@ fn a_first_connection_that_never_comes_up_is_diagnosed_once() {
         0.0,
     );
     r.update(
-        Input::Server(ServerMessage::PeerJoined { peer_id: pid("aristo") }),
+        Input::Server(ServerMessage::PeerJoined {
+            peer_id: pid("aristo"),
+        }),
         0.0,
     );
     let mut asked = 0;
@@ -512,7 +520,10 @@ fn a_first_connection_that_never_comes_up_is_diagnosed_once() {
     while t < 120_000.0 {
         t += 500.0;
         let fx = r.update(Input::Tick, t);
-        asked += fx.iter().filter(|e| **e == Effect::DiagnoseLink(pid("aristo"))).count();
+        asked += fx
+            .iter()
+            .filter(|e| **e == Effect::DiagnoseLink(pid("aristo")))
+            .count();
     }
     assert_eq!(asked, 1, "the blocked notice asks for one diagnosis");
 }
@@ -616,10 +627,52 @@ fn host_handover_is_announced_as_the_web_app_does() {
         Input::Server(ServerMessage::Host {
             host_peer_id: pid("riya"),
             from: Some(pid("me")),
+            reason: None,
         }),
         0.0,
     );
     assert!(fx.contains(&Effect::Ui(UiEvent::Notice("👑 Riya is now the host".into()))));
+}
+
+#[test]
+fn a_host_who_left_is_replaced_as_the_web_app_says() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    connected_to(&mut r, "arjun");
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: identity_of("riya", "Riya", false),
+        },
+        0.0,
+    );
+    let host_left = |who: &str| {
+        Input::Server(ServerMessage::Host {
+            host_peer_id: pid(who),
+            from: None,
+            reason: Some("host-left".into()),
+        })
+    };
+    let fx = r.update(host_left("riya"), 0.0);
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice(
+        "👑 The host left. Riya is now the host".into()
+    ))));
+    assert!(!r.is_host());
+    let fx = r.update(host_left("me"), 0.0);
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice(
+        "👑 The host left. You're the host now".into()
+    ))));
+    assert!(r.is_host());
+    // A plain update of who the host is says nothing
+    let fx = r.update(
+        Input::Server(ServerMessage::Host {
+            host_peer_id: pid("arjun"),
+            from: None,
+            reason: None,
+        }),
+        0.0,
+    );
+    assert!(!fx.iter().any(|e| matches!(e, Effect::Ui(UiEvent::Notice(_)))));
 }
 
 #[test]
@@ -841,6 +894,8 @@ fn reactions_go_out_and_come_in_with_limits() {
                     id: format!("c{at}"),
                     is_host: false,
                     text: text.into(),
+                    reply_to: None,
+                    mentions: Vec::new(),
                 },
             ),
             at,
@@ -1125,6 +1180,8 @@ fn host_hub_relays_broadcast_messages() {
             id: "msg-1".into(),
             is_host: false,
             text: "Hello from Riya".into(),
+            reply_to: None,
+            mentions: Vec::new(),
         },
     };
 
@@ -1167,4 +1224,160 @@ fn host_hub_relays_broadcast_messages() {
     assert_eq!(relays.len(), 1);
     assert_eq!(relays[0].0, pid("alex"));
     assert_eq!(relays[0].1.message, chat.message);
+}
+
+#[test]
+fn rich_chat_replies_and_mentions_as_the_web_app_sends_them() {
+    use rtc_protocol::peer::ReplyRef;
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: identity_of("riya", "Riya", false),
+        },
+        0.0,
+    );
+    // Riya writes; we reply to her and mention her
+    let said = |id: &str, text: &str, reply_to: Option<ReplyRef>, mentions: Vec<String>| Input::Peer {
+        from: pid("riya"),
+        envelope: Envelope {
+            sender: Some("Riya".into()),
+            timestamp: Some(5.0),
+            message: PeerMessage::Chat {
+                id: id.into(),
+                is_host: false,
+                text: text.into(),
+                reply_to,
+                mentions,
+            },
+        },
+    };
+    r.update(said("r1", "**movie** at 9?", None, vec![]), 5.0);
+    let fx = r.update(
+        Input::Command(Command::SendChat {
+            id: "m1".into(),
+            text: "yes @Riya!".into(),
+            reply_to: Some("r1".into()),
+        }),
+        6.0,
+    );
+    let sent = fx.iter().find_map(|e| match e {
+        Effect::Broadcast(Envelope {
+            message: PeerMessage::Chat {
+                reply_to, mentions, ..
+            },
+            ..
+        }) => Some((reply_to.clone(), mentions.clone())),
+        _ => None,
+    });
+    let (reply_to, mentions) = sent.expect("the chat was sent");
+    assert_eq!(
+        reply_to,
+        Some(ReplyRef {
+            id: "r1".into(),
+            sender: "Riya".into(),
+            text: "movie at 9?".into()
+        })
+    );
+    assert_eq!(mentions, vec!["riya".to_owned()]);
+    let mine = r.chat().last().unwrap();
+    assert_eq!(
+        mine.reply.as_ref().map(|q| (q.name.as_str(), q.mine)),
+        Some(("Riya", false))
+    );
+
+    // She replies to us and mentions us: quoted from our own copy, and we're told
+    let fx = r.update(
+        said(
+            "r2",
+            "great",
+            Some(ReplyRef {
+                id: "m1".into(),
+                sender: "Faked Name".into(),
+                text: "faked".into(),
+            }),
+            vec!["me".into()],
+        ),
+        7.0,
+    );
+    let line = r.chat().last().unwrap();
+    assert!(line.mentions_me);
+    let q = line.reply.as_ref().unwrap();
+    assert!(q.mine, "it quotes our own message");
+    assert_eq!(q.text, "yes @Riya!");
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::Ui(UiEvent::Notice(n)) if n == "💬 Riya mentioned you: great"))
+    );
+
+    // A reply to a message we don't have keeps what she sent, cut to size
+    r.update(
+        said(
+            "r3",
+            "and this",
+            Some(ReplyRef {
+                id: "gone".into(),
+                sender: "x".repeat(100),
+                text: "y".repeat(500),
+            }),
+            vec![],
+        ),
+        8.0,
+    );
+    let q = r.chat().last().unwrap().reply.clone().unwrap();
+    assert_eq!(q.name.chars().count(), 40);
+    assert!(q.text.chars().count() <= 140);
+    assert!(!r.chat().last().unwrap().mentions_me);
+}
+
+#[test]
+fn quic_is_only_for_desktop_apps_that_say_so() {
+    let mut r = hosting();
+    for p in ["web", "old-desktop", "new-desktop", "liar"] {
+        connected_to(&mut r, p);
+    }
+    let say = |peer: &str, client: Option<&str>, quic: Option<u32>| {
+        let mut e = identity_of(peer, peer, true);
+        if let PeerMessage::PeerIdentity {
+            client: c, quic: q, ..
+        } = &mut e.message
+        {
+            *c = client.map(str::to_owned);
+            *q = quic;
+        }
+        Input::Peer {
+            from: pid(peer),
+            envelope: e,
+        }
+    };
+    r.update(say("web", None, None), 0.0);
+    r.update(say("old-desktop", Some("desktop"), None), 0.0);
+    r.update(say("new-desktop", Some("desktop"), Some(1)), 0.0);
+    r.update(say("liar", None, Some(1)), 0.0);
+    let quic = |p: &str| r.members()[&pid(p)].quic;
+    assert!(!quic("web"));
+    assert!(!quic("old-desktop"));
+    assert!(quic("new-desktop"));
+    assert!(
+        !quic("liar"),
+        "a web app saying quic doesn't make it a desktop app"
+    );
+}
+
+#[test]
+fn our_identity_says_we_do_quic() {
+    let mut r = hosting();
+    r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid("riya") }),
+        0.0,
+    );
+    let fx = r.update(Input::ChannelOpen(pid("riya")), 0.0);
+    let Some(Effect::SendToPeer { envelope, .. }) = fx.first() else {
+        panic!("no identity sent: {fx:?}")
+    };
+    assert!(matches!(
+        &envelope.message,
+        PeerMessage::PeerIdentity { quic: Some(1), .. }
+    ));
 }

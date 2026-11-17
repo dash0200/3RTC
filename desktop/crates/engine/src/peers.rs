@@ -405,9 +405,18 @@ impl Peers {
         let remote = link.remote_candidates.clone();
         let pc = link.pc.clone();
         let states = vec![
-            ("connection".to_owned(), format!("{:?}", pc.connection_state()).to_lowercase()),
-            ("ice".to_owned(), format!("{:?}", pc.ice_connection_state()).to_lowercase()),
-            ("gathering".to_owned(), format!("{:?}", pc.ice_gathering_state()).to_lowercase()),
+            (
+                "connection".to_owned(),
+                format!("{:?}", pc.connection_state()).to_lowercase(),
+            ),
+            (
+                "ice".to_owned(),
+                format!("{:?}", pc.ice_connection_state()).to_lowercase(),
+            ),
+            (
+                "gathering".to_owned(),
+                format!("{:?}", pc.ice_gathering_state()).to_lowercase(),
+            ),
         ];
         let report = pc.get_stats().await.unwrap_or_default();
         let paths = paths_tried(&report);

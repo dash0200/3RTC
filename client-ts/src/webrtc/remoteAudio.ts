@@ -1,4 +1,5 @@
 import { routeMediaElement } from '../utils/audioDevices';
+import { isCameraTransceiver } from './cameraLine';
 
 export interface PeerAudioEntry {
   audioElement?: HTMLAudioElement | null;
@@ -21,6 +22,8 @@ export interface AttachRemoteAudioContext {
   onRemoteVideoStream?: (targetPeerId: string, stream: MediaStream, track: MediaStreamTrack) => void;
   onRemoteVideoStreamEnded?: (targetPeerId: string) => void;
   onRemoteScreenAudioStream?: (targetPeerId: string, stream: MediaStream, track: MediaStreamTrack) => void;
+  /** The peer's camera line's track arrived (webrtc/cameraLine.ts) */
+  onRemoteCameraStream?: (targetPeerId: string, stream: MediaStream, track: MediaStreamTrack) => void;
 }
 
 /**
@@ -39,6 +42,11 @@ export function attachRemoteAudio(pc: RTCPeerConnection, ctx: AttachRemoteAudioC
   } = ctx;
 
   pc.ontrack = (event: RTCTrackEvent) => {
+    if (event.track.kind === 'video' && isCameraTransceiver(pc, event.transceiver)) {
+      // The second video line: their camera, never the shared screen
+      ctx.onRemoteCameraStream?.(targetPeerId, new MediaStream([event.track]), event.track);
+      return;
+    }
     if (event.track.kind === 'video') {
       const videoStream =
         event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);

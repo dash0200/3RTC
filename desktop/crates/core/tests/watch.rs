@@ -54,6 +54,7 @@ fn connected_to(r: &mut Room, peer: &str, name: &str) {
                 client: None,
                 topology: None,
                 max_users: None,
+                quic: None,
             },
         ),
         0.0,

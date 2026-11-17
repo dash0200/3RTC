@@ -1,8 +1,12 @@
 /**
  * Chat: text messages, P2P images (sent over each peer's bulk channel) and the unread count.
  *
- * Wire messages: 'chat' { id, sender, isHost, text }, 'p2p-image-start' { ... } followed by
- * binary 'IMG1' frames (utils/p2pImageShare.ts).
+ * Wire messages: 'chat' { id, sender, isHost, text, replyTo?, mentions? }, 'p2p-image-start' { ... }
+ * followed by binary 'IMG1' frames (utils/p2pImageShare.ts).
+ *
+ * Rich chat (older apps ignore the new fields and show the text): `replyTo { id, sender, text }`
+ * quotes an earlier message (`text` a short plain snippet), `mentions` lists the peer ids named
+ * with @Name; the people mentioned get a notice. Formatting is in the text (utils/chatFormat.ts).
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
@@ -16,6 +20,10 @@ import {
 } from '../../utils/p2pImageShare';
 import type { Room } from '../../types';
 import { usePeerMessageOn } from '../../core/RoomContext';
+import { MAX_MENTIONS, plainSnippet } from '../../utils/chatFormat';
+import { cleanMentions, cleanReplyRef, type ChatReplyRef } from './chatFields';
+
+export type { ChatReplyRef } from './chatFields';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB limit
 const MAX_MESSAGES = 300; // older ones are dropped (and their file memory freed)
@@ -50,6 +58,11 @@ export interface ChatMessage {
   sender: string;
   isHost?: boolean;
   text: string;
+  replyTo?: ChatReplyRef;
+  /** Peer ids named with @Name */
+  mentions?: string[];
+  /** It mentions us */
+  mentionsMe?: boolean;
   timestamp: number;
   isSelf: boolean;
   transferId?: string;
@@ -66,7 +79,7 @@ export interface UseChatOptions {
 export interface UseChatReturn {
   messages: ChatMessage[];
   unreadChatCount: number;
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string, extras?: { replyTo?: ChatReplyRef | null; mentions?: string[] }) => void;
   sendImage: (file: File | Blob | null, caption?: string) => void;
   sendFile: (file: File | Blob | null, caption?: string) => void;
   pauseTransfer: (transferId: string) => void;
@@ -192,6 +205,8 @@ export function useChat({ room, isChatOpen }: UseChatOptions): UseChatReturn {
     sender?: string;
     text?: string;
     timestamp?: number;
+    replyTo?: unknown;
+    mentions?: unknown;
   }>(bus, 'chat', (data, from) => {
     const reaction = lastReactionRef.current.get(from);
     if (
@@ -204,20 +219,37 @@ export function useChat({ room, isChatOpen }: UseChatOptions): UseChatReturn {
     }
     const text = data.text;
     if (typeof text !== 'string' || !text.trim()) return;
-    setMessages((prev) =>
-      appendCapped(prev, {
+    const replyTo = cleanReplyRef(data.replyTo);
+    const mentions = cleanMentions(data.mentions);
+    const selfId = room.getSelfId();
+    const mentionsMe = Boolean(selfId && mentions.includes(selfId));
+    const sender = room.peerName(from) || data.sender || 'Peer';
+    setMessages((prev) => {
+      // A reply quotes our own copy of the message when we have it (names can't be faked there)
+      const quoted = replyTo && prev.find((m) => m.id === replyTo.id);
+      return appendCapped(prev, {
         type: 'chat',
         id: typeof data.id === 'string' ? data.id.slice(0, 64) : crypto.randomUUID(),
-        sender: room.peerName(from) || data.sender || 'Peer',
+        sender,
         isHost: room.isPeerHost(from),
         text: text.slice(0, MAX_CHAT_TEXT),
+        ...(replyTo
+          ? { replyTo: quoted ? { id: quoted.id, sender: quoted.isSelf ? 'You' : quoted.sender, text: plainSnippet(quoted.text || (quoted.file ? `📎 ${quoted.file.name}` : '')) } : replyTo }
+          : {}),
+        ...(mentions.length ? { mentions } : {}),
+        ...(mentionsMe ? { mentionsMe } : {}),
         timestamp: Number.isFinite(data.timestamp)
           ? Math.min(data.timestamp as number, Date.now() + 60000)
           : Date.now(),
         isSelf: false
-      })
-    );
-    sound.playPop();
+      });
+    });
+    if (mentionsMe) {
+      sound.playChime();
+      room.notify(`💬 ${sender} mentioned you: ${plainSnippet(text, 80)}`);
+    } else {
+      sound.playPop();
+    }
   });
 
   // Handle incoming start of image or arbitrary file transfer
@@ -374,14 +406,20 @@ export function useChat({ room, isChatOpen }: UseChatOptions): UseChatReturn {
   );
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, extras: { replyTo?: ChatReplyRef | null; mentions?: string[] } = {}) => {
       const { username, isHost } = room.getSelf();
+      const replyTo = extras.replyTo
+        ? { id: extras.replyTo.id, sender: extras.replyTo.sender, text: plainSnippet(extras.replyTo.text) }
+        : undefined;
+      const mentions = (extras.mentions || []).slice(0, MAX_MENTIONS);
       const msg = {
         type: 'chat' as const,
         id: crypto.randomUUID(),
         sender: username,
         isHost,
         text,
+        ...(replyTo ? { replyTo } : {}),
+        ...(mentions.length ? { mentions } : {}),
         timestamp: Date.now()
       };
       if (bus.broadcast('chat', msg) > 0) {

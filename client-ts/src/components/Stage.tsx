@@ -18,6 +18,7 @@ import type { QueueItem } from '../features/queue/useQueue';
 import type { AudioSettings } from '../utils/audioSettings';
 import type { SoundboardSettings, SoundboardClip } from '../utils/soundboard';
 import type { UseScreenShareReturn } from '../features/screenshare/useScreenShare';
+import type { UseCameraReturn } from '../features/camera/useCamera';
 import type { ReactionFeed } from '../features/reactions/reactionFeed';
 import type { PlaybackSyncState } from '../features/playback/drift';
 import type { RemoteLocalVideoMeta, StreamProgress } from '../features/playback/usePlayback';
@@ -109,6 +110,10 @@ export interface StageProps {
   activityMenu?: ActivityMenuItem[];
   onStartActivity?: (id: string) => void;
   screenShare?: UseScreenShareReturn | null;
+  /** Webcam (features/camera) */
+  camera?: Pick<UseCameraReturn, 'isOn' | 'isStarting' | 'toggle'> | null;
+  /** Camera tiles, shown in a row just above the dock (nothing covers the stage's controls) */
+  cameraTiles?: React.ReactNode;
   bus?: RoomBus | null;
   onToggleChat?: () => void;
   isChatOpen?: boolean;
@@ -184,6 +189,8 @@ export default function Stage({
   activityMenu = [],
   onStartActivity,
   screenShare = null,
+  camera = null,
+  cameraTiles = null,
   bus = null
 }: StageProps) {
   const isPhone = layout === 'phone';
@@ -472,6 +479,8 @@ export default function Stage({
         </div>
       )}
 
+      {!isPhone && roomId && cameraTiles}
+
       {!isPhone && roomId && (
         <DesktopDock
           localUser={localUser}
@@ -503,6 +512,9 @@ export default function Stage({
           screenSharer={screenShare?.screenSharer}
           isScreenShareDismissed={screenShare?.isDismissed}
           onToggleScreenShare={screenShare?.toggleScreenShare}
+          isCameraOn={camera?.isOn}
+          isCameraStarting={camera?.isStarting}
+          onToggleCamera={camera?.toggle}
           activityMenu={activityMenu}
           onStartActivity={onStartActivity}
           playbackLock={playbackLock}

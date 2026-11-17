@@ -18,6 +18,8 @@ export interface PeerMetadataRecord {
   proto?: number;
   build?: string;
   clientId?: string;
+  /** Their app understands the camera line (webrtc/cameraLine.ts) */
+  camera?: boolean;
 }
 
 export interface PeerMessageHandlerContext {
@@ -117,9 +119,11 @@ interface PeerIncomingData {
           isMuted: Boolean(data.isMuted),
           ...(typeof data.proto === 'number' ? { proto: data.proto } : {}),
           ...(typeof data.build === 'string' ? { build: data.build.slice(0, 20) } : {}),
-          ...(typeof data.clientId === 'string' ? { clientId: data.clientId.slice(0, 64) } : {})
+          ...(typeof data.clientId === 'string' ? { clientId: data.clientId.slice(0, 64) } : {}),
+          ...(data.camera === true ? { camera: true } : {})
         }
       }));
+      if (data.camera === true) bus.emitEvent('peer-camera-capable', { peerId: targetPeerId });
       if (Boolean(data.isHost)) {
         if (data.topology === 'hub' || data.topology === 'mesh' || typeof data.maxUsers === 'number') {
           bus.emitEvent('room-settings', {
