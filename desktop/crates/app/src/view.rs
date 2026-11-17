@@ -8,8 +8,8 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::{
     AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Subscription, Task,
-    Window, div, prelude::FluentBuilder as _, px,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, ScrollHandle, SharedString, Styled as _,
+    Subscription, Task, Window, div, prelude::FluentBuilder as _, px,
 };
 use rtc_core::Command;
 use rtc_engine::{ChatLine, Config, Devices, Handle, MicSource, Phase, Snapshot, Update};
@@ -113,6 +113,9 @@ pub(crate) struct RoomView {
     pub(crate) engine: Option<Handle>,
     pub(crate) room: Option<Snapshot>,
     pub(crate) chat: Vec<ChatLine>,
+    pub(crate) chat_scroll: ScrollHandle,
+    pub(crate) chat_unread_count: usize,
+    pub(crate) chat_first_unread: Option<usize>,
     pub(crate) logs: Vec<LogLine>,
     pub(crate) unread: usize,
     pub(crate) logs_unseen: usize,
@@ -332,6 +335,9 @@ impl RoomView {
             engine: None,
             room: None,
             chat: Vec::new(),
+            chat_scroll: ScrollHandle::new(),
+            chat_unread_count: 0,
+            chat_first_unread: None,
             logs: Vec::new(),
             unread: 0,
             logs_unseen: 0,
@@ -540,11 +546,37 @@ impl RoomView {
                     self.unread += 1;
                 }
                 self.chat_line_sounds(&line);
+                let new_idx = self.chat.len();
                 self.chat.push(line);
                 if self.chat.len() > CHAT_KEEP {
                     let gone = self.chat.remove(0);
                     if let Some(i) = gone.image {
                         self.pictures.remove(&i.transfer_id);
+                    }
+                    if let Some(first) = self.chat_first_unread {
+                        self.chat_first_unread = first.checked_sub(1);
+                    }
+                }
+
+                if mine {
+                    self.chat_scroll.scroll_to_bottom();
+                    self.chat_unread_count = 0;
+                    self.chat_first_unread = None;
+                } else if self.tab == Tab::Chat && self.panel_open {
+                    if self.is_chat_at_bottom() {
+                        self.chat_scroll.scroll_to_bottom();
+                        self.chat_unread_count = 0;
+                        self.chat_first_unread = None;
+                    } else {
+                        self.chat_unread_count += 1;
+                        if self.chat_first_unread.is_none() {
+                            self.chat_first_unread = Some(new_idx);
+                        }
+                    }
+                } else {
+                    self.chat_unread_count += 1;
+                    if self.chat_first_unread.is_none() {
+                        self.chat_first_unread = Some(new_idx);
                     }
                 }
             }
@@ -636,6 +668,7 @@ impl RoomView {
         if self.pending.is_some() {
             self.send_picture(text.trim().to_owned(), cx);
             self.message.update(cx, |m, cx| m.set_value("", window, cx));
+            self.scroll_chat_to_bottom(cx);
             return;
         }
         if text.trim().is_empty() {
@@ -646,6 +679,23 @@ impl RoomView {
             text,
         });
         self.message.update(cx, |m, cx| m.set_value("", window, cx));
+        self.scroll_chat_to_bottom(cx);
+    }
+
+    pub(crate) fn is_chat_at_bottom(&self) -> bool {
+        let max = self.chat_scroll.max_offset().y;
+        if max <= px(10.) {
+            return true;
+        }
+        let cur = self.chat_scroll.offset().y;
+        (cur + max).abs() <= px(60.)
+    }
+
+    pub(crate) fn scroll_chat_to_bottom(&mut self, cx: &mut Context<'_, Self>) {
+        self.chat_scroll.scroll_to_bottom();
+        self.chat_unread_count = 0;
+        self.chat_first_unread = None;
+        cx.notify();
     }
 
     pub(crate) fn send_chat_clicked(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -670,7 +720,14 @@ impl RoomView {
         self.tab = tab;
         self.panel_open = true;
         match tab {
-            Tab::Chat => self.unread = 0,
+            Tab::Chat => {
+                self.unread = 0;
+                if let Some(first) = self.chat_first_unread {
+                    self.chat_scroll.scroll_to_top_of_item(first + 1);
+                } else {
+                    self.chat_scroll.scroll_to_bottom();
+                }
+            }
             Tab::Logs => self.logs_unseen = 0,
             _ => {}
         }
@@ -683,6 +740,11 @@ impl RoomView {
         self.settings.save();
         if self.panel_open && self.tab == Tab::Chat {
             self.unread = 0;
+            if let Some(first) = self.chat_first_unread {
+                self.chat_scroll.scroll_to_top_of_item(first + 1);
+            } else {
+                self.chat_scroll.scroll_to_bottom();
+            }
         }
         cx.notify();
     }

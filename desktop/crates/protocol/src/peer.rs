@@ -706,7 +706,7 @@ mod tests {
                 id: "r1".into(),
                 emoji: "🔥".into(),
                 lane: Some(47.25),
-                combo: Some(3.0)
+                combo: Some(3.0),
             }
         );
         let s = Envelope::from_json(

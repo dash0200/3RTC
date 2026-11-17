@@ -305,12 +305,15 @@ fn transfer_card(name: &str, size: u64, percent: u8, sending: bool) -> impl Into
         .gap(px(8.))
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .child(div().text_size(px(18.)).child(icon))
+                .child(div().flex_none().text_size(px(18.)).child(icon))
                 .child(
                     div()
+                        .flex_1()
                         .min_w_0()
                         .flex()
                         .flex_col()
@@ -358,7 +361,7 @@ pub(crate) fn picture_view(
     let percent = state.map_or(0, |p| p.percent);
     let moving = state.is_none_or(|p| p.moving);
     let image = state.and_then(|p| p.image.clone());
-    let mut col = div().flex().flex_col().gap(px(6.));
+    let mut col = div().flex().flex_col().gap(px(6.)).w(px(240.));
     if moving {
         col = col.child(transfer_card(&info.file_name, info.file_size, percent, mine));
     }
@@ -368,7 +371,7 @@ pub(crate) fn picture_view(
             div()
                 .id(SharedString::from(format!("pic-{}", info.transfer_id)))
                 .relative()
-                .max_w(px(260.))
+                .max_w(px(240.))
                 .rounded(px(12.))
                 .overflow_hidden()
                 .border_1()
@@ -377,8 +380,8 @@ pub(crate) fn picture_view(
                 .on_click(cx.listener(move |v, _, _, cx| v.open_lightbox(id.clone(), cx)))
                 .child(
                     img(image)
-                        .max_w(px(260.))
-                        .max_h(px(260.))
+                        .max_w(px(240.))
+                        .max_h(px(240.))
                         .object_fit(ObjectFit::Contain),
                 ),
         );
@@ -399,6 +402,7 @@ pub(crate) fn picture_view(
         col = col.child(
             div()
                 .id(SharedString::from(format!("pic-{}", info.transfer_id)))
+                .w(px(240.))
                 .px(px(12.))
                 .py(px(8.))
                 .rounded(px(12.))
@@ -409,21 +413,23 @@ pub(crate) fn picture_view(
                 .flex()
                 .items_center()
                 .justify_between()
-                .gap(px(12.))
+                .gap(px(8.))
                 .cursor_pointer()
                 .on_click(cx.listener(move |v, _, _, cx| v.save_picture(&save_id, cx)))
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .min_w_0()
                         .child(div().flex_none().text_size(px(18.)).child(icon))
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .min_w_0()
                                 .child(
                                     div()
                                         .text_size(px(13.))
