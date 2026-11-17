@@ -2406,31 +2406,112 @@ pub(crate) fn urlencode(s: &str) -> String {
         .collect()
 }
 
+fn date_label(at_ms: f64) -> String {
+    use chrono::{Datelike, TimeZone as _};
+    #[allow(clippy::cast_possible_truncation)]
+    let ms = at_ms as i64;
+    let Some(dt) = chrono::Local.timestamp_millis_opt(ms).single() else {
+        return "Today".to_string();
+    };
+    let now = chrono::Local::now();
+    let today = now.date_naive();
+    let msg_date = dt.date_naive();
+    let yesterday = today - chrono::Duration::days(1);
+    if msg_date == today {
+        "Today".to_string()
+    } else if msg_date == yesterday {
+        "Yesterday".to_string()
+    } else if msg_date.year() == today.year() {
+        dt.format("%B %-d").to_string()
+    } else {
+        dt.format("%B %-d, %Y").to_string()
+    }
+}
+
 fn chat_tab(
     view: &RoomView,
     room: &Snapshot,
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
 ) -> impl IntoElement {
+    use chrono::TimeZone as _;
     let focused = view.message.read(cx).focus_handle(cx).is_focused(window);
     let mut rows = Vec::new();
     let mut prev: Option<(&PeerId, f64)> = None;
-    for line in &view.chat {
+    let mut prev_date: Option<chrono::NaiveDate> = None;
+    for (i, line) in view.chat.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        let msg_date = chrono::Local
+            .timestamp_millis_opt(line.at as i64)
+            .single()
+            .map(|d| d.date_naive());
+        if msg_date != prev_date {
+            prev_date = msg_date;
+            rows.push(
+                div()
+                    .w_full()
+                    .py(px(6.))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .px(px(10.))
+                            .py(px(3.))
+                            .rounded_full()
+                            .bg(tokens::raised())
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(tokens::text_2())
+                            .child(date_label(line.at)),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        if view.chat_first_unread == Some(i) {
+            rows.push(
+                div()
+                    .w_full()
+                    .my(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(div().flex_1().h(px(1.)).bg(tokens::accent().opacity(0.4)))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .py(px(2.))
+                            .rounded_full()
+                            .bg(tokens::accent().opacity(0.15))
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(tokens::accent())
+                            .child(format!("{} Unread Messages", view.chat_unread_count.max(1))),
+                    )
+                    .child(div().flex_1().h(px(1.)).bg(tokens::accent().opacity(0.4)))
+                    .into_any_element(),
+            );
+        }
+
         let starts = prev.is_none_or(|(p, at)| *p != line.from || (line.at - at).abs() > 5.0 * 60_000.0);
         prev = Some((&line.from, line.at));
         let mine = line.from == room.me;
         let name = if mine { "You".to_owned() } else { line.name.clone() };
         let color = avatar::color(&line.name);
+        let bubble_group: SharedString = format!("msg-bubble-{i}").into();
         rows.push(
             div()
                 .flex()
                 .gap(px(10.))
                 .items_start()
+                .when(mine, gpui_kit::Styled::flex_row_reverse)
                 .when(starts && !rows.is_empty(), |el| el.mt(px(10.)))
-                .child(if starts {
+                .child(if starts && !mine {
                     avatar(&line.name, 30., false, tokens::surface()).into_any_element()
-                } else {
+                } else if !mine {
                     div().w(px(30.)).flex_none().into_any_element()
+                } else {
+                    div().into_any_element()
                 })
                 .child(
                     div()
@@ -2438,7 +2519,8 @@ fn chat_tab(
                         .flex_1()
                         .flex()
                         .flex_col()
-                        .items_start()
+                        .when(mine, gpui_kit::Styled::items_end)
+                        .when(!mine, gpui_kit::Styled::items_start)
                         .gap(px(2.))
                         .when(starts, |el| {
                             el.child(
@@ -2446,6 +2528,7 @@ fn chat_tab(
                                     .flex()
                                     .items_center()
                                     .gap(px(6.))
+                                    .when(mine, gpui_kit::Styled::flex_row_reverse)
                                     .child(
                                         div()
                                             .text_size(px(14.))
@@ -2468,30 +2551,93 @@ fn chat_tab(
                                     })
                                     .child(
                                         div()
-                                            .text_size(px(12.))
-                                            .text_color(tokens::text_3())
-                                            .child(clock(line.at)),
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(4.))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.))
+                                                    .text_color(tokens::text_3())
+                                                    .child(clock(line.at)),
+                                            )
+                                            .when(mine, |el| {
+                                                el.child(
+                                                    div()
+                                                        .text_size(px(11.))
+                                                        .text_color(tokens::focus())
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .child("✓✓"),
+                                                )
+                                            }),
                                     ),
                             )
                         })
                         .children(crate::chat::picture_view(view, line, mine, cx))
                         .when(!line.text.is_empty(), |el| {
+                            let text = line.text.clone();
+                            let copy_text = line.text.clone();
                             el.child(
                                 div()
+                                    .id(SharedString::from(format!("bubble-{i}")))
+                                    .group(bubble_group.clone())
+                                    .relative()
                                     .max_w_full()
                                     .px(px(12.))
                                     .py(px(7.))
                                     .rounded(px(12.))
-                                    .bg(tokens::raised())
-                                    .text_size(px(14.))
-                                    .line_height(gpui_kit::relative(1.45))
-                                    .child(line.text.clone()),
+                                    .bg(if mine {
+                                        tokens::focus().opacity(0.15)
+                                    } else {
+                                        tokens::raised()
+                                    })
+                                    .border_1()
+                                    .border_color(if mine {
+                                        tokens::focus().opacity(0.3)
+                                    } else {
+                                        tokens::line()
+                                    })
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(|v, event: &gpui_kit::ClickEvent, _, _| {
+                                        if event.click_count() >= 2 {
+                                            v.react("❤️");
+                                        }
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .line_height(gpui_kit::relative(1.45))
+                                            .child(text),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!("copy-msg-{i}")))
+                                            .absolute()
+                                            .top(px(4.))
+                                            .right(px(4.))
+                                            .size(px(20.))
+                                            .rounded(px(4.))
+                                            .bg(tokens::surface().opacity(0.9))
+                                            .hover(|s| s.bg(tokens::raised()))
+                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .opacity(0.0)
+                                            .group_hover(bubble_group, |s| s.opacity(1.0))
+                                            .on_click(cx.listener(move |v, _, _, cx| {
+                                                v.copy(copy_text.clone(), "chat-msg", cx);
+                                                v.show_toast("Message copied", cx);
+                                            }))
+                                            .child(icon(Icon::Copy, px(12.), tokens::text_2())),
+                                    ),
                             )
                         }),
-                ),
+                )
+                .into_any_element(),
         );
     }
     let send_active = !view.message.read(cx).value().trim().is_empty() || view.pending.is_some();
+    let show_scroll_btn = view.chat_unread_count > 0 || !view.is_chat_at_bottom();
     div()
         .flex_1()
         .min_h_0()
@@ -2523,16 +2669,83 @@ fn chat_tab(
                 .into_any_element()
         } else {
             div()
-                .id("chat-scroll")
+                .relative()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .p(px(16.))
-                .gap(px(4.))
-                .child(div().flex_1().min_h_0())
-                .children(rows)
+                .child(
+                    div()
+                        .id("chat-scroll")
+                        .track_scroll(&view.chat_scroll)
+                        .on_scroll(cx.listener(|v, _, _, cx| {
+                            if v.is_chat_at_bottom()
+                                && (v.chat_unread_count > 0 || v.chat_first_unread.is_some())
+                            {
+                                v.chat_unread_count = 0;
+                                v.chat_first_unread = None;
+                                cx.notify();
+                            }
+                        }))
+                        .size_full()
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .p(px(16.))
+                        .gap(px(4.))
+                        .child(div().flex_1().min_h_0())
+                        .children(rows),
+                )
+                .when(show_scroll_btn, |el| {
+                    el.child(
+                        div()
+                            .id("chat-scroll-bottom")
+                            .absolute()
+                            .bottom(px(12.))
+                            .right(px(16.))
+                            .size(px(38.))
+                            .rounded_full()
+                            .bg(tokens::surface())
+                            .hover(|s| s.bg(tokens::raised()))
+                            .border_1()
+                            .border_color(tokens::line_strong())
+                            .shadow(tokens::drop_shadow(4., 12., 0.35))
+                            .cursor_pointer()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .on_click(cx.listener(|v, _, _, cx| v.scroll_chat_to_bottom(cx)))
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(tokens::text_2())
+                                    .child("↓"),
+                            )
+                            .when(view.chat_unread_count > 0, |badge_el| {
+                                badge_el.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(-6.))
+                                        .right(px(-6.))
+                                        .px(px(6.))
+                                        .h(px(18.))
+                                        .min_w(px(18.))
+                                        .rounded_full()
+                                        .bg(tokens::accent())
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(11.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(tokens::white())
+                                        .child(if view.chat_unread_count > 99 {
+                                            "99+".to_string()
+                                        } else {
+                                            view.chat_unread_count.to_string()
+                                        }),
+                                )
+                            }),
+                    )
+                })
                 .into_any_element()
         })
         .child(
