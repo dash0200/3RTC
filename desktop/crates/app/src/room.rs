@@ -2254,7 +2254,7 @@ fn panel(
         Tab::Chat => chat_tab(view, room, window, cx).into_any_element(),
         Tab::Queue => crate::watch::queue_tab(view, room, window, cx),
         Tab::People => people_tab(view, room, cx).into_any_element(),
-        Tab::Logs => logs_tab(view).into_any_element(),
+        Tab::Logs => logs_tab(view, cx).into_any_element(),
     };
     div()
         .w(px(PANEL_WIDTH))
@@ -3087,7 +3087,10 @@ fn people_tab(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) 
         )
 }
 
-fn logs_tab(view: &RoomView) -> impl IntoElement {
+fn logs_tab(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement {
+    // After a connection to someone failed: its full log, to paste where it's needed
+    let connection_log = view.connection_log.clone();
+    let copied = view.copied == Some("connection-log");
     div()
         .flex_1()
         .min_h_0()
@@ -3105,7 +3108,18 @@ fn logs_tab(view: &RoomView) -> impl IntoElement {
                 .text_size(px(12.))
                 .text_color(tokens::text_2())
                 .child(div().size(px(6.)).rounded_full().bg(tokens::focus()))
-                .child(format!("{} events recorded", view.logs.len())),
+                .child(div().flex_1().child(format!("{} events recorded", view.logs.len())))
+                .when_some(connection_log, |el, log| {
+                    el.child(
+                        Button::new(
+                            "copy-connection-log",
+                            if copied { "Copied" } else { "Copy connection log" },
+                        )
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            v.copy(log.clone(), "connection-log", cx);
+                        })),
+                    )
+                }),
         )
         .child(
             div()

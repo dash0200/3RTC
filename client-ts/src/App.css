@@ -12508,6 +12508,45 @@ video::cue {
   opacity: 1;
 }
 
+.network-blocked-why b {
+  color: #ffd27a;
+}
+
+.network-blocked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.network-blocked-actions button {
+  background: rgba(255, 210, 122, 0.12);
+  border: 1px solid #a8741a;
+  color: #ffd27a;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.network-blocked-actions button:hover {
+  background: rgba(255, 210, 122, 0.22);
+}
+
+.network-blocked-log {
+  margin: 4px 0 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .phone-app .network-blocked-banner {
   top: 58px;
 }

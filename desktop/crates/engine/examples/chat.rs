@@ -184,6 +184,7 @@ async fn main() -> anyhow::Result<()> {
                     },
                     Update::Pop => {}
                     Update::Log(l) => println!("LOG {l}"),
+                    Update::ConnectionLog(l) => println!("CONNECTION_LOG\n{l}"),
                     Update::StreamReady { name, size, reader } => {
                         println!("STREAM_READY {size} {name}");
                         // read it as a player would: the end first (an index), then front to back
