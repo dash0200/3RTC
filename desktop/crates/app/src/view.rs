@@ -125,6 +125,8 @@ pub(crate) struct RoomView {
     pub(crate) name: Entity<InputState>,
     pub(crate) code: Entity<CodeInput>,
     pub(crate) message: Entity<InputState>,
+    /// Sketch's guess box.
+    pub(crate) sketch_guess: Entity<InputState>,
     pub(crate) link: Entity<InputState>,
     pub(crate) server_url: Entity<InputState>,
     pub(crate) join_error: Option<SharedString>,
@@ -236,6 +238,7 @@ impl RoomView {
         });
         let code = cx.new(CodeInput::new);
         let message = cx.new(|cx| InputState::new(window, cx).placeholder("Message the room"));
+        let sketch_guess = cx.new(|cx| InputState::new(window, cx).placeholder("Your guess"));
         let link = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Paste a YouTube, magnet:?, Vimeo, Twitch or video link")
         });
@@ -258,6 +261,13 @@ impl RoomView {
             cx.subscribe_in(&message, window, |this, _, e: &InputEvent, window, cx| {
                 if matches!(e, InputEvent::PressEnter { .. }) {
                     this.send_chat(window, cx);
+                }
+            }),
+            cx.subscribe_in(&sketch_guess, window, |this, _, e: &InputEvent, window, cx| {
+                if matches!(e, InputEvent::PressEnter { .. }) {
+                    this.sk_guess(window, cx);
+                } else if matches!(e, InputEvent::Change) {
+                    cx.notify();
                 }
             }),
             cx.subscribe_in(&name, window, |this, _, e: &InputEvent, _, cx| {
@@ -350,6 +360,7 @@ impl RoomView {
             name,
             code,
             message,
+            sketch_guess,
             link,
             server_url,
             join_error: None,
@@ -523,6 +534,7 @@ impl RoomView {
                 self.ludo_after(cx);
                 self.games_after(cx);
                 self.tycoon_after(cx);
+                self.sketch_after(cx);
                 self.whiteboard_after(cx);
                 if entered {
                     self.tab = if alone { Tab::Invite } else { Tab::Chat };

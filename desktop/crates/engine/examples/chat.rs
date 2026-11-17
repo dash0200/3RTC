@@ -64,6 +64,21 @@ async fn main() -> anyhow::Result<()> {
     let mut drivers: std::collections::HashMap<String, rtc_games::driver::Driver> =
         std::collections::HashMap::new();
     let (game_tx, mut game_rx) = tokio::sync::mpsc::unbounded_channel::<(String, serde_json::Value)>();
+    // Sketch: the deciding app keeps time (`tick` twice a second while a turn is on)
+    let sketch_on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (on, tx) = (std::sync::Arc::clone(&sketch_on), game_tx.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if on.load(std::sync::atomic::Ordering::Relaxed)
+                    && tx.send((rtc_games::sketch::KEY.to_owned(), rtc_games::sketch::act::tick())).is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
     // remote control: what we were last told (the sharer answers by name)
     let mut control = rtc_engine::ControlView::default();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -127,6 +142,17 @@ async fn main() -> anyhow::Result<()> {
                                 println!("{a}");
                                 last_activity = a;
                             }
+                            sketch_on.store(
+                                s.stores.iter().any(|(k, v)| {
+                                    k == rtc_games::sketch::KEY
+                                        && v.presence.authority.as_ref() == Some(&s.me)
+                                        && matches!(
+                                            v.state.get("phase").and_then(serde_json::Value::as_str),
+                                            Some("picking" | "drawing" | "reveal")
+                                        )
+                                }),
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
                             for (key, v) in &s.stores {
                                 let line = format!(
                                     "STORE {key} v={} authority={} state={}",
