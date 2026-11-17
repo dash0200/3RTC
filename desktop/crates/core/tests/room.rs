@@ -494,6 +494,30 @@ fn a_dropped_link_is_restarted_then_rebuilt_by_the_offering_side() {
 }
 
 #[test]
+fn a_first_connection_that_never_comes_up_is_diagnosed_once() {
+    let mut r = hosting();
+    r.update(
+        Input::SignalingUp {
+            label: "Local".into(),
+            backup: false,
+        },
+        0.0,
+    );
+    r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid("aristo") }),
+        0.0,
+    );
+    let mut asked = 0;
+    let mut t = 0.0;
+    while t < 120_000.0 {
+        t += 500.0;
+        let fx = r.update(Input::Tick, t);
+        asked += fx.iter().filter(|e| **e == Effect::DiagnoseLink(pid("aristo"))).count();
+    }
+    assert_eq!(asked, 1, "the blocked notice asks for one diagnosis");
+}
+
+#[test]
 fn a_bye_or_a_leave_ends_it_and_signaling_loss_alone_does_not() {
     let mut r = hosting();
     connected_to(&mut r, "riya");

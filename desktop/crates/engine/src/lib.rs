@@ -115,6 +115,8 @@ pub enum Update {
     Chat(ChatLine),
     /// A line for the Logs tab.
     Log(String),
+    /// The full log of why a connection to someone failed (the Logs tab offers to copy it).
+    ConnectionLog(String),
     /// A toast; before a room exists, why a join failed.
     Notice(String),
     /// The microphones and speakers on this PC.
@@ -1245,6 +1247,16 @@ impl Engine {
                 Effect::OpenPeer { peer, initiator } => self.peers.open(peer, initiator).await,
                 Effect::Signal { peer, signal } => self.peers.signal(peer, signal).await,
                 Effect::IceRestart(peer) => self.peers.offer(&peer, true).await,
+                Effect::DiagnoseLink(peer) => {
+                    // Before any ClosePeer that follows: the stats need the connection open
+                    if let Some((d, log)) = self.peers.diagnose(&peer).await {
+                        tracing::warn!("{log}");
+                        let _ = self
+                            .updates
+                            .send(Update::Log(format!("🔎 Why: {} {}", d.summary, d.details.join(" "))));
+                        let _ = self.updates.send(Update::ConnectionLog(log));
+                    }
+                }
                 Effect::ClosePeer(peer) => {
                     let outs = self.streams.peer_gone(&peer);
                     self.stream_out(outs);

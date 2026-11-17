@@ -14,7 +14,7 @@ import { micPipeline } from '../utils/micPipeline';
 import { speakingActivity } from '../utils/speakingActivity';
 import { ICE_SERVERS, BULK_CHANNEL_ID, RECOVERY, PROTOCOL_VERSION } from './config';
 import { extractAudioSdp, setVoiceRoomSize, tuneSdpForDiscordAudio, tuneAudioSender } from './sdp';
-import { teardownPeerEntry } from './peerEntry';
+import { rememberCandidate, teardownPeerEntry } from './peerEntry';
 import { attachRemoteAudio } from './remoteAudio';
 import { attachPeerRecovery } from './peerRecovery';
 import { createPeerMessageHandler } from './peerMessages';
@@ -400,6 +400,7 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         if (!event.candidate) return;
         const kind = candidateType(event.candidate);
         if (kind) (peerEntry.localCandidateTypes ||= new Set<string>()).add(kind);
+        rememberCandidate((peerEntry.localCandidates ||= []), event.candidate.candidate);
         sendSignal({
           type: 'ice-candidate',
           targetId: targetPeerId,

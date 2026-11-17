@@ -105,6 +105,16 @@ Not done:
 - **The stream doctor** (`features/diagnostics/speedTest.ts`, `docs/PROTOCOL.md` "Stream doctor").
   This is next, once the owner has run `checklists/M6.md`.
 
+## Connection-failure log (17 Nov 2026)
+
+When a first connection to someone never comes up, both apps now say why and keep a full log:
+- Rules: `crates/core/src/ice_diagnosis.rs`, the same as `client-ts/src/webrtc/iceDiagnosis.ts`
+  (both sides' ICE candidates and the candidate pairs tried: UDP blocked, strict NAT, or filtered).
+- Core asks for it with `Effect::DiagnoseLink` on the blocked notice; the engine keeps each link's
+  candidates (`peers.rs`), adds a `🔎 Why:` line to the Logs tab and sends `Update::ConnectionLog`.
+- The Logs tab shows "Copy connection log" once there is one. No protocol change.
+- Not yet verified: `cargo fmt`, `clippy` and `cargo test` after this change (owner to run).
+
 ## Known limits (accepted)
 
 - Remote control can't type into apps running as administrator, or on the secure desktop (UAC

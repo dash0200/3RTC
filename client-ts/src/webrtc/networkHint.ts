@@ -12,6 +12,10 @@ export interface NetworkHint {
   side: 'ours' | 'either';
   toast: string;
   message: string;
+  /** Filled in a moment later by the diagnosis (webrtc/iceDiagnosis.ts): the plain-text reason… */
+  why?: string;
+  /** …and the full log to copy and share. */
+  log?: string;
 }
 
 export function blockedNetworkHint(localCandidateTypes: string[] = []): NetworkHint {
