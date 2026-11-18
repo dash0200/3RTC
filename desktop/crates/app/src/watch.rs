@@ -150,6 +150,10 @@ pub(crate) struct WatchUi {
     pub(crate) torrent_stream_url: Option<String>,
     /// A multi-file torrent waiting for the user to pick the file to stream.
     pub(crate) torrent_choice: Option<TorrentChoice>,
+    /// Torrent subtitle files that arrived before the player was up (loaded when it is).
+    pub(crate) torrent_subs: Vec<std::path::PathBuf>,
+    /// The first torrent subtitle went to the room already (the rest only load here).
+    pub(crate) torrent_sub_shared: bool,
     /// Host control as last told to the web player (`None`: not yet, e.g. a new player).
     lock_applied: Cell<Option<bool>>,
 }
@@ -161,6 +165,10 @@ pub(crate) struct TorrentChoice {
     pub(crate) files: Vec<crate::torrent::TorrentFileEntry>,
     /// The file id we'd pick on our own (marked "Suggested").
     pub(crate) suggested: usize,
+    /// The file Play starts (the suggested one at first).
+    pub(crate) selected: usize,
+    /// Subtitle files ticked to load with it (those matching it at first).
+    pub(crate) subs: HashSet<usize>,
     /// Folders the user folded shut.
     pub(crate) collapsed: HashSet<String>,
 }
@@ -214,6 +222,8 @@ impl WatchUi {
             torrent_stats: None,
             torrent_stream_url: None,
             torrent_choice: None,
+            torrent_subs: Vec::new(),
+            torrent_sub_shared: false,
         }
     }
 }
@@ -761,6 +771,7 @@ impl RoomView {
         crate::torrent::TorrentService::cancel_stream(&self.runtime);
         self.watch.torrent_status = None;
         self.watch.torrent_choice = None;
+        self.watch.torrent_subs.clear();
         self.watch.torrent_stats = None;
         self.watch.torrent_stream_url = None;
         self.watch.link_error = None;
@@ -768,22 +779,48 @@ impl RoomView {
     }
 
     /// The user picked a file from a multi-file torrent: only that file downloads and plays.
-    pub(crate) fn pick_torrent_file(&mut self, file_id: usize, cx: &mut Context<'_, Self>) {
+    pub(crate) fn play_torrent_choice(&mut self, cx: &mut Context<'_, Self>) {
         let Some(choice) = self.watch.torrent_choice.take() else {
             return;
         };
+        let file_id = choice.selected;
         let name = choice
             .files
             .iter()
             .find(|f| f.id == file_id)
             .map(|f| f.name.clone())
             .unwrap_or_default();
-        if crate::torrent::TorrentService::choose_file(file_id) {
+        let mut subs: Vec<usize> = choice.subs.into_iter().collect();
+        subs.sort_unstable();
+        if crate::torrent::TorrentService::choose_file(file_id, subs) {
             self.watch.torrent_status = Some(format!("🧲 Starting “{name}”…").into());
         } else {
             self.watch.link_error = Some("That torrent was closed. Open it again to pick a file.".into());
         }
         cx.notify();
+    }
+
+    /// Picker: this file is the one Play starts; its matching subtitles get ticked instead.
+    pub(crate) fn select_torrent_file(&mut self, file_id: usize, cx: &mut Context<'_, Self>) {
+        if let Some(choice) = &mut self.watch.torrent_choice
+            && choice.selected != file_id
+        {
+            choice.selected = file_id;
+            choice.subs = crate::torrent::matching_subtitles(&choice.files, file_id)
+                .into_iter()
+                .collect();
+            cx.notify();
+        }
+    }
+
+    /// Picker: tick or untick a subtitle file to load with the video.
+    pub(crate) fn toggle_torrent_subtitle(&mut self, file_id: usize, cx: &mut Context<'_, Self>) {
+        if let Some(choice) = &mut self.watch.torrent_choice {
+            if !choice.subs.remove(&file_id) {
+                choice.subs.insert(file_id);
+            }
+            cx.notify();
+        }
     }
 
     /// Folds a folder of the torrent file picker shut, or opens it again.
@@ -808,6 +845,8 @@ impl RoomView {
         self.watch.torrent_stats = None;
         self.watch.torrent_stream_url = None;
         self.watch.torrent_choice = None;
+        self.watch.torrent_subs.clear();
+        self.watch.torrent_sub_shared = false;
         self.watch.link_error = None;
         self.watch.torrent_status = Some("🧲 Connecting to BitTorrent swarm...".into());
         cx.notify();
@@ -830,12 +869,20 @@ impl RoomView {
                             suggested,
                         } => {
                             v.watch.torrent_status = None;
+                            let subs = crate::torrent::matching_subtitles(&files, suggested)
+                                .into_iter()
+                                .collect();
                             v.watch.torrent_choice = Some(TorrentChoice {
                                 title,
                                 files,
                                 suggested,
+                                selected: suggested,
+                                subs,
                                 collapsed: HashSet::new(),
                             });
+                        }
+                        crate::torrent::TorrentProgress::Subtitle { path } => {
+                            v.torrent_subtitle(path, cx);
                         }
                         crate::torrent::TorrentProgress::Resolved {
                             title,
@@ -1588,7 +1635,8 @@ pub(crate) fn link_error(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Opt
 }
 
 /// "Pick a file to stream": the torrent's files by folder (folders fold shut), each row with
-/// name and size, videos first and tagged. The list scrolls.
+/// name and size, videos first and tagged. A click selects the file Play starts; subtitle files
+/// get a box to tick (those matching the selected file are ticked). The list scrolls.
 fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomView>) -> AnyElement {
     let groups = crate::torrent::group_by_folder(&choice.files);
     let headed = groups.iter().any(|g| !g.folder.is_empty());
@@ -1651,7 +1699,16 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
         for f in g.files {
             let id = f.id;
             let suggested = id == choice.suggested;
+            let selected = id == choice.selected;
+            let ticked = f.subtitle && choice.subs.contains(&id);
             let size = rtc_protocol::image::format_size(f.size);
+            let (tag, tag_color) = if f.playable {
+                ("VIDEO", tokens::live_text())
+            } else if f.subtitle {
+                ("SUB", tokens::warn())
+            } else {
+                ("FILE", tokens::text_3())
+            };
             items.push(
                 div()
                     .id(("torrent-file", id))
@@ -1664,25 +1721,34 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                     .py(px(8.))
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(if suggested {
-                        tokens::accent()
-                    } else {
-                        tokens::line()
-                    })
-                    .bg(tokens::raised())
+                    .border_color(if selected { tokens::accent() } else { tokens::line() })
+                    .bg(if selected { tokens::panel() } else { tokens::raised() })
                     .hover(|s| s.border_color(tokens::line_strong()).bg(tokens::panel()))
                     .cursor_pointer()
+                    // subtitles: a box to tick (loaded with the video)
+                    .children(f.subtitle.then(|| {
+                        div()
+                            .flex_none()
+                            .size(px(16.))
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(if ticked { tokens::accent() } else { tokens::line_strong() })
+                            .bg(if ticked { tokens::accent() } else { tokens::bg() })
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(tokens::white())
+                            .child(if ticked { "✓" } else { "" })
+                    }))
                     .child(
                         div()
                             .flex_none()
                             .text_size(px(11.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(if f.playable {
-                                tokens::live_text()
-                            } else {
-                                tokens::text_3()
-                            })
-                            .child(if f.playable { "VIDEO" } else { "FILE" }),
+                            .text_color(tag_color)
+                            .child(tag),
                     )
                     .child(
                         div()
@@ -1691,11 +1757,7 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                             .truncate()
                             .text_size(px(13.5))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if f.playable {
-                                tokens::text()
-                            } else {
-                                tokens::text_2()
-                            })
+                            .text_color(if f.playable || ticked { tokens::text() } else { tokens::text_2() })
                             .child(f.name),
                     )
                     .children(suggested.then(|| {
@@ -1713,11 +1775,25 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                             .text_color(tokens::text_2())
                             .child(size),
                     )
-                    .on_click(cx.listener(move |v, _, _, cx| v.pick_torrent_file(id, cx)))
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        if f.subtitle {
+                            v.toggle_torrent_subtitle(id, cx);
+                        } else {
+                            v.select_torrent_file(id, cx);
+                        }
+                    }))
                     .into_any_element(),
             );
         }
     }
+    // what Play starts: the selected file and the ticked subtitles
+    let selected_name = choice
+        .files
+        .iter()
+        .find(|f| f.id == choice.selected)
+        .map(|f| f.name.clone())
+        .unwrap_or_default();
+    let sub_count = choice.subs.len();
     div()
         .flex()
         .flex_col()
@@ -1788,6 +1864,41 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                 .children(items),
         )
         .child(
+            div()
+                .id("torrent-play")
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .w_full()
+                .px(px(14.))
+                .py(px(10.))
+                .rounded(px(8.))
+                .bg(tokens::accent())
+                .hover(|s| s.bg(tokens::accent_press()))
+                .cursor_pointer()
+                .text_color(tokens::white())
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(format!("▶ Play {selected_name}")),
+                )
+                .children((sub_count > 0).then(|| {
+                    div()
+                        .flex_none()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(format!(
+                            "+ {sub_count} subtitle{}",
+                            if sub_count == 1 { "" } else { "s" }
+                        ))
+                }))
+                .on_click(cx.listener(|v, _, _, cx| v.play_torrent_choice(cx))),
+        )
+        .child(
             // "Keep torrent downloads", here where it's decided (it counts for this torrent)
             div()
                 .id("torrent-keep")
@@ -1818,7 +1929,7 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                                 .child("Keep after watching"),
                         )
                         .child(div().text_size(px(12.)).text_color(tokens::text_3()).child(if keep {
-                            "Saved in Downloads\\3RTC Torrents (qBittorrent can finish it)"
+                            "Saved in Downloads\\3RTC\\Torrents (qBittorrent can finish it)"
                         } else {
                             "Deleted when you stop watching"
                         })),

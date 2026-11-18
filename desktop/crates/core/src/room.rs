@@ -1405,6 +1405,15 @@ impl Room {
                     self.log(text.clone(), fx);
                     fx.push(Effect::Ui(UiEvent::Notice(text)));
                 }
+                if from.is_none() && reason.as_deref() == Some("host-returned") {
+                    // The room's owner came back: host again (a stand-in becomes a guest)
+                    let text = match self.members.get(&host_peer_id).and_then(|m| m.username.clone()) {
+                        Some(name) => format!("👑 {name} is back and is the host again"),
+                        None => "👑 The host is back".to_owned(),
+                    };
+                    self.log(text.clone(), fx);
+                    fx.push(Effect::Ui(UiEvent::Notice(text)));
+                }
                 if let Some(from) = from {
                     let me = &self.me.peer_id;
                     let text = if &host_peer_id == me {

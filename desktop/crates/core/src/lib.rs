@@ -14,6 +14,7 @@ pub mod ice_diagnosis;
 pub mod quic;
 pub mod recovery;
 mod room;
+pub mod saves;
 pub mod shared;
 pub mod transfers;
 

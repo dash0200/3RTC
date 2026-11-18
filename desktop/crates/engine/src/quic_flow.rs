@@ -78,7 +78,8 @@ pub(crate) struct QuicState {
     sends: HashMap<(String, PeerId), tokio::task::AbortHandle>,
 }
 
-/// Where an offered file goes: its name, and its place in a folder (cleaned, under Downloads).
+/// Where an offered file goes: its name, and its place in a folder (cleaned, under
+/// `Downloads\3RTC\Folders`; a single file goes in `Downloads\3RTC\Files`).
 pub(crate) struct Place<'a> {
     pub(crate) file_name: &'a str,
     pub(crate) relative_path: Option<&'a str>,
@@ -91,6 +92,17 @@ impl Place<'_> {
             .and_then(clean_relative_path)
             .map(|p| p.split('/').map(str::to_owned).collect())
             .unwrap_or_default()
+    }
+
+    /// Where it's saved: a folder's file in its folder's layout under `Downloads\3RTC\Folders`,
+    /// a single file in `Downloads\3RTC\Files` (`rtc_core::saves`).
+    pub(crate) fn save_dir(&self) -> PathBuf {
+        let kind = if self.relative_path.is_some() {
+            rtc_core::saves::Kind::Folders
+        } else {
+            rtc_core::saves::Kind::Files
+        };
+        self.dir(&rtc_core::saves::dir(kind))
     }
 
     /// The folder it goes in, under `downloads`.
@@ -110,13 +122,6 @@ impl Place<'_> {
         let last = self.parts().pop().unwrap_or_else(|| self.file_name.to_owned());
         rtc_protocol::image::safe_file_save_name(&last, "application/octet-stream")
     }
-}
-
-/// Where received files go (as the app saves pictures).
-pub(crate) fn downloads() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(std::env::temp_dir, |h| PathBuf::from(h).join("Downloads"))
 }
 
 /// `dir/name`, or `dir/name (1)`… if that's taken.
@@ -309,7 +314,7 @@ impl Engine {
                 size,
                 sha256,
             },
-            dir: place.dir(&downloads()),
+            dir: place.save_dir(),
             name: place.name(),
         };
         let task = tokio::spawn(job.run());

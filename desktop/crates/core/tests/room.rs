@@ -677,6 +677,51 @@ fn a_host_who_left_is_replaced_as_the_web_app_says() {
 }
 
 #[test]
+fn the_owner_coming_back_is_the_host_again_and_a_stand_in_steps_down() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: identity_of("riya", "Riya", false),
+        },
+        0.0,
+    );
+    // we stood in while Riya (the owner) was away
+    r.update(
+        Input::Server(ServerMessage::Host {
+            host_peer_id: pid("me"),
+            from: None,
+            reason: Some("host-left".into()),
+        }),
+        0.0,
+    );
+    assert!(r.is_host());
+    let fx = r.update(
+        Input::Server(ServerMessage::Host {
+            host_peer_id: pid("riya"),
+            from: None,
+            reason: Some("host-returned".into()),
+        }),
+        0.0,
+    );
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice(
+        "👑 Riya is back and is the host again".into()
+    ))));
+    assert!(!r.is_host());
+    // back with a new peer id (a reload): not known yet by name
+    let fx = r.update(
+        Input::Server(ServerMessage::Host {
+            host_peer_id: pid("riya-2"),
+            from: None,
+            reason: Some("host-returned".into()),
+        }),
+        0.0,
+    );
+    assert!(fx.contains(&Effect::Ui(UiEvent::Notice("👑 The host is back".into()))));
+}
+
+#[test]
 fn names_from_peers_are_cleaned() {
     assert_eq!(clean_name("  Riya\u{200b}\u{202e}  K  "), "Riya K");
     assert_eq!(clean_name("\u{0007}\u{feff}"), "Guest");

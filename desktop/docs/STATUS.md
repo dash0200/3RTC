@@ -117,10 +117,12 @@ When a first connection to someone never comes up, both apps now say why and kee
 
 ## Host migration and quicker reconnects (17 Nov 2026)
 
-- **Host migration** (server): when the host's connection ends and others remain, the server waits
-  `HOST_HANDOVER_GRACE_MS` (20 s) and then makes whoever was in the room longest the host
-  (`host {hostPeerId, reason: "host-left"}`, no `from`; see `docs/PROTOCOL.md`). Desktop: the
-  `reason` field on `ServerMessage::Host`, and core says "👑 The host left. X is now the host".
+- **Host migration** (server, changed 18 Nov): a room always has a host. When the host leaves,
+  whoever was in the room longest stands in at once (`host {hostPeerId, reason: "host-left"}`);
+  when the room's owner comes back it is the host again (`reason: "host-returned"`), unless the
+  owner had handed the room on by hand. See `docs/PROTOCOL.md`. Desktop: the `reason` field on
+  `ServerMessage::Host`; core says "👑 The host left. X is now the host" and "👑 X is back and is
+  the host again" (`the_owner_coming_back_is_the_host_again_and_a_stand_in_steps_down`).
 - **Dead signaling sockets** are noticed sooner: `crates/signaling` drops a socket after 35 s of
   silence (was 60 s), checked every 5 s (was at each 25 s ping). The web app checks that its ping is
   answered within 8 s and probes at once on a network change (`webrtc/liveness.ts`).
@@ -230,12 +232,19 @@ Opening a torrent with several files lets the user pick one; only that file down
 - Room peers: unchanged and no wire change. The host shares the chosen file (`share_file`
   name/size), so everyone streams that same file from the host. The web app has no torrent
   support, so nothing changed there.
-- Tests: `torrent.rs` (file list, default pick, folder grouping, natural order, chosen path).
+- Subtitle files (`.srt` `.ass` `.ssa` `.vtt` `.sub`) in the picker: tagged SUB with a box to tick.
+  A click on a file selects it, Play starts it; the subtitles matching it are ticked
+  (`matching_subtitles`: named after it in its folder, in `Subs`/`Subtitles` beside it, or any
+  there when it's the only video). Ticked ones download with it; each complete one
+  (`TorrentProgress::Subtitle`) loads into mpv (queued until the player is up), and the first
+  is shared with the room as WebVTT, like a dropped subtitle file.
+- Tests: `torrent.rs` (file list, default pick, folder grouping, natural order, chosen path,
+  subtitle matching).
 - "Keep torrent downloads" (`keep_torrents`, on by default): a switch in the file picker and in
-  Player Shortcuts & Controls → TORRENTS; read when the file is picked (`torrent::set_keep`). On: saved in `Downloads\3RTC Torrents` in qBittorrent's "Original"
+  Player Shortcuts & Controls → TORRENTS; read when the file is picked (`torrent::set_keep`). On: saved in `Downloads\3RTC\Torrents` in qBittorrent's "Original"
   layout (`<torrent name>\<folders>\file`) and kept when it stops. Off: `%TEMP%\3RTC\torrents`,
   deleted when it stops and emptied when the service starts. To finish a kept download in
-  qBittorrent: add the same torrent with save path `Downloads\3RTC Torrents`, hash check on.
+  qBittorrent: add the same torrent with save path `Downloads\3RTC\Torrents`, hash check on.
   Unpicked files exist as empty files. "Show file" next to the swarm stats (kept only) opens it.
 - No upload to the swarm: librqbit's `disable-upload` feature, `SessionOptions::disable_upload`
   (no bitfield or haves sent, piece requests refused). The host's upload goes to the room only.
@@ -290,6 +299,24 @@ Desktop and browser users see each other's cameras (the web app's `features/came
   counted from the last frame; tests in `tests/unit/transferCancel.test.ts`.
 - A cancelled QUIC download keeps its `.3rtc-part` in Downloads (as after a failure; "Resume" offers it).
 - Not yet verified: `cargo fmt`, `clippy`, `cargo test`, `npm test`, typecheck, and a real run.
+
+## Chat drop hint (18 Nov 2026)
+
+Dragging files, pictures or a folder over the room's side panel shows "Drop to send in chat"
+(`app/src/room.rs` `drop_hint`: a `drag_over::<ExternalPaths>` overlay, invisible otherwise, whose
+hitbox doesn't block the mouse, so the panel's `on_drop` still takes the drop).
+Not yet verified: a run with a real drag from Explorer.
+
+## Everything saved in Downloads\3RTC (18 Nov 2026)
+
+One folder, sorted by kind (`core/src/saves.rs`, `rtc_core::saves::dir(Kind)`):
+- `Downloads\3RTC\Torrents`: kept torrents (`app/src/torrent.rs` `download_dir`).
+- `Downloads\3RTC\Files`: single files received in chat (QUIC; `engine` `Place::save_dir`).
+- `Downloads\3RTC\Folders\<folder>`: folders received in chat, in their layout (QUIC and bulk;
+  "already here" is looked for there).
+- `Downloads\3RTC\Pictures`: where Save on a chat picture starts (`app/src/chat.rs`).
+Files received before this, straight in Downloads, aren't found for resume or "already here".
+Not yet verified: build, tests (`saves` has one), a run.
 
 ## Known limits (accepted)
 

@@ -43,9 +43,10 @@ export interface SignalingContext {
   /** Couldn't get into a room (full, not found...) before being in one: show it where the user joined.
    *  True if shown there (then no toast). */
   onRoomError?: (message: string, roomId: string | null) => boolean;
-  /** The host handed the room to `hostPeerId` (`fromPeerId` did it) */
+  /** The host handed the room to `hostPeerId` (`fromPeerId` did it; null: the host left, or with
+   *  `returned` the room's owner came back) */
   /** The host changed: handed on by `fromPeerId`, or (null) the host left and the server picked the next */
-  onHostChanged?: (hostPeerId: string, fromPeerId: string | null) => void;
+  onHostChanged?: (hostPeerId: string, fromPeerId: string | null, returned?: boolean) => void;
 }
 
 // Errors that mean "you didn't get into the room"
@@ -465,7 +466,7 @@ export async function processSignalingMessage(
         if (roomTokensRef?.current) roomTokensRef.current = { ...roomTokensRef.current, host: null };
       }
       const change = hostChangeNotice(msg);
-      if (change) ctx.onHostChanged?.(change.host, change.from);
+      if (change) ctx.onHostChanged?.(change.host, change.from, change.returned);
       break;
     }
 

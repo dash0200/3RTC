@@ -95,7 +95,10 @@ export interface FindRoomMessage extends SignalingMessageBase {
 export interface RoomInfo {
   epoch: string;
   hostPeerId: string | null;
-  /** Times the host handed the room on; host tokens of an earlier generation no longer work */
+  /** Whose room it is: who made it, or whom the owner handed it to. While the owner is away a
+   *  stand-in is host; the owner gets it back on return. null: not known (brought back by a guest) */
+  ownerPeerId?: string | null;
+  /** Times the owner handed the room on; host tokens of an earlier generation no longer work */
   hostGen?: number;
   /** Network topology: 'mesh' (default full P2P) or 'hub' (host star relay) */
   topology?: 'mesh' | 'hub';

@@ -6,6 +6,9 @@ describe('host migration (web)', () => {
   it('the host left: everyone is told who the host is now, with no one "making" them host', () => {
     assert.deepEqual(hostChangeNotice({ hostPeerId: 'a', reason: 'host-left' }), { host: 'a', from: null });
   });
+  it('the owner came back: everyone is told it is the host again', () => {
+    assert.deepEqual(hostChangeNotice({ hostPeerId: 'h', reason: 'host-returned' }), { host: 'h', from: null, returned: true });
+  });
   it('a hand-over still names who did it', () => {
     assert.deepEqual(hostChangeNotice({ hostPeerId: 'a', from: 'h' }), { host: 'a', from: 'h' });
   });

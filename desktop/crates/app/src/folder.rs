@@ -324,7 +324,7 @@ pub(crate) fn dialog(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyElem
                 div()
                     .text_size(px(12.))
                     .text_color(tokens::text_3())
-                    .child("Files go to Downloads, in the folder's layout."),
+                    .child("Files go to Downloads\\3RTC\\Folders, in the folder's layout."),
             )
         })
         .child(

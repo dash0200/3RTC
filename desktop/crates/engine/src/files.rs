@@ -24,7 +24,7 @@ use rtc_protocol::peer::{Envelope, PeerMessage};
 use rtc_webrtc::libwebrtc::data_channel::DataChannel;
 
 use crate::outgoing::Source;
-use crate::quic_flow::{Place, downloads, unique_path};
+use crate::quic_flow::{Place, unique_path};
 use crate::{BULK_HIGH_WATER, Engine, FileHere, Msg, OutgoingFolder, OutgoingImage, Update, now_ms};
 
 /// One of our files that can still be sent (to whoever accepts it).
@@ -637,7 +637,7 @@ impl Engine {
         let queue = self.queue_tx.clone();
         let folder_id = folder.folder_id;
         tokio::task::spawn_blocking(move || {
-            let root = downloads();
+            let root = rtc_core::saves::dir(rtc_core::saves::Kind::Folders);
             let here: Vec<(String, FileHere)> = look
                 .into_iter()
                 .filter_map(|(tid, path, file_name, size)| {
@@ -704,7 +704,7 @@ impl Engine {
                 file_name: &file_name,
                 relative_path: Some(&path),
             };
-            let dir = place.dir(&downloads());
+            let dir = place.save_dir();
             let name = place.name();
             let saved = async {
                 tokio::fs::create_dir_all(&dir).await?;
