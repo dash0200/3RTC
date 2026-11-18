@@ -1803,7 +1803,7 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                         .p(px(2.))
                         .rounded_full()
                         .flex()
-                        .when(keep, |d| d.justify_end())
+                        .when(keep, gpui_kit::Styled::justify_end)
                         .bg(if keep { tokens::accent() } else { tokens::line_strong() })
                         .child(div().size(px(16.)).rounded_full().bg(tokens::white())),
                 )
