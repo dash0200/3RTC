@@ -91,6 +91,7 @@ pub(crate) fn render(
                         .flex()
                         .flex_col()
                         .child(stage(view, room, window, cx))
+                        .children(crate::camera::tiles(view, room, cx))
                         .child(dock(view, room, is_fs, cx)),
                 )
                 .when(view.panel_open, |el| el.child(panel(view, room, id, window, cx))),
@@ -342,6 +343,12 @@ fn stage(
     window: &mut Window,
     cx: &mut Context<'_, RoomView>,
 ) -> AnyElement {
+    // a camera on the stage, for us only: over whatever plays there, which keeps running
+    // (a video plays on, hidden, as under a dialog)
+    if let Some(camera) = crate::camera::stage(view, room, cx) {
+        view.hide_player();
+        return camera;
+    }
     if view.activity_covers() {
         // the open game takes the stage (the video plays on, hidden)
         view.hide_player();
@@ -1324,6 +1331,61 @@ fn horizontal_tray(
                 .child(tray_done(cx))
                 .into_any_element()
         }
+        Pop::Camera => {
+            // the camera picker: "Default camera" and each camera on this PC (ADR 0010)
+            let chosen = view.settings.camera_device.clone();
+            let mut rows: Vec<(String, String)> = vec![(String::new(), "Default camera".to_owned())];
+            rows.extend(view.camera.devices.iter().map(|c| (c.id.clone(), c.name.clone())));
+            let none = view.camera.devices.is_empty();
+            let pills = rows.into_iter().enumerate().map(|(i, (id, name))| {
+                let active = id == chosen;
+                tray_pill(
+                    SharedString::from(format!("tray-camera-{i}")),
+                    active.then_some(Icon::Check),
+                    SharedString::from(name),
+                    active,
+                    false,
+                )
+                .on_click(cx.listener(move |v, _, _, cx| v.choose_camera(id.clone(), cx)))
+            });
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(tray_title(Icon::Camera, "Camera"))
+                        .child(
+                            div()
+                                .id("tray-camera-scroll")
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .overflow_x_scroll()
+                                .children(pills)
+                                .when(none, |el| {
+                                    el.child(
+                                        div()
+                                            .text_size(px(13.5))
+                                            .text_color(tokens::text_2())
+                                            .child("No camera found"),
+                                    )
+                                }),
+                        ),
+                )
+                .child(tray_done(cx))
+                .into_any_element()
+        }
         Pop::Games => {
             let open = room.activity.as_ref().map(|a| a.current.id.clone());
             let people = room.members.len() + 1;
@@ -1638,6 +1700,7 @@ fn dock(view: &RoomView, room: &Snapshot, is_fullscreen: bool, cx: &mut Context<
                 .items_center()
                 .gap(px(8.))
                 .child(mic)
+                .child(crate::camera::dock_button(view, cx))
                 .child(
                     dock_btn(
                         "deafen",

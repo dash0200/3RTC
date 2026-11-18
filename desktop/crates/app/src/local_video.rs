@@ -36,8 +36,12 @@ const SUB_EXT: &[&str] = &["srt", "ass", "ssa", "vtt", "sub", "sup"];
 const BAR_H: f32 = 52.;
 /// In full screen, height of the bottom trigger region to reveal controls.
 pub(crate) const FULLSCREEN_BOTTOM_ZONE: f32 = BAR_H;
-/// In full screen, the controls bar stays visible this long after the pointer moved out of it.
-const FULLSCREEN_HIDE_DELAY: Duration = Duration::from_millis(2500);
+/// In full screen, the pointer hides after the mouse was still this long.
+const FULLSCREEN_HIDE_DELAY: Duration = Duration::from_millis(2000);
+/// In full screen, the controls bar stays this long after the pointer left the bottom edge.
+const FULLSCREEN_LEAVE_DELAY: Duration = Duration::from_millis(800);
+/// How long a click on the video waits to see whether it's the start of a double click.
+const CLICK_WAIT: Duration = Duration::from_millis(250);
 
 fn has_ext(path: &Path, list: &[&str]) -> bool {
     path.extension()
@@ -130,6 +134,11 @@ pub(crate) struct LocalUi {
     pub(crate) last_play_toggle: Option<Instant>,
     /// Task that auto-hides controls or shows them when cursor reaches bottom in full screen.
     pub(crate) fullscreen_task: Option<Task<()>>,
+    /// A click's play / pause, waiting to see whether a second click makes it a double click
+    /// (dropping it cancels it).
+    pending_click: Option<Task<()>>,
+    /// When a click's play / pause last happened (a double click right after undoes it).
+    click_toggled_at: Option<Instant>,
     /// The offer card's note (the wrong file was chosen).
     pub(crate) offer_error: Option<SharedString>,
     /// The file we offer to viewers (the engine serves it).
@@ -174,6 +183,8 @@ impl LocalUi {
             controls_left_at: None,
             last_play_toggle: None,
             fullscreen_task: None,
+            pending_click: None,
+            click_toggled_at: None,
             offer_error: None,
             sharing: false,
             stream: None,
@@ -221,6 +232,7 @@ impl LocalUi {
         self.menu = None;
         self.fullscreen_controls = false;
         self.controls_left_at = None;
+        self.pending_click = None;
         self.offer_error = None;
     }
 }
@@ -295,11 +307,6 @@ impl RoomView {
     /// Our own file plays: offer it to viewers who don't have it.
     pub(crate) fn share_own_file(&mut self, path: &Path) {
         self.share_own_torrent(path, None, None, None);
-    }
-
-    /// Our own file plays with an optional known size (e.g. torrent metadata): offer it to viewers who don't have it.
-    pub(crate) fn share_own_file_sized(&mut self, path: &Path, size: Option<u64>) {
-        self.share_own_torrent(path, None, size, None);
     }
 
     /// Offers our own file or torrent stream to the room.
@@ -387,6 +394,7 @@ impl RoomView {
         self.watch.torrent_stream_url = None;
         self.watch.torrent_stats = None;
         self.watch.torrent_status = None;
+        self.watch.torrent_choice = None;
         if let Some(e) = &self.engine {
             e.stream_from(name.clone());
             self.watch.local.asking = Some(name);
@@ -407,6 +415,7 @@ impl RoomView {
         self.watch.torrent_stream_url = None;
         self.watch.torrent_stats = None;
         self.watch.torrent_status = None;
+        self.watch.torrent_choice = None;
         if self.watch.local.asking.take().is_none() {
             reader.close();
             return;
@@ -523,24 +532,11 @@ impl RoomView {
                 None
             }
             VideoEvent::Click => {
-                if self.pop.is_some() {
-                    self.pop = None;
-                } else if self.settings.player_click_play
-                    && !self.room.as_ref().is_some_and(crate::watch::locked_for_me)
-                {
-                    self.video_toggle_play(cx);
-                }
+                self.video_click(cx);
                 None
             }
             VideoEvent::DblClick => {
-                if self.settings.player_double_click_fullscreen {
-                    if self.settings.player_click_play
-                        && !self.room.as_ref().is_some_and(crate::watch::locked_for_me)
-                    {
-                        self.video_toggle_play(cx);
-                    }
-                    self.toggle_video_fullscreen(window, cx);
-                }
+                self.video_double_click(window, cx);
                 None
             }
             VideoEvent::PlayPause => {
@@ -689,6 +685,7 @@ impl RoomView {
         }
         crate::torrent::TorrentService::cancel_stream(&self.runtime);
         self.watch.torrent_status = None;
+        self.watch.torrent_choice = None;
         self.watch.torrent_stats = None;
         let size = match std::fs::metadata(&path) {
             Ok(m) if m.is_file() => m.len(),
@@ -767,6 +764,71 @@ impl RoomView {
             }
         })
         .detach();
+    }
+
+    /// A click on the video. With double click for full screen on, its play / pause waits a
+    /// moment ([`CLICK_WAIT`], or the system's double-click time if shorter) and a double click
+    /// cancels it (or undoes it, when the second click was slower than that), so going in or out
+    /// of full screen never pauses the video, as in VLC. Otherwise it plays / pauses at once.
+    pub(crate) fn video_click(&mut self, cx: &mut Context<'_, Self>) {
+        if self.pop.is_some() {
+            self.pop = None;
+            cx.notify();
+            return;
+        }
+        if !self.settings.player_click_play || self.room.as_ref().is_some_and(crate::watch::locked_for_me) {
+            return;
+        }
+        if !self.settings.player_double_click_fullscreen {
+            self.video_toggle_play(cx);
+            return;
+        }
+        let wait = CLICK_WAIT.min(Duration::from_millis(rtc_platform_win::double_click_ms()));
+        self.watch.local.pending_click = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |v, cx| {
+                v.watch.local.pending_click = None;
+                v.video_toggle_play(cx);
+                v.watch.local.click_toggled_at = Some(Instant::now());
+            });
+        }));
+    }
+
+    /// A double click on the video: full screen in or out, and the first click's play / pause
+    /// never happens.
+    pub(crate) fn video_double_click(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if !self.settings.player_double_click_fullscreen {
+            return;
+        }
+        let waiting = self.watch.local.pending_click.take().is_some();
+        let double_click = Duration::from_millis(rtc_platform_win::double_click_ms());
+        let toggled = self
+            .watch
+            .local
+            .click_toggled_at
+            .take()
+            .is_some_and(|t| t.elapsed() < double_click);
+        if !waiting && toggled {
+            // the first click already played / paused: put it back
+            self.watch.local.last_play_toggle = None;
+            self.video_toggle_play(cx);
+        }
+        self.toggle_video_fullscreen(window, cx);
+    }
+
+    /// Clips the video window to show the controls bar in full screen, or not. Done as soon as
+    /// the bar shows or hides, not on the next frame: the bar must never linger over the video.
+    pub(crate) fn sync_fullscreen_clip(&self) {
+        let l = &self.watch.local;
+        #[allow(clippy::cast_possible_truncation)]
+        let clip = if l.fullscreen && l.fullscreen_controls {
+            (FULLSCREEN_BOTTOM_ZONE * self.watch.scale.get()).round() as i32
+        } else {
+            0
+        };
+        if let Some(p) = self.watch.player.borrow().as_ref() {
+            p.set_bottom_clip(clip);
+        }
     }
 
     /// The bar's play/pause: like a click on the video (the room follows).
@@ -946,8 +1008,9 @@ impl RoomView {
         if on {
             self.watch.local.hwnd = rtc_platform_win::raw_hwnd(window);
             self.watch.local.scale = window.scale_factor();
-            self.watch.local.fullscreen_controls = true;
-            self.watch.local.controls_left_at = Some(Instant::now());
+            // the bar shows when the pointer goes to the bottom edge
+            self.watch.local.fullscreen_controls = false;
+            self.watch.local.controls_left_at = None;
             rtc_platform_win::set_cursor_visible(true);
             if !window.is_fullscreen() {
                 self.watch.local.video_fullscreen_window = true;
@@ -969,6 +1032,7 @@ impl RoomView {
             }
         }
         self.set_web_player_fullscreen(on);
+        self.sync_fullscreen_clip();
         cx.notify();
     }
 
@@ -994,7 +1058,9 @@ impl RoomView {
         cx.notify();
     }
 
-    /// Ensures the watcher task is active to show controls on bottom cursor and auto-hide after 2.5s.
+    /// Full screen: the controls bar shows only while the pointer is at the bottom edge (and
+    /// [`FULLSCREEN_LEAVE_DELAY`] after it left), or while a menu or dialog is open. Moving the
+    /// mouse shows the pointer; [`FULLSCREEN_HIDE_DELAY`] still, off the bar, hides it.
     pub(crate) fn ensure_fullscreen_watch(&mut self, cx: &mut Context<'_, Self>) {
         if !self.watch.local.fullscreen || self.watch.local.fullscreen_task.is_some() {
             return;
@@ -1003,10 +1069,8 @@ impl RoomView {
             let mut last_pos: Option<(i32, i32)> = None;
             let mut last_activity = Instant::now();
             let mut cursor_hidden = false;
-            let hide_delay = FULLSCREEN_HIDE_DELAY;
-
             loop {
-                cx.background_executor().timer(Duration::from_millis(60)).await;
+                cx.background_executor().timer(Duration::from_millis(50)).await;
                 let done = this
                     .update(cx, |view, cx| {
                         if !view.watch.local.fullscreen {
@@ -1016,86 +1080,43 @@ impl RoomView {
                             }
                             return true;
                         }
+                        #[allow(clippy::cast_possible_truncation)]
                         let threshold_px =
                             (FULLSCREEN_BOTTOM_ZONE * view.watch.local.scale.max(1.0)).round() as i32;
-                        if let Some((x, y, at_bottom)) =
+                        let Some((x, y, at_bottom)) =
                             rtc_platform_win::cursor_window_state(view.watch.local.hwnd, threshold_px)
-                        {
-                            let pos = (x, y);
-                            let moved = last_pos != Some(pos);
-                            if moved {
-                                last_pos = Some(pos);
-                                last_activity = Instant::now();
-                                if cursor_hidden {
-                                    cursor_hidden = false;
-                                    rtc_platform_win::set_cursor_visible(true);
-                                }
+                        else {
+                            return false;
+                        };
+                        if last_pos != Some((x, y)) {
+                            last_pos = Some((x, y));
+                            last_activity = Instant::now();
+                        }
+                        let keep = view.watch.local.menu.is_some() || view.dialog.is_some();
+                        let l = &mut view.watch.local;
+                        let show = if keep || at_bottom {
+                            l.controls_left_at = None;
+                            true
+                        } else if l.fullscreen_controls {
+                            // just left the bottom edge: a moment before it goes
+                            let left = *l.controls_left_at.get_or_insert_with(Instant::now);
+                            left.elapsed() < FULLSCREEN_LEAVE_DELAY
+                        } else {
+                            false
+                        };
+                        if show != l.fullscreen_controls {
+                            l.fullscreen_controls = show;
+                            if !show {
+                                l.controls_left_at = None;
                             }
-
-                            // While a menu or dialog is open, keep controls and cursor visible
-                            if view.watch.local.menu.is_some() || view.dialog.is_some() {
-                                if cursor_hidden {
-                                    cursor_hidden = false;
-                                    rtc_platform_win::set_cursor_visible(true);
-                                }
-                                if !view.watch.local.fullscreen_controls {
-                                    view.watch.local.fullscreen_controls = true;
-                                    cx.notify();
-                                }
-                                view.watch.local.controls_left_at = None;
-                                return false;
-                            }
-
-                            if at_bottom {
-                                let change = !view.watch.local.fullscreen_controls;
-                                view.watch.local.fullscreen_controls = true;
-                                view.watch.local.controls_left_at = None;
-                                if change {
-                                    cx.notify();
-                                }
-                                // If the user left the mouse at bottom with no movement for 3s, hide panel and cursor
-                                if last_activity.elapsed() >= Duration::from_millis(3000) {
-                                    if view.watch.local.fullscreen_controls {
-                                        view.watch.local.fullscreen_controls = false;
-                                        cx.notify();
-                                    }
-                                    if !cursor_hidden {
-                                        cursor_hidden = true;
-                                        rtc_platform_win::set_cursor_visible(false);
-                                    }
-                                }
-                            } else {
-                                // Mouse is not at bottom
-                                if view.watch.local.fullscreen_controls {
-                                    if view.watch.local.controls_left_at.is_none() {
-                                        view.watch.local.controls_left_at = Some(Instant::now());
-                                    } else if view
-                                        .watch
-                                        .local
-                                        .controls_left_at
-                                        .is_some_and(|t| t.elapsed() >= hide_delay)
-                                    {
-                                        view.watch.local.fullscreen_controls = false;
-                                        view.watch.local.controls_left_at = None;
-                                        cx.notify();
-                                    }
-                                }
-                                // Hide cursor along with the panel once stillness threshold is reached
-                                if (!view.watch.local.fullscreen_controls
-                                    || last_activity.elapsed() >= hide_delay)
-                                    && last_activity.elapsed() >= hide_delay
-                                {
-                                    if view.watch.local.fullscreen_controls {
-                                        view.watch.local.fullscreen_controls = false;
-                                        view.watch.local.controls_left_at = None;
-                                        cx.notify();
-                                    }
-                                    if !cursor_hidden {
-                                        cursor_hidden = true;
-                                        rtc_platform_win::set_cursor_visible(false);
-                                    }
-                                }
-                            }
+                            view.sync_fullscreen_clip();
+                            cx.notify();
+                        }
+                        let hide_cursor =
+                            !keep && !at_bottom && last_activity.elapsed() >= FULLSCREEN_HIDE_DELAY;
+                        if hide_cursor != cursor_hidden {
+                            cursor_hidden = hide_cursor;
+                            rtc_platform_win::set_cursor_visible(!hide_cursor);
                         }
                         false
                     })
@@ -1117,6 +1138,7 @@ impl RoomView {
             self.watch.local.fullscreen_controls = true;
             self.watch.local.controls_left_at = None;
             if change {
+                self.sync_fullscreen_clip();
                 cx.notify();
             }
         } else if self.watch.local.fullscreen_controls && self.watch.local.controls_left_at.is_none() {
@@ -1292,6 +1314,21 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                     ts.seeds, ts.peers, ts.total_peers, sp_mb
                 ))
         }))
+        // the torrent's file in Explorer (Downloads\3RTC Torrents)
+        .children(
+            view.settings
+                .keep_torrents
+                .then_some(view.watch.torrent_stats)
+                .flatten()
+                .and(view.watch.local.file.clone())
+                .map(|path| {
+                    bar_btn("lv-torrent-folder")
+                        .flex_none()
+                        .text_size(px(12.))
+                        .child("Show file")
+                        .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&path)))
+                }),
+        )
         .child({
             let down = Rc::clone(&scrub);
             let drag = Rc::clone(&scrub);

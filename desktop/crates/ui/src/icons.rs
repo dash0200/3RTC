@@ -8,6 +8,10 @@ pub enum Icon {
     Mic,
     /// `micOff` in the web set.
     MicOff,
+    /// `camera` in the web set.
+    Camera,
+    /// `cameraOff` in the web set.
+    CameraOff,
     /// `headphones` in the web set.
     Headphones,
     /// `headphonesOff` in the web set.
@@ -48,6 +52,8 @@ pub enum Icon {
     SpeakerOff,
     /// `upload` in the web set.
     Upload,
+    /// `download` in the web set.
+    Download,
     /// `userPlus` in the web set.
     UserPlus,
     /// `chevronUp` in the web set.
@@ -70,6 +76,24 @@ pub enum Icon {
     ScreenShareOff,
     /// `laserPointer` in the web set.
     LaserPointer,
+    /// `pointer` in the web set.
+    Pointer,
+    /// `chevronDown` in the web set.
+    ChevronDown,
+    /// `minus` in the web set.
+    Minus,
+    /// `tv` in the web set.
+    Tv,
+    /// `keyboard` in the web set.
+    Keyboard,
+    /// `layers` in the web set.
+    Layers,
+    /// `windows` in the web set.
+    Windows,
+    /// `bolt` in the web set.
+    Bolt,
+    /// `magnet` in the web set.
+    Magnet,
     /// `more` in the web set.
     More,
     /// `play` in the web set.
@@ -84,6 +108,8 @@ impl Icon {
         match self {
             Self::Mic => ("icons/mic.svg", Some("icons/mic-bold.svg")),
             Self::MicOff => ("icons/micOff.svg", Some("icons/micOff-bold.svg")),
+            Self::Camera => ("icons/camera.svg", Some("icons/camera-bold.svg")),
+            Self::CameraOff => ("icons/cameraOff.svg", Some("icons/cameraOff-bold.svg")),
             Self::Headphones => ("icons/headphones.svg", Some("icons/headphones-bold.svg")),
             Self::HeadphonesOff => ("icons/headphonesOff.svg", Some("icons/headphonesOff-bold.svg")),
             Self::Smile => ("icons/smile.svg", Some("icons/smile-bold.svg")),
@@ -104,6 +130,7 @@ impl Icon {
             Self::Speaker => ("icons/speaker.svg", Some("icons/speaker-bold.svg")),
             Self::SpeakerOff => ("icons/speakerOff.svg", Some("icons/speakerOff-bold.svg")),
             Self::Upload => ("icons/upload.svg", Some("icons/upload-bold.svg")),
+            Self::Download => ("icons/download.svg", Some("icons/download-bold.svg")),
             Self::UserPlus => ("icons/userPlus.svg", Some("icons/userPlus-bold.svg")),
             Self::ChevronUp => ("icons/chevronUp.svg", Some("icons/chevronUp-bold.svg")),
             Self::Settings => ("icons/settings.svg", Some("icons/settings-bold.svg")),
@@ -115,6 +142,15 @@ impl Icon {
             Self::ScreenShare => ("icons/screenShare.svg", Some("icons/screenShare-bold.svg")),
             Self::ScreenShareOff => ("icons/screenShareOff.svg", Some("icons/screenShareOff-bold.svg")),
             Self::LaserPointer => ("icons/laserPointer.svg", Some("icons/laserPointer-bold.svg")),
+            Self::Pointer => ("icons/pointer.svg", Some("icons/pointer-bold.svg")),
+            Self::ChevronDown => ("icons/chevronDown.svg", Some("icons/chevronDown-bold.svg")),
+            Self::Minus => ("icons/minus.svg", Some("icons/minus-bold.svg")),
+            Self::Tv => ("icons/tv.svg", Some("icons/tv-bold.svg")),
+            Self::Keyboard => ("icons/keyboard.svg", Some("icons/keyboard-bold.svg")),
+            Self::Layers => ("icons/layers.svg", Some("icons/layers-bold.svg")),
+            Self::Windows => ("icons/windows.svg", Some("icons/windows-bold.svg")),
+            Self::Bolt => ("icons/bolt.svg", Some("icons/bolt-bold.svg")),
+            Self::Magnet => ("icons/magnet.svg", Some("icons/magnet-bold.svg")),
             Self::More => ("icons/more.svg", None),
             Self::Play => ("icons/play.svg", None),
             Self::Pause => ("icons/pause.svg", None),
@@ -133,6 +169,19 @@ pub(crate) const FILES: &[(&str, &[u8])] = &[
     (
         "icons/micOff-bold.svg",
         include_bytes!("../assets/icons/micOff-bold.svg"),
+    ),
+    ("icons/camera.svg", include_bytes!("../assets/icons/camera.svg")),
+    (
+        "icons/camera-bold.svg",
+        include_bytes!("../assets/icons/camera-bold.svg"),
+    ),
+    (
+        "icons/cameraOff.svg",
+        include_bytes!("../assets/icons/cameraOff.svg"),
+    ),
+    (
+        "icons/cameraOff-bold.svg",
+        include_bytes!("../assets/icons/cameraOff-bold.svg"),
     ),
     (
         "icons/headphones.svg",
@@ -247,6 +296,14 @@ pub(crate) const FILES: &[(&str, &[u8])] = &[
         include_bytes!("../assets/icons/upload-bold.svg"),
     ),
     (
+        "icons/download.svg",
+        include_bytes!("../assets/icons/download.svg"),
+    ),
+    (
+        "icons/download-bold.svg",
+        include_bytes!("../assets/icons/download-bold.svg"),
+    ),
+    (
         "icons/userPlus.svg",
         include_bytes!("../assets/icons/userPlus.svg"),
     ),
@@ -318,6 +375,54 @@ pub(crate) const FILES: &[(&str, &[u8])] = &[
     (
         "icons/laserPointer-bold.svg",
         include_bytes!("../assets/icons/laserPointer-bold.svg"),
+    ),
+    ("icons/pointer.svg", include_bytes!("../assets/icons/pointer.svg")),
+    (
+        "icons/pointer-bold.svg",
+        include_bytes!("../assets/icons/pointer-bold.svg"),
+    ),
+    (
+        "icons/chevronDown.svg",
+        include_bytes!("../assets/icons/chevronDown.svg"),
+    ),
+    (
+        "icons/chevronDown-bold.svg",
+        include_bytes!("../assets/icons/chevronDown-bold.svg"),
+    ),
+    ("icons/minus.svg", include_bytes!("../assets/icons/minus.svg")),
+    (
+        "icons/minus-bold.svg",
+        include_bytes!("../assets/icons/minus-bold.svg"),
+    ),
+    ("icons/tv.svg", include_bytes!("../assets/icons/tv.svg")),
+    ("icons/tv-bold.svg", include_bytes!("../assets/icons/tv-bold.svg")),
+    (
+        "icons/keyboard.svg",
+        include_bytes!("../assets/icons/keyboard.svg"),
+    ),
+    (
+        "icons/keyboard-bold.svg",
+        include_bytes!("../assets/icons/keyboard-bold.svg"),
+    ),
+    ("icons/layers.svg", include_bytes!("../assets/icons/layers.svg")),
+    (
+        "icons/layers-bold.svg",
+        include_bytes!("../assets/icons/layers-bold.svg"),
+    ),
+    ("icons/windows.svg", include_bytes!("../assets/icons/windows.svg")),
+    (
+        "icons/windows-bold.svg",
+        include_bytes!("../assets/icons/windows-bold.svg"),
+    ),
+    ("icons/bolt.svg", include_bytes!("../assets/icons/bolt.svg")),
+    (
+        "icons/bolt-bold.svg",
+        include_bytes!("../assets/icons/bolt-bold.svg"),
+    ),
+    ("icons/magnet.svg", include_bytes!("../assets/icons/magnet.svg")),
+    (
+        "icons/magnet-bold.svg",
+        include_bytes!("../assets/icons/magnet-bold.svg"),
     ),
     ("icons/more.svg", include_bytes!("../assets/icons/more.svg")),
     ("icons/play.svg", include_bytes!("../assets/icons/play.svg")),

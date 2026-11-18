@@ -61,21 +61,21 @@ pub fn wav(samples: &[i16]) -> Vec<u8> {
 }
 
 /// The logo as `size`×`size` RGBA pixels (straight alpha): a red (#E5143D) square with
-/// corners rounded by 27% of its size, and the white play mark (`logo-play.svg`, 42% of the
-/// size) in the middle. Edges are smoothed with 4×4 samples per pixel.
+/// corners rounded by 27% of its size, and the white mark (`logo-play.svg`, pointing left, 42% of
+/// the size) in the middle. Edges are smoothed with 4×4 samples per pixel.
 #[must_use]
 pub fn logo_rgba(size: u32) -> Vec<u8> {
     const SUB: u32 = 4;
     let s = f64::from(size);
     let radius = s * 0.27;
-    // the play mark: viewBox 14×14, path M3 1.5 v11 l9.5 -5.5 z, drawn 42% of the size, centered
+    // the mark: viewBox 14×14, path M11 1.5 v11 L1.5 7 z (pointing left), drawn 42% of the size, centered
     let mark = s * 0.42;
     let scale = mark / 14.0;
     let origin = (s - mark) / 2.0;
     let tri = [
-        (origin + 3.0 * scale, origin + 1.5 * scale),
-        (origin + 3.0 * scale, origin + 12.5 * scale),
-        (origin + 12.5 * scale, origin + 7.0 * scale),
+        (origin + 11.0 * scale, origin + 1.5 * scale),
+        (origin + 11.0 * scale, origin + 12.5 * scale),
+        (origin + 1.5 * scale, origin + 7.0 * scale),
     ];
     let mut out = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {

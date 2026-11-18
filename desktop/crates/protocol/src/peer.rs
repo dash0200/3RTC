@@ -56,6 +56,14 @@ pub enum PeerMessage {
         /// Desktop app: the QUIC file transfer version it speaks (ADR 0009); absent otherwise.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quic: Option<u32>,
+        /// I understand the camera line (`webrtc/cameraLine.ts`, ADR 0010). Read as the web app
+        /// does: only `true` counts.
+        #[serde(
+            default,
+            skip_serializing_if = "std::ops::Not::not",
+            deserialize_with = "only_true"
+        )]
+        camera: bool,
     },
     /// My mic was muted or unmuted.
     #[serde(rename_all = "camelCase")]
@@ -200,12 +208,16 @@ pub enum PeerMessage {
         #[serde(default)]
         caption: String,
     },
-    /// Pause, resume, or cancel a P2P file transfer.
+    /// Pause, resume, accept or cancel a P2P file transfer. A file of
+    /// `rtc_core::transfers::ACCEPT_MIN_BYTES` or more (and every file of a folder offer) is
+    /// only sent to a receiver after their `accept`. A `cancel` from the file's sender cancels it
+    /// for everyone; from a receiver, only that receiver stops getting it (and once nobody
+    /// does, the sender stops): `rtc_core::transfers`, `docs/PROTOCOL.md`.
     #[serde(rename = "p2p-file-control", rename_all = "camelCase")]
     P2pFileControl {
         /// Transfer session identifier.
         transfer_id: String,
-        /// Control action: "pause", "resume", or "cancel".
+        /// Control action: "pause", "resume", "accept" or "cancel".
         action: String,
         /// Optional start chunk index when resuming.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,6 +230,29 @@ pub enum PeerMessage {
         transfer_id: String,
         /// Next chunk index requested.
         resume_from_chunk: u32,
+    },
+    /// A folder offered in chat (bulk channel): its files, each sent to a receiver only once they
+    /// accept it (`p2p-file-control` `accept` with the file's transfer id). A `cancel` with the
+    /// folder's id from its sender withdraws the whole folder.
+    #[serde(rename = "p2p-folder-offer", rename_all = "camelCase")]
+    P2pFolderOffer {
+        /// The chat message's id.
+        #[serde(default)]
+        id: String,
+        /// The folder's id (also a transfer id for a `cancel` of the whole folder).
+        folder_id: String,
+        /// The folder's name.
+        #[serde(default)]
+        name: String,
+        /// Text sent with it.
+        #[serde(default)]
+        caption: String,
+        /// Sent by the host.
+        #[serde(default)]
+        is_host: bool,
+        /// Its files.
+        #[serde(default)]
+        files: Vec<FolderEntry>,
     },
     /// The host locked (or unlocked) playback to themselves.
     #[serde(rename_all = "camelCase")]
@@ -479,9 +514,35 @@ pub enum PeerMessage {
         #[serde(default)]
         reason: String,
     },
+    /// Whether my camera is on (`features/camera/useCamera.ts`): sent to everyone when it changes,
+    /// and to each newcomer while it's on. Only `true` counts as on.
+    CameraStatus {
+        /// On now.
+        #[serde(default, deserialize_with = "only_true")]
+        on: bool,
+    },
     /// A message type this app doesn't handle: ignored (protocol rule 1).
     #[serde(other, skip_serializing)]
     Unknown,
+}
+
+/// One file of a `p2p-folder-offer`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderEntry {
+    /// The transfer that brings it (when accepted).
+    pub transfer_id: String,
+    /// Its path inside the folder, the folder's name first (`Photos/2026/a.jpg`).
+    pub path: String,
+    /// Its file name.
+    #[serde(default)]
+    pub file_name: String,
+    /// Its size in bytes.
+    #[serde(default)]
+    pub file_size: f64,
+    /// MIME type.
+    #[serde(default)]
+    pub mime_type: String,
 }
 
 /// Measurements of one WebRTC connection to a peer.
@@ -577,6 +638,12 @@ fn lenient_reply<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<ReplyR
     Ok(serde_json::from_value::<ReplyRef>(v)
         .ok()
         .filter(|r| !r.id.is_empty()))
+}
+
+/// `true` only when the JSON value is `true` (the web app's `=== true`); anything else is false,
+/// never an error, so an odd value doesn't cost the whole message.
+fn only_true<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(Value::deserialize(d)? == Value::Bool(true))
 }
 
 /// A list of strings, keeping only the strings (anything else: an empty list).
@@ -695,6 +762,7 @@ mod tests {
             topology: None,
             max_users: None,
             quic: None,
+            camera: true,
         }
     }
 
@@ -710,7 +778,8 @@ mod tests {
             v,
             json!({"type": "peer-identity", "peerId": "p1", "username": "Darshan", "isHost": true,
                    "isMuted": false, "proto": 2, "build": "261111.1200", "clientId": "c-123",
-                   "client": "desktop", "sender": "Darshan", "timestamp": 1_700_000_000_000.0})
+                   "client": "desktop", "camera": true, "sender": "Darshan",
+                   "timestamp": 1_700_000_000_000.0})
         );
     }
 
@@ -875,6 +944,54 @@ mod tests {
         );
         let fallback = Envelope::from_json(r#"{"type":"quic-fallback","transferId":"t1"}"#).unwrap();
         assert!(matches!(fallback.message, PeerMessage::QuicFallback { reason, .. } if reason.is_empty()));
+    }
+
+    #[test]
+    fn camera_messages_read_as_the_web_app_sends_them() {
+        // what useCamera.ts broadcasts
+        let on = Envelope::from_json(r#"{"type":"camera-status","on":true,"sender":"Riya","timestamp":1}"#)
+            .unwrap();
+        assert_eq!(on.message, PeerMessage::CameraStatus { on: true });
+        // only `true` is on, as the web app reads it; nothing odd is an error
+        for text in [
+            r#"{"type":"camera-status","on":false}"#,
+            r#"{"type":"camera-status","on":"yes"}"#,
+            r#"{"type":"camera-status","on":1}"#,
+            r#"{"type":"camera-status"}"#,
+        ] {
+            assert_eq!(
+                Envelope::from_json(text).unwrap().message,
+                PeerMessage::CameraStatus { on: false },
+                "{text}"
+            );
+        }
+        let v: Value = serde_json::from_str(
+            &Envelope {
+                sender: None,
+                timestamp: None,
+                message: PeerMessage::CameraStatus { on: true },
+            }
+            .to_json()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v, json!({"type": "camera-status", "on": true}));
+        // the web app's identity says `camera: true`; an odd value keeps the identity, without it
+        let web = r#"{"type":"peer-identity","peerId":"p2","username":"Riya","isHost":false,"isMuted":false,"proto":2,"clientId":"c-2","camera":true}"#;
+        assert!(matches!(
+            Envelope::from_json(web).unwrap().message,
+            PeerMessage::PeerIdentity { camera: true, .. }
+        ));
+        let odd = web.replace("\"camera\":true", "\"camera\":\"true\"");
+        assert!(matches!(
+            Envelope::from_json(&odd).unwrap().message,
+            PeerMessage::PeerIdentity { camera: false, .. }
+        ));
+        let old = web.replace(",\"camera\":true", "");
+        assert!(matches!(
+            Envelope::from_json(&old).unwrap().message,
+            PeerMessage::PeerIdentity { camera: false, .. }
+        ));
     }
 
     #[test]

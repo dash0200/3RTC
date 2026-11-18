@@ -151,7 +151,7 @@ impl ScreenFeed {
         lock(&self.0).target
     }
 
-    fn put(&self, f: ScreenFrame) {
+    pub(crate) fn put(&self, f: ScreenFrame) {
         let mut g = lock(&self.0);
         g.count += 1;
         g.frame = Some(Arc::new(f));
@@ -553,7 +553,7 @@ fn to_nv12(b: &I420Buffer) -> Vec<u8> {
     out
 }
 
-fn bgra_of(b: &I420Buffer) -> ScreenFrame {
+pub(crate) fn bgra_of(b: &I420Buffer) -> ScreenFrame {
     let (w, h) = (b.width(), b.height());
     let mut bgra = vec![0u8; (w * h * 4) as usize];
     #[allow(clippy::cast_possible_wrap)]

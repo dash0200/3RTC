@@ -6,6 +6,7 @@ import { useLiveVoiceUsers } from '../../utils/speakingActivity';
 import { getAvatarColor } from '../../utils/sound';
 import { getInitials, PeerAudioPopover, type VoicePeer } from '../PeerVoiceRoster';
 import AudioDevicePicker from '../AudioDevicePicker';
+import type { CameraDevice } from '../../features/camera/cameraDevices';
 import SoundboardTray from '../SoundboardTray';
 import { spatialAudio } from '../../features/audio/spatialAudio';
 import type { ConnectedPeer, SelfInfo } from '../../types';
@@ -46,6 +47,11 @@ export interface DesktopDockProps {
   isCameraOn?: boolean;
   isCameraStarting?: boolean;
   onToggleCamera?: () => void;
+  /** The camera picker (features/camera/cameraDevices.ts) */
+  cameras?: CameraDevice[];
+  cameraDeviceId?: string;
+  onSelectCamera?: (deviceId: string) => void;
+  onOpenCameraPicker?: () => void;
   activityMenu?: ActivityMenuItem[];
   onStartActivity?: (id: string) => void;
   playbackLock?: boolean;
@@ -92,6 +98,10 @@ export default function DesktopDock({
   isCameraOn = false,
   isCameraStarting = false,
   onToggleCamera,
+  cameras = [],
+  cameraDeviceId = '',
+  onSelectCamera,
+  onOpenCameraPicker,
   activityMenu = [],
   onStartActivity,
   playbackLock = false,
@@ -107,6 +117,7 @@ export default function DesktopDock({
   const [selectedPeer, setSelectedPeer] = useState<VoicePeer | null>(null);
   const quickReactions = useReactionSet();
   const devices = usePopover();
+  const cameraPicker = usePopover();
   const reactions = usePopover();
   const sounds = usePopover();
   const games = usePopover();
@@ -222,17 +233,56 @@ export default function DesktopDock({
         </div>
 
         {typeof onToggleCamera === 'function' && (
-          <button
-            type="button"
-            className={`dock-btn ${isCameraOn ? 'is-active' : ''}`}
-            aria-pressed={isCameraOn}
-            aria-label={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
-            title={isCameraStarting ? 'Starting camera…' : isCameraOn ? 'Turn camera off' : 'Turn camera on'}
-            disabled={isCameraStarting}
-            onClick={onToggleCamera}
-          >
-            <Icon name={isCameraOn ? 'camera' : 'cameraOff'} />
-          </button>
+          <div className={`dock-cam ${isCameraOn ? 'is-active' : ''}`} ref={cameraPicker.ref as React.RefObject<HTMLDivElement>}>
+            <button
+              type="button"
+              className="dock-cam-toggle"
+              aria-pressed={isCameraOn}
+              aria-label={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
+              title={isCameraStarting ? 'Starting camera…' : isCameraOn ? 'Turn camera off' : 'Turn camera on'}
+              disabled={isCameraStarting}
+              onClick={onToggleCamera}
+            >
+              <Icon name={isCameraOn ? 'camera' : 'cameraOff'} />
+            </button>
+            {typeof onSelectCamera === 'function' && (
+              <button
+                type="button"
+                className="dock-mic-caret dock-cam-caret"
+                aria-label="Choose camera"
+                aria-expanded={cameraPicker.open}
+                onClick={() => {
+                  if (!cameraPicker.open) onOpenCameraPicker?.();
+                  cameraPicker.toggle();
+                }}
+              >
+                <Icon name="chevronUp" size={14} strokeWidth={2.4} />
+              </button>
+            )}
+            {cameraPicker.open && typeof onSelectCamera === 'function' && (
+              <div className="dock-pop dock-pop-cameras dock-menu" role="menu" aria-label="Camera">
+                <div className="dock-menu-label">Camera</div>
+                {[{ deviceId: '', label: 'Default camera' }, ...cameras].map((c) => (
+                  <button
+                    key={c.deviceId || 'default'}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={c.deviceId === cameraDeviceId}
+                    className="dock-menu-item"
+                    disabled={isCameraStarting}
+                    onClick={() => {
+                      cameraPicker.close();
+                      if (c.deviceId !== cameraDeviceId) onSelectCamera(c.deviceId);
+                    }}
+                  >
+                    <span className="dock-menu-emoji" aria-hidden="true">{c.deviceId === cameraDeviceId ? '✓' : ''}</span>
+                    <span className="dock-cam-name">{c.label}</span>
+                  </button>
+                ))}
+                {cameras.length === 0 && <div className="dock-menu-note">No camera found</div>}
+              </div>
+            )}
+          </div>
         )}
 
         <button

@@ -168,7 +168,11 @@ impl State {
     /// The turn whose board shows now (the one just played, during the reveal).
     #[must_use]
     pub fn board_turn(&self) -> i64 {
-        if self.phase == "reveal" { (self.turn - 1).max(0) } else { self.turn }
+        if self.phase == "reveal" {
+            (self.turn - 1).max(0)
+        } else {
+            self.turn
+        }
     }
 
     fn feed_line(&mut self, line: FeedLine) {
@@ -183,6 +187,7 @@ impl State {
 // ---- words and guesses ----------------------------------------------------------------------
 
 /// Words to draw: simple things anyone can sketch in a minute (`words.ts`).
+#[rustfmt::skip]
 pub const WORDS: &[&str] = &[
     "apple", "banana", "mango", "grapes", "pineapple", "watermelon", "carrot", "tomato",
     "onion", "potato", "corn", "mushroom", "pizza", "burger", "sandwich", "ice cream",
@@ -214,6 +219,7 @@ pub const WORDS: &[&str] = &[
 
 /// Latin letters with accents (and full-width letters, ligatures, superscripts) as plain ones:
 /// the part of JS `normalize('NFKD')` plus dropping accents that a guess can meet.
+#[rustfmt::skip]
 const FOLD: &[(char, &str)] = &[
     ('\u{a0}', " "), ('\u{a8}', " "), ('\u{aa}', "a"), ('\u{af}', " "), ('\u{b2}', "2"), ('\u{b3}', "3"),
     ('\u{b4}', " "), ('\u{b8}', " "), ('\u{b9}', "1"), ('\u{ba}', "o"), ('\u{e0}', "a"), ('\u{e1}', "a"),
@@ -349,7 +355,15 @@ pub fn distance(a: &str, b: &str, max: usize) -> usize {
 pub fn hint_for(word: &str, shown: &[usize]) -> String {
     word.chars()
         .enumerate()
-        .map(|(i, c)| if c == ' ' { ' ' } else if shown.contains(&i) { c } else { '_' })
+        .map(|(i, c)| {
+            if c == ' ' {
+                ' '
+            } else if shown.contains(&i) {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -383,7 +397,11 @@ pub fn shown_letters(word: &str, elapsed_share: f64, seed: i64) -> Vec<usize> {
 
 /// Three different words, not used in this game yet if possible.
 fn pick_choices(meta: &mut Meta<'_>, avoid: &[String]) -> Vec<String> {
-    let pool: Vec<&str> = WORDS.iter().copied().filter(|w| !avoid.iter().any(|a| a == w)).collect();
+    let pool: Vec<&str> = WORDS
+        .iter()
+        .copied()
+        .filter(|w| !avoid.iter().any(|a| a == w))
+        .collect();
     let from: Vec<&str> = if pool.len() >= 3 { pool } else { WORDS.to_vec() };
     let mut out: Vec<String> = Vec::new();
     while out.len() < 3 {
@@ -455,7 +473,7 @@ fn info(text: String) -> FeedLine {
 fn here<'s>(s: &'s State, meta: &Meta<'_>) -> Vec<&'s Player> {
     s.players
         .iter()
-        .filter(|p| meta.present.iter().any(|id| *id == p.id))
+        .filter(|p| meta.present.contains(&p.id))
         .collect()
 }
 
@@ -669,7 +687,11 @@ fn step(s: &State, a: &Value, meta: &mut Meta<'_>) -> Option<State> {
                     .iter()
                     .filter(|p| s.drawer.as_deref() != Some(p.id.as_str()))
                     .all(|p| o.guessed.contains(&p.id));
-                return Some(if everyone { end_turn(&o, "Everyone got it!", now) } else { o });
+                return Some(if everyone {
+                    end_turn(&o, "Everyone got it!", now)
+                } else {
+                    o
+                });
             }
             let close = target.len() >= 4 && distance(&guess, &target, 1) <= 1;
             o.feed_line(if close {

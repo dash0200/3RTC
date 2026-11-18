@@ -22,6 +22,8 @@ import { loadQuickPicks } from './utils/quickPicks';
 import { setPreviewServers } from './features/chat/linkPreviewClient';
 import { useCamera } from './features/camera/useCamera';
 import CameraTiles from './features/camera/CameraTiles';
+import CameraStage from './features/camera/CameraStage';
+import { SELF_CAMERA, nextSpotlight, spotlightStream } from './features/camera/spotlight';
 import { createRoomBus } from './core/roomBus';
 import type { RoomBus } from './types';
 import { pickAuthority } from './core/sharedState';
@@ -625,6 +627,25 @@ export default function App() {
     [connectedPeers]
   );
 
+  // A camera on the stage, for us only (features/camera/spotlight.ts)
+  const [cameraSpotlight, setCameraSpotlight] = useState<string | null>(null);
+  const spotlitStream = spotlightStream(cameraSpotlight, camera.localStream, camera.remote);
+  const closeCameraSpotlight = useCallback(() => setCameraSpotlight(null), []);
+  const toggleCameraSpotlight = useCallback((key: string) => setCameraSpotlight((cur) => nextSpotlight(cur, key)), []);
+  // That camera turned off, its person left, or we left the room: the stage comes back
+  useEffect(() => {
+    if (cameraSpotlight && (!spotlitStream || !roomId)) setCameraSpotlight(null);
+  }, [cameraSpotlight, spotlitStream, roomId]);
+  useBackLayer(Boolean(spotlitStream), closeCameraSpotlight);
+  const cameraStage = spotlitStream && cameraSpotlight ? (
+    <CameraStage
+      stream={spotlitStream}
+      name={cameraSpotlight === SELF_CAMERA ? 'You' : cameraNameOf(cameraSpotlight)}
+      mirrored={cameraSpotlight === SELF_CAMERA}
+      onClose={closeCameraSpotlight}
+    />
+  ) : null;
+
   const roomContext = useMemo(() => ({ ...room, roomId, isHost, username, peers: connectedPeers, playbackLock, signalUrl }),
     [room, roomId, isHost, username, connectedPeers, playbackLock, signalUrl]);
 
@@ -688,6 +709,7 @@ export default function App() {
       rejoin={rejoin}
       screenShare={screenShare}
       camera={camera}
+      cameraStage={cameraStage}
       bus={bus}
       onCopyRoom={handleCopyRoom}
       onLeaveRoom={handleLeaveRoom}
@@ -792,6 +814,7 @@ export default function App() {
       onPauseTransfer={chat.pauseTransfer}
       onResumeTransfer={chat.resumeTransfer}
       onCancelTransfer={chat.cancelTransfer}
+      onAcceptTransfer={chat.acceptTransfer}
       onClearLogs={notices.clearLogs}
       onTestSound={handleTestSound}
       isP2PConnected={isP2PConnected}
@@ -882,7 +905,7 @@ export default function App() {
             {roomId ? (
               <>
                 {renderStage({ layout: 'phone', onOpenAddVideo: () => setPhoneSheet('add') })}
-                <CameraTiles layout="phone" localStream={camera.localStream} remote={camera.remote} nameOf={cameraNameOf} />
+                <CameraTiles layout="phone" localStream={camera.localStream} remote={camera.remote} nameOf={cameraNameOf} spotlight={cameraSpotlight} onSpotlight={toggleCameraSpotlight} />
                 {renderChat({ embedded: true, isOpen: true })}
                 <PhoneActionBar
                   isMicMuted={isMicMuted}
@@ -1000,7 +1023,7 @@ export default function App() {
                     onOpenAddVideo: () => setPhoneSheet('add'),
                     onUpdateAudioSettings: handleUpdateAudioSettings,
                     onSelectOutput: selectOutputDevice,
-                    cameraTiles: <CameraTiles localStream={camera.localStream} remote={camera.remote} nameOf={cameraNameOf} />
+                    cameraTiles: <CameraTiles localStream={camera.localStream} remote={camera.remote} nameOf={cameraNameOf} spotlight={cameraSpotlight} onSpotlight={toggleCameraSpotlight} />
                   })}
                 </main>
               </div>

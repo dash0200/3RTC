@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
-use rtc_core::quic::{clean_relative_path, from_hex32, partial_name, peer_addrs, to_hex, use_quic};
+use rtc_core::quic::{clean_relative_path, from_hex32, partial_name, peer_addrs, to_hex};
 use rtc_protocol::PeerId;
 use rtc_protocol::peer::{Envelope, PeerMessage};
 use tokio::sync::{mpsc, oneshot};
@@ -55,6 +55,8 @@ pub(crate) enum Event {
     Sent { transfer_id: String, peer: PeerId },
     /// Received and saved.
     Received { transfer_id: String, path: PathBuf },
+    /// A folder's file came in whole on the bulk channel but couldn't be saved.
+    SaveFailed { transfer_id: String, reason: String },
     /// Receiving failed: the sender is told, and sends it over the bulk channel.
     ReceiveFailed {
         transfer_id: String,
@@ -66,32 +68,20 @@ pub(crate) enum Event {
 /// QUIC transfers in progress.
 #[derive(Default)]
 pub(crate) struct QuicState {
-    /// Our files going over QUIC to some peers, by transfer id.
-    out: HashMap<String, Out>,
+    /// Our files going over QUIC: to whom, by transfer id.
+    out: HashMap<String, HashSet<PeerId>>,
     /// Answers awaited, by transfer and peer.
     answers: HashMap<(String, PeerId), AnswerTx>,
     /// Files coming in, by transfer id: from whom, and the task.
     incoming: HashMap<String, (PeerId, JoinHandle<()>)>,
-}
-
-/// One of our files going over QUIC.
-struct Out {
-    path: PathBuf,
-    size: u64,
-    file_name: String,
-    /// Peers still to get it over QUIC.
-    peers: HashSet<PeerId>,
-    /// Its place in a folder being sent.
-    relative_path: Option<String>,
-    /// The announcement and the bytes, for a fallback to the bulk channel.
-    start: Option<Envelope>,
-    source: Option<Source>,
+    /// Our sends in progress, by transfer and peer (to stop one on a cancel).
+    sends: HashMap<(String, PeerId), tokio::task::AbortHandle>,
 }
 
 /// Where an offered file goes: its name, and its place in a folder (cleaned, under Downloads).
-struct Place<'a> {
-    file_name: &'a str,
-    relative_path: Option<&'a str>,
+pub(crate) struct Place<'a> {
+    pub(crate) file_name: &'a str,
+    pub(crate) relative_path: Option<&'a str>,
 }
 
 impl Place<'_> {
@@ -104,7 +94,7 @@ impl Place<'_> {
     }
 
     /// The folder it goes in, under `downloads`.
-    fn dir(&self, downloads: &Path) -> PathBuf {
+    pub(crate) fn dir(&self, downloads: &Path) -> PathBuf {
         let parts = self.parts();
         let mut dir = downloads.to_owned();
         if parts.len() > 1 {
@@ -116,21 +106,21 @@ impl Place<'_> {
     }
 
     /// The file's own name, made safe.
-    fn name(&self) -> String {
+    pub(crate) fn name(&self) -> String {
         let last = self.parts().pop().unwrap_or_else(|| self.file_name.to_owned());
         rtc_protocol::image::safe_file_save_name(&last, "application/octet-stream")
     }
 }
 
 /// Where received files go (as the app saves pictures).
-fn downloads() -> PathBuf {
+pub(crate) fn downloads() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map_or_else(std::env::temp_dir, |h| PathBuf::from(h).join("Downloads"))
 }
 
 /// `dir/name`, or `dir/name (1)`… if that's taken.
-fn unique_path(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let first = dir.join(name);
     if !first.exists() {
         return first;
@@ -149,95 +139,67 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     first
 }
 
-/// A progress reporter: percent of `size`, sent only when it changes.
-fn progress(queue: mpsc::UnboundedSender<Msg>, transfer_id: String, size: u64) -> impl Fn(u64) + Send {
+/// A progress reporter: percent of `size`, sent only when it changes (`peer`: sending to them).
+fn progress(
+    queue: mpsc::UnboundedSender<Msg>,
+    transfer_id: String,
+    size: u64,
+    peer: Option<PeerId>,
+) -> impl Fn(u64) + Send {
     let last = AtomicU8::new(0);
     move |done: u64| {
         let percent = u8::try_from(done.saturating_mul(100) / size.max(1))
             .unwrap_or(100)
             .min(100);
         if last.swap(percent, Ordering::Relaxed) != percent {
-            let _ = queue.send(Msg::ImageSending(transfer_id.clone(), percent));
+            let _ = queue.send(Msg::ImageSending(transfer_id.clone(), peer.clone(), percent));
         }
     }
 }
 
 impl Engine {
-    /// Before our file is announced: which desktop peers get it over QUIC (none for pictures,
-    /// small files, or bytes not from a file on disk).
-    pub(crate) fn quic_plan(
-        &mut self,
-        transfer_id: &str,
-        file_name: &str,
-        size: u64,
-        path: Option<&Path>,
-        is_image: bool,
-        relative_path: Option<String>,
-    ) {
-        let Some(path) = path else { return };
-        if is_image {
-            return;
-        }
-        let peers: HashSet<PeerId> = self
-            .room
-            .members()
-            .iter()
-            .filter(|(_, m)| m.connected && use_quic(size, m.quic))
-            .map(|(p, _)| p.clone())
-            .collect();
-        if peers.is_empty() {
-            return;
-        }
-        self.quic.out.insert(
-            transfer_id.to_owned(),
-            Out {
-                path: path.to_owned(),
-                size,
-                file_name: file_name.to_owned(),
-                peers,
-                relative_path,
-                start: None,
-                source: None,
-            },
-        );
-    }
-
-    /// The peers that get this transfer over QUIC (no bulk frames for them).
-    pub(crate) fn quic_peers(&self, transfer_id: &str) -> HashSet<PeerId> {
-        self.quic
-            .out
-            .get(transfer_id)
-            .map(|o| o.peers.clone())
-            .unwrap_or_default()
-    }
-
-    /// Our file's announcement went out: start a QUIC send to each peer planned. `report`: the
-    /// progress shown is QUIC's (nobody gets it over the bulk channel).
-    pub(crate) fn quic_start(&mut self, transfer_id: &str, start: &Envelope, source: &Source, report: bool) {
-        let Some(out) = self.quic.out.get_mut(transfer_id) else {
+    /// Sends our file (accepted by `peer`, a desktop app that does QUIC) over QUIC. A failure
+    /// falls back to their bulk channel ([`Event::SendFailed`]).
+    pub(crate) fn quic_send_to(&mut self, transfer_id: &str, peer: &PeerId) {
+        let Some(file) = self.files.out.get(transfer_id) else {
             return;
         };
-        out.start = Some(start.clone());
-        out.source = Some(source.clone());
-        let mut jobs = Vec::new();
-        for peer in out.peers.clone() {
-            jobs.push(SendJob {
-                queue: self.queue_tx.clone(),
-                transfer_id: transfer_id.to_owned(),
-                peer,
-                file_name: out.file_name.clone(),
-                relative_path: out.relative_path.clone(),
-                path: out.path.clone(),
-                size: out.size,
-                source: source.clone(),
-                report,
-            });
-        }
-        // each QUIC send counts until it's done (a folder's next file waits for it)
-        *self.inflight.entry(transfer_id.to_owned()).or_default() +=
-            u32::try_from(jobs.len()).unwrap_or(u32::MAX);
-        for job in jobs {
-            self.sending.push(tokio::spawn(job.run()));
+        let Some(path) = file.path.clone() else {
+            return;
+        };
+        let job = SendJob {
+            queue: self.queue_tx.clone(),
+            transfer_id: transfer_id.to_owned(),
+            peer: peer.clone(),
+            file_name: file.file_name.clone(),
+            relative_path: file.relative_path.clone(),
+            path,
+            size: file.size,
+            source: file.source.clone(),
+        };
+        self.quic
+            .out
+            .entry(transfer_id.to_owned())
+            .or_default()
+            .insert(peer.clone());
+        let task = tokio::spawn(job.run());
+        self.quic
+            .sends
+            .insert((transfer_id.to_owned(), peer.clone()), task.abort_handle());
+        self.sending.push(task);
+    }
+
+    /// `peer` left: our QUIC sends to them stop (theirs to us end on their own).
+    pub(crate) fn quic_peer_gone(&mut self, peer: &PeerId) {
+        let tids: Vec<String> = self
+            .quic
+            .sends
+            .keys()
+            .filter(|(_, p)| p == peer)
+            .map(|(t, _)| t.clone())
+            .collect();
+        for tid in tids {
+            self.quic_stop_to(&tid, peer);
         }
     }
 
@@ -323,6 +285,10 @@ impl Engine {
         if self.quic.incoming.contains_key(transfer_id) {
             return;
         }
+        // only files we accepted (an older app offers without asking)
+        if !self.files.accepted.contains_key(transfer_id) {
+            return refuse(self, "not accepted");
+        }
         let (Some(sha256), Some(cert_sha256), Some(token)) =
             (from_hex32(sha256), from_hex32(cert_sha256), from_hex32(token))
         else {
@@ -383,47 +349,73 @@ impl Engine {
                 peer,
                 reason,
             } => {
+                // stopped already (cancelled): nothing to fall back to
+                if self
+                    .quic
+                    .sends
+                    .remove(&(transfer_id.clone(), peer.clone()))
+                    .is_none()
+                {
+                    return;
+                }
                 tracing::info!(
                     "QUIC send of {transfer_id} to {peer} failed ({reason}): bulk channel instead"
                 );
                 self.quic.answers.remove(&(transfer_id.clone(), peer.clone()));
                 self.quic_fallback_to(&peer, &transfer_id, &reason);
-                let Some(out) = self.quic.out.get_mut(&transfer_id) else {
-                    return;
-                };
-                if !out.peers.remove(&peer) {
-                    return;
-                }
-                let (Some(start), Some(source)) = (out.start.clone(), out.source.clone()) else {
-                    self.part_done(&transfer_id);
-                    return;
-                };
-                if out.peers.is_empty() {
-                    self.quic.out.remove(&transfer_id);
-                }
-                // the announcement again (so the receiver expects the frames), then the frames
-                let channels = self.peers.bulk_channels(std::iter::once(&peer));
-                if let Ok(json) = start.to_json() {
-                    for dc in &channels {
-                        let _ = dc.send(json.as_bytes(), false);
-                    }
-                }
-                self.spawn_frames(channels, source, transfer_id.clone());
-                // the QUIC part is over (the frames count now)
-                self.part_done(&transfer_id);
-            }
-            Event::Sent { transfer_id, peer } => {
-                tracing::info!("QUIC: {transfer_id} sent to {peer}");
-                if let Some(out) = self.quic.out.get_mut(&transfer_id) {
-                    out.peers.remove(&peer);
-                    if out.peers.is_empty() {
+                if let Some(to) = self.quic.out.get_mut(&transfer_id) {
+                    to.remove(&peer);
+                    if to.is_empty() {
                         self.quic.out.remove(&transfer_id);
                     }
                 }
-                self.part_done(&transfer_id);
+                let Some(file) = self.files.out.get(&transfer_id) else {
+                    self.part_failed(&transfer_id, &peer);
+                    return;
+                };
+                // the announcement again (so the receiver expects the frames), then the frames
+                let channels = self.bulk_pairs(std::iter::once(&peer));
+                if channels.is_empty() {
+                    self.part_failed(&transfer_id, &peer);
+                    return;
+                }
+                if let Some(json) = file.start.as_ref().and_then(|s| s.to_json().ok()) {
+                    for (_, dc) in &channels {
+                        let _ = dc.send(json.as_bytes(), false);
+                    }
+                }
+                let source = file.source.clone();
+                self.spawn_frames(channels, source, transfer_id.clone());
+            }
+            Event::Sent { transfer_id, peer } => {
+                if self
+                    .quic
+                    .sends
+                    .remove(&(transfer_id.clone(), peer.clone()))
+                    .is_none()
+                {
+                    return;
+                }
+                tracing::info!("QUIC: {transfer_id} sent to {peer}");
+                if let Some(to) = self.quic.out.get_mut(&transfer_id) {
+                    to.remove(&peer);
+                    if to.is_empty() {
+                        self.quic.out.remove(&transfer_id);
+                    }
+                }
+                self.delivered_to(&transfer_id, &peer);
+            }
+            Event::SaveFailed { transfer_id, reason } => {
+                tracing::warn!("couldn't save {transfer_id}: {reason}");
+                let _ = self
+                    .updates
+                    .send(Update::Notice(format!("Couldn't save a file: {reason}")));
+                let _ = self.updates.send(Update::TransferCancelled { transfer_id });
             }
             Event::Received { transfer_id, path } => {
                 self.quic.incoming.remove(&transfer_id);
+                self.files.accepted.remove(&transfer_id);
+                self.transfers.finish(&transfer_id);
                 let _ = self.updates.send(Update::FileSaved { transfer_id, path });
             }
             Event::ReceiveFailed {
@@ -440,10 +432,54 @@ impl Engine {
         }
     }
 
+    /// A receiver cancelled (or left): stop sending them this file over QUIC. True when a send
+    /// to them was stopped (its part of the transfer is over).
+    pub(crate) fn quic_stop_to(&mut self, transfer_id: &str, peer: &PeerId) -> bool {
+        self.quic.answers.remove(&(transfer_id.to_owned(), peer.clone()));
+        if let Some(to) = self.quic.out.get_mut(transfer_id) {
+            to.remove(peer);
+            if to.is_empty() {
+                self.quic.out.remove(transfer_id);
+            }
+        }
+        match self.quic.sends.remove(&(transfer_id.to_owned(), peer.clone())) {
+            Some(task) => {
+                task.abort();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Our file was cancelled: stop every QUIC send of it.
+    pub(crate) fn quic_cancel(&mut self, transfer_id: &str) {
+        self.quic.out.remove(transfer_id);
+        self.quic.answers.retain(|(t, _), _| t != transfer_id);
+        self.quic.sends.retain(|(t, _), task| {
+            if t == transfer_id {
+                task.abort();
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// A file coming in over QUIC was cancelled: stop receiving it (its `.3rtc-part` stays,
+    /// as after a failure).
+    pub(crate) fn quic_stop_incoming(&mut self, transfer_id: &str) {
+        if let Some((_, task)) = self.quic.incoming.remove(transfer_id) {
+            task.abort();
+        }
+    }
+
     /// Leaving the room: stop every QUIC transfer.
     pub(crate) fn quic_reset(&mut self) {
         self.quic.out.clear();
         self.quic.answers.clear();
+        for (_, task) in self.quic.sends.drain() {
+            task.abort();
+        }
         for (_, (_, task)) in self.quic.incoming.drain() {
             task.abort();
         }
@@ -460,7 +496,6 @@ struct SendJob {
     path: PathBuf,
     size: u64,
     source: Source,
-    report: bool,
 }
 
 impl SendJob {
@@ -519,17 +554,13 @@ impl SendJob {
         if addrs.is_empty() {
             return Err("no address to reach them".to_owned());
         }
-        let report = self.report;
-        let progress = progress(self.queue.clone(), self.transfer_id.clone(), self.size);
-        sender
-            .serve(&addrs, move |sent| {
-                if report {
-                    progress(sent);
-                }
-            })
-            .await
-            .map(|_| ())
-            .map_err(|e| e.0)
+        let progress = progress(
+            self.queue.clone(),
+            self.transfer_id.clone(),
+            self.size,
+            Some(self.peer.clone()),
+        );
+        sender.serve(&addrs, progress).await.map(|_| ()).map_err(|e| e.0)
     }
 }
 
@@ -589,7 +620,12 @@ impl ReceiveJob {
                 envelope,
             }))
             .map_err(|_| "engine stopped".to_owned())?;
-        let progress = progress(self.queue.clone(), self.transfer_id.clone(), self.offer.size);
+        let progress = progress(
+            self.queue.clone(),
+            self.transfer_id.clone(),
+            self.offer.size,
+            None,
+        );
         match quic::receive(socket, &self.offer, &partial, offset, progress).await {
             Ok(_) => {
                 let path = unique_path(&self.dir, &self.name);

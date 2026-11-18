@@ -38,5 +38,10 @@ urlencoding.workspace = true
 librqbit.workspace = true
 librqbit-dualstack-sockets.workspace = true
 
+# build.rs links the logo into 3rtc.exe as its icon (Windows only); GPUI already uses this crate
+# for its manifest, so nothing new comes into the tree
+[build-dependencies]
+embed-resource = "3.0"
+
 [lints]
 workspace = true

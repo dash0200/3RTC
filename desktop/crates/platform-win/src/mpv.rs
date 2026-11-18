@@ -16,14 +16,17 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{BLACK_BRUSH, CreateRectRgn, GetStockObject, HBRUSH, SetWindowRgn};
+use windows::Win32::Graphics::Gdi::{
+    BLACK_BRUSH, CreateRectRgn, GetStockObject, HBRUSH, RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW,
+    RedrawWindow, SetWindowRgn,
+};
 use windows::Win32::System::LibraryLoader::{
     GetModuleFileNameW, GetModuleHandleW, GetProcAddress, LoadLibraryW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, RegisterClassExW, SW_HIDE,
     SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, ShowWindow, WNDCLASSEXW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DISABLED, WS_EX_NOPARENTNOTIFY,
 };
 use windows::core::{HSTRING, PCSTR, PCWSTR, w};
 
@@ -467,6 +470,17 @@ fn apply_clip(h: HWND, clip_px: i32) {
         // SAFETY: None removes the clipping region, restoring the whole window.
         let _ = unsafe { SetWindowRgn(h, None, true) };
     }
+    // mpv's own window inside ours repaints the last frame at once: a paused video has no new
+    // frames, so the area the controls bar left would otherwise keep showing the bar.
+    // SAFETY: `h` is our live child window on its own thread; no rectangle or region is passed.
+    let _ = unsafe {
+        RedrawWindow(
+            Some(h),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        )
+    };
 }
 
 const WM_MOUSEACTIVATE: u32 = 0x0021;
@@ -507,7 +521,10 @@ fn make_host(parent: ParentWindow, rect: Rect) -> Result<HWND, String> {
             WS_EX_NOPARENTNOTIFY,
             class,
             w!(""),
-            WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+            // disabled: Windows skips it (and mpv's window inside it) when it decides who gets the
+            // mouse, so clicks, double clicks, the wheel and the pointer go to the app's window
+            // under it, which handles them (mpv passed clicks on unreliably)
+            WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_DISABLED,
             rect.x,
             rect.y,
             rect.width.max(1),
@@ -597,7 +614,7 @@ fn setup(
         ("force-window", "yes"),
         ("hwdec", "auto-safe"),
         ("sub-auto", "fuzzy"),
-        ("cursor-autohide", "1500"),
+        ("cursor-autohide", "2000"),
         ("audio-display", "no"),
     ] {
         mpv.option(lib, k, v);
@@ -980,6 +997,10 @@ impl VideoPlayer {
     pub fn set_bottom_clip(&self, clip_px: i32) {
         if let Some(ui) = &self.ui {
             ui.run(move || {
+                // the stage asks on every frame: only a change touches the window
+                if BOTTOM_CLIP.get() == clip_px {
+                    return;
+                }
                 BOTTOM_CLIP.set(clip_px);
                 if let Some(h) = host() {
                     apply_clip(h, clip_px);

@@ -7648,10 +7648,11 @@ dependencies = [
 
 [[package]]
 name = "rtc-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "embed-resource",
  "gpui-kit",
  "image",
  "librqbit",
@@ -7678,7 +7679,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-audio"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "cpal",
  "nnnoiseless",
@@ -7688,7 +7689,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "rtc-games",
@@ -7699,7 +7700,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -7722,7 +7723,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-games"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "serde",
@@ -7731,7 +7732,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-platform-win"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "raw-window-handle",
  "serde",
@@ -7746,7 +7747,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "serde",
@@ -7757,7 +7758,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-signaling"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "futures-util",
  "rand 0.9.5",
@@ -7770,7 +7771,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
@@ -7778,7 +7779,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-webrtc"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "futures-util",
  "libwebrtc",
@@ -7794,7 +7795,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-webview"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "raw-window-handle",
  "rtc-platform-win",
