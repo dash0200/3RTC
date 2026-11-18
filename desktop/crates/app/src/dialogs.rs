@@ -1674,7 +1674,7 @@ fn player_shortcuts(
                 .child(toggle_row(
                     "ps-keep-torrents",
                     "Keep torrent downloads",
-                    "Save the file in Downloads\\3RTC Torrents (qBittorrent can finish it). Off: deleted when you stop. Also in the torrent's file picker",
+                    "Save the file in Downloads\\3RTC\\Torrents (qBittorrent can finish it). Off: deleted when you stop. Also in the torrent's file picker",
                     view.settings.keep_torrents,
                     true,
                     RoomView::set_keep_torrents,

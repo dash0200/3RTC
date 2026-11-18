@@ -48,9 +48,6 @@ export const ABUSE_LIMITS = {
   maxConnections: envNumber('SIGNAL_MAX_CONNECTIONS', 2000)
 };
 
-// The host's connection ended and others are still in the room: how long to keep the room for the
-// host (a Wi-Fi blip, a reload, Leave then Rejoin) before the longest-present person becomes host.
-export const HOST_HANDOVER_GRACE_MS = envNumber('HOST_HANDOVER_GRACE_MS', 20000);
 
 /**
  * A token bucket for bytes: `take(n)` is true (and spends n) while the bucket holds n.
@@ -111,7 +108,8 @@ export function attachSignaling(server) {
   // Map<roomId, Map<peerId, WebSocket>>
   /** @type {Map<string, Map<string, import('./types/protocol.d.ts').SignalingSocket>>} */
   const rooms = new Map();
-  // Map<roomId, { epoch, hostPeerId }>: the room instance (see seats.js) and who is its host
+  // Map<roomId, { epoch, hostPeerId, ownerPeerId, hostGen }>: the room instance (see seats.js), who
+  // is its host now, and whose room it is (see `handOver`)
   /** @type {Map<string, import('./types/protocol.d.ts').RoomInfo>} */
   const roomInfo = new Map();
   const seats = createSeats(loadSecret({ dir: path.dirname(fileURLToPath(import.meta.url)) }));
@@ -120,42 +118,59 @@ export function attachSignaling(server) {
   /** @type {Map<string, number>} */
   const connectionsPerIp = new Map();
   let openConnections = 0;
-  // Map<roomId, timer>: rooms whose host left, waiting for HOST_HANDOVER_GRACE_MS
-  /** @type {Map<string, ReturnType<typeof setTimeout>>} */
-  const handovers = new Map();
+  /**
+   * A room always has a host while anyone is in it. When the host is gone (left, dropped, or the
+   * room came back after a server restart without its host), the person who has been in the room
+   * longest (the steadiest connection) becomes the host at once: a *stand-in*. The room's owner
+   * (who made it, or whom the owner handed it to by hand) keeps the host token; a stand-in gets
+   * none, so when the owner comes back with it (`create-room` with the token, or `join` on its own
+   * seat) the room is theirs again. A hub room becomes a mesh (its hub is gone). No-op while the
+   * host is here.
+   * @param {string} roomId
+   * @param {string} [quiet] a peer not to tell (it's joining: its `joined` names the host)
+   * @returns {string | null} the new host, if one was picked
+   */
+  function handOver(roomId, quiet) {
+    const info = roomInfo.get(roomId);
+    const room = rooms.get(roomId);
+    if (!info || !room) return null;
+    const current = info.hostPeerId ? room.get(info.hostPeerId) : undefined;
+    if (current && current.readyState === WebSocket.OPEN) return null;
+    // Map order is join order: the first open socket has been here longest
+    const next = [...room.entries()].find(([, peerWs]) => peerWs.readyState === WebSocket.OPEN);
+    if (!next) return null;
+    const [nextId] = next;
+    const oldHostId = info.hostPeerId;
+    info.hostPeerId = nextId;
+    log('HOST', `Host ${oldHostId ?? '(none)'} gone from room "${roomId}": ${nextId} stands in until the owner is back`);
+    const wasHub = info.topology === 'hub';
+    if (wasHub) info.topology = 'mesh';
+    for (const [peerId, clientWs] of room.entries()) {
+      if (peerId === quiet) continue;
+      // No `from`: it wasn't handed on. Apps that don't know `reason` just update the host.
+      safeSend(clientWs, { type: 'host', hostPeerId: nextId, reason: 'host-left' });
+      if (wasHub) safeSend(clientWs, { type: 'topology-changed', topology: 'mesh', hostPeerId: nextId });
+    }
+    return nextId;
+  }
 
   /**
-   * The host left `roomId`: if it isn't back in time, the person in the room longest becomes the
-   * host (as `transfer-host` does: a new host token of the next generation, so the old host's
-   * token no longer takes the room back; it can still come back as a guest). A hub room becomes a
-   * mesh again (its hub is gone).
-   * @param {string} roomId @param {string} oldHostId
+   * The owner is back (`peerId`, maybe a new id after a reload): the room is theirs again, and
+   * everyone else hears it (`host`, reason `host-returned`). A stand-in host just becomes a guest.
+   * @param {string} roomId @param {string} peerId
    */
-  function scheduleHandover(roomId, oldHostId) {
-    clearTimeout(handovers.get(roomId));
-    const timer = setTimeout(() => {
-      handovers.delete(roomId);
-      const info = roomInfo.get(roomId);
-      const room = rooms.get(roomId);
-      // Gone, back (same or new peer id), or someone was made host meanwhile
-      if (!info || !room || info.hostPeerId !== oldHostId || room.has(oldHostId)) return;
-      const next = [...room.entries()].find(([, peerWs]) => peerWs.readyState === WebSocket.OPEN);
-      if (!next) return;
-      const [nextId, nextWs] = next;
-      info.hostGen = (info.hostGen || 0) + 1;
-      info.hostPeerId = nextId;
-      log('HOST', `Host ${oldHostId} left room "${roomId}": ${nextId} is the host now (generation ${info.hostGen})`);
-      safeSend(nextWs, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
-      const wasHub = info.topology === 'hub';
-      if (wasHub) info.topology = 'mesh';
-      for (const [, clientWs] of room.entries()) {
-        // No `from`: it wasn't handed on. Apps that don't know `reason` just update the host.
-        safeSend(clientWs, { type: 'host', hostPeerId: nextId, reason: 'host-left' });
-        if (wasHub) safeSend(clientWs, { type: 'topology-changed', topology: 'mesh', hostPeerId: nextId });
-      }
-    }, HOST_HANDOVER_GRACE_MS);
-    timer.unref?.();
-    handovers.set(roomId, timer);
+  function ownerBack(roomId, peerId) {
+    const info = roomInfo.get(roomId);
+    const room = rooms.get(roomId);
+    if (!info || !room) return;
+    const was = info.hostPeerId;
+    info.hostPeerId = peerId;
+    info.ownerPeerId = peerId;
+    if (was === peerId) return;
+    log('HOST', `Owner ${peerId} is back in room "${roomId}": host again (stand-in ${was ?? '(none)'})`);
+    for (const [otherId, clientWs] of room.entries()) {
+      if (otherId !== peerId) safeSend(clientWs, { type: 'host', hostPeerId: peerId, reason: 'host-returned' });
+    }
   }
   const globalBytes = createByteBucket(ABUSE_LIMITS.globalBytesPerSec, ABUSE_LIMITS.globalBurstBytes);
 
@@ -172,8 +187,9 @@ export function attachSignaling(server) {
     const room = new Map();
     rooms.set(roomId, room);
     const limit = maxUsers && Number(maxUsers) >= 2 ? Math.floor(Number(maxUsers)) : (topology === 'hub' ? 32 : MAX_ROOM_USERS);
-    // hostGen: how many times the host has handed the room on (host tokens name it; older ones stop working)
-    roomInfo.set(roomId, { epoch, hostPeerId, hostGen, topology, maxUsers: limit });
+    // hostGen: how many times the owner has handed the room on (host tokens name it; older ones
+    // stop working). ownerPeerId: whose room it is (null: not known, a room a guest brought back)
+    roomInfo.set(roomId, { epoch, hostPeerId, ownerPeerId: hostPeerId, hostGen, topology, maxUsers: limit });
     return room;
   }
 
@@ -190,7 +206,8 @@ export function attachSignaling(server) {
   function maySit(roomId, room, peerId, ws, token) {
     const info = roomInfo.get(roomId);
     if (!info) return false;
-    if (info.hostPeerId && peerId === info.hostPeerId) {
+    // the host's seat and the owner's (while a stand-in hosts) need their own seat token
+    if ((info.hostPeerId && peerId === info.hostPeerId) || (info.ownerPeerId && peerId === info.ownerPeerId)) {
       return seats.checkSeat(token, roomId, peerId) === info.epoch;
     }
     const holder = room.get(peerId);
@@ -203,13 +220,14 @@ export function attachSignaling(server) {
    *  guest after a restart, until the host returns). */
   const hostOf = (roomId) => roomInfo.get(roomId)?.hostPeerId ?? null;
 
-  /** Seat and host tokens for the client. Host token is only issued if host identity is verified. */
+  /** Seat and host tokens for the client. The host token only goes to the room's owner, once its
+   *  identity is verified (a stand-in host gets none: the room goes back to the owner). */
   function tokensFor(roomId, peerId, isHostVerified = false) {
     const info = roomInfo.get(roomId);
     if (!info) return {};
     return {
       seatToken: seats.seatToken(roomId, info.epoch, peerId),
-      ...(info.hostPeerId === peerId && isHostVerified ? { hostToken: seats.hostToken(roomId, info.epoch, info.hostGen || 0) } : {})
+      ...(info.ownerPeerId === peerId && isHostVerified ? { hostToken: seats.hostToken(roomId, info.epoch, info.hostGen || 0) } : {})
     };
   }
 
@@ -270,11 +288,9 @@ export function attachSignaling(server) {
       if (room.size === 0) {
         rooms.delete(roomId);
         roomInfo.delete(roomId);
-        clearTimeout(handovers.get(roomId));
-        handovers.delete(roomId);
         log('INFO', `Room "${roomId}" closed (empty)`);
       } else if (roomInfo.get(roomId)?.hostPeerId === peerId) {
-        scheduleHandover(roomId, peerId);
+        handOver(roomId);
       }
     }
 
@@ -387,8 +403,10 @@ export function attachSignaling(server) {
             if (previous && previous !== ws) previous.roomId = null; // its close won't remove us
             room.set(peerId, ws);
             ws.roomId = resumeRoomId;
+            const wasHost = currentInfo?.hostPeerId ?? null;
             if (currentInfo) {
               currentInfo.hostPeerId = peerId;
+              currentInfo.ownerPeerId = peerId;
               currentInfo.hostGen = Math.max(currentInfo.hostGen || 0, host.gen);
             }
 
@@ -406,7 +424,10 @@ export function attachSignaling(server) {
               ...tokensFor(resumeRoomId, peerId, true)
             });
             for (const peer of otherPeers) {
-              safeSend(peer.ws, { type: 'host', hostPeerId: peerId });
+              // `host-returned`: the owner took the room back from a stand-in
+              safeSend(peer.ws, wasHost && wasHost !== peerId
+                ? { type: 'host', hostPeerId: peerId, reason: 'host-returned' }
+                : { type: 'host', hostPeerId: peerId });
               safeSend(peer.ws, { type: 'peer-joined', peerId });
             }
             break;
@@ -542,6 +563,9 @@ export function attachSignaling(server) {
           const hasValidSeatToken = Boolean(
             data.seatToken && seats.checkSeat(data.seatToken, roomId, peerId) === info?.epoch
           );
+          // The owner coming back on its own seat (a stand-in is host meanwhile): host again
+          const ownerReturning = Boolean(info?.ownerPeerId && peerId === info.ownerPeerId &&
+            !isHostSeat && hasValidSeatToken);
 
           // Prevent unauthenticated claim of the host's seat (H-03)
           if (isHostSeat && !hasValidSeatToken) {
@@ -579,9 +603,13 @@ export function attachSignaling(server) {
 
           rateLimiter.recordSuccessfulJoin(ws.clientIp);
 
+          if (ownerReturning) ownerBack(roomId, ws.peerId);
+          // A room brought back without its host: whoever is here longest stands in at once
+          else handOver(roomId, ws.peerId);
+
           const otherPeers = getOtherPeers(roomId, ws.peerId);
           const currentTopology = info?.topology || 'mesh';
-          const isHost = Boolean(isHostSeat && hasValidSeatToken);
+          const isHost = Boolean((isHostSeat && hasValidSeatToken) || ownerReturning || hostOf(roomId) === ws.peerId);
           const hostPeerId = hostOf(roomId);
 
           // In Hub topology, guests only connect to the host; the host connects to all guests.
@@ -600,7 +628,7 @@ export function attachSignaling(server) {
             hostPeerId,
             topology: currentTopology,
             maxUsers: info?.maxUsers || roomLimit,
-            ...tokensFor(roomId, ws.peerId, isHost)
+            ...tokensFor(roomId, ws.peerId, isHost && hasValidSeatToken)
           });
 
           // Notify other peers about the newcomer
@@ -618,9 +646,11 @@ export function attachSignaling(server) {
         }
 
         case 'transfer-host': {
-          // The host hands the room to someone else in it. Only the host the server knows may do it;
-          // the new host gets a host token of the next generation, so the old host's token can't take
-          // the room back (its seat token still works: it stays as a guest).
+          // The host hands the room to someone else in it. Only the host the server knows may do it.
+          // The owner doing it makes the other person the owner: a host token of the next
+          // generation, so the old owner's token can't take the room back (its seat token still
+          // works: it stays as a guest). A stand-in doing it only passes the stand-in role on: the
+          // owner still gets the room back when it returns.
           const roomId = ws.roomId;
           const info = roomId ? roomInfo.get(roomId) : null;
           const room = roomId ? rooms.get(roomId) : null;
@@ -634,10 +664,15 @@ export function attachSignaling(server) {
             safeSend(ws, { type: 'error', code: 'target-not-found', message: 'That person is no longer in the room' });
             return;
           }
-          info.hostGen = (info.hostGen || 0) + 1;
           info.hostPeerId = targetId;
-          log('HOST', `Peer ${ws.peerId} made ${targetId} the host of room "${roomId}" (generation ${info.hostGen})`);
-          safeSend(target, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
+          if (info.ownerPeerId === ws.peerId || !info.ownerPeerId) {
+            info.hostGen = (info.hostGen || 0) + 1;
+            info.ownerPeerId = targetId;
+            log('HOST', `Peer ${ws.peerId} made ${targetId} the host of room "${roomId}" (generation ${info.hostGen})`);
+            safeSend(target, { type: 'host-token', roomId, hostToken: seats.hostToken(roomId, info.epoch, info.hostGen) });
+          } else {
+            log('HOST', `Stand-in ${ws.peerId} passed the host of room "${roomId}" to ${targetId} (owner ${info.ownerPeerId})`);
+          }
           for (const [, clientWs] of room.entries()) {
             safeSend(clientWs, { type: 'host', hostPeerId: targetId, from: ws.peerId });
           }
@@ -817,8 +852,6 @@ export function attachSignaling(server) {
 
   wss.on('close', () => {
     clearInterval(heartbeatInterval);
-    for (const timer of handovers.values()) clearTimeout(timer);
-    handovers.clear();
   });
 
   return wss;

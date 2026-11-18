@@ -2328,10 +2328,53 @@ fn panel(
         .bg(tokens::surface())
         .border_l_1()
         .border_color(tokens::line())
+        .relative()
         .on_drop(cx.listener(|v, paths: &ExternalPaths, _, cx| v.dropped(paths, cx)))
         .child(bar)
         .child(div().flex_1().min_h_0().flex().flex_col().child(body))
+        .child(drop_hint())
         .into_any_element()
+}
+
+/// "Drop to send": over the side panel while files or a folder are dragged over it, so it's
+/// clear the drop will work (`RoomView::dropped` takes them). Hidden otherwise, and never in
+/// the way of the mouse.
+fn drop_hint() -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .p(px(12.))
+        .opacity(0.)
+        // its own hitbox doesn't block the mouse: the panel under it still takes the drop
+        .drag_over::<ExternalPaths>(|s, _, _, _| s.opacity(1.))
+        .child(
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(px(8.))
+                .rounded(px(14.))
+                .border(px(2.))
+                .border_dashed()
+                .border_color(tokens::accent())
+                .bg(tokens::surface().opacity(0.94))
+                .child(div().text_size(px(34.)).child("📎"))
+                .child(
+                    div()
+                        .text_size(px(16.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(tokens::text())
+                        .child("Drop to send in chat"),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .text_color(tokens::text_2())
+                        .child("A picture, a file or a folder"),
+                ),
+        )
 }
 
 fn invite_tab(view: &RoomView, id: RoomId, cx: &mut Context<'_, RoomView>) -> impl IntoElement {

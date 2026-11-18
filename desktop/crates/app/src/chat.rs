@@ -147,11 +147,11 @@ fn picture(_mime: &str, bytes: &[u8]) -> Option<Arc<Image>> {
     Some(Arc::new(Image::from_bytes(fmt, bytes.to_vec())))
 }
 
-/// Where pictures are saved by default.
-fn downloads() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(std::env::temp_dir, |h| PathBuf::from(h).join("Downloads"))
+/// Where the save dialog for a chat picture starts: `Downloads\3RTC\Pictures` (made if missing).
+fn pictures_dir() -> PathBuf {
+    let dir = rtc_core::saves::dir(rtc_core::saves::Kind::Pictures);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }
 
 impl RoomView {
@@ -470,7 +470,7 @@ impl RoomView {
         }
     }
 
-    /// A file arrived over QUIC and is saved in Downloads (ADR 0009).
+    /// A file arrived over QUIC and is saved in `Downloads\3RTC\Files` (ADR 0009).
     pub(crate) fn file_saved(&mut self, transfer_id: String, path: PathBuf, cx: &mut Context<'_, Self>) {
         let name = path
             .file_name()
@@ -489,7 +489,7 @@ impl RoomView {
             return;
         }
         self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
-        self.show_toast(format!("Saved {name} in Downloads"), cx);
+        self.show_toast(format!("Saved {name} in Downloads\\3RTC\\Files"), cx);
     }
 
     /// Accept (a big file's card, or a folder's file): its sender starts sending it to us.
@@ -569,7 +569,7 @@ impl RoomView {
         self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
     }
 
-    /// Saves the lightbox's picture where the user picks (Downloads first).
+    /// Saves the lightbox's picture where the user picks (`Downloads\3RTC\Pictures` first).
     pub(crate) fn save_picture(&mut self, transfer_id: &str, cx: &mut Context<'_, Self>) {
         let Some(line) = self
             .chat
@@ -588,7 +588,7 @@ impl RoomView {
             return;
         };
         let name = rtc_protocol::image::safe_file_save_name(&image.file_name, &image.mime);
-        let ask = cx.prompt_for_new_path(&downloads(), Some(&name));
+        let ask = cx.prompt_for_new_path(&pictures_dir(), Some(&name));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(path))) = ask.await {
                 let said = match std::fs::write(&path, &bytes) {

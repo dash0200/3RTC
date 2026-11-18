@@ -241,11 +241,15 @@ export default function App() {
     return true;
   }, []);
 
-  // The host handed the room on (or left, fromId null): tell everyone who is host now
-  const handleHostChanged = useCallback((newHostId: string, fromId: string | null) => {
+  // The host handed the room on (or left, fromId null; or the owner came back): tell everyone who
+  // is host now
+  const handleHostChanged = useCallback((newHostId: string, fromId: string | null, returned?: boolean) => {
     const self = peerIdRef.current;
     const nameOf = (id: string) => peerMetadataRef.current[id]?.username || 'Someone';
-    const text = fromId === null
+    const returnedName = peerMetadataRef.current[newHostId]?.username;
+    const text = returned
+      ? (returnedName ? `👑 ${returnedName} is back and is the host again` : '👑 The host is back')
+      : fromId === null
       ? (newHostId === self ? "👑 The host left. You're the host now" : `👑 The host left. ${nameOf(newHostId)} is now the host`)
       : newHostId === self
       ? `👑 ${nameOf(fromId)} made you the host`

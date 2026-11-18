@@ -98,7 +98,7 @@ pub(crate) struct Settings {
     pub(crate) player_mouse_nav_seek: bool,
     /// Arrow keys seek and adjust volume (default: true).
     pub(crate) player_arrow_keys: bool,
-    /// Torrents: keep the downloaded file in `Downloads\3RTC Torrents` (default: true); off, a
+    /// Torrents: keep the downloaded file in `Downloads\3RTC\Torrents` (default: true); off, a
     /// temporary copy is deleted when the torrent stops.
     pub(crate) keep_torrents: bool,
     /// Play / pause shortcut key (default: Space).

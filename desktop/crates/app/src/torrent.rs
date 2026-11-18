@@ -3,10 +3,12 @@
 //! Provides background downloading and streaming of magnet links and `.torrent` files.
 //! Opening one first lists its files without downloading anything; when it holds more than one
 //! file the user picks one (`TorrentProgress::ChooseFile`, answered by `TorrentService::choose_file`),
-//! and only that file's pieces are downloaded (librqbit `only_files`).
+//! with the subtitle files to load with it (those matching it are ticked: `matching_subtitles`),
+//! and only those files' pieces are downloaded (librqbit `only_files`). Each subtitle file is
+//! reported (`TorrentProgress::Subtitle`) once it's complete.
 //!
 //! With "Keep torrent downloads" on (the default) files are kept in
-//! `Downloads\3RTC Torrents\<torrent name>\…`, the layout qBittorrent uses ("Original"), so a
+//! `Downloads\3RTC\Torrents\<torrent name>\…`, the layout qBittorrent uses ("Original"), so a
 //! download can be finished there; off, they go to a temporary folder that is deleted when the
 //! torrent stops (and at the next start). Nothing is ever uploaded to the swarm
 //! (`disable_upload`): the host's upload is kept for the room's viewers.
@@ -45,6 +47,11 @@ pub(crate) enum TorrentProgress {
         files: Vec<TorrentFileEntry>,
         /// The file id we'd pick on our own (the largest video).
         suggested: usize,
+    },
+    /// A subtitle file picked with the video is complete on disk.
+    Subtitle {
+        /// Where it is.
+        path: PathBuf,
     },
     /// Metadata resolved, video file identified inside the torrent.
     Resolved {
@@ -100,7 +107,7 @@ pub(crate) enum TorrentProgress {
 /// torrent's file is picked, so the picker's switch counts for that torrent.
 static KEEP: AtomicBool = AtomicBool::new(true);
 
-/// Sets whether the next picked torrent file is kept in `Downloads\3RTC Torrents`.
+/// Sets whether the next picked torrent file is kept in `Downloads\3RTC\Torrents`.
 pub(crate) fn set_keep(on: bool) {
     KEEP.store(on, Ordering::Relaxed);
 }
@@ -127,6 +134,9 @@ static TORRENT_SERVICE: OnceLock<TorrentService> = OnceLock::new();
 /// The torrent playing, and whether its files are deleted when it stops (not kept).
 type Active = (Arc<ManagedTorrent>, bool);
 
+/// The user's pick: the video's file id and the subtitle files' ids to load with it.
+type Choice = (usize, Vec<usize>);
+
 /// The active torrent streaming service.
 #[derive(Clone)]
 pub(crate) struct TorrentService {
@@ -138,7 +148,7 @@ pub(crate) struct TorrentService {
     active_handle: Arc<Mutex<Option<Active>>>,
     active_cancel: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     /// Waiting for the user to pick a file from a multi-file torrent.
-    pending_choice: Arc<Mutex<Option<tokio::sync::oneshot::Sender<usize>>>>,
+    pending_choice: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Choice>>>>,
 }
 
 impl TorrentService {
@@ -219,14 +229,15 @@ impl TorrentService {
         });
     }
 
-    /// The user picked a file (by torrent file id) from the `ChooseFile` list. Returns `false`
-    /// when no torrent is waiting for a pick (it was cancelled or replaced).
-    pub(crate) fn choose_file(file_id: usize) -> bool {
+    /// The user picked a file (by torrent file id) from the `ChooseFile` list, with the subtitle
+    /// files to load with it. Returns `false` when no torrent is waiting for a pick (it was
+    /// cancelled or replaced).
+    pub(crate) fn choose_file(file_id: usize, subtitles: Vec<usize>) -> bool {
         let Some(svc) = TORRENT_SERVICE.get() else {
             return false;
         };
         let pending = svc.pending_choice.lock().ok().and_then(|mut p| p.take());
-        pending.is_some_and(|tx| tx.send(file_id).is_ok())
+        pending.is_some_and(|tx| tx.send((file_id, subtitles)).is_ok())
     }
 
     /// Stops and removes the active torrent from the session.
@@ -336,7 +347,7 @@ impl TorrentService {
         let suggested = default_file(&files).ok_or_else(|| anyhow::anyhow!("Torrent contains no files"))?;
 
         // Several files: the user picks one.
-        let file_id = if files.len() > 1 {
+        let (file_id, subtitle_ids) = if files.len() > 1 {
             let (choice_tx, choice_rx) = tokio::sync::oneshot::channel();
             if let Ok(mut pending) = self.pending_choice.lock() {
                 *pending = Some(choice_tx);
@@ -352,12 +363,12 @@ impl TorrentService {
                     return Ok(());
                 }
                 picked = choice_rx => match picked {
-                    Ok(id) => id,
+                    Ok(choice) => choice,
                     Err(_) => return Ok(()), // cancelled / replaced
                 }
             }
         } else {
-            suggested
+            (suggested, Vec::new())
         };
         let chosen = files
             .iter()
@@ -365,8 +376,15 @@ impl TorrentService {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("That file isn't in this torrent."))?;
 
-        // Phase 2: add it for real, downloading only the chosen file's pieces.
-        let only = vec![chosen.id];
+        // only real subtitle files of this torrent, never the video twice
+        let subtitles: Vec<TorrentFileEntry> = files
+            .iter()
+            .filter(|f| f.subtitle && f.id != chosen.id && subtitle_ids.contains(&f.id))
+            .cloned()
+            .collect();
+
+        // Phase 2: add it for real, downloading only the chosen files' pieces.
+        let only: Vec<usize> = std::iter::once(chosen.id).chain(subtitles.iter().map(|f| f.id)).collect();
         // librqbit's own folder for it (the torrent's name for several files), under ours
         let sub = listed
             .output_folder
@@ -427,6 +445,7 @@ impl TorrentService {
             path: _,
             size: video_size,
             playable: _,
+            subtitle: _,
         } = chosen;
         let relative_path = listed_relative_path(&files, file_id);
 
@@ -458,6 +477,11 @@ impl TorrentService {
         let mut last_check = std::time::Instant::now();
         let mut last_downloaded: u64 = 0;
         let mut ready_sent = false;
+        // subtitle files still downloading: (file id, size, where)
+        let mut subs_left: Vec<(usize, u64, PathBuf)> = subtitles
+            .iter()
+            .map(|f| (f.id, f.size, output_folder.join(listed_relative_path(&files, f.id))))
+            .collect();
 
         loop {
             tokio::select! {
@@ -470,6 +494,14 @@ impl TorrentService {
 
             let stats = handle.stats();
             let downloaded = stats.progress_bytes;
+            // subtitle files complete on disk: to the player
+            subs_left.retain(|(id, size, path)| {
+                let done = stats.file_progress.get(*id).is_some_and(|got| got >= size);
+                if done {
+                    let _ = tx.send(TorrentProgress::Subtitle { path: path.clone() });
+                }
+                !done
+            });
             let (seeds, peers, total_peers) = if let Some(l) = &stats.live {
                 let p = &l.snapshot.peer_stats;
                 (
@@ -549,16 +581,10 @@ fn temp_download_dir() -> PathBuf {
     std::env::temp_dir().join("3RTC").join("torrents")
 }
 
-/// Where kept torrents are saved: `Downloads\3RTC Torrents` (one folder per multi-file torrent, named
-/// after it, as qBittorrent does).
+/// Where kept torrents are saved: `Downloads\3RTC\Torrents` (one folder per multi-file torrent,
+/// named after it, as qBittorrent does).
 pub(crate) fn download_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map_or_else(
-            || std::env::temp_dir().join("3RTC"),
-            |h| PathBuf::from(h).join("Downloads"),
-        )
-        .join("3RTC Torrents")
+    rtc_core::saves::dir(rtc_core::saves::Kind::Torrents)
 }
 
 /// One file inside a torrent, as listed in the file picker.
@@ -574,6 +600,8 @@ pub(crate) struct TorrentFileEntry {
     pub(crate) size: u64,
     /// A video the player can stream.
     pub(crate) playable: bool,
+    /// A subtitle file (`.srt`, `.ass`, `.ssa`, `.vtt`, `.sub`).
+    pub(crate) subtitle: bool,
 }
 
 /// The torrent's real files from `(path, length, is_padding)` in torrent order. Padding files
@@ -596,6 +624,7 @@ pub(crate) fn file_entries(files: impl IntoIterator<Item = (PathBuf, u64, bool)>
             TorrentFileEntry {
                 id,
                 playable: is_video_name(&name),
+                subtitle: is_subtitle_name(&name),
                 path,
                 name,
                 size,
@@ -612,6 +641,59 @@ pub(crate) fn default_file(files: &[TorrentFileEntry]) -> Option<usize> {
         .max_by_key(|f| f.size)
         .or_else(|| files.iter().max_by_key(|f| f.size))
         .map(|f| f.id)
+}
+
+/// The subtitle files that go with the video `video`: in its folder named after it
+/// (`Movie.mkv` → `Movie.en.srt`), in a `Subs` / `Subtitles` folder beside it (in a sub-folder
+/// named after it, or straight in it), or, when it's the only video in its folder, any there.
+pub(crate) fn matching_subtitles(files: &[TorrentFileEntry], video: usize) -> Vec<usize> {
+    let Some(v) = files.iter().find(|f| f.id == video) else {
+        return Vec::new();
+    };
+    let dir_of = |p: &str| p.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_owned());
+    let stem_of = |n: &str| n.rsplit_once('.').map_or(n, |(s, _)| s).to_lowercase();
+    let vdir = dir_of(&v.path);
+    let vstem = stem_of(&v.name);
+    let alone = files.iter().filter(|f| f.playable && dir_of(&f.path) == vdir).count() == 1;
+    // named after it: its name, then the end or a separator (`E1` isn't `E10`)
+    let named = |n: &str| {
+        n.to_lowercase()
+            .strip_prefix(vstem.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '_', '-', ' ', '[', '(']))
+    };
+    files
+        .iter()
+        .filter(|f| f.subtitle)
+        .filter(|f| {
+            let dir = dir_of(&f.path);
+            if dir == vdir {
+                return alone || named(&f.name);
+            }
+            // under <video folder>/Subs/… or <video folder>/Subtitles/…
+            let rest = if vdir.is_empty() {
+                Some(dir.as_str())
+            } else {
+                dir.strip_prefix(&vdir).and_then(|r| r.strip_prefix('/'))
+            };
+            let Some(rest) = rest else {
+                return false;
+            };
+            let mut parts = rest.split('/');
+            let in_subs = parts
+                .next()
+                .is_some_and(|top| matches!(top.to_lowercase().as_str(), "subs" | "subtitles"));
+            if !in_subs {
+                return false;
+            }
+            match parts.next() {
+                // Subs/<video name>/2_English.srt
+                Some(inner) => inner.to_lowercase() == vstem,
+                // Subs/Movie.en.srt, or any when the video is alone
+                None => alone || named(&f.name),
+            }
+        })
+        .map(|f| f.id)
+        .collect()
 }
 
 /// One folder of the picker: its files, videos first then in name order.
@@ -712,6 +794,12 @@ fn listed_relative_path(files: &[TorrentFileEntry], id: usize) -> PathBuf {
         .unwrap_or_default()
 }
 
+/// A subtitle file the player can load.
+pub(crate) fn is_subtitle_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [".srt", ".ass", ".ssa", ".vtt", ".sub"].iter().any(|e| n.ends_with(e))
+}
+
 /// Helper to check if a filename has a video extension.
 pub(crate) fn is_video_name(name: &str) -> bool {
     let n = name.to_lowercase();
@@ -766,9 +854,54 @@ mod tests {
             id,
             path: path.to_owned(),
             playable: is_video_name(&name),
+            subtitle: is_subtitle_name(&name),
             name,
             size,
         }
+    }
+
+    #[test]
+    fn subtitles_next_to_the_video_named_after_it() {
+        let files = vec![
+            entry(0, "Show/E01.mkv", 9),
+            entry(1, "Show/E01.en.srt", 1),
+            entry(2, "Show/E02.mkv", 9),
+            entry(3, "Show/E02.srt", 1),
+            entry(4, "Show/notes.txt", 1),
+        ];
+        assert_eq!(matching_subtitles(&files, 0), vec![1]);
+        assert_eq!(matching_subtitles(&files, 2), vec![3]);
+        let numbered = vec![entry(0, "E1.mkv", 9), entry(1, "E10.mkv", 9), entry(2, "E10.srt", 1)];
+        assert_eq!(matching_subtitles(&numbered, 0), Vec::<usize>::new());
+        assert_eq!(matching_subtitles(&numbered, 1), vec![2]);
+    }
+
+    #[test]
+    fn subtitles_in_a_subs_folder() {
+        let files = vec![
+            entry(0, "Movie/Movie.2020.mkv", 9),
+            entry(1, "Movie/Subs/English.srt", 1),
+            entry(2, "Movie/Subtitles/French.ass", 1),
+            entry(3, "Movie/Other/English.srt", 1),
+        ];
+        // the only video in its folder: every subtitle in its Subs folders
+        assert_eq!(matching_subtitles(&files, 0), vec![1, 2]);
+        let pack = vec![
+            entry(0, "Pack/E01.mkv", 9),
+            entry(1, "Pack/E02.mkv", 9),
+            entry(2, "Pack/Subs/E01/2_English.srt", 1),
+            entry(3, "Pack/Subs/E02/2_English.srt", 1),
+            entry(4, "Pack/Subs/E02.srt", 1),
+        ];
+        assert_eq!(matching_subtitles(&pack, 1), vec![3, 4]);
+        assert_eq!(matching_subtitles(&pack, 9), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn detects_subtitle_files() {
+        assert!(is_subtitle_name("a.SRT"));
+        assert!(is_subtitle_name("b.ass"));
+        assert!(!is_subtitle_name("c.mkv"));
     }
 
     #[test]

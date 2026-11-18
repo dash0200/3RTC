@@ -270,8 +270,8 @@ Server → browser: `room-created {roomId, peerId, hostPeerId, seatToken, hostTo
 `room-resumed {roomId, peerId, peers, hostPeerId, seatToken, hostToken}`,
 `joined {roomId, peerId, peers, hostPeerId, seatToken}`, `host {hostPeerId, from?, reason?}` (the host got the room back,
 maybe with a new peer id; with `from`: `from` handed the room to `hostPeerId`; with `reason: "host-left"`:
-the host left and the server picked the next host), `host-token {roomId, hostToken}`
-(to the new host after a transfer), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
+the host left and the server made someone stand in; with `reason: "host-returned"`: the room's owner came
+back and is the host again), `host-token {roomId, hostToken}` (to the new owner after a transfer), `peer-joined {peerId}`, `peer-left {peerId}`, `left`, `offer / answer / ice-candidate {from, …}`,
 `pong`, `room-found {roomId, exists}`, `error {message, code?}` (`code`: `resume-denied`, `seat-taken`,
 `room-full`, `not-found`, `server-busy`, `rate-limited`, `not-host`, `target-not-found`).
 
@@ -283,6 +283,8 @@ proves nothing. The server signs a **seat token** (this peer id in this room) an
 - `create-room` with a code (resume) needs the room's host token: after a signaling drop, a server
   restart, a page reload (new peer id; the app saves the token with "Rejoin room"), or Leave then
   Rejoin. The host token is enough for the host's own seat or a free one, not for a guest's live seat;
+- the seat of the room's owner is only given back with its seat token, also while a stand-in hosts
+  (and `join` on it makes the owner the host again);
 - `join` with `rejoin` brings back a room that's gone (server restart) only with a seat token for it.
 Tokens name the room instance (a random id given at creation), so a token from an earlier room with
 the same code doesn't work on a new one, and they expire after 24 hours. They are signed with the
@@ -290,19 +292,22 @@ server's secret (`SIGNAL_SECRET`, or `.signal-secret` made on first start in pro
 survive restarts. The app sends tokens only back to the server, never to peers.
 
 **Handing the room on** (`transfer-host`): only the peer the server knows as host may do it, to someone
-connected in the room. The room's **host generation** goes up by one; host tokens name it (`v2.` tokens;
+connected in the room. Done by the room's **owner** (who made it, or whom the owner handed it to), the
+other person becomes the owner and the room's **host generation** goes up by one; host tokens name it (`v2.` tokens;
 generation 0 keeps the `v1.` form), and the server refuses a host token of an earlier generation, so the
-old host can't take the room back (its seat token still works: it stays as a guest). After a server
-restart a room brought back by a guest has no generation yet: the first valid host token sets it, and a
-later generation still wins.
+old host can't take the room back (its seat token still works: it stays as a guest). Done by a stand-in
+(below), it only passes the stand-in role on: the owner still gets the room back. After a server restart
+a room brought back by a guest has no generation yet: the first valid host token sets it, and a later
+generation still wins.
 
-**When the host leaves** (its connection ends while others are still in the room), the server keeps
-the room for it for `HOST_HANDOVER_GRACE_MS` (20 s): a host that comes back in time (Wi-Fi blip,
-reload, Leave then Rejoin with its host token) stays host. Otherwise whoever has been in the room
-longest becomes the host, as with `transfer-host`: the host generation goes up, the new host gets
-`host-token`, and everyone gets `host {hostPeerId, reason: "host-left"}` (no `from`, so apps that
-don't know `reason` just update the host without a notice). The old host can come back as a guest. A
-hub room becomes a mesh again (`topology-changed`), since its hub is gone.
+**A room always has a host.** When the host leaves (Leave, its connection ends, or a room comes back
+after a server restart without it) while others are in the room, whoever has been in the room longest
+(the steadiest connection) **stands in at once**: everyone gets `host {hostPeerId, reason: "host-left"}`
+(no `from`, so apps that don't know `reason` just update the host without a notice). A stand-in gets no
+host token. When the owner comes back (resume with its host token, maybe with a new peer id after a
+reload, or `join` on its own seat with its seat token) it is the host again: the others get
+`host {hostPeerId, reason: "host-returned"}` and the stand-in is a guest again. A hub room becomes a
+mesh again when its host leaves (`topology-changed`), since its hub is gone.
 
 **Several servers** (Oracle first, then GCP): rooms live in the memory of the server they were made
 on. Both servers must use the **same secret** (the deploy scripts upload `server/.signal-secret`,
