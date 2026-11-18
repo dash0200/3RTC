@@ -727,7 +727,13 @@ impl RoomView {
     /// A subtitle file picked with a torrent's video finished downloading: into the player
     /// (now, or once it's up). The first one is shared with the room too.
     pub(crate) fn torrent_subtitle(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
-        let playing = self.watch.player.borrow().as_ref().and_then(Live::video).is_some();
+        let playing = self
+            .watch
+            .player
+            .borrow()
+            .as_ref()
+            .and_then(Live::video)
+            .is_some();
         if playing {
             self.load_torrent_subtitle(&path, cx);
         } else {
