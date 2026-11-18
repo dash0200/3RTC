@@ -1,0 +1,2 @@
+// The exe's icon (crates/app/build.rs). The lowest-numbered icon is the one Explorer shows.
+1 ICON "3rtc.ico"

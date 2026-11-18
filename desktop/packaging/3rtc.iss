@@ -28,6 +28,8 @@ OutputBaseFilename=3RTC-Setup-{#AppBuild}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+; the 3RTC logo on the installer (the file crates/app/build.rs puts in 3rtc.exe)
+SetupIconFile=..\crates\app\assets\windows\3rtc.ico
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\3rtc.exe
@@ -46,8 +48,8 @@ Source: "{#MpvDll}"; DestDir: "{app}"; DestName: "libmpv-2.dll"; Flags: ignoreve
 #endif
 
 [Icons]
-Name: "{userprograms}\3RTC"; Filename: "{app}\3rtc.exe"
-Name: "{userdesktop}\3RTC"; Filename: "{app}\3rtc.exe"; Tasks: desktopicon
+Name: "{userprograms}\3RTC"; Filename: "{app}\3rtc.exe"; IconFilename: "{app}\3rtc.exe"
+Name: "{userdesktop}\3RTC"; Filename: "{app}\3rtc.exe"; IconFilename: "{app}\3rtc.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\3rtc.exe"; Description: "Open 3RTC"; Flags: nowait postinstall skipifsilent
