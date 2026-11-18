@@ -267,12 +267,22 @@ export class P2PImageSender {
   start(): void {
     this.isAborted = false;
     this.isPaused = false;
-
-    const channels = this.getDataChannels().filter((dc) => dc && dc.readyState === 'open');
-    if (channels.length === 0) {
+    if (!this.announce()) {
       this.onError(new Error('No open peer data channels available to send file'));
       return;
     }
+    // 2. Begin pumping binary chunks
+    this._pump();
+  }
+
+  /**
+   * Sends only the announcement (`p2p-image-start` / `p2p-file-start`) on the open channels: a big
+   * file is offered this way, and its frames go later to each receiver who accepts it.
+   * False when no channel is open.
+   */
+  announce(): boolean {
+    const channels = this.getDataChannels().filter((dc) => dc && dc.readyState === 'open');
+    if (channels.length === 0) return false;
 
     const isImage = isImageFile(this.file);
     const msgType = isImage ? 'p2p-image-start' : 'p2p-file-start';
@@ -300,9 +310,7 @@ export class P2PImageSender {
         dc.send(startMsg);
       } catch { /* channel send error */ }
     }
-
-    // 2. Begin pumping binary chunks
-    this._pump();
+    return true;
   }
 
   abort(): void {
@@ -509,6 +517,8 @@ export class P2PImageReceiver {
     }
 
     if (!transfer.chunks[chunkIndex]) {
+      // still coming: not stale (cleanStale counts from the last frame; big files take a while)
+      transfer.createdAt = Date.now();
       transfer.chunks[chunkIndex] = data;
       transfer.receivedCount++;
       transfer.receivedBytes += data.byteLength;

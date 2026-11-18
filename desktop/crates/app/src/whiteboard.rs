@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, FontWeight, Hsla, Image, ImageFormat, MouseButton, MouseDownEvent,
-    MouseMoveEvent, PathBuilder, Pixels, Point, canvas, div, img, point, px,
+    AnyElement, Bounds, Context, Corners, FontWeight, Hsla, Image, ImageFormat, MouseButton, MouseDownEvent,
+    MouseMoveEvent, PathBuilder, Pixels, Point, RenderImage, canvas, div, fill, img, point, px,
 };
 use rtc_core::ActivityCommand;
 use rtc_engine::Snapshot;
@@ -90,6 +90,9 @@ pub(crate) struct BoardUi {
     epoch: Option<i64>,
     opened: BTreeSet<String>,
     picture: RefCell<Option<(String, Arc<Image>)>>,
+    /// The last picture that finished decoding: it stays on screen while a newer one decodes,
+    /// so the board never goes blank when a stroke is saved.
+    drawn: Rc<RefCell<Option<Drawn>>>,
     icons: RefCell<HashMap<(&'static str, bool), Arc<Image>>>,
     /// Where the board is drawn.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -100,6 +103,15 @@ pub(crate) struct BoardUi {
     pub(crate) base: String,
     /// The board everything above is about (a new one starts clean).
     shown: String,
+}
+
+/// A decoded picture of the saved strokes.
+struct Drawn {
+    /// Its source (for freeing it once a newer one is shown).
+    image: Arc<Image>,
+    render: Arc<RenderImage>,
+    /// The strokes in it.
+    ids: BTreeSet<String>,
 }
 
 /// How a board is used (`Whiteboard` props): the whiteboard itself, or a game's.
@@ -399,6 +411,10 @@ impl RoomView {
             b.undo.clear();
             b.redo.clear();
             b.confirm_clear = false;
+            let old = b.drawn.borrow_mut().take();
+            if let Some(d) = old {
+                d.image.remove_asset(cx);
+            }
         }
         let Some(ix) = self.wb_index() else {
             self.activity.board.epoch = None;
@@ -411,10 +427,7 @@ impl RoomView {
         }
         if self.activity.board.epoch != Some(ix.epoch) {
             if let Some(old) = self.activity.board.epoch {
-                self.activity_command(
-                    ActivityCommand::Release(format!("{base}:{old}:")),
-                    cx,
-                );
+                self.activity_command(ActivityCommand::Release(format!("{base}:{old}:")), cx);
             }
             let b = &mut self.activity.board;
             b.epoch = Some(ix.epoch);
@@ -904,6 +917,34 @@ pub(crate) fn board(
         *ui.picture.borrow_mut() = Some((svg, Arc::clone(&image)));
         image
     });
+    // While a new picture decodes, the last decoded one stays up with the strokes it lacks
+    // painted over it (`img` would show nothing for those frames: the board blinked).
+    let decoding = ui
+        .drawn
+        .borrow()
+        .as_ref()
+        .is_none_or(|d| d.image.id != picture.id);
+    let (new_ids, missing): (Option<BTreeSet<String>>, Vec<Stroke>) = if decoding {
+        let visible = || strokes.iter().filter(|s| !ui.gone.contains(&s.id));
+        let have = ui
+            .drawn
+            .borrow()
+            .as_ref()
+            .map(|d| d.ids.clone())
+            .unwrap_or_default();
+        (
+            Some(visible().map(|s| s.id.clone()).collect()),
+            visible().filter(|s| !have.contains(&s.id)).cloned().collect(),
+        )
+    } else {
+        (None, Vec::new())
+    };
+    let drawn = Rc::clone(&ui.drawn);
+    let board_bg = if ix.bg == "dark" {
+        tokens::hex(0x15_161b)
+    } else {
+        tokens::hex(0xfb_fbf8)
+    };
 
     // what's being drawn: others', ours, not-yet-saved ones, the eraser
     let saved: BTreeSet<&str> = strokes.iter().map(|s| s.id.as_str()).collect();
@@ -931,7 +972,13 @@ pub(crate) fn board(
 
     let area = ui.area.get();
     let avail_w = area.map_or(900.0, |a| f32::from(a.size.width) - 32.0);
-    let chrome = if read_only { 28.0 } else if mode.game { 80.0 } else { 120.0 };
+    let chrome = if read_only {
+        28.0
+    } else if mode.game {
+        80.0
+    } else {
+        120.0
+    };
     let avail_h = area.map_or(560.0, |a| f32::from(a.size.height) - chrome);
     #[allow(clippy::cast_possible_truncation)]
     let scale = (avail_w / BOARD_W as f32).min(avail_h / BOARD_H as f32).max(0.05);
@@ -953,12 +1000,44 @@ pub(crate) fn board(
         .h(px(bh))
         .rounded(px(10.))
         .overflow_hidden()
-        .when(!read_only, |el| el.cursor_crosshair())
-        .child(img(picture).absolute().w(px(bw)).h(px(bh)))
+        .when(!read_only, gpui_kit::Styled::cursor_crosshair)
         .child(
             canvas(
                 move |b, _, _| bounds_cell.set(Some(b)),
-                move |b, (), window, _| {
+                move |b, (), window, cx| {
+                    // the saved strokes: the new picture once decoded, the last one until then
+                    let fresh = Arc::clone(&picture).use_render_image(window, cx);
+                    let mut last = drawn.borrow_mut();
+                    let lagging = match (fresh, new_ids) {
+                        (Some(render), Some(ids)) => {
+                            let old = last.replace(Drawn {
+                                image: Arc::clone(&picture),
+                                render,
+                                ids,
+                            });
+                            if let Some(old) = old
+                                && old.image.id != picture.id
+                            {
+                                old.image.remove_asset(cx);
+                            }
+                            false
+                        }
+                        (Some(_), None) => false,
+                        (None, _) => true,
+                    };
+                    let corners = Corners::all(px(10.));
+                    match last.as_ref() {
+                        Some(d) => {
+                            let _ = window.paint_image(b, b, corners, Arc::clone(&d.render), 0, false);
+                        }
+                        None => window.paint_quad(fill(b, board_bg).corner_radii(corners)),
+                    }
+                    drop(last);
+                    if lagging {
+                        for s in &missing {
+                            paint_live(window, b.origin, scale, s);
+                        }
+                    }
                     for s in &over {
                         paint_live(window, b.origin, scale, s);
                     }
@@ -1133,34 +1212,38 @@ pub(crate) fn board(
                 .when(ui.redo.is_empty(), |el| el.opacity(0.4))
                 .on_click(cx.listener(|v, _, _, cx| v.wb_undo(true, cx))),
         )
-        .when(!mode.game, |el| el.child(
-            text_btn(
-                "wb-bg",
-                if ix.bg == "light" {
-                    "Dark board"
-                } else {
-                    "Light board"
-                },
-                false,
+        .when(!mode.game, |el| {
+            el.child(
+                text_btn(
+                    "wb-bg",
+                    if ix.bg == "light" {
+                        "Dark board"
+                    } else {
+                        "Light board"
+                    },
+                    false,
+                )
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    let bg = if v.wb_index().is_some_and(|i| i.bg == "light") {
+                        "dark"
+                    } else {
+                        "light"
+                    };
+                    v.wb_dispatch(bg_key.clone(), json!({ "kind": "bg", "bg": bg }), cx);
+                })),
             )
-            .on_click(cx.listener(move |v, _, _, cx| {
-                let bg = if v.wb_index().is_some_and(|i| i.bg == "light") {
-                    "dark"
-                } else {
-                    "light"
-                };
-                v.wb_dispatch(bg_key.clone(), json!({ "kind": "bg", "bg": bg }), cx);
-            })),
-        ));
+        });
     if ui.confirm_clear && can_manage {
         let clear_key = base.clone();
         actions = actions
             .child(
-                text_btn("wb-clear-yes", "Clear for everyone", true).on_click(cx.listener(move |v, _, _, cx| {
-                    let name = v.room.as_ref().map(|r| r.username.clone()).unwrap_or_default();
-                    v.activity.board.confirm_clear = false;
-                    v.wb_dispatch(clear_key.clone(), json!({ "kind": "clear", "name": name }), cx);
-                })),
+                text_btn("wb-clear-yes", "Clear for everyone", true).on_click(cx.listener(
+                    move |v, _, _, cx| {
+                        let name = v.room.as_ref().map(|r| r.username.clone()).unwrap_or_default();
+                        v.activity.board.confirm_clear = false;
+                        v.wb_dispatch(clear_key.clone(), json!({ "kind": "clear", "name": name }), cx);
+                    },
+                )),
             )
             .child(
                 text_btn("wb-clear-no", "Cancel", false).on_click(cx.listener(|v, _, _, cx| {
@@ -1224,22 +1307,24 @@ pub(crate) fn board(
                     )
                 })
                 .child(board)
-                .when(!mode.game, |el| el.child(
-                    div()
-                        .flex()
-                        .gap(px(10.))
-                        .text_size(px(12.5))
-                        .text_color(tokens::text_3())
-                        .child(foot)
-                        .when(full, |el| {
-                            el.child(
-                                div()
-                                    .text_color(tokens::warn())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("The board is full: save it and clear it to keep drawing."),
-                            )
-                        }),
-                )),
+                .when(!mode.game, |el| {
+                    el.child(
+                        div()
+                            .flex()
+                            .gap(px(10.))
+                            .text_size(px(12.5))
+                            .text_color(tokens::text_3())
+                            .child(foot)
+                            .when(full, |el| {
+                                el.child(
+                                    div()
+                                        .text_color(tokens::warn())
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child("The board is full: save it and clear it to keep drawing."),
+                                )
+                            }),
+                    )
+                }),
         )
         .into_any_element()
 }

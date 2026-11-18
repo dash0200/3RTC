@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activity;
+mod camera;
 mod chat;
 mod chess;
 mod control;
@@ -14,6 +15,7 @@ mod desktop;
 mod dialogs;
 mod emoji;
 mod extras;
+mod folder;
 mod fun;
 mod home;
 mod lastcard;

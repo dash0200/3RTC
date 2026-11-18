@@ -1,9 +1,13 @@
 //! Our chat files' bytes: in memory (pictures and small files, as before), or still on disk (big
 //! files and folders), read in chunks as they're sent so a 10 GB file is never held in memory.
 
+use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use rtc_protocol::PeerId;
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
@@ -89,9 +93,63 @@ impl Reader {
     }
 }
 
+/// Tells the tasks sending one of our files over the bulk channels to stop: for everyone (the
+/// sender cancelled, or nobody receives it any more) or for some receivers (they cancelled).
+#[derive(Debug, Default)]
+pub(crate) struct Stop {
+    all: AtomicBool,
+    peers: Mutex<HashSet<PeerId>>,
+}
+
+impl Stop {
+    /// Stop sending it to anyone.
+    pub(crate) fn stop_all(&self) {
+        self.all.store(true, Ordering::Relaxed);
+    }
+
+    /// Stop sending it to `peer`.
+    pub(crate) fn stop_to(&self, peer: PeerId) {
+        self.peers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(peer);
+    }
+
+    /// Stopped for everyone.
+    pub(crate) fn is_all(&self) -> bool {
+        self.all.load(Ordering::Relaxed)
+    }
+
+    /// No more of it goes to `peer`.
+    pub(crate) fn stopped(&self, peer: &PeerId) -> bool {
+        self.is_all()
+            || self
+                .peers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(peer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stop_for_one_receiver_or_for_all() {
+        let a = PeerId::new("peer_a").unwrap();
+        let b = PeerId::new("peer_b").unwrap();
+        let stop = Stop::default();
+        assert!(!stop.is_all());
+        assert!(!stop.stopped(&a));
+        stop.stop_to(a.clone());
+        assert!(stop.stopped(&a), "a cancelled");
+        assert!(!stop.stopped(&b), "b still gets it");
+        assert!(!stop.is_all());
+        stop.stop_all();
+        assert!(stop.is_all());
+        assert!(stop.stopped(&b), "nobody gets it once stopped for all");
+    }
 
     #[tokio::test]
     async fn memory_and_disk_read_the_same() {

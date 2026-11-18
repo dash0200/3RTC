@@ -61,6 +61,7 @@ fn identity_of(peer: &str, name: &str, is_reply: bool) -> Envelope {
             topology: None,
             max_users: None,
             quic: None,
+            camera: false,
         },
     }
 }
@@ -1380,4 +1381,123 @@ fn our_identity_says_we_do_quic() {
         &envelope.message,
         PeerMessage::PeerIdentity { quic: Some(1), .. }
     ));
+}
+
+fn camera_status(peer: &str, on: bool) -> Input {
+    Input::Peer {
+        from: pid(peer),
+        envelope: Envelope {
+            sender: Some(peer.into()),
+            timestamp: Some(1.0),
+            message: PeerMessage::CameraStatus { on },
+        },
+    }
+}
+
+fn sends_camera_status(fx: &[Effect], on: bool) -> bool {
+    fx.iter().any(|e| {
+        matches!(e,
+            Effect::Broadcast(Envelope { message: PeerMessage::CameraStatus { on: o }, .. })
+            | Effect::SendToPeer { envelope: Envelope { message: PeerMessage::CameraStatus { on: o }, .. }, .. }
+            if *o == on)
+    })
+}
+
+#[test]
+fn our_identity_says_we_show_cameras_and_theirs_is_read() {
+    let mut r = hosting();
+    r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid("riya") }),
+        0.0,
+    );
+    let fx = r.update(Input::ChannelOpen(pid("riya")), 0.0);
+    assert!(fx.iter().any(|e| matches!(
+        e,
+        Effect::SendToPeer {
+            envelope: Envelope {
+                message: PeerMessage::PeerIdentity { camera: true, .. },
+                ..
+            },
+            ..
+        }
+    )));
+    assert!(!r.members()[&pid("riya")].camera);
+    let mut e = identity_of("riya", "Riya", true);
+    if let PeerMessage::PeerIdentity { camera, .. } = &mut e.message {
+        *camera = true;
+    }
+    r.update(
+        Input::Peer {
+            from: pid("riya"),
+            envelope: e,
+        },
+        0.0,
+    );
+    assert!(r.members()[&pid("riya")].camera);
+}
+
+#[test]
+fn our_camera_is_told_to_everyone_and_to_each_newcomer() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    let fx = r.update(Input::Command(Command::SetCamera(true)), 1.0);
+    assert!(sends_camera_status(&fx, true), "{fx:?}");
+    assert!(r.camera_on());
+    // the same again: nothing new to say
+    assert!(!sends_camera_status(
+        &r.update(Input::Command(Command::SetCamera(true)), 1.0),
+        true
+    ));
+    // someone joining later hears it when their channel opens
+    r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid("anna") }),
+        2.0,
+    );
+    let fx = r.update(Input::ChannelOpen(pid("anna")), 2.0);
+    assert!(fx.iter().any(|e| matches!(e,
+        Effect::SendToPeer { peer, envelope: Envelope { message: PeerMessage::CameraStatus { on: true }, .. } } if *peer == pid("anna"))));
+    let fx = r.update(Input::Command(Command::SetCamera(false)), 3.0);
+    assert!(sends_camera_status(&fx, false));
+    // off: a newcomer hears nothing about it
+    r.update(
+        Input::Server(ServerMessage::PeerJoined { peer_id: pid("kai") }),
+        4.0,
+    );
+    assert!(!sends_camera_status(
+        &r.update(Input::ChannelOpen(pid("kai")), 4.0),
+        true
+    ));
+}
+
+#[test]
+fn cameras_are_listed_in_the_order_they_came_on() {
+    let mut r = hosting();
+    for p in ["anna", "kai", "riya"] {
+        connected_to(&mut r, p);
+    }
+    r.update(camera_status("riya", true), 1.0);
+    r.update(camera_status("anna", true), 2.0);
+    // saying on again keeps their place
+    r.update(camera_status("riya", true), 3.0);
+    assert_eq!(r.cameras(), vec![pid("riya"), pid("anna")]);
+    r.update(camera_status("riya", false), 4.0);
+    assert_eq!(r.cameras(), vec![pid("anna")]);
+    // back on: at the end
+    r.update(camera_status("riya", true), 5.0);
+    assert_eq!(r.cameras(), vec![pid("anna"), pid("riya")]);
+    // a camera-status from someone not in the room is ignored
+    r.update(camera_status("stranger", true), 6.0);
+    assert_eq!(r.cameras(), vec![pid("anna"), pid("riya")]);
+}
+
+#[test]
+fn a_camera_goes_with_its_connection_and_ours_with_the_room() {
+    let mut r = hosting();
+    connected_to(&mut r, "riya");
+    r.update(camera_status("riya", true), 1.0);
+    r.update(Input::ChannelClosed(pid("riya")), 2.0);
+    assert!(r.cameras().is_empty(), "the tile goes when the connection does");
+    r.update(Input::Command(Command::SetCamera(true)), 3.0);
+    r.update(Input::Command(Command::Leave), 4.0);
+    assert!(!r.camera_on());
 }

@@ -7,7 +7,9 @@
 
 #![deny(missing_docs)]
 
+mod camera;
 mod control;
+mod files;
 mod images;
 mod peers;
 // QUIC file transfer between desktop apps (ADR 0009): the transport, and the chat's use of it
@@ -23,7 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rtc_core::{Command, Effect, Identity, Input, Room};
-use rtc_protocol::peer::{Envelope, PeerMessage};
+use rtc_protocol::peer::Envelope;
 use rtc_protocol::{ClientId, PeerId, RoomId};
 use rtc_signaling::Event as SignalingEvent;
 use rtc_webrtc::factory::Factory;
@@ -31,8 +33,10 @@ use rtc_webrtc::stats::Speaking;
 use rtc_webrtc::voice::Voice;
 use tokio::sync::mpsc;
 
+pub use camera::CameraChoice;
 pub use control::{ControlCmd, ControlView};
 pub use rtc_core::{ChatImage, ChatLine, Member, Phase, Reaction, Sound, UiEvent};
+pub use rtc_platform_win::CameraInfo;
 pub use rtc_protocol::stream::{InputKind, ScreenInput};
 pub use rtc_webrtc::factory::IceServerConfig;
 pub use rtc_webrtc::voice::{Device, Devices, MicSource};
@@ -216,6 +220,27 @@ pub enum Update {
     },
     /// Remote control of the shared screen changed (asked, offered, who controls).
     Control(ControlView),
+    /// A chat file (or folder) was cancelled (by us, by its sender, or because nobody was
+    /// receiving it): nothing more of it comes or goes.
+    TransferCancelled {
+        /// Its transfer (or folder).
+        transfer_id: String,
+    },
+    /// Where our big file (or folder file) is with its receivers: waiting to accept, being
+    /// sent, sent. Nobody waiting or being sent to: it's over.
+    SendState {
+        /// Its transfer.
+        transfer_id: String,
+        /// The counts.
+        status: rtc_core::transfers::SendStatus,
+    },
+    /// Files of a folder offered to us that are already in Downloads (whole or in part).
+    FolderHere {
+        /// The folder.
+        folder_id: String,
+        /// Transfer id and what's there.
+        files: Vec<(String, FileHere)>,
+    },
     /// A chat picture arrived whole.
     ImageReady {
         /// Its transfer.
@@ -223,6 +248,10 @@ pub enum Update {
         /// The file's bytes.
         bytes: Arc<[u8]>,
     },
+    /// Cameras (ADR 0010): ours and everyone's whose camera is on and whose picture is here.
+    Cameras(CameraView),
+    /// The cameras on this PC (answer to [`Handle::list_cameras`]).
+    CameraDevices(Vec<CameraInfo>),
     /// A chat file arrived over QUIC and is saved here (ADR 0009).
     FileSaved {
         /// Its transfer.
@@ -271,6 +300,44 @@ pub struct OutgoingImage {
     pub relative_path: Option<String>,
 }
 
+/// A folder to offer in chat (see [`Handle::send_folder`]).
+#[derive(Debug, Clone)]
+pub struct OutgoingFolder {
+    /// The chat message's id.
+    pub id: String,
+    /// The folder's id.
+    pub folder_id: String,
+    /// Its name.
+    pub name: String,
+    /// Text sent with it.
+    pub caption: String,
+    /// Its files (each with `path`, `disk_size` and `relative_path`, the folder's name first).
+    pub files: Vec<OutgoingImage>,
+}
+
+/// A file of a folder offered to us that's already in Downloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileHere {
+    /// All of it (same size), here.
+    Whole(std::path::PathBuf),
+    /// Part of it (an earlier download stopped): accepting resumes it.
+    Partly,
+}
+
+/// The cameras to show (ADR 0010).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CameraView {
+    /// Our camera is on (its pictures go out).
+    pub on: bool,
+    /// Our camera is being opened.
+    pub starting: bool,
+    /// Our own tile's pictures (already mirrored), while on.
+    pub mine: Option<ScreenFeed>,
+    /// Everyone else's, in the order they turned them on: (who, their pictures). Only once their
+    /// status says on and their picture is here.
+    pub remote: Vec<(PeerId, ScreenFeed)>,
+}
+
 /// One viewer of our screen share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenViewer {
@@ -298,8 +365,12 @@ enum Request {
     TestSound,
     Isolation(bool),
     SendImage(OutgoingImage),
-    /// A folder's files, sent one after the other.
-    SendFolder(Vec<OutgoingImage>),
+    /// Offer a folder: everyone picks the files they want.
+    SendFolder(OutgoingFolder),
+    /// Cancel a chat file or folder: ours (stop sending it) or one offered or coming in.
+    CancelTransfer(String),
+    /// Accept a big file (or a folder's file) offered to us.
+    AcceptTransfer(String),
     NetStats,
     /// Offer this file to viewers who ask; `None`: stop.
     ShareFile(Option<ShareFileSpec>),
@@ -320,6 +391,10 @@ enum Request {
     ScreenPing(f64, f64),
     /// Remote control of the shared screen.
     Control(ControlCmd),
+    /// Turn our camera on with this camera (or switch to it), or off (`None`).
+    Camera(Option<CameraChoice>),
+    /// List the cameras on this PC.
+    CameraDevices,
     /// A sound of our own (`replace`: stop the last one with the same flag first).
     PlaySamples {
         samples: Arc<[f32]>,
@@ -397,10 +472,22 @@ impl Handle {
         let _ = self.tx.send(Request::SendImage(image));
     }
 
-    /// Sends a folder's files one after the other (each as a chat file; other desktop apps keep
-    /// the folder's layout).
-    pub fn send_folder(&self, files: Vec<OutgoingImage>) {
-        let _ = self.tx.send(Request::SendFolder(files));
+    /// Offers a folder in chat: each receiver picks the files they want (other desktop apps
+    /// save them in the folder's layout under Downloads).
+    pub fn send_folder(&self, folder: OutgoingFolder) {
+        let _ = self.tx.send(Request::SendFolder(folder));
+    }
+
+    /// Accepts a big file (or a folder's file) offered to us: its sender starts sending it.
+    pub fn accept_transfer(&self, transfer_id: String) {
+        let _ = self.tx.send(Request::AcceptTransfer(transfer_id));
+    }
+
+    /// Cancels a chat file on its way: ours stops going to everyone (a folder id: all its
+    /// files); one offered or coming in is declined or stops coming. [`Update::TransferCancelled`]
+    /// follows.
+    pub fn cancel_transfer(&self, transfer_id: String) {
+        let _ = self.tx.send(Request::CancelTransfer(transfer_id));
     }
 
     /// Offers the video file playing here to viewers who don't have it (`None`: stops, and
@@ -445,6 +532,17 @@ impl Handle {
     /// input (answered with [`Update::Control`]).
     pub fn control(&self, cmd: ControlCmd) {
         let _ = self.tx.send(Request::Control(cmd));
+    }
+
+    /// Turns our camera on with `choice` (or switches to it while on), or off (`None`). The
+    /// result comes back as [`Update::Cameras`]; a camera that won't open, as a notice.
+    pub fn camera(&self, choice: Option<CameraChoice>) {
+        let _ = self.tx.send(Request::Camera(choice));
+    }
+
+    /// Asks for the cameras on this PC (answered with [`Update::CameraDevices`]).
+    pub fn list_cameras(&self) {
+        let _ = self.tx.send(Request::CameraDevices);
     }
 
     /// A click on the shared screen (everyone sees a ripple there).
@@ -498,16 +596,24 @@ enum Msg {
     Signaling(SignalingEvent),
     Peer(PeerEvent),
     RoomFound(RoomId, Option<String>),
-    /// A picture we send is this far along.
-    ImageSending(String, u8),
+    /// A file we send is this far along (to one receiver, or to everyone: `None`).
+    ImageSending(String, Option<PeerId>, u8),
     /// From the video-sharing module's other threads.
     Stream(stream::Back),
     /// The sharer took remote control back (from the control thread).
     TakeBack(rtc_platform_win::TakeBack),
     /// A QUIC file transfer's background task (ADR 0009).
     Quic(quic_flow::Event),
-    /// A file's frames are all sent (or the sending stopped).
-    FramesDone(String),
+    /// A file's frames are all sent (or the sending stopped): who got it all, who didn't.
+    FramesDone {
+        transfer_id: String,
+        ok: Vec<PeerId>,
+        failed: Vec<PeerId>,
+    },
+    /// Files of a folder offered to us that are already in Downloads.
+    FolderHere(String, Vec<(String, FileHere)>),
+    /// Our camera's capture (which capture, by its number).
+    Camera(u64, camera::Back),
 }
 
 /// A fresh peer id for this launch (the server ties seats to it).
@@ -553,6 +659,12 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
             .inner()
             .create_video_track("screen", screen_source.clone()),
     );
+    let camera_source = camera::new_source();
+    let camera_track = rtc_webrtc::libwebrtc::media_stream_track::MediaStreamTrack::Video(
+        factory
+            .inner()
+            .create_video_track("camera", camera_source.clone()),
+    );
     let meter = voice.meter();
     let app = voice.app_feed();
     let peer_tx = queue_tx.clone();
@@ -561,6 +673,7 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
         factory,
         voice.track(),
         screen_track,
+        camera_track,
         signaling.clone(),
         move |e| {
             let _ = peer_tx.send(Msg::Peer(e));
@@ -611,17 +724,28 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
             sharer: None,
             watch: None,
         },
+        camera: CameraState {
+            source: camera_source,
+            capture: None,
+            number: 0,
+            starting: false,
+            size: None,
+            preview: None,
+            tracks: HashMap::new(),
+            watches: HashMap::new(),
+            applied: HashMap::new(),
+            shown: None,
+        },
         net_before: HashMap::new(),
         control: control::Control::default(),
         streams: stream::Streams::new(move |b| {
             let _ = want_tx.send(Msg::Stream(b));
         }),
-        outgoing: HashMap::new(),
         sending: Vec::new(),
         quic: quic_flow::QuicState::default(),
-        inflight: HashMap::new(),
-        folder_queue: std::collections::VecDeque::new(),
-        folder_current: None,
+        files: files::Files::default(),
+        transfers: rtc_core::transfers::Transfers::default(),
+        stops: HashMap::new(),
     };
     if config.mic == MicSource::Device && !engine.voice.is_device() {
         let _ = engine.updates.send(Update::Notice(NO_SOUND_CARD.to_owned()));
@@ -674,13 +798,14 @@ struct Engine {
     stream_ticks: u32,
     /// Screen sharing, both ways.
     screen: ScreenState,
-    /// Our files waiting for their announcement to go out, by transfer id.
-    outgoing: HashMap<String, outgoing::Source>,
-    /// Ways each of our transfers is still being sent (frames, QUIC per peer).
-    inflight: HashMap<String, u32>,
-    /// A folder being sent: the files still to go, and the one going now.
-    folder_queue: std::collections::VecDeque<OutgoingImage>,
-    folder_current: Option<String>,
+    /// Cameras, both ways (ADR 0010).
+    camera: CameraState,
+    /// Chat files both ways (offers, accepts, folders).
+    files: files::Files,
+    /// Who still receives our files, and who sent the ones coming in (for cancels).
+    transfers: rtc_core::transfers::Transfers,
+    /// Our files on the bulk channels: what to stop sending, and to whom, by transfer id.
+    stops: HashMap<String, Arc<outgoing::Stop>>,
     /// Our pictures being sent.
     sending: Vec<tokio::task::JoinHandle<()>>,
     /// Each connection's last details and when (for the data rates).
@@ -716,6 +841,8 @@ impl Engine {
                     self.stream_ticks = self.stream_ticks.wrapping_add(1);
                     self.route_screen();
                     self.screen_sound_lines().await;
+                    self.camera_lines().await;
+                    self.route_camera();
                     let outs = self.streams.tick(true);
                     self.stream_out(outs);
                     let fx = self.room.update(Input::Tick, now);
@@ -825,19 +952,28 @@ impl Engine {
                 self.send_image(image).await;
                 return;
             }
-            Msg::Ui(Request::SendFolder(files)) => {
-                if self.folder_current.is_some() || !self.folder_queue.is_empty() {
-                    let _ = self.updates.send(Update::Notice(
-                        "A folder is still being sent: wait for it to finish".to_owned(),
-                    ));
-                    return;
-                }
-                self.folder_queue = files.into();
-                self.next_folder_file();
+            Msg::Ui(Request::SendFolder(folder)) => {
+                self.send_folder(folder).await;
                 return;
             }
-            Msg::FramesDone(transfer_id) => {
-                self.part_done(&transfer_id);
+            Msg::FramesDone {
+                transfer_id,
+                ok,
+                failed,
+            } => {
+                self.frames_done(&transfer_id, &ok, &failed);
+                return;
+            }
+            Msg::Ui(Request::CancelTransfer(transfer_id)) => {
+                self.cancel_transfer(&transfer_id);
+                return;
+            }
+            Msg::Ui(Request::AcceptTransfer(transfer_id)) => {
+                self.accept_transfer(&transfer_id);
+                return;
+            }
+            Msg::FolderHere(folder_id, files) => {
+                let _ = self.updates.send(Update::FolderHere { folder_id, files });
                 return;
             }
             Msg::Ui(Request::ShareFile(file)) => {
@@ -903,6 +1039,21 @@ impl Engine {
                 self.take_back(why);
                 return;
             }
+            Msg::Ui(Request::Camera(choice)) => {
+                self.camera_request(choice).await;
+                return;
+            }
+            Msg::Ui(Request::CameraDevices) => {
+                let tx = self.updates.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = tx.send(Update::CameraDevices(rtc_platform_win::cameras()));
+                });
+                return;
+            }
+            Msg::Camera(number, back) => {
+                self.camera_back(number, back).await;
+                return;
+            }
             Msg::Ui(Request::ScreenPing(x, y)) => {
                 let me = self.room.identity();
                 let m = rtc_protocol::stream::ScreenMessage::Ping {
@@ -920,8 +1071,16 @@ impl Engine {
                 peer,
                 generation,
                 track,
+                mid,
             }) => {
-                if self.peers.is_current(&peer, generation) {
+                if self.peers.is_current(&peer, generation)
+                    && self.peers.is_camera_line(&peer, mid.as_deref())
+                {
+                    // their camera (the second video line), never the shared screen
+                    self.camera.tracks.insert(peer.clone(), track);
+                    self.camera.watches.remove(&peer);
+                    self.publish_cameras();
+                } else if self.peers.is_current(&peer, generation) {
                     self.screen.tracks.insert(peer.clone(), track);
                     if self.screen.sharer.as_ref().is_some_and(|(p, _)| *p == peer) {
                         self.watch_screen();
@@ -1010,8 +1169,8 @@ impl Engine {
                 }
                 return;
             }
-            Msg::ImageSending(transfer_id, percent) => {
-                let _ = self.updates.send(Update::ImageProgress { transfer_id, percent });
+            Msg::ImageSending(transfer_id, peer, percent) => {
+                self.sending_progress(transfer_id, peer, percent);
                 return;
             }
             Msg::Quic(event) => {
@@ -1031,16 +1190,11 @@ impl Engine {
                     self.stream_out(outs);
                     return;
                 }
-                match self.images.frame(&data) {
+                match self.images.frame(&data, now_ms()) {
                     Some(images::Got::Progress { transfer_id, percent }) => {
                         let _ = self.updates.send(Update::ImageProgress { transfer_id, percent });
                     }
-                    Some(images::Got::Done { transfer_id, bytes }) => {
-                        let _ = self.updates.send(Update::ImageReady {
-                            transfer_id,
-                            bytes: bytes.into(),
-                        });
-                    }
+                    Some(images::Got::Done { transfer_id, bytes }) => self.file_arrived(transfer_id, bytes),
                     None => {}
                 }
                 return;
@@ -1141,21 +1295,12 @@ impl Engine {
         if let Input::Peer { from, envelope } = &input
             && self.room.members().contains_key(from)
         {
-            let (tid, chunks) = match &envelope.message {
-                PeerMessage::P2pImageStart {
-                    transfer_id,
-                    total_chunks,
-                    ..
-                }
-                | PeerMessage::P2pFileStart {
-                    transfer_id,
-                    total_chunks,
-                    ..
-                } => (Some(transfer_id.as_str()), Some(*total_chunks)),
-                _ => (None, None),
-            };
-            if let (Some(tid), Some(chunks)) = (tid, chunks) {
-                self.images.start(tid, chunks, now);
+            // accept and cancel (the room logic still relays them in a hub room)
+            self.file_control(from, &envelope.message);
+            self.folder_offered(from, &envelope.message);
+            // a folder's file isn't a chat line of its own
+            if self.file_announced(from, &envelope.message, now) {
+                return;
             }
         }
         let fx = self.room.update(input, now);
@@ -1196,221 +1341,6 @@ impl Engine {
         let _ = self.updates.send(Update::Net(out));
     }
 
-    /// Starts sending one of our pictures: the room logic adds the chat line and announces it;
-    /// the frames follow from [`Effect::BroadcastBulk`].
-    async fn send_image(&mut self, image: OutgoingImage) {
-        // a big file or a folder's file stays on disk until it's sent
-        let source = match (image.disk_size, &image.path) {
-            (Some(size), Some(path)) => outgoing::Source::Disk {
-                path: path.clone(),
-                size,
-            },
-            _ => outgoing::Source::Memory(Arc::clone(&image.bytes)),
-        };
-        let size = source.size();
-        if size > rtc_protocol::image::MAX_SEND_BYTES as u64 {
-            let _ = self.updates.send(Update::Notice(
-                "File exceeds 10 GB limit. Please select a smaller file.".to_owned(),
-            ));
-            self.folder_stopped(&image.transfer_id);
-            return;
-        }
-        if self.peers.bulk_channels(self.room.members().keys()).is_empty() {
-            let _ = self.updates.send(Update::Notice(
-                "Waiting for peer to connect before sending file".to_owned(),
-            ));
-            self.folder_stopped(&image.transfer_id);
-            return;
-        }
-        self.outgoing.insert(image.transfer_id.clone(), source);
-        let is_img = rtc_protocol::image::is_image_mime(&image.mime)
-            || rtc_protocol::image::mime_for_name(&image.file_name).is_some();
-        // big files from disk go to other desktop apps over QUIC (ADR 0009); a folder's
-        // pictures too, so the folder arrives whole
-        self.quic_plan(
-            &image.transfer_id,
-            &image.file_name,
-            size,
-            image.path.as_deref(),
-            is_img && image.relative_path.is_none(),
-            image.relative_path.clone(),
-        );
-        let mime = if is_img {
-            rtc_protocol::image::clean_mime(&image.mime).to_owned()
-        } else {
-            rtc_protocol::image::clean_file_mime(&image.mime)
-        };
-        let command = Command::ImageSent {
-            id: image.id,
-            image: ChatImage {
-                transfer_id: image.transfer_id.clone(),
-                file_name: image.file_name,
-                file_size: size,
-                mime,
-            },
-            caption: image.caption,
-        };
-        let fx = self.room.update(Input::Command(command), now_ms());
-        self.apply(fx).await;
-        // not sent (not in a room): nothing to keep
-        self.outgoing.remove(&image.transfer_id);
-        // nothing went out for it (no announcement): a folder moves on
-        if !self.inflight.contains_key(&image.transfer_id)
-            && self.folder_current.as_deref() == Some(image.transfer_id.as_str())
-        {
-            self.folder_current = None;
-            self.next_folder_file();
-        }
-    }
-
-    /// A folder's file couldn't be sent: the rest of the folder isn't either.
-    fn folder_stopped(&mut self, transfer_id: &str) {
-        if self.folder_current.as_deref() == Some(transfer_id) {
-            self.folder_current = None;
-            let left = self.folder_queue.len();
-            self.folder_queue.clear();
-            if left > 0 {
-                let _ = self.updates.send(Update::Notice(format!(
-                    "{left} more files of the folder weren't sent"
-                )));
-            }
-        }
-    }
-
-    /// Sends a picture's announcement, then its frames, on every open bulk channel, waiting
-    /// whenever a channel is backed up.
-    fn send_frames(&mut self, envelope: &Envelope) {
-        let (PeerMessage::P2pImageStart { transfer_id, .. } | PeerMessage::P2pFileStart { transfer_id, .. }) =
-            &envelope.message
-        else {
-            return;
-        };
-        let Some(source) = self.outgoing.remove(transfer_id) else {
-            return;
-        };
-        let all = self.peers.bulk_channels(self.room.members().keys());
-        let Ok(start) = envelope.to_json() else { return };
-        for dc in &all {
-            if let Err(e) = dc.send(start.as_bytes(), false) {
-                tracing::debug!("picture announcement: {e:?}");
-            }
-        }
-        // Desktop peers getting it over QUIC (ADR 0009) have the announcement, not the frames
-        let quic_peers = self.quic_peers(transfer_id);
-        if quic_peers.is_empty() {
-            self.spawn_frames(all, source, transfer_id.clone());
-            return;
-        }
-        let channels = self
-            .peers
-            .bulk_channels(self.room.members().keys().filter(|p| !quic_peers.contains(*p)));
-        let transfer_id = transfer_id.clone();
-        self.quic_start(&transfer_id, envelope, &source, channels.is_empty());
-        if !channels.is_empty() {
-            self.spawn_frames(channels, source, transfer_id);
-        }
-    }
-
-    /// Sends a picture's frames on `channels` (its announcement already went), waiting whenever
-    /// a channel is backed up.
-    fn spawn_frames(
-        &mut self,
-        channels: Vec<rtc_webrtc::libwebrtc::data_channel::DataChannel>,
-        source: outgoing::Source,
-        transfer_id: String,
-    ) {
-        *self.inflight.entry(transfer_id.clone()).or_default() += 1;
-        let progress = self.queue_tx.clone();
-        self.sending.push(tokio::spawn(async move {
-            use rtc_protocol::image::{CHUNK, pack};
-            use rtc_webrtc::libwebrtc::data_channel::DataChannelState;
-            let frames = async {
-                let total = u32::try_from(source.size().div_ceil(CHUNK as u64).max(1)).unwrap_or(u32::MAX);
-                let mut reader = source.reader();
-                let mut last = 0u8;
-                for index in 0..total {
-                    loop {
-                        let open: Vec<_> = channels
-                            .iter()
-                            .filter(|dc| dc.state() == DataChannelState::Open)
-                            .collect();
-                        if open.is_empty() {
-                            tracing::info!(
-                                "❌ Image transfer failed: All peer connections dropped during image transfer"
-                            );
-                            return;
-                        }
-                        if open.iter().all(|dc| dc.buffered_amount() <= BULK_HIGH_WATER) {
-                            break;
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                    // read as it goes (a big file is never all in memory)
-                    let piece = match reader.next(CHUNK).await {
-                        Ok(piece) => piece,
-                        Err(e) => {
-                            tracing::info!("❌ File transfer failed: couldn't read the file: {e}");
-                            return;
-                        }
-                    };
-                    let frame = pack(&transfer_id, index, total, &piece);
-                    for dc in &channels {
-                        if dc.state() == DataChannelState::Open {
-                            let _ = dc.send(&frame, true);
-                        }
-                    }
-                    #[allow(
-                        clippy::cast_possible_truncation,
-                        clippy::cast_sign_loss,
-                        clippy::cast_precision_loss
-                    )]
-                    let percent = ((f64::from(index + 1) / f64::from(total)) * 100.0)
-                        .round()
-                        .min(100.0) as u8;
-                    if percent != last {
-                        last = percent;
-                        let _ = progress.send(Msg::ImageSending(transfer_id.clone(), percent));
-                    }
-                    tokio::task::yield_now().await;
-                }
-            };
-            frames.await;
-            // finished (or given up): the next file of a folder can go
-            let _ = progress.send(Msg::FramesDone(transfer_id));
-        }));
-    }
-
-    /// One way of sending this transfer finished (the frames, or QUIC to one peer). When none is
-    /// left, the next file of a folder being sent starts.
-    fn part_done(&mut self, transfer_id: &str) {
-        let left = match self.inflight.get_mut(transfer_id) {
-            Some(n) => {
-                *n = n.saturating_sub(1);
-                *n
-            }
-            None => 0,
-        };
-        if left == 0 {
-            self.inflight.remove(transfer_id);
-            if self.folder_current.as_deref() == Some(transfer_id) {
-                self.folder_current = None;
-                self.next_folder_file();
-            }
-        }
-    }
-
-    /// Sends the next file of the folder being sent, if any (one at a time).
-    fn next_folder_file(&mut self) {
-        if self.folder_current.is_some() {
-            return;
-        }
-        let Some(next) = self.folder_queue.pop_front() else {
-            return;
-        };
-        self.folder_current = Some(next.transfer_id.clone());
-        let _ = self.queue_tx.send(Msg::Ui(Request::SendImage(next)));
-    }
-
     async fn apply(&mut self, fx: Vec<Effect>) {
         for effect in fx {
             match effect {
@@ -1446,7 +1376,12 @@ impl Engine {
                         self.control_watch_reset();
                     }
                     self.control_peer_gone(&peer);
+                    self.camera.tracks.remove(&peer);
+                    self.camera.watches.remove(&peer);
+                    self.camera.applied.remove(&peer);
                     self.speaking.remove(&peer);
+                    // gone: they no longer receive our files (one nobody receives stops)
+                    self.transfers_peer_gone(&peer);
                     self.voice.remove_remote(peer.as_str());
                     self.voice.remove_remote_screen(peer.as_str());
                     self.peers.close(&peer);
@@ -1465,15 +1400,17 @@ impl Engine {
                         // left: pictures half-way in or out are dropped
                         self.images.reset();
                         self.quic_reset();
-                        self.inflight.clear();
-                        self.folder_queue.clear();
-                        self.folder_current = None;
-                        self.outgoing.clear();
+                        self.files_reset();
                         self.stop_capture();
                         self.screen.sharer = None;
                         self.screen.watch = None;
                         self.screen.tracks.clear();
                         self.publish_screen();
+                        // the camera closes with the room (`useCamera.ts`, `room-left`)
+                        self.camera_off_here();
+                        self.camera.tracks.clear();
+                        self.camera.watches.clear();
+                        self.camera.applied.clear();
                         self.control_watch_reset();
                         let mut outs = self.streams.share(
                             None,
@@ -1494,6 +1431,7 @@ impl Engine {
                     self.update_audio_open();
                     self.publish_room();
                     self.publish_control();
+                    self.publish_cameras();
                 }
                 Effect::Ui(UiEvent::Chat(line)) => {
                     let _ = self.updates.send(Update::Chat(line));
@@ -1520,7 +1458,7 @@ impl Engine {
                 Effect::Ui(UiEvent::Board { from, live, body }) => {
                     let _ = self.updates.send(Update::Board { from, live, body });
                 }
-                Effect::BroadcastBulk(envelope) => self.send_frames(&envelope),
+                Effect::BroadcastBulk(envelope) => self.announce(&envelope),
             }
         }
     }
@@ -1662,6 +1600,188 @@ impl Engine {
             }
         };
         let _ = self.updates.send(u);
+    }
+
+    /// Turns our camera on (or switches it), or off.
+    async fn camera_request(&mut self, choice: Option<CameraChoice>) {
+        let Some(choice) = choice else {
+            self.camera_off_here();
+            let fx = self
+                .room
+                .update(Input::Command(Command::SetCamera(false)), now_ms());
+            self.apply(fx).await;
+            self.publish_cameras();
+            return;
+        };
+        if !matches!(self.room.phase(), Phase::InRoom(_)) {
+            return;
+        }
+        // a switch keeps our tile (and everyone's view of us) while the new camera opens
+        self.camera.capture = None;
+        self.camera.number += 1;
+        let number = self.camera.number;
+        if !self.room.camera_on() {
+            self.camera.starting = true;
+        }
+        let preview = self
+            .camera
+            .preview
+            .get_or_insert_with(ScreenFeed::default)
+            .clone();
+        let tx = self.queue_tx.clone();
+        self.camera.capture = Some(camera::start(
+            &choice,
+            self.camera.source.clone(),
+            preview,
+            move |b| {
+                let _ = tx.send(Msg::Camera(number, b));
+            },
+        ));
+        self.publish_cameras();
+    }
+
+    /// What our camera's capture says.
+    async fn camera_back(&mut self, number: u64, back: camera::Back) {
+        if number != self.camera.number || self.camera.capture.is_none() {
+            return;
+        }
+        match back {
+            camera::Back::Started { width, height, fps } => {
+                tracing::info!("camera: {width}×{height} at {fps} fps");
+                self.camera.starting = false;
+                self.camera.size = Some((width, height, fps));
+                self.camera.applied.clear();
+                self.route_camera();
+                let fx = self
+                    .room
+                    .update(Input::Command(Command::SetCamera(true)), now_ms());
+                self.apply(fx).await;
+            }
+            camera::Back::Ended(err) => {
+                if let Some(e) = &err {
+                    tracing::warn!("camera: {e}");
+                    let _ = self
+                        .updates
+                        .send(Update::Notice(camera::error_text(e).to_owned()));
+                } else {
+                    tracing::info!("camera: stopped");
+                }
+                self.camera_off_here();
+                let fx = self
+                    .room
+                    .update(Input::Command(Command::SetCamera(false)), now_ms());
+                self.apply(fx).await;
+            }
+        }
+        self.publish_cameras();
+    }
+
+    /// Stops our camera here (the room logic is told separately).
+    fn camera_off_here(&mut self) {
+        self.camera.capture = None;
+        self.camera.number += 1;
+        self.camera.starting = false;
+        self.camera.size = None;
+        self.camera.preview = None;
+        self.camera.applied.clear();
+    }
+
+    /// As the side that made each connection: the camera line, for apps that say they have it
+    /// (tried again every tick until the connection is ready for a new offer).
+    async fn camera_lines(&mut self) {
+        let want: Vec<PeerId> = self
+            .room
+            .members()
+            .iter()
+            .filter(|(_, m)| m.camera && m.connected)
+            .map(|(p, _)| p.clone())
+            .collect();
+        for peer in want {
+            self.peers.add_camera_line(&peer).await;
+        }
+    }
+
+    /// Sets each viewer's camera sender: desktop viewers get the whole picture (the rate cap
+    /// grows with it), web viewers the web app's 640×360, 24 fps, 350 kbps.
+    fn route_camera(&mut self) {
+        let Some(size) = self.camera.size else { return };
+        let (w, h, fps) = size;
+        let viewers: Vec<(PeerId, bool)> = self
+            .room
+            .members()
+            .iter()
+            .map(|(p, m)| (p.clone(), m.desktop))
+            .collect();
+        for (peer, desktop) in viewers {
+            if self.camera.applied.get(&peer) == Some(&(desktop, size)) {
+                continue;
+            }
+            let Some(sender) = self.peers.camera_sender(&peer) else {
+                continue;
+            };
+            let mut params = sender.parameters();
+            let Some(enc) = params.encodings.first_mut() else {
+                continue;
+            };
+            if desktop {
+                enc.max_bitrate = Some(camera::desktop_bitrate(w, h, fps));
+                enc.max_framerate = Some(f64::from(fps));
+                enc.scale_resolution_down_by = Some(1.0);
+            } else {
+                enc.max_bitrate = Some(camera::WEB_BPS);
+                enc.max_framerate = Some(camera::WEB_FPS);
+                enc.scale_resolution_down_by = Some(camera::web_scale(h));
+            }
+            match sender.set_parameters(params) {
+                Ok(()) => {
+                    tracing::info!(
+                        "camera: to {peer} ({}): {}",
+                        if desktop { "desktop" } else { "web" },
+                        if desktop {
+                            format!("{w}×{h}")
+                        } else {
+                            "640×360 at most".to_owned()
+                        }
+                    );
+                    self.camera.applied.insert(peer, (desktop, size));
+                }
+                Err(e) => tracing::debug!("camera sender to {peer}: {e:?}"),
+            }
+        }
+    }
+
+    /// Decodes the cameras that are on (and only those) and tells the UI what to show.
+    fn publish_cameras(&mut self) {
+        let on = self.room.cameras();
+        self.camera.watches.retain(|p, _| on.contains(p));
+        let mut remote = Vec::new();
+        for peer in on {
+            if !self.camera.watches.contains_key(&peer)
+                && let Some(track) = self.camera.tracks.get(&peer).cloned()
+            {
+                let feed = ScreenFeed::default();
+                self.camera
+                    .watches
+                    .insert(peer.clone(), (screen::Watch::start(track, feed.clone()), feed));
+            }
+            if let Some((_, feed)) = self.camera.watches.get(&peer) {
+                remote.push((peer, feed.clone()));
+            }
+        }
+        let view = CameraView {
+            on: self.room.camera_on() && self.camera.capture.is_some(),
+            starting: self.camera.starting,
+            mine: if self.camera.capture.is_some() {
+                self.camera.preview.clone()
+            } else {
+                None
+            },
+            remote,
+        };
+        if self.camera.shown.as_ref() != Some(&view) {
+            self.camera.shown = Some(view.clone());
+            let _ = self.updates.send(Update::Cameras(view));
+        }
     }
 
     /// Starts decoding the sharer's pictures (once their track is here).
@@ -2033,6 +2153,30 @@ impl Engine {
         };
         let _ = self.updates.send(Update::Room(snapshot));
     }
+}
+
+/// Cameras, both ways (ADR 0010).
+struct CameraState {
+    /// Our camera's video source (its track is on every camera line).
+    source: rtc_webrtc::libwebrtc::video_source::native::NativeVideoSource,
+    /// Our camera, while it's on (or opening).
+    capture: Option<camera::Capture>,
+    /// The current capture's number (events from older ones are ignored).
+    number: u64,
+    /// Being opened (no pictures yet).
+    starting: bool,
+    /// What the camera gives: width, height, frames a second (once started).
+    size: Option<(u32, u32, u32)>,
+    /// Our own tile's pictures.
+    preview: Option<ScreenFeed>,
+    /// Each person's camera track (from their camera line).
+    tracks: HashMap<PeerId, rtc_webrtc::libwebrtc::video_track::RtcVideoTrack>,
+    /// Decoding the cameras that are on.
+    watches: HashMap<PeerId, (screen::Watch, ScreenFeed)>,
+    /// What each viewer's camera sender was set to: (desktop viewer, the camera's size).
+    applied: HashMap<PeerId, (bool, (u32, u32, u32))>,
+    /// What the UI was last told.
+    shown: Option<CameraView>,
 }
 
 /// Screen sharing, both ways.

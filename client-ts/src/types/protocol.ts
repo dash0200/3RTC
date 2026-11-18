@@ -380,11 +380,35 @@ export interface P2PFileStartMessage extends BasePeerMessage {
   isHost?: boolean;
 }
 
+/**
+ * `accept`: a receiver wants a big file (8 MB or more) or a folder's file; only then does the
+ * sender send it to them. `cancel` from the file's sender: cancelled for everyone (with a folder's
+ * id: the whole folder). From a receiver: only that receiver stops getting it; once nobody waits
+ * for or receives it, the sender stops (docs/PROTOCOL.md).
+ */
 export interface P2PFileControlMessage extends BasePeerMessage {
   type: 'p2p-file-control';
   transferId: string;
-  action: 'pause' | 'resume' | 'cancel';
+  action: 'pause' | 'resume' | 'accept' | 'cancel';
   startChunk?: number;
+}
+
+/** A folder offered in chat (desktop app, bulk channel): each file is sent on `accept`. */
+export interface P2PFolderOfferMessage extends BasePeerMessage {
+  type: 'p2p-folder-offer';
+  id: string;
+  folderId: string;
+  name: string;
+  caption?: string;
+  isHost?: boolean;
+  files: Array<{
+    transferId: string;
+    /** Its path inside the folder, the folder's name first (`Photos/2026/a.jpg`). */
+    path: string;
+    fileName: string;
+    fileSize: number;
+    mimeType: string;
+  }>;
 }
 
 export interface P2PFileSyncMessage extends BasePeerMessage {
@@ -681,6 +705,7 @@ export type PeerMessage =
   | ChatMessage
   | P2PImageStartMessage
   | P2PFileStartMessage
+  | P2PFolderOfferMessage
   | P2PFileControlMessage
   | P2PFileSyncMessage
   | ReactionMessage

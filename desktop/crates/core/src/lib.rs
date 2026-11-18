@@ -15,10 +15,11 @@ pub mod quic;
 pub mod recovery;
 mod room;
 pub mod shared;
+pub mod transfers;
 
 pub use room::{
-    ActivityCommand, ActivityView, BLOCKED_MESSAGE, BLOCKED_TOAST, ChatImage, ChatLine, Command, Effect,
-    HEARTBEAT_MS, Identity, Input, LinkState, MAX_CHAT_CHARS, Member, NAME_MAX, Phase, PlayerCmd,
-    PlayerReport, Quote, Reaction, RemoteSignal, Room, Showing, Sound, StoreView, UiEvent, UserAction,
-    WatchCommand, WatchView, clean_name,
+    ActivityCommand, ActivityView, BLOCKED_MESSAGE, BLOCKED_TOAST, ChatFolder, ChatFolderFile, ChatImage,
+    ChatLine, Command, Effect, FOLDER_MAX_FILES, HEARTBEAT_MS, Identity, Input, LinkState, MAX_CHAT_CHARS,
+    Member, NAME_MAX, Phase, PlayerCmd, PlayerReport, Quote, Reaction, RemoteSignal, Room, Showing, Sound,
+    StoreView, UiEvent, UserAction, WatchCommand, WatchView, clean_folder, clean_name,
 };

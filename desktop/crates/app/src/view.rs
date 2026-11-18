@@ -58,6 +58,8 @@ pub(crate) enum Pop {
     Sounds,
     /// "Play together": the games.
     Games,
+    /// The camera picker.
+    Camera,
 }
 
 /// A dialog over everything.
@@ -83,6 +85,8 @@ pub(crate) enum Dialog {
     Screen,
     /// Player shortcuts and controls settings.
     Player,
+    /// A folder offered in chat: its files (which: `RoomView::folder_open`).
+    Folder,
 }
 
 /// Which key is being recorded in the settings.
@@ -185,6 +189,10 @@ pub(crate) struct RoomView {
     pub(crate) reply_to: Option<rtc_core::Quote>,
     /// The picture the lightbox shows.
     pub(crate) lightbox: Option<String>,
+    /// The folder whose window is open.
+    pub(crate) folder_open: Option<String>,
+    /// Transfer ids of the files of folders offered in chat (saved quietly, shown in the window).
+    pub(crate) folder_files: std::collections::HashSet<String>,
     /// Connection details.
     pub(crate) net: crate::net::NetState,
     /// Updates: where they are, and the task checking for them.
@@ -198,6 +206,8 @@ pub(crate) struct RoomView {
     pub(crate) extras: crate::extras::Extras,
     /// Screen sharing.
     pub(crate) screen: crate::screen::ScreenUi,
+    /// Cameras (ADR 0010).
+    pub(crate) camera: crate::camera::CameraUi,
     /// The open game on this device.
     pub(crate) activity: crate::activity::ActivityUi,
 }
@@ -401,6 +411,8 @@ impl RoomView {
             pending: None,
             reply_to: None,
             lightbox: None,
+            folder_open: None,
+            folder_files: std::collections::HashSet::new(),
             net: crate::net::NetState::default(),
             update: crate::update::Status::Idle,
             gpu: GpuState::read(),
@@ -408,6 +420,7 @@ impl RoomView {
             watch,
             extras: crate::extras::Extras::default(),
             screen: crate::screen::ScreenUi::default(),
+            camera: crate::camera::CameraUi::default(),
             activity: crate::activity::ActivityUi::default(),
         };
         this.start_updates(cx);
@@ -523,6 +536,8 @@ impl RoomView {
                     self.pictures.clear();
                     self.pending = None;
                     self.lightbox = None;
+                    self.folder_open = None;
+                    self.folder_files.clear();
                     self.emoji_open = false;
                     self.stop_app_sound(cx);
                 }
@@ -604,6 +619,9 @@ impl RoomView {
             Update::ImageProgress { transfer_id, percent } => self.picture_progress(transfer_id, percent),
             Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes),
             Update::FileSaved { transfer_id, path } => self.file_saved(transfer_id, path, cx),
+            Update::TransferCancelled { transfer_id } => self.transfer_cancelled(&transfer_id),
+            Update::SendState { transfer_id, status } => self.send_state(&transfer_id, status),
+            Update::FolderHere { folder_id: _, files } => self.folder_here(files),
             Update::Net(peers) => self.on_net(peers),
             Update::Log(text) => self.log(text),
             Update::ConnectionLog(text) => self.connection_log = Some(text),
@@ -640,6 +658,8 @@ impl RoomView {
                 self.screen.error = Some(e.clone());
                 self.show_toast(format!("Couldn't share the screen: {e}"), cx);
             }
+            Update::Cameras(view) => self.on_cameras(view, cx),
+            Update::CameraDevices(list) => self.on_camera_devices(list),
             Update::Pop => self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice()),
         }
         cx.notify();
@@ -883,6 +903,13 @@ impl RoomView {
 
     pub(crate) fn set_player_double_click_fullscreen(&mut self, on: bool, cx: &mut Context<'_, Self>) {
         self.settings.player_double_click_fullscreen = on;
+        self.settings.save();
+        cx.notify();
+    }
+
+    pub(crate) fn set_keep_torrents(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        self.settings.keep_torrents = on;
+        crate::torrent::set_keep(on);
         self.settings.save();
         cx.notify();
     }
@@ -1511,6 +1538,8 @@ impl RoomView {
                 self.dialog = None;
             } else if self.pop.is_some() {
                 self.pop = None;
+            } else if self.camera.on_stage().is_some() {
+                self.camera_stage_close(cx);
             } else if window.is_fullscreen() {
                 window.toggle_fullscreen();
             }

@@ -1,12 +1,12 @@
 //! Chat pictures arriving on the bulk channels (`P2PImageReceiver` in
 //! `client-ts/src/utils/p2pImageShare.ts`): frames are put back together per transfer, with the
-//! web app's limits; an abandoned transfer is dropped after two minutes.
+//! web app's limits; a transfer with no frame for two minutes is dropped.
 
 use std::collections::HashMap;
 
 use rtc_protocol::image::{self, CHUNK, MAX_CHUNKS};
 
-/// A transfer nobody finished is dropped after this long (ms).
+/// A transfer with no frame for this long is dropped (ms).
 pub(crate) const STALE_MS: f64 = 120_000.0;
 
 /// What a frame did.
@@ -55,10 +55,13 @@ impl Receiver {
         );
     }
 
-    /// A binary message on a bulk channel (anything that isn't a picture frame is ignored).
-    pub(crate) fn frame(&mut self, bytes: &[u8]) -> Option<Got> {
+    /// A binary message on a bulk channel at `now` (anything that isn't a picture frame is
+    /// ignored).
+    pub(crate) fn frame(&mut self, bytes: &[u8], now: f64) -> Option<Got> {
         let f = image::parse(bytes)?;
         let t = self.transfers.get_mut(&f.transfer_id)?;
+        // still coming: not stale (a big file takes longer than two minutes)
+        t.started = now;
         let slot = t.chunks.get_mut(usize::try_from(f.index).ok()?)?;
         if slot.is_some() {
             return None;
@@ -96,7 +99,12 @@ impl Receiver {
         })
     }
 
-    /// Drops transfers nobody finished.
+    /// A transfer was cancelled: drop what came of it (later frames are ignored).
+    pub(crate) fn abort(&mut self, transfer_id: &str) {
+        self.transfers.remove(transfer_id);
+    }
+
+    /// Drops transfers with no frame for [`STALE_MS`].
     pub(crate) fn clean(&mut self, now: f64) {
         self.transfers.retain(|_, t| now - t.started < STALE_MS);
     }
@@ -118,26 +126,48 @@ mod tests {
         let mut r = Receiver::default();
         r.start("t", 3.0, 0.0);
         assert!(
-            r.frame(&pack("other", 0, 3, b"x")).is_none(),
+            r.frame(&pack("other", 0, 3, b"x"), 0.0).is_none(),
             "an unknown transfer"
         );
         assert_eq!(
-            r.frame(&pack("t", 2, 3, b"cc")),
+            r.frame(&pack("t", 2, 3, b"cc"), 0.0),
             Some(Got::Progress {
                 transfer_id: "t".into(),
                 percent: 33
             })
         );
-        assert!(r.frame(&pack("t", 2, 3, b"cc")).is_none(), "a repeat");
-        assert!(r.frame(&pack("t", 9, 3, b"zz")).is_none(), "out of range");
-        r.frame(&pack("t", 0, 3, b"aa"));
+        assert!(r.frame(&pack("t", 2, 3, b"cc"), 0.0).is_none(), "a repeat");
+        assert!(r.frame(&pack("t", 9, 3, b"zz"), 0.0).is_none(), "out of range");
+        r.frame(&pack("t", 0, 3, b"aa"), 0.0);
         assert_eq!(
-            r.frame(&pack("t", 1, 3, b"bb")),
+            r.frame(&pack("t", 1, 3, b"bb"), 0.0),
             Some(Got::Done {
                 transfer_id: "t".into(),
                 bytes: b"aabbcc".to_vec()
             })
         );
+    }
+
+    #[test]
+    fn a_cancelled_transfer_ignores_the_rest_of_its_frames() {
+        let mut r = Receiver::default();
+        r.start("t", 3.0, 0.0);
+        assert!(r.frame(&pack("t", 0, 3, b"aa"), 0.0).is_some());
+        r.abort("t");
+        assert!(r.frame(&pack("t", 1, 3, b"bb"), 0.0).is_none());
+        assert!(r.frame(&pack("t", 2, 3, b"cc"), 0.0).is_none(), "never completes");
+        assert!(r.transfers.is_empty());
+    }
+
+    #[test]
+    fn a_long_transfer_is_not_stale_while_frames_come() {
+        let mut r = Receiver::default();
+        r.start("t", 3.0, 0.0);
+        r.frame(&pack("t", 0, 3, b"aa"), STALE_MS - 1.0);
+        r.clean(STALE_MS + 10.0);
+        assert_eq!(r.transfers.len(), 1, "a frame came a moment ago");
+        r.clean(2.0 * STALE_MS);
+        assert!(r.transfers.is_empty(), "nothing for two minutes");
     }
 
     #[test]

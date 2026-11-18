@@ -65,11 +65,13 @@ pub(crate) enum PeerEvent {
         generation: u64,
         state: PeerConnectionState,
     },
-    /// Their video arrived (a shared screen; shown only once they say they share).
+    /// Their video arrived: a shared screen (shown only once they say they share), or their
+    /// camera when it came on the camera line (`mid` tells which, `Peers::is_camera_line`).
     RemoteVideo {
         peer: PeerId,
         generation: u64,
         track: rtc_webrtc::libwebrtc::video_track::RtcVideoTrack,
+        mid: Option<String>,
     },
     /// Their voice arrived (an incoming audio track), or the sound of their shared screen
     /// (`screen`: its stream is `screen-audio`).
@@ -91,6 +93,21 @@ type Sink = Arc<dyn Fn(PeerEvent) + Send + Sync>;
 
 /// The stream id of a shared screen's sound (its own audio line).
 pub(crate) const SCREEN_SOUND_STREAM: &str = "screen-audio";
+/// The stream id of our camera's track (any id works: the line's place says it's the camera).
+const CAMERA_STREAM: &str = "camera";
+
+/// The video lines of a connection in their fixed order (`videoTransceivers` in `cameraLine.ts`):
+/// the first is the shared screen, the second the camera.
+fn video_lines(pc: &PeerConnection) -> Vec<rtc_webrtc::libwebrtc::rtp_transceiver::RtpTransceiver> {
+    pc.transceivers()
+        .into_iter()
+        .filter(|t| matches!(t.receiver().track(), Some(MediaStreamTrack::Video(_))))
+        // `direction()`, never `current_direction()`: webrtc-sys reads the latter with
+        // `optional::value()`, which aborts the process for a line not negotiated yet (our camera
+        // track waiting for the camera line, or a line between its offer and the answer)
+        .filter(|t| t.direction() != rtc_webrtc::libwebrtc::rtp_transceiver::RtpTransceiverDirection::Stopped)
+        .collect()
+}
 
 struct Link {
     pc: PeerConnection,
@@ -103,6 +120,10 @@ struct Link {
     levels: tokio::task::JoinHandle<()>,
     /// Our screen's sound goes on this connection (added once, kept).
     screen_sound: bool,
+    /// We made this connection (then we add the camera line, ADR 0010).
+    initiator: bool,
+    /// We added the camera line on it (as the initiator; once).
+    camera_line: bool,
     /// ICE candidate lines we sent and received, for the connection-failure diagnosis.
     local_candidates: Arc<Mutex<Vec<String>>>,
     remote_candidates: Vec<String>,
@@ -181,6 +202,8 @@ pub(crate) struct Peers {
     voice: MediaStreamTrack,
     /// Our screen (frames only while sharing).
     screen: MediaStreamTrack,
+    /// Our camera (frames only while it's on).
+    camera: MediaStreamTrack,
     signaling: rtc_signaling::Handle,
     sink: Sink,
     links: HashMap<PeerId, Link>,
@@ -217,6 +240,7 @@ impl Peers {
         factory: Factory,
         voice: MediaStreamTrack,
         screen: MediaStreamTrack,
+        camera: MediaStreamTrack,
         signaling: rtc_signaling::Handle,
         sink: impl Fn(PeerEvent) + Send + Sync + 'static,
     ) -> Self {
@@ -224,6 +248,7 @@ impl Peers {
             factory,
             voice,
             screen,
+            camera,
             signaling,
             sink: Arc::new(sink),
             links: HashMap::new(),
@@ -278,6 +303,7 @@ impl Peers {
                 peer: from.clone(),
                 generation,
                 track,
+                mid: event.transceiver.mid(),
             }),
         })));
         let sink = Arc::clone(&self.sink);
@@ -300,6 +326,14 @@ impl Peers {
         if let Err(e) = pc.add_track(self.screen.clone(), &["screen"]) {
             tracing::warn!("video line to {peer}: {e:?}");
         }
+        // Camera (ADR 0010): as the answerer, our camera track waits here, unused, for the camera
+        // line the other side adds (libwebrtc pairs an offered line with the first unused
+        // track-added transceiver of its kind: the screen took the first video line). An answer
+        // can't add lines, so apps without the camera line never see it. As the initiator we add
+        // the line ourselves once both identities are in (`add_camera_line`).
+        if !initiator && let Err(e) = pc.add_track(self.camera.clone(), &[CAMERA_STREAM]) {
+            tracing::warn!("camera track to {peer}: {e:?}");
+        }
         // H.264 first: the GPU encodes it (screen.rs); VP8 and the rest stay as fallbacks
         self.prefer_h264(&pc);
         // a fast start and a high ceiling for screens; the estimate decides within them
@@ -308,7 +342,6 @@ impl Peers {
             start_bitrate_bps: Some(4_000_000),
             max_bitrate_bps: Some(60_000_000),
         });
-        let _ = initiator;
         // the bulk channel is pre-negotiated: both sides create it
         let bulk = pc
             .create_data_channel(channels::BULK_LABEL, channels::bulk_init())
@@ -331,6 +364,8 @@ impl Peers {
             pending: Vec::new(),
             levels,
             screen_sound: false,
+            initiator,
+            camera_line: false,
             local_candidates,
             remote_candidates: Vec::new(),
         };
@@ -665,16 +700,66 @@ impl Peers {
         }
     }
 
-    /// The sender of our screen to a peer (its track is the shared picture or their own).
+    /// The sender of our screen to a peer (its track is the shared picture or their own): the
+    /// first video line's, never the camera's.
     pub(crate) fn video_sender(&self, peer: &PeerId) -> Option<RtpSender> {
         let link = self.links.get(peer)?;
         if link.pc.connection_state() != PeerConnectionState::Connected {
             return None;
         }
-        link.pc
-            .senders()
-            .into_iter()
-            .find(|s| matches!(s.track(), Some(MediaStreamTrack::Video(_))))
+        video_lines(&link.pc)
+            .first()
+            .map(rtc_webrtc::libwebrtc::rtp_transceiver::RtpTransceiver::sender)
+    }
+
+    /// The sender of our camera to a peer, once the camera line is negotiated.
+    pub(crate) fn camera_sender(&self, peer: &PeerId) -> Option<RtpSender> {
+        let link = self.links.get(peer)?;
+        if link.pc.connection_state() != PeerConnectionState::Connected {
+            return None;
+        }
+        video_lines(&link.pc)
+            .get(1)
+            .filter(|t| t.mid().is_some())
+            .map(rtc_webrtc::libwebrtc::rtp_transceiver::RtpTransceiver::sender)
+    }
+
+    /// Whether a track that arrived on the line `mid` is the peer's camera (the second video line).
+    pub(crate) fn is_camera_line(&self, peer: &PeerId, mid: Option<&str>) -> bool {
+        let Some(mid) = mid else { return false };
+        let Some(link) = self.links.get(peer) else {
+            return false;
+        };
+        video_lines(&link.pc)
+            .get(1)
+            .and_then(rtc_webrtc::libwebrtc::rtp_transceiver::RtpTransceiver::mid)
+            .is_some_and(|m| m == mid)
+    }
+
+    /// As the side that made the connection: adds the camera line once (the other app says
+    /// `camera: true`) and offers it. Returns whether it's there now; `false` means try again
+    /// later (not connected, or another offer is under way). `cameraLine.ts` does the same.
+    pub(crate) async fn add_camera_line(&mut self, peer: &PeerId) -> bool {
+        let Some(link) = self.links.get_mut(peer) else {
+            return false;
+        };
+        if !link.initiator || link.camera_line {
+            return link.camera_line || !link.initiator;
+        }
+        if link.pc.connection_state() != PeerConnectionState::Connected
+            || link.pc.signaling_state() != rtc_webrtc::libwebrtc::peer_connection::SignalingState::Stable
+            || video_lines(&link.pc).is_empty()
+        {
+            return false;
+        }
+        link.camera_line = true;
+        if let Err(e) = link.pc.add_track(self.camera.clone(), &[CAMERA_STREAM]) {
+            tracing::warn!("camera line to {peer}: {e:?}");
+            return true; // not again on this connection
+        }
+        tracing::info!("camera: line to {peer}; offering it");
+        self.offer(peer, false).await;
+        true
     }
 
     /// Our screen's sound to a viewer: its own audio line, added once to their

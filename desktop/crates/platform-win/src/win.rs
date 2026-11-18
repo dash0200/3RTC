@@ -20,7 +20,7 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetDoubleClickTime};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_LARGE_ICON, NIIF_RESPECT_QUIET_TIME,
     NIIF_USER, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONUSERCLICK, NIN_SELECT,
@@ -251,6 +251,13 @@ pub fn raw_hwnd(window: &impl HasWindowHandle) -> isize {
 /// Returns whether the cursor is currently in the bottom strip (`threshold_px` high) of the window's client area.
 pub fn cursor_in_bottom_hwnd(raw_hwnd: isize, threshold_px: i32) -> bool {
     cursor_window_state(raw_hwnd, threshold_px).is_some_and(|(_, _, at_bottom)| at_bottom)
+}
+
+/// The system's double-click time in milliseconds (what GPUI counts double clicks by).
+#[must_use]
+pub fn double_click_ms() -> u64 {
+    // SAFETY: reads a system setting; takes no arguments.
+    u64::from(unsafe { GetDoubleClickTime() })
 }
 
 /// Returns `(pt.x, pt.y, at_bottom)` in client coordinates if the window handle is valid.

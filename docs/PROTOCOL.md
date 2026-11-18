@@ -32,8 +32,38 @@ file/video frames on the bulk channel.
 |---|---|
 | `chat` | `id, sender, isHost, text, replyTo?, mentions?` — `text` may use simple markdown (`**bold**`, `*italic*`/`_italic_`, `~~struck~~`, `` `code` ``) and `@Name` mentions, which older apps just show as typed. `replyTo {id, sender, text}`: the message it answers (`text` a plain snippet of at most 140 characters; receivers quote their own copy when they have it). `mentions`: the peer ids named with @Name (at most 10); those people get a notice. Malformed `replyTo`/`mentions` are dropped, the message kept. |
 | `p2p-image-start` (bulk) | `id, transferId, fileName, fileSize, mimeType, caption, …`, then binary frames starting with `IMG1` |
+| `p2p-file-start` (bulk) | the same for a file that isn't a picture (`totalChunks`; then `IMG1` frames, or QUIC between desktop apps) |
+| `p2p-file-control` | `transferId, action: pause \| resume \| accept \| cancel, startChunk?` (see below) |
+| `p2p-file-sync` | `transferId, resumeFromChunk`: a receiver back after a reconnect asks for the rest |
+| `p2p-folder-offer` (bulk) | `id, folderId, name, caption, isHost, files: [{transferId, path, fileName, fileSize, mimeType}]` (desktop app; see below) |
 | `reaction` | `id, emoji, lane, combo` (any single emoji: each person picks their own set of up to 10; receivers allow ~10 a second per person) |
 | `soundboard-sfx` | `soundId, soundName, emoji` |
+
+**Big files wait for Accept; folders are picked file by file.** Files of **8 MB** (8 388 608 bytes) or
+more, pictures too, are only announced: the sender sends `p2p-image-start` / `p2p-file-start` to everyone
+and no frames. A receiver who wants it sends `p2p-file-control` `accept`; the sender then sends that
+receiver the announcement again (only to them) and the file from its first frame, on their own (a desktop
+app to another desktop app: over QUIC, ADR 0009; else the bulk channel). Smaller files go to everyone
+straight away, as before. Older apps never send `accept`, so they don't get big files until they update;
+an older sender's big files aren't received by a newer app either.
+
+A folder (desktop app) goes as one `p2p-folder-offer`: its files' paths (cleaned by the receiver, never
+above the folder, at most 1000 files) and sizes. Every file waits for `accept` with its `transferId`; the
+sender sends each person's accepted files one at a time, each preceded by its `p2p-file-start` (never a
+chat line of its own). Desktop receivers save them under Downloads in the folder's layout and show the
+files already there; web receivers save each one from the folder window.
+
+**Cancelling a chat file** (`p2p-file-control` with `action: cancel`). Who sent it decides what it means
+(`features/chat/transferPeers.ts`, `desktop/crates/core/src/transfers.rs`):
+- From the file's **sender** (the peer that announced it): cancelled for everyone. Receivers stop (bulk
+  frames and QUIC) and show it as cancelled. With a folder's `folderId`: the whole folder.
+- From a **receiver** (Cancel, or Decline on an offer): only that receiver stops getting it; the sender
+  keeps sending to the others. Other receivers ignore it.
+- When **nobody is waiting for or receiving** a file any more (every receiver declined, cancelled, got
+  it, or left the room), it's over: if nobody got it, the sender stops and sends its own cancel.
+
+Both apps show Cancel on the file's card for the sender and the receivers, and Accept / Decline on a big
+file offered. Apps from before this treated any cancel as "cancelled for everyone".
 
 ### Playback
 | type | fields |
@@ -103,6 +133,15 @@ While drawing, two messages that are not state:
 | `wb-live` | `e` (board epoch), `id, k, c, w`, `from` (how many numbers were sent before) and `pts` (the new ones), `name`; or `{ e, id, done: true }` when the stroke ends |
 | `wb-cursor` | `x, y, name` (board units, at most ~12 a second), or `gone: true` |
 
+### Sketch (`features/activities/sketch`)
+One player draws a word, the others guess it. The game is shared state `act:sketch` (`rules.ts`),
+redacted: the word and the 3 choices go only to the drawer until the reveal. The deciding app keeps
+time by dispatching `{ kind: 'tick' }` about twice a second while a turn is on (ticks from anyone
+else are ignored); a new deciding app that doesn't know the word ends that turn without points.
+Each turn's board is a whiteboard of its own: index `act:sketch:t<turn>` and chunks
+`act:sketch:t<turn>:<epoch>:<n>` (the whiteboard rules), drawn live with `wb-live` / `wb-cursor`.
+Guesses are actions on `act:sketch`, not chat. No new message types.
+
 ### Cards in hand (Last Card)
 Shared stores can pass `redact(state, peerId)` (core/sharedState.ts): every copy of the state sent to
 a peer is made for that peer, so in Last Card each app receives its own hand and nobody else's. No new
@@ -167,6 +206,12 @@ line: they take any incoming video for the shared screen, so it must never reach
 | `camera-status` | anyone → everyone, and to each newcomer while on | `on` (true or false) |
 
 A tile is shown only when `camera-status` says on and the camera line's picture has arrived.
+
+Between two **desktop** apps (`client: "desktop"`) the camera isn't held to 640×360: a desktop app sends
+other desktop apps its camera's own picture (up to 1080p, 30 fps, about 3 Mbit/s at most for 1080p) and
+web apps the 640×360 / 24 fps / 350 kbps above (scaled down per connection), so nothing changes for the
+web app. Which camera is used (the picker by the camera button) and a camera shown on the stage after a
+click are each app's own choice: nothing is sent for them (`desktop/docs/adr/0010-webcam.md`).
 
 **QUIC file transfer (desktop → desktop only, `desktop/docs/adr/0009`).** Between two desktop apps,
 files of 8 MB or more can go over a direct QUIC connection instead of the `bulk` channel. The web app
