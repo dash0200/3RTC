@@ -384,7 +384,9 @@ impl TorrentService {
             .collect();
 
         // Phase 2: add it for real, downloading only the chosen files' pieces.
-        let only: Vec<usize> = std::iter::once(chosen.id).chain(subtitles.iter().map(|f| f.id)).collect();
+        let only: Vec<usize> = std::iter::once(chosen.id)
+            .chain(subtitles.iter().map(|f| f.id))
+            .collect();
         // librqbit's own folder for it (the torrent's name for several files), under ours
         let sub = listed
             .output_folder
@@ -392,7 +394,11 @@ impl TorrentService {
             .map(Path::to_path_buf)
             .unwrap_or_default();
         let keep = KEEP.load(Ordering::Relaxed);
-        let base = if keep { download_dir() } else { self.session_dir.clone() };
+        let base = if keep {
+            download_dir()
+        } else {
+            self.session_dir.clone()
+        };
         let opts = AddTorrentOptions {
             overwrite: true,
             output_folder: Some(base.join(sub).to_string_lossy().into_owned()),
@@ -480,7 +486,13 @@ impl TorrentService {
         // subtitle files still downloading: (file id, size, where)
         let mut subs_left: Vec<(usize, u64, PathBuf)> = subtitles
             .iter()
-            .map(|f| (f.id, f.size, output_folder.join(listed_relative_path(&files, f.id))))
+            .map(|f| {
+                (
+                    f.id,
+                    f.size,
+                    output_folder.join(listed_relative_path(&files, f.id)),
+                )
+            })
             .collect();
 
         loop {
@@ -654,7 +666,11 @@ pub(crate) fn matching_subtitles(files: &[TorrentFileEntry], video: usize) -> Ve
     let stem_of = |n: &str| n.rsplit_once('.').map_or(n, |(s, _)| s).to_lowercase();
     let vdir = dir_of(&v.path);
     let vstem = stem_of(&v.name);
-    let alone = files.iter().filter(|f| f.playable && dir_of(&f.path) == vdir).count() == 1;
+    let alone = files
+        .iter()
+        .filter(|f| f.playable && dir_of(&f.path) == vdir)
+        .count()
+        == 1;
     // named after it: its name, then the end or a separator (`E1` isn't `E10`)
     let named = |n: &str| {
         n.to_lowercase()
@@ -797,7 +813,9 @@ fn listed_relative_path(files: &[TorrentFileEntry], id: usize) -> PathBuf {
 /// A subtitle file the player can load.
 pub(crate) fn is_subtitle_name(name: &str) -> bool {
     let n = name.to_lowercase();
-    [".srt", ".ass", ".ssa", ".vtt", ".sub"].iter().any(|e| n.ends_with(e))
+    [".srt", ".ass", ".ssa", ".vtt", ".sub"]
+        .iter()
+        .any(|e| n.ends_with(e))
 }
 
 /// Helper to check if a filename has a video extension.
@@ -871,7 +889,11 @@ mod tests {
         ];
         assert_eq!(matching_subtitles(&files, 0), vec![1]);
         assert_eq!(matching_subtitles(&files, 2), vec![3]);
-        let numbered = vec![entry(0, "E1.mkv", 9), entry(1, "E10.mkv", 9), entry(2, "E10.srt", 1)];
+        let numbered = vec![
+            entry(0, "E1.mkv", 9),
+            entry(1, "E10.mkv", 9),
+            entry(2, "E10.srt", 1),
+        ];
         assert_eq!(matching_subtitles(&numbered, 0), Vec::<usize>::new());
         assert_eq!(matching_subtitles(&numbered, 1), vec![2]);
     }

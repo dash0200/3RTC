@@ -1721,8 +1721,16 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                     .py(px(8.))
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(if selected { tokens::accent() } else { tokens::line() })
-                    .bg(if selected { tokens::panel() } else { tokens::raised() })
+                    .border_color(if selected {
+                        tokens::accent()
+                    } else {
+                        tokens::line()
+                    })
+                    .bg(if selected {
+                        tokens::panel()
+                    } else {
+                        tokens::raised()
+                    })
                     .hover(|s| s.border_color(tokens::line_strong()).bg(tokens::panel()))
                     .cursor_pointer()
                     // subtitles: a box to tick (loaded with the video)
@@ -1732,7 +1740,11 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                             .size(px(16.))
                             .rounded(px(4.))
                             .border_1()
-                            .border_color(if ticked { tokens::accent() } else { tokens::line_strong() })
+                            .border_color(if ticked {
+                                tokens::accent()
+                            } else {
+                                tokens::line_strong()
+                            })
                             .bg(if ticked { tokens::accent() } else { tokens::bg() })
                             .flex()
                             .items_center()
@@ -1757,7 +1769,11 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                             .truncate()
                             .text_size(px(13.5))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if f.playable || ticked { tokens::text() } else { tokens::text_2() })
+                            .text_color(if f.playable || ticked {
+                                tokens::text()
+                            } else {
+                                tokens::text_2()
+                            })
                             .child(f.name),
                     )
                     .children(suggested.then(|| {
@@ -1827,10 +1843,7 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                                 .truncate()
                                 .text_size(px(12.))
                                 .text_color(tokens::text_3())
-                                .child(format!(
-                                    "{} · only this file is downloaded",
-                                    choice.title
-                                )),
+                                .child(format!("{} · only this file is downloaded", choice.title)),
                         ),
                 )
                 .child(
@@ -1915,7 +1928,11 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                         .rounded_full()
                         .flex()
                         .when(keep, gpui_kit::Styled::justify_end)
-                        .bg(if keep { tokens::accent() } else { tokens::line_strong() })
+                        .bg(if keep {
+                            tokens::accent()
+                        } else {
+                            tokens::line_strong()
+                        })
                         .child(div().size(px(16.)).rounded_full().bg(tokens::white())),
                 )
                 .child(
@@ -1928,11 +1945,16 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("Keep after watching"),
                         )
-                        .child(div().text_size(px(12.)).text_color(tokens::text_3()).child(if keep {
-                            "Saved in Downloads\\3RTC\\Torrents (qBittorrent can finish it)"
-                        } else {
-                            "Deleted when you stop watching"
-                        })),
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(tokens::text_3())
+                                .child(if keep {
+                                    "Saved in Downloads\\3RTC\\Torrents (qBittorrent can finish it)"
+                                } else {
+                                    "Deleted when you stop watching"
+                                }),
+                        ),
                 )
                 .on_click(cx.listener(move |v, _, _, cx| v.set_keep_torrents(!keep, cx))),
         )

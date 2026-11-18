@@ -1138,7 +1138,9 @@ impl Engine {
                 generation,
                 text,
             }) if (text.contains("\"file-format") || text.contains("\"file-subtitle-"))
-                && type_is(&text, |t| t == "file-format" || t.starts_with("file-format-") || t.starts_with("file-subtitle-")) =>
+                && type_is(&text, |t| {
+                    t == "file-format" || t.starts_with("file-format-") || t.starts_with("file-subtitle-")
+                }) =>
             {
                 if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
                     return;
@@ -2256,15 +2258,22 @@ mod tests {
     #[test]
     fn messages_go_by_their_type_not_their_text() {
         let video = |t: &str| {
-            t.starts_with("p2p-") && t != "p2p-image-start" && t != "p2p-folder-offer" && !t.starts_with("p2p-file-")
+            t.starts_with("p2p-")
+                && t != "p2p-image-start"
+                && t != "p2p-folder-offer"
+                && !t.starts_with("p2p-file-")
         };
         let folder = r#"{"type":"p2p-folder-offer","folderId":"f","files":[{"transferId":"t","path":"F/p2p-x/screen-1.png"}]}"#;
         assert!(!type_is(folder, video), "a folder offer is chat, not video");
-        assert!(!type_is(folder, |t| t.starts_with("screen-")), "a file name is not a type");
+        assert!(
+            !type_is(folder, |t| t.starts_with("screen-")),
+            "a file name is not a type"
+        );
         let start = r#"{"type":"p2p-file-start","transferId":"t","fileName":"screen-1.png"}"#;
         assert!(!type_is(start, |t| t.starts_with("screen-")));
         assert!(type_is(r#"{"type":"p2p-range-request","streamNo":1}"#, video));
-        assert!(type_is(r#"{"type":"screen-pointer","x":0.5}"#, |t| t.starts_with("screen-")));
+        assert!(type_is(r#"{"type":"screen-pointer","x":0.5}"#, |t| t
+            .starts_with("screen-")));
         assert!(!type_is("not json \"screen-", |_| true));
     }
 }
