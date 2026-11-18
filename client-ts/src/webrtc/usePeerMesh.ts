@@ -67,7 +67,7 @@ export interface PeerMeshContext {
   /** See SignalingContext.onRoomError */
   onRoomError?: (message: string, roomId: string | null) => boolean;
   /** See SignalingContext.onHostChanged */
-  onHostChanged?: (hostPeerId: string, fromPeerId: string | null) => void;
+  onHostChanged?: (hostPeerId: string, fromPeerId: string | null, returned?: boolean) => void;
 }
 
 export interface PeerMeshHookResult {
@@ -644,7 +644,8 @@ export function usePeerMesh(ctx: PeerMeshContext): PeerMeshHookResult {
         username,
         findRoomElsewhere: (code: string, notFoundMessage: string) => findRoomElsewhereRef.current(code, notFoundMessage),
         onRoomError: (message: string, room: string | null) => onRoomErrorRef.current?.(message, room) ?? false,
-        onHostChanged: (hostId: string, fromId: string | null) => onHostChangedRef.current?.(hostId, fromId)
+        onHostChanged: (hostId: string, fromId: string | null, returned?: boolean) =>
+          onHostChangedRef.current?.(hostId, fromId, returned)
       }),
     [
       peerIdRef,

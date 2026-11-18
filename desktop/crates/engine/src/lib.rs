@@ -622,6 +622,15 @@ fn new_peer_id() -> PeerId {
     PeerId::new(format!("dk{:016x}", rand::random::<u64>())).unwrap_or_else(|_| unreachable!())
 }
 
+/// Whether a peer message's `type` passes `test` (checked on the parsed field, not the text: a
+/// file name such as `screen-1.png` or a folder offer's paths must not decide where it goes).
+fn type_is(text: &str, test: impl FnOnce(&str) -> bool) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("type").and_then(serde_json::Value::as_str).map(test))
+        .unwrap_or(false)
+}
+
 fn now_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1092,7 +1101,7 @@ impl Engine {
                 peer,
                 generation,
                 text,
-            }) if text.contains("\"screen-") => {
+            }) if text.contains("\"screen-") && type_is(&text, |t| t.starts_with("screen-")) => {
                 if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
                     return;
                 }
@@ -1128,7 +1137,9 @@ impl Engine {
                 peer,
                 generation,
                 text,
-            }) if text.contains("\"file-format") || text.contains("\"file-subtitle-") => {
+            }) if (text.contains("\"file-format") || text.contains("\"file-subtitle-"))
+                && type_is(&text, |t| t == "file-format" || t.starts_with("file-format-") || t.starts_with("file-subtitle-")) =>
+            {
                 if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
                     return;
                 }
@@ -1150,8 +1161,13 @@ impl Engine {
                 generation,
                 text,
             }) if text.contains("\"p2p-")
-                && !text.contains("\"p2p-image-start\"")
-                && !text.contains("\"p2p-file-") =>
+                // the video stream's messages; chat files and folders go to the room logic
+                && type_is(&text, |t| {
+                    t.starts_with("p2p-")
+                        && t != "p2p-image-start"
+                        && t != "p2p-folder-offer"
+                        && !t.starts_with("p2p-file-")
+                }) =>
             {
                 if !self.peers.is_current(&peer, generation) || !self.room.members().contains_key(&peer) {
                     return;
@@ -2230,5 +2246,25 @@ impl stream::Links for EngineLinks<'_> {
 
     fn me(&self) -> String {
         self.room.identity().username.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::type_is;
+
+    #[test]
+    fn messages_go_by_their_type_not_their_text() {
+        let video = |t: &str| {
+            t.starts_with("p2p-") && t != "p2p-image-start" && t != "p2p-folder-offer" && !t.starts_with("p2p-file-")
+        };
+        let folder = r#"{"type":"p2p-folder-offer","folderId":"f","files":[{"transferId":"t","path":"F/p2p-x/screen-1.png"}]}"#;
+        assert!(!type_is(folder, video), "a folder offer is chat, not video");
+        assert!(!type_is(folder, |t| t.starts_with("screen-")), "a file name is not a type");
+        let start = r#"{"type":"p2p-file-start","transferId":"t","fileName":"screen-1.png"}"#;
+        assert!(!type_is(start, |t| t.starts_with("screen-")));
+        assert!(type_is(r#"{"type":"p2p-range-request","streamNo":1}"#, video));
+        assert!(type_is(r#"{"type":"screen-pointer","x":0.5}"#, |t| t.starts_with("screen-")));
+        assert!(!type_is("not json \"screen-", |_| true));
     }
 }

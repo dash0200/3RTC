@@ -230,6 +230,8 @@ describe('signaling server', () => {
         host.send({ type: 'leave' });
         await host.next('left');
         await guest.next('peer-left');
+        // the guest stands in while the host is away (a room always has a host)
+        assert.equal((await guest.next('host')).hostPeerId, 'g7d');
         host.send({ type: 'create-room', roomId: created.roomId, peerId: 'h7d', hostToken: created.hostToken });
         const back = await host.next('room-resumed');
         assert.deepEqual(back.peers, ['g7d']);

@@ -395,6 +395,7 @@ impl RoomView {
         self.watch.torrent_stats = None;
         self.watch.torrent_status = None;
         self.watch.torrent_choice = None;
+        self.watch.torrent_subs.clear();
         if let Some(e) = &self.engine {
             e.stream_from(name.clone());
             self.watch.local.asking = Some(name);
@@ -416,6 +417,7 @@ impl RoomView {
         self.watch.torrent_stats = None;
         self.watch.torrent_status = None;
         self.watch.torrent_choice = None;
+        self.watch.torrent_subs.clear();
         if self.watch.local.asking.take().is_none() {
             reader.close();
             return;
@@ -483,6 +485,10 @@ impl RoomView {
         let report = match e {
             VideoEvent::Ready { duration } => {
                 l.duration = duration;
+                // torrent subtitles that finished before the player was up
+                for path in std::mem::take(&mut self.watch.torrent_subs) {
+                    self.load_torrent_subtitle(&path, cx);
+                }
                 None
             }
             VideoEvent::State {
@@ -686,6 +692,7 @@ impl RoomView {
         crate::torrent::TorrentService::cancel_stream(&self.runtime);
         self.watch.torrent_status = None;
         self.watch.torrent_choice = None;
+        self.watch.torrent_subs.clear();
         self.watch.torrent_stats = None;
         let size = match std::fs::metadata(&path) {
             Ok(m) if m.is_file() => m.len(),
@@ -715,6 +722,27 @@ impl RoomView {
         self.watch.local.file = Some(path);
         self.watch_cmd(WatchCommand::PlayFile { name, size });
         cx.notify();
+    }
+
+    /// A subtitle file picked with a torrent's video finished downloading: into the player
+    /// (now, or once it's up). The first one is shared with the room too.
+    pub(crate) fn torrent_subtitle(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        let playing = self.watch.player.borrow().as_ref().and_then(Live::video).is_some();
+        if playing {
+            self.load_torrent_subtitle(&path, cx);
+        } else {
+            self.watch.torrent_subs.push(path);
+        }
+    }
+
+    fn load_torrent_subtitle(&mut self, path: &Path, cx: &mut Context<'_, Self>) {
+        if self.watch.torrent_sub_shared {
+            self.with_video(|p| p.add_subtitle(path));
+            cx.notify();
+        } else {
+            self.watch.torrent_sub_shared = true;
+            self.add_subtitle(path, cx);
+        }
     }
 
     fn add_subtitle(&mut self, path: &Path, cx: &mut Context<'_, Self>) {
@@ -1314,7 +1342,7 @@ pub(crate) fn controls(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                     ts.seeds, ts.peers, ts.total_peers, sp_mb
                 ))
         }))
-        // the torrent's file in Explorer (Downloads\3RTC Torrents)
+        // the torrent's file in Explorer (Downloads\3RTC\Torrents)
         .children(
             view.settings
                 .keep_torrents
