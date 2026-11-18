@@ -14,7 +14,8 @@ use gpui_kit::{
 };
 use rtc_core::Quote;
 use rtc_core::chat_format::{MentionTarget, format_chat};
-use rtc_engine::{ChatLine, OutgoingImage, Snapshot};
+use rtc_core::transfers::{SendStatus, needs_accept};
+use rtc_engine::{ChatLine, FileHere, OutgoingFolder, OutgoingImage, Snapshot};
 use rtc_protocol::image::{MAX_SEND_BYTES, format_size, mime_for_name};
 use rtc_ui::button::{Button, Variant};
 use rtc_ui::{Icon, icon, tokens};
@@ -31,6 +32,14 @@ pub(crate) struct Picture {
     pub(crate) moving: bool,
     /// Received over QUIC and saved here (ADR 0009): the card opens its folder.
     pub(crate) saved: Option<PathBuf>,
+    /// Cancelled (by us, by its sender, or nobody was receiving it): the card says so.
+    pub(crate) cancelled: bool,
+    /// Theirs, offered: it comes only once we accept it (big files, a folder's files).
+    pub(crate) offered: bool,
+    /// Ours, offered: where it is with the receivers (waiting to accept, being sent, sent).
+    pub(crate) send: Option<SendStatus>,
+    /// A folder's file partly in Downloads already (accepting resumes it).
+    pub(crate) partly: bool,
 }
 
 /// A picture attached to the next message.
@@ -335,49 +344,50 @@ impl RoomView {
         let Some(p) = self.pending.take() else { return };
         let new_transfer = || format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
         if let Some(files) = p.folder {
-            // one chat file each, sent one after the other; the first says what it is
-            let folder = p
+            // offered as a list: each receiver picks the files they want (`folder.rs`)
+            let name = p
                 .path
                 .as_ref()
                 .and_then(|d| d.file_name())
                 .map_or_else(|| "folder".to_owned(), |n| n.to_string_lossy().into_owned());
-            let count = files.len();
-            let mut first = format!("📁 {folder}: {count} file{}", if count == 1 { "" } else { "s" });
-            if !caption.trim().is_empty() {
-                first = format!("{first}\n{caption}");
-            }
             let mut out = Vec::new();
-            for (i, f) in files.into_iter().enumerate() {
+            for f in files {
                 let transfer_id = new_transfer();
                 self.pictures.insert(
                     transfer_id.clone(),
                     Picture {
-                        moving: true,
                         saved: Some(f.path.clone()),
                         ..Picture::default()
                     },
                 );
-                let name = f
+                let file_name = f
                     .path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 out.push(OutgoingImage {
-                    id: rtc_engine::Handle::new_message_id(),
+                    id: transfer_id.clone(),
                     transfer_id,
-                    mime: mime_for_name(&name)
+                    mime: mime_for_name(&file_name)
                         .unwrap_or("application/octet-stream")
                         .to_owned(),
-                    file_name: name,
+                    file_name,
                     bytes: Arc::from(Vec::new()),
-                    caption: if i == 0 { first.clone() } else { String::new() },
+                    caption: String::new(),
                     path: Some(f.path),
                     disk_size: Some(f.size),
                     relative_path: Some(f.relative),
                 });
             }
+            let folder = OutgoingFolder {
+                id: rtc_engine::Handle::new_message_id(),
+                folder_id: new_transfer(),
+                name,
+                caption,
+                files: out,
+            };
             if let Some(e) = &self.engine {
-                e.send_folder(out);
+                e.send_folder(folder);
             }
             cx.notify();
             return;
@@ -392,6 +402,7 @@ impl RoomView {
                 moving: true,
                 // a file sent from disk: its card shows it in its folder
                 saved: if p.on_disk { p.path.clone() } else { None },
+                ..Picture::default()
             },
         );
         if let Some(e) = &self.engine {
@@ -413,11 +424,30 @@ impl RoomView {
     /// A chat line arrived (or went): pictures start their progress; the web app's sounds.
     pub(crate) fn chat_line_sounds(&mut self, line: &ChatLine) {
         let mine = self.room.as_ref().is_some_and(|r| r.me == line.from);
+        if let Some(folder) = &line.folder {
+            // every file waits to be picked in the folder window (ours: until someone does)
+            for f in &folder.files {
+                let p = self.pictures.entry(f.transfer_id.clone()).or_default();
+                p.offered = !mine;
+                self.folder_files.insert(f.transfer_id.clone());
+            }
+            if mine {
+                self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
+            } else {
+                self.ui_sound(&crate::sounds::CHIME, crate::sounds::CHIME_WAV.as_slice());
+            }
+            return;
+        }
         match &line.image {
             Some(i) => {
                 let p = self.pictures.entry(i.transfer_id.clone()).or_default();
                 if !mine {
-                    p.moving = true;
+                    // a big file waits for us to accept it
+                    if needs_accept(i.file_size) {
+                        p.offered = true;
+                    } else {
+                        p.moving = true;
+                    }
                     self.ui_sound(&crate::sounds::CHIME, crate::sounds::CHIME_WAV.as_slice());
                 } else {
                     self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
@@ -429,9 +459,13 @@ impl RoomView {
 
     pub(crate) fn picture_progress(&mut self, transfer_id: String, percent: u8) {
         let p = self.pictures.entry(transfer_id).or_default();
+        if p.cancelled {
+            return;
+        }
         p.percent = percent;
-        // ours (the bytes, or a file sent from disk) is done; theirs waits for the last frame
-        if percent >= 100 && (p.bytes.is_some() || p.saved.is_some()) {
+        // ours (the bytes, or a file sent from disk) is done; theirs waits for the last frame;
+        // ours offered is done when nobody waits for or gets it any more (`send_state`)
+        if percent >= 100 && p.send.is_none() && (p.bytes.is_some() || p.saved.is_some()) {
             p.moving = false;
         }
     }
@@ -442,12 +476,82 @@ impl RoomView {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // a folder's files: shown in the folder window, not one toast each
+        let quiet = self.folder_files.contains(&transfer_id);
         let p = self.pictures.entry(transfer_id).or_default();
         p.percent = 100;
         p.moving = false;
+        p.cancelled = false;
+        p.offered = false;
+        p.partly = false;
         p.saved = Some(path);
+        if quiet {
+            return;
+        }
         self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
         self.show_toast(format!("Saved {name} in Downloads"), cx);
+    }
+
+    /// Accept (a big file's card, or a folder's file): its sender starts sending it to us.
+    pub(crate) fn accept_transfer(&mut self, transfer_id: &str) {
+        let Some(p) = self.pictures.get_mut(transfer_id) else {
+            return;
+        };
+        if !p.offered {
+            return;
+        }
+        p.offered = false;
+        p.moving = true;
+        p.percent = 0;
+        if let Some(e) = &self.engine {
+            e.accept_transfer(transfer_id.to_owned());
+        }
+    }
+
+    /// Where our offered file is with its receivers.
+    pub(crate) fn send_state(&mut self, transfer_id: &str, status: SendStatus) {
+        let p = self.pictures.entry(transfer_id.to_owned()).or_default();
+        if p.cancelled {
+            return;
+        }
+        p.send = Some(status);
+        p.moving = status.waiting > 0 || status.sending > 0;
+        if status.sending == 0 {
+            p.percent = 0;
+        }
+    }
+
+    /// Files of a folder offered to us that are in Downloads already.
+    pub(crate) fn folder_here(&mut self, files: Vec<(String, FileHere)>) {
+        for (tid, here) in files {
+            let p = self.pictures.entry(tid).or_default();
+            match here {
+                FileHere::Whole(path) => p.saved = Some(path),
+                FileHere::Partly => p.partly = true,
+            }
+        }
+    }
+
+    /// The card's Cancel: our file stops going to everyone (the rest of a folder too); one
+    /// coming in stops coming (`cancelTransfer` in `useChat.ts`).
+    pub(crate) fn cancel_transfer(&mut self, transfer_id: String, cx: &mut Context<'_, Self>) {
+        self.transfer_cancelled(&transfer_id);
+        if let Some(e) = &self.engine {
+            e.cancel_transfer(transfer_id);
+        }
+        cx.notify();
+    }
+
+    /// A chat file (or folder) was cancelled (here, by its sender, or nobody was receiving it).
+    pub(crate) fn transfer_cancelled(&mut self, transfer_id: &str) {
+        let p = self.pictures.entry(transfer_id.to_owned()).or_default();
+        if !p.moving && (p.bytes.is_some() || p.saved.is_some()) {
+            // it got here (or went) whole before the cancel did
+            return;
+        }
+        p.moving = false;
+        p.offered = false;
+        p.cancelled = true;
     }
 
     pub(crate) fn picture_ready(&mut self, transfer_id: &str, bytes: Arc<[u8]>) {
@@ -508,8 +612,14 @@ impl RoomView {
     }
 }
 
-/// A picture or file on its way (`.chat-image-transfer-card`).
-fn transfer_card(name: &str, size: u64, percent: u8, sending: bool) -> impl IntoElement {
+/// A picture or file on its way, offered, or cancelled (`.chat-image-transfer-card`): its
+/// name, `status`, a progress bar (`percent`) and buttons (`actions`).
+fn transfer_card(
+    name: &str,
+    status: String,
+    percent: Option<u8>,
+    actions: Option<AnyElement>,
+) -> impl IntoElement {
     let icon = if name.rsplit('.').next().is_some_and(|ext| {
         matches!(
             ext.to_ascii_lowercase().as_str(),
@@ -557,23 +667,103 @@ fn transfer_card(name: &str, size: u64, percent: u8, sending: bool) -> impl Into
                             div()
                                 .text_size(px(12.))
                                 .text_color(tokens::text_2())
-                                .child(format!(
-                                    "{} • {percent}% ({})",
-                                    if sending { "Sending" } else { "Receiving" },
-                                    format_size(size)
-                                )),
+                                .child(status),
                         ),
                 ),
         )
-        .child(
+        .children(percent.map(|percent| {
             div().h(px(4.)).rounded_full().bg(tokens::line()).child(
                 div()
                     .h_full()
                     .rounded_full()
                     .bg(tokens::focus())
                     .w(gpui_kit::relative((f32::from(percent.max(4))) / 100.0)),
-            ),
-        )
+            )
+        }))
+        .children(actions)
+}
+
+/// "1 person", "3 people".
+pub(crate) fn people(n: usize) -> String {
+    if n == 1 {
+        "1 person".to_owned()
+    } else {
+        format!("{n} people")
+    }
+}
+
+/// A small button on a file card (`.transfer-action-btn`); `primary`: the accent one.
+pub(crate) fn small_button(
+    id: String,
+    label: &'static str,
+    primary: bool,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+) -> AnyElement {
+    let el = div()
+        .id(SharedString::from(id))
+        .flex_none()
+        .px(px(10.))
+        .py(px(4.))
+        .rounded(px(8.))
+        .border_1()
+        .text_size(px(12.))
+        .cursor_pointer()
+        .on_click(on_click)
+        .child(label);
+    if primary {
+        el.bg(tokens::accent())
+            .border_color(tokens::accent())
+            .text_color(tokens::text())
+            .font_weight(FontWeight::SEMIBOLD)
+            .hover(|s| s.bg(tokens::accent_press()))
+            .into_any_element()
+    } else {
+        el.border_color(tokens::line())
+            .text_color(tokens::text_2())
+            .hover(|s| s.bg(tokens::danger_bg()).text_color(tokens::danger_text()))
+            .into_any_element()
+    }
+}
+
+/// The Cancel under a file on its way: for the sender and the receivers alike.
+fn cancel_button(transfer_id: &str, cx: &mut Context<'_, RoomView>) -> AnyElement {
+    let id = transfer_id.to_owned();
+    div()
+        .flex()
+        .justify_end()
+        .child(small_button(
+            format!("cancel-{transfer_id}"),
+            "✕ Cancel",
+            false,
+            cx.listener(move |v, _, _, cx| v.cancel_transfer(id.clone(), cx)),
+        ))
+        .into_any_element()
+}
+
+/// Accept and Decline under a big file offered to us.
+fn offer_buttons(transfer_id: &str, cx: &mut Context<'_, RoomView>) -> AnyElement {
+    let accept = transfer_id.to_owned();
+    let decline = transfer_id.to_owned();
+    div()
+        .flex()
+        .justify_end()
+        .gap(px(8.))
+        .child(small_button(
+            format!("decline-{transfer_id}"),
+            "Decline",
+            false,
+            cx.listener(move |v, _, _, cx| v.cancel_transfer(decline.clone(), cx)),
+        ))
+        .child(small_button(
+            format!("accept-{transfer_id}"),
+            "⬇ Accept",
+            true,
+            cx.listener(move |v, _, _, cx| {
+                v.accept_transfer(&accept);
+                cx.notify();
+            }),
+        ))
+        .into_any_element()
 }
 
 /// A chat line's picture: progress, then the thumbnail (click to open it).
@@ -583,14 +773,64 @@ pub(crate) fn picture_view(
     mine: bool,
     cx: &mut Context<'_, RoomView>,
 ) -> Option<AnyElement> {
+    if let Some(folder) = &line.folder {
+        return Some(crate::folder::card(view, folder, mine, cx));
+    }
     let info = line.image.as_ref()?;
     let state = view.pictures.get(&info.transfer_id);
     let percent = state.map_or(0, |p| p.percent);
-    let moving = state.is_none_or(|p| p.moving);
+    let cancelled = state.is_some_and(|p| p.cancelled);
+    let offered = !mine && !cancelled && state.is_some_and(|p| p.offered);
+    let moving = !cancelled && !offered && state.is_none_or(|p| p.moving);
     let image = state.and_then(|p| p.image.clone());
+    let size = format_size(info.file_size);
     let mut col = div().flex().flex_col().gap(px(6.)).w(px(240.));
-    if moving {
-        col = col.child(transfer_card(&info.file_name, info.file_size, percent, mine));
+    if cancelled {
+        col = col.child(transfer_card(
+            &info.file_name,
+            format!("✕ Cancelled ({size})"),
+            None,
+            None,
+        ));
+    } else if offered {
+        col = col.child(transfer_card(
+            &info.file_name,
+            format!("{size} • accept to download"),
+            None,
+            Some(offer_buttons(&info.transfer_id, cx)),
+        ));
+    } else if moving {
+        let send = if mine { state.and_then(|p| p.send) } else { None };
+        let (status, bar) = match send {
+            Some(s) if s.sending == 0 => (
+                format!("Waiting for {} to accept ({size})", people(s.waiting)),
+                None,
+            ),
+            Some(s) => {
+                let waiting = if s.waiting > 0 {
+                    format!(", {} waiting", s.waiting)
+                } else {
+                    String::new()
+                };
+                (
+                    format!("Sending to {} • {percent}%{waiting} ({size})", people(s.sending)),
+                    Some(percent),
+                )
+            }
+            None => (
+                format!(
+                    "{} • {percent}% ({size})",
+                    if mine { "Sending" } else { "Receiving" }
+                ),
+                Some(percent),
+            ),
+        };
+        col = col.child(transfer_card(
+            &info.file_name,
+            status,
+            bar,
+            Some(cancel_button(&info.transfer_id, cx)),
+        ));
     }
     if let Some(image) = image {
         let id = info.transfer_id.clone();
@@ -612,7 +852,7 @@ pub(crate) fn picture_view(
                         .object_fit(ObjectFit::Contain),
                 ),
         );
-    } else if !moving {
+    } else if !moving && !cancelled && !offered {
         // arrived, but not a type we can draw (non-image or AVIF): offer it to save
         let id = info.transfer_id.clone();
         let save_id = id.clone();

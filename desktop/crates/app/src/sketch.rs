@@ -161,7 +161,7 @@ impl RoomView {
                             v.activity.sketch.ticking = false;
                             return false;
                         }
-                        if n % 2 == 0 && v.sk_deciding() {
+                        if n.is_multiple_of(2) && v.sk_deciding() {
                             v.sk_send(act::tick(), cx);
                         }
                         cx.notify();
@@ -247,15 +247,16 @@ fn feed_line(l: &FeedLine) -> AnyElement {
         "info" => (tokens::text_3(), FontWeight::NORMAL),
         _ => (tokens::text(), FontWeight::NORMAL),
     };
-    let row = div()
-        .text_size(px(13.))
-        .text_color(color)
-        .font_weight(weight);
+    let row = div().text_size(px(13.)).text_color(color).font_weight(weight);
     if l.kind == "guess" {
         row.flex()
             .flex_wrap()
             .gap(px(4.))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("{}:", l.name)))
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("{}:", l.name)),
+            )
             .child(l.text.clone())
             .into_any_element()
     } else {
@@ -283,7 +284,7 @@ pub(crate) fn view(
         .unwrap_or_default();
     let joined = s.player(&me).is_some();
     let drawing = s.drawer.as_deref() == Some(me.as_str());
-    let i_guessed = s.guessed.iter().any(|g| *g == me);
+    let i_guessed = s.guessed.contains(&me);
     let guessing = can_guess(&s, &me);
     #[allow(clippy::cast_possible_wrap)]
     let now = now_ms() as i64;
@@ -295,7 +296,7 @@ pub(crate) fn view(
     let turns = s.total_turns();
     let round = (s.turn / (s.players.len() as i64).max(1) + 1).min(ROUNDS);
     let mut ranked = s.players.clone();
-    ranked.sort_by(|a, b| b.score.cmp(&a.score));
+    ranked.sort_by_key(|p| std::cmp::Reverse(p.score));
     let enough = s.players.iter().filter(|p| present.contains(&p.id)).count() >= 2;
     let drawer_name = name_of(&s, s.drawer.as_deref());
 
@@ -305,7 +306,11 @@ pub(crate) fn view(
             .px(px(8.))
             .py(px(2.))
             .rounded(px(7.))
-            .bg(if secs <= 10 { tokens::danger_bg() } else { tokens::raised() })
+            .bg(if secs <= 10 {
+                tokens::danger_bg()
+            } else {
+                tokens::raised()
+            })
             .text_color(if secs <= 10 {
                 tokens::danger_text()
             } else {
@@ -385,7 +390,10 @@ pub(crate) fn view(
         _ => div()
             .child(format!(
                 "Game over · {}",
-                ranked.first().map(|p| format!("{} wins!", p.name)).unwrap_or_default()
+                ranked
+                    .first()
+                    .map(|p| format!("{} wins!", p.name))
+                    .unwrap_or_default()
             ))
             .into_any_element(),
     };
@@ -420,7 +428,9 @@ pub(crate) fn view(
                 .child(banner),
         )
         .when((s.phase == "picking" || s.phase == "drawing") && drawing, |el| {
-            el.child(sk_btn("sk-skip", "Skip").on_click(cx.listener(|v, _, _, cx| v.sk_send(act::skip(), cx))))
+            el.child(
+                sk_btn("sk-skip", "Skip").on_click(cx.listener(|v, _, _, cx| v.sk_send(act::skip(), cx))),
+            )
         });
 
     // ---- the board area ----
@@ -463,7 +473,9 @@ pub(crate) fn view(
             c.child(lead(if over {
                 "Thanks for playing!".to_owned()
             } else {
-                format!("Take turns drawing a word while everyone else guesses. Everyone draws {ROUNDS} times.")
+                format!(
+                    "Take turns drawing a word while everyone else guesses. Everyone draws {ROUNDS} times."
+                )
             }))
             .child(if over {
                 Button::new("sk-again", "Play again")
@@ -472,14 +484,11 @@ pub(crate) fn view(
                     .disabled(!joined)
                     .on_click(cx.listener(|v, _, _, cx| v.sk_send(act::again(), cx)))
             } else {
-                Button::new(
-                    "sk-start",
-                    if enough { "Start" } else { "Waiting for players…" },
-                )
-                .variant(Variant::Primary)
-                .min_height(px(38.))
-                .disabled(!joined || !enough)
-                .on_click(cx.listener(|v, _, _, cx| v.sk_send(act::start(), cx)))
+                Button::new("sk-start", if enough { "Start" } else { "Waiting for players…" })
+                    .variant(Variant::Primary)
+                    .min_height(px(38.))
+                    .disabled(!joined || !enough)
+                    .on_click(cx.listener(|v, _, _, cx| v.sk_send(act::start(), cx)))
             })
             .into_any_element()
         }
@@ -500,7 +509,11 @@ pub(crate) fn view(
             .into_any_element(),
         _ => {
             let key = board_key(s.board_turn());
-            let board = room.stores.iter().find(|(k, _)| *k == key).map(|(_, v)| v.state.clone());
+            let board = room
+                .stores
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.state.clone());
             match board {
                 Some(b) if view.activity.board.base == key => {
                     let mode = Mode {
@@ -621,7 +634,8 @@ pub(crate) fn view(
                         .border_color(tokens::line_strong())
                         .bg(tokens::surface())
                         .when(!guessing, |el| el.opacity(0.5))
-                        .child(Input::new(&view.sketch_guess).appearance(false).disabled(!guessing)),
+                        // `sk_guess` ignores the box while guessing isn't allowed
+                        .child(Input::new(&view.sketch_guess).appearance(false)),
                 )
                 .child(
                     Button::new("sk-guess", "Guess")

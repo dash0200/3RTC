@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePeerMessageOn } from '../../core/RoomContext';
 import { cameraConstraints } from '../../webrtc/cameraLine';
+import { cameraToOpen, listCameras, onCameraListChange, readCameraChoice, saveCameraChoice, type CameraDevice } from './cameraDevices';
 import type { RoomBus } from '../../types';
 
 export interface RemoteCamera {
@@ -26,6 +27,14 @@ export interface UseCameraReturn {
   remote: RemoteCamera[];
   toggle: () => void;
   stop: () => void;
+  /** The cameras plugged in (named once a camera has been allowed) */
+  cameras: CameraDevice[];
+  /** The chosen camera's deviceId ('' : the default) */
+  deviceId: string;
+  /** Choose a camera ('' : the default); while on, the picture switches to it */
+  selectDevice: (deviceId: string) => void;
+  /** Read the list again (when the picker opens) */
+  refreshCameras: () => void;
 }
 
 const NOOP_BUS = { on: () => () => {} } as unknown as RoomBus;
@@ -50,6 +59,48 @@ export function useCamera(bus: RoomBus | null | undefined, notify: (text: string
   const onRef = useRef<Set<string>>(new Set());
   const orderRef = useRef<string[]>([]);
   const startingRef = useRef(false);
+  const [cameras, setCameras] = useState<CameraDevice[]>([]);
+  const [deviceId, setDeviceId] = useState<string>(() => readCameraChoice());
+  const deviceIdRef = useRef(deviceId);
+  deviceIdRef.current = deviceId;
+
+  const refreshCameras = useCallback(() => {
+    void listCameras().then((list) => setCameras(list));
+  }, []);
+  useEffect(() => {
+    refreshCameras();
+    return onCameraListChange(refreshCameras);
+  }, [refreshCameras]);
+
+  /** Opens the chosen camera (the default when it isn't plugged in, or won't open). */
+  const openCamera = useCallback(async (): Promise<MediaStream> => {
+    const id = cameraToOpen(deviceIdRef.current, await listCameras());
+    try {
+      return await navigator.mediaDevices.getUserMedia(cameraConstraints(id || undefined));
+    } catch (err: unknown) {
+      const name = err instanceof Error ? err.name : '';
+      if (!id || (name !== 'NotFoundError' && name !== 'OverconstrainedError' && name !== 'NotReadableError')) throw err;
+      return navigator.mediaDevices.getUserMedia(cameraConstraints());
+    }
+  }, []);
+
+  /** Wires a newly opened camera in as ours (the first time, or after switching cameras). */
+  const takeStream = useCallback((stream: MediaStream, onEnded: () => void): MediaStreamTrack => {
+    const track = stream.getVideoTracks()[0];
+    if (!track) throw new Error('no video track');
+    try {
+      track.contentHint = 'motion';
+    } catch {
+      // not supported: fine
+    }
+    // The camera unplugged or taken by the system: treat as off
+    track.onended = () => {
+      if (localRef.current === stream) onEnded();
+    };
+    localRef.current = stream;
+    setLocalStream(stream);
+    return track;
+  }, []);
 
   const refresh = useCallback(() => {
     const list: RemoteCamera[] = [];
@@ -93,30 +144,49 @@ export function useCamera(bus: RoomBus | null | undefined, notify: (text: string
     startingRef.current = true;
     setIsStarting(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints());
-      const track = stream.getVideoTracks()[0];
-      if (!track) throw new Error('no video track');
-      try {
-        track.contentHint = 'motion';
-      } catch {
-        // not supported: fine
-      }
-      // The camera unplugged or taken by the system: treat as off
-      track.onended = () => {
-        if (localRef.current === stream) stop();
-      };
-      localRef.current = stream;
-      setLocalStream(stream);
+      const stream = await openCamera();
+      const track = takeStream(stream, stop);
       setIsOn(true);
       bus.emitEvent('set-camera-track', track);
       bus.broadcast('camera-status', { type: 'camera-status', on: true });
+      refreshCameras(); // names show once a camera is allowed
     } catch (err: unknown) {
       notify(cameraErrorText(err));
     } finally {
       startingRef.current = false;
       setIsStarting(false);
     }
-  }, [bus, notify, stop]);
+  }, [bus, notify, stop, openCamera, takeStream, refreshCameras]);
+
+  const selectDevice = useCallback((id: string) => {
+    saveCameraChoice(id);
+    deviceIdRef.current = id;
+    setDeviceId(id);
+    const old = localRef.current;
+    if (!bus || !old || startingRef.current) return;
+    // On now: open the new one, swap the picture on every connection, then close the old one
+    // (camera-status stays on; nobody sees it go off)
+    startingRef.current = true;
+    setIsStarting(true);
+    void (async () => {
+      try {
+        // some cameras can't be open twice at once: close the old one first
+        for (const t of old.getTracks()) t.stop();
+        const stream = await openCamera();
+        if (localRef.current !== old) {
+          for (const t of stream.getTracks()) t.stop();
+          return;
+        }
+        bus.emitEvent('set-camera-track', takeStream(stream, stop));
+      } catch (err: unknown) {
+        notify(cameraErrorText(err));
+        if (localRef.current === old) stop();
+      } finally {
+        startingRef.current = false;
+        setIsStarting(false);
+      }
+    })();
+  }, [bus, notify, stop, openCamera, takeStream]);
 
   const toggle = useCallback(() => {
     if (localRef.current) stop();
@@ -174,5 +244,5 @@ export function useCamera(bus: RoomBus | null | undefined, notify: (text: string
     refresh();
   });
 
-  return { isOn, isStarting, localStream, remote, toggle, stop };
+  return { isOn, isStarting, localStream, remote, toggle, stop, cameras, deviceId, selectDevice, refreshCameras };
 }

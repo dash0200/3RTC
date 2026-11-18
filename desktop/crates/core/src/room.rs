@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use rtc_protocol::peer::{Envelope, PeerMessage, ReplyRef};
+use rtc_protocol::peer::{Envelope, FolderEntry, PeerMessage, ReplyRef};
 use rtc_protocol::sdp::{IceCandidate, SessionDescription};
 use rtc_protocol::signaling::{ClientMessage, ErrorCode, ServerMessage};
 use rtc_protocol::{ClientId, PROTOCOL_VERSION, PeerId, RoomId};
@@ -52,6 +52,12 @@ pub struct Member {
     pub desktop: bool,
     /// Their app takes files over QUIC (ADR 0009).
     pub quic: bool,
+    /// Their app understands the camera line (`camera: true` in their identity, ADR 0010).
+    pub camera: bool,
+    /// They say their camera is on (`camera-status`).
+    pub camera_on: bool,
+    /// When they turned it on, in the order cameras came on (their tile's place).
+    pub camera_since: u64,
     /// Their voice is coming through right now.
     pub speaking: bool,
     /// Their app's install id, once their identity arrives (stable across rooms and restarts:
@@ -76,6 +82,8 @@ pub struct ChatLine {
     pub at: f64,
     /// A picture sent with it (the text is then its caption); its bytes come separately.
     pub image: Option<ChatImage>,
+    /// A folder offered with it (`p2p-folder-offer`): each file is downloaded on request.
+    pub folder: Option<ChatFolder>,
     /// The message it replies to.
     pub reply: Option<Quote>,
     /// It mentions us (@our name).
@@ -107,6 +115,36 @@ pub struct ChatImage {
     /// Its type (`image/png`, …).
     pub mime: String,
 }
+
+/// A folder offered in chat (`p2p-folder-offer`): its files, each sent only to the receivers
+/// who accept it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatFolder {
+    /// The folder's id (a `cancel` with it withdraws the whole folder).
+    pub folder_id: String,
+    /// The folder's name.
+    pub name: String,
+    /// Its files, in path order.
+    pub files: Vec<ChatFolderFile>,
+}
+
+/// One file of a [`ChatFolder`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChatFolderFile {
+    /// The transfer that brings it (when accepted).
+    pub transfer_id: String,
+    /// Its path inside the folder, the folder's name first (cleaned: `Photos/2026/a.jpg`).
+    pub path: String,
+    /// Its file name.
+    pub file_name: String,
+    /// Its size in bytes.
+    pub file_size: u64,
+    /// Its type.
+    pub mime: String,
+}
+
+/// Most files taken from a folder offer.
+pub const FOLDER_MAX_FILES: usize = 1000;
 
 /// A floating reaction to show.
 #[derive(Debug, Clone, PartialEq)]
@@ -212,6 +250,17 @@ pub enum Command {
         live: bool,
         /// The fields.
         body: Value,
+    },
+    /// Our camera started (true, the shell opened it) or stopped: tell everyone (`camera-status`).
+    SetCamera(bool),
+    /// We offered a folder in chat (the shell sends each file to whoever accepts it).
+    FolderSent {
+        /// The chat message's id.
+        id: String,
+        /// The folder and its files.
+        folder: ChatFolder,
+        /// Text sent with it.
+        caption: String,
     },
     /// We started sending a chat picture (the shell sends the bytes on the bulk channels).
     ImageSent {
@@ -424,6 +473,10 @@ pub struct Room {
     watch: watch::Watch,
     /// Activities and their shared state.
     activities: activity::Activities,
+    /// Our camera is on.
+    camera_on: bool,
+    /// Counts cameras coming on (each member's `camera_since`).
+    camera_seq: u64,
 }
 
 impl Room {
@@ -452,7 +505,29 @@ impl Room {
             host_gone_since: None,
             watch: watch::Watch::new(),
             activities: activity::Activities::new(),
+            camera_on: false,
+            camera_seq: 0,
         }
+    }
+
+    /// Our camera is on.
+    #[must_use]
+    pub const fn camera_on(&self) -> bool {
+        self.camera_on
+    }
+
+    /// Whose cameras are on, in the order they turned them on (the web app's tile order). A tile
+    /// shows once their picture has arrived too; that's the engine's to know.
+    #[must_use]
+    pub fn cameras(&self) -> Vec<PeerId> {
+        let mut on: Vec<(&PeerId, u64)> = self
+            .members
+            .iter()
+            .filter(|(_, m)| m.camera_on && m.connected)
+            .map(|(p, m)| (p, m.camera_since))
+            .collect();
+        on.sort_by_key(|(_, since)| *since);
+        on.into_iter().map(|(p, _)| p.clone()).collect()
     }
 
     /// Current room network topology ("mesh" or "hub").
@@ -706,6 +781,7 @@ impl Room {
             topology: self.is_host().then(|| self.topology().to_owned()),
             max_users: self.is_host().then_some(self.max_users),
             quic: Some(rtc_protocol::peer::QUIC_VERSION),
+            camera: true,
         }
     }
 
@@ -763,6 +839,18 @@ impl Room {
                 fx.push(Effect::Ui(UiEvent::Changed));
             }
             Command::CreateRoom | Command::Join(_) | Command::Resume { .. } => {}
+            Command::SetCamera(on) => {
+                if self.camera_on == on {
+                    return;
+                }
+                self.camera_on = on;
+                if matches!(self.phase, Phase::InRoom(_)) {
+                    fx.push(Effect::Broadcast(
+                        self.envelope(PeerMessage::CameraStatus { on }, now_ms),
+                    ));
+                }
+                fx.push(Effect::Ui(UiEvent::Changed));
+            }
             Command::Leave => {
                 if self.phase == Phase::Idle {
                     return;
@@ -803,6 +891,7 @@ impl Room {
                     text,
                     at: now_ms,
                     image: None,
+                    folder: None,
                     reply,
                     mentions_me: false,
                 };
@@ -983,6 +1072,45 @@ impl Room {
                 };
                 fx.push(Effect::Broadcast(self.envelope(message, now_ms)));
             }
+            Command::FolderSent { id, folder, caption } => {
+                if !matches!(self.phase, Phase::InRoom(_)) {
+                    return;
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let files = folder
+                    .files
+                    .iter()
+                    .map(|f| FolderEntry {
+                        transfer_id: f.transfer_id.clone(),
+                        path: f.path.clone(),
+                        file_name: f.file_name.clone(),
+                        file_size: f.file_size as f64,
+                        mime_type: f.mime.clone(),
+                    })
+                    .collect();
+                let offer = PeerMessage::P2pFolderOffer {
+                    id: id.clone(),
+                    folder_id: folder.folder_id.clone(),
+                    name: folder.name.clone(),
+                    caption: caption.clone(),
+                    is_host: self.is_host(),
+                    files,
+                };
+                fx.push(Effect::BroadcastBulk(self.envelope(offer, now_ms)));
+                let line = ChatLine {
+                    id,
+                    from: self.me.peer_id.clone(),
+                    name: self.me.username.clone(),
+                    is_host: self.is_host(),
+                    text: caption.chars().take(MAX_CHAT_CHARS).collect(),
+                    at: now_ms,
+                    image: None,
+                    folder: Some(folder),
+                    reply: None,
+                    mentions_me: false,
+                };
+                self.push_chat(line, fx);
+            }
             Command::ImageSent { id, image, caption } => {
                 if !matches!(self.phase, Phase::InRoom(_)) {
                     return;
@@ -1023,6 +1151,7 @@ impl Room {
                     text: caption.chars().take(MAX_CHAT_CHARS).collect(),
                     at: now_ms,
                     image: Some(image),
+                    folder: None,
                     reply: None,
                     mentions_me: false,
                 };
@@ -1113,6 +1242,8 @@ impl Room {
         self.host_gone_since = None;
         self.watch_reset(fx);
         self.shared_reset(fx);
+        // the shell closes the camera when leaving (`useCamera.ts`, `room-left`)
+        self.camera_on = false;
         fx.push(Effect::Ui(UiEvent::Changed));
     }
 
@@ -1495,6 +1626,13 @@ impl Room {
             peer: peer.clone(),
             envelope,
         });
+        // a newcomer learns that our camera is on (`useCamera.ts`, on `peer-open`)
+        if self.camera_on {
+            fx.push(Effect::SendToPeer {
+                peer: peer.clone(),
+                envelope: self.envelope(PeerMessage::CameraStatus { on: true }, now_ms),
+            });
+        }
         // our shared states (`sharedState.ts`: everyone with a state sends it)
         self.shared_channel_open(&peer, now_ms, fx);
         // what are they watching? (`useMediaSync.ts`)
@@ -1514,6 +1652,8 @@ impl Room {
         };
         m.connected = false;
         m.speaking = false;
+        // their camera came on that connection; a new one tells us again (`useCamera.ts` forgets it)
+        m.camera_on = false;
         let gone = self.health.get(peer).is_none_or(|h| h.signaling_gone);
         if gone {
             self.drop_member(peer, fx);
@@ -1550,6 +1690,7 @@ impl Room {
                 | PeerMessage::P2pFileStart { .. }
                 | PeerMessage::P2pFileControl { .. }
                 | PeerMessage::P2pFileSync { .. }
+                | PeerMessage::P2pFolderOffer { .. }
                 | PeerMessage::YtAction { .. }
                 | PeerMessage::MediaAction { .. }
                 | PeerMessage::YtRequestSync
@@ -1582,6 +1723,7 @@ impl Room {
                 topology,
                 max_users,
                 quic,
+                camera,
                 ..
             } => {
                 // the host's identity carries the lock, active topology, and capacity, for people joining later
@@ -1627,6 +1769,7 @@ impl Room {
                     m.muted = is_muted;
                     m.desktop = client.as_deref() == Some(rtc_protocol::peer::CLIENT_DESKTOP);
                     m.quic = m.desktop && quic.is_some_and(|v| v >= rtc_protocol::peer::QUIC_VERSION);
+                    m.camera = camera;
                 }
                 if !is_reply {
                     let reply = self.envelope(self.identity_message(true), ts);
@@ -1647,6 +1790,19 @@ impl Room {
                 }
             }
             PeerMessage::PeerBye => self.drop_member(&from, fx),
+            PeerMessage::CameraStatus { on } => {
+                let seq = self.camera_seq + 1;
+                if let Some(m) = self.members.get_mut(&from)
+                    && m.camera_on != on
+                {
+                    m.camera_on = on;
+                    if on {
+                        m.camera_since = seq;
+                        self.camera_seq = seq;
+                    }
+                    fx.push(Effect::Ui(UiEvent::Changed));
+                }
+            }
             PeerMessage::NetPing { ping_id, send_time } => {
                 let pong = self.envelope(PeerMessage::NetPong { ping_id, send_time }, ts);
                 fx.push(Effect::SendToPeer {
@@ -1702,6 +1858,7 @@ impl Room {
                     text,
                     at: if ts > 0.0 { ts } else { 0.0 },
                     image: None,
+                    folder: None,
                     reply,
                     mentions_me,
                 };
@@ -1814,6 +1971,7 @@ impl Room {
                         file_size,
                         mime: rtc_protocol::image::clean_mime(&mime_type).to_owned(),
                     }),
+                    folder: None,
                     reply: None,
                     mentions_me: false,
                 };
@@ -1865,6 +2023,42 @@ impl Room {
                         file_size,
                         mime: rtc_protocol::image::clean_file_mime(&mime_type),
                     }),
+                    folder: None,
+                    reply: None,
+                    mentions_me: false,
+                };
+                self.push_chat(line, fx);
+            }
+            PeerMessage::P2pFolderOffer {
+                id,
+                folder_id,
+                name: folder_name,
+                caption,
+                files,
+                ..
+            } => {
+                let Some(folder) = clean_folder(folder_id, &folder_name, files) else {
+                    return;
+                };
+                let name = self.name_of(&from);
+                let is_host = self.host.as_ref() == Some(&from);
+                let line = ChatLine {
+                    id: if id.is_empty() {
+                        folder.folder_id.clone()
+                    } else {
+                        id.chars().take(64).collect()
+                    },
+                    from,
+                    name,
+                    is_host,
+                    text: caption.chars().take(MAX_CHAT_CHARS).collect(),
+                    at: if ts > 0.0 {
+                        ts.min(now_ms + 60_000.0)
+                    } else {
+                        now_ms
+                    },
+                    image: None,
+                    folder: Some(folder),
                     reply: None,
                     mentions_me: false,
                 };
@@ -1977,6 +2171,58 @@ impl Room {
             | PeerMessage::Unknown => {}
         }
     }
+}
+
+/// A folder offer from a peer, checked: ids of sane length, paths cleaned (never above the
+/// folder), sizes in range, at most [`FOLDER_MAX_FILES`] files. `None` when nothing is left.
+#[must_use]
+pub fn clean_folder(folder_id: String, name: &str, files: Vec<FolderEntry>) -> Option<ChatFolder> {
+    let ok_id = |id: &str| !id.trim().is_empty() && id.len() <= 64;
+    if !ok_id(&folder_id) {
+        return None;
+    }
+    let mut out: Vec<ChatFolderFile> = files
+        .into_iter()
+        .filter(|f| ok_id(&f.transfer_id) && f.transfer_id != folder_id)
+        .filter_map(|f| {
+            let path = crate::quic::clean_relative_path(&f.path)?;
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let file_size = if f.file_size.is_finite()
+                && f.file_size > 0.0
+                && f.file_size <= rtc_protocol::image::MAX_SEND_BYTES as f64
+            {
+                f.file_size as u64
+            } else {
+                0
+            };
+            let file_name = path.rsplit('/').next().unwrap_or_default().to_owned();
+            Some(ChatFolderFile {
+                transfer_id: f.transfer_id,
+                path,
+                file_name,
+                file_size,
+                mime: rtc_protocol::image::clean_file_mime(&f.mime_type),
+            })
+        })
+        .take(FOLDER_MAX_FILES)
+        .collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out.dedup_by(|a, b| a.transfer_id == b.transfer_id || a.path == b.path);
+    let first = out.first()?;
+    let name: String = if name.trim().is_empty() {
+        first.path.split('/').next().unwrap_or("folder").to_owned()
+    } else {
+        name.chars().take(120).collect()
+    };
+    Some(ChatFolder {
+        folder_id,
+        name,
+        files: out,
+    })
 }
 
 /// A number in 0..1 from an id and the time (a lane for reactions that came without one).

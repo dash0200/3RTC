@@ -75,6 +75,13 @@ pub(crate) fn render(
             dismiss,
         )
         .into_any_element(),
+        Dialog::Folder => dialog(
+            "folder-dialog",
+            px(620.),
+            crate::folder::dialog(view, cx),
+            dismiss,
+        )
+        .into_any_element(),
         Dialog::Player => dialog(
             "player-dialog",
             px(540.),
@@ -1660,6 +1667,17 @@ fn player_shortcuts(
                     view.settings.player_arrow_keys,
                     true,
                     RoomView::set_player_arrow_keys,
+                    cx,
+                ))
+                .child(div().h(px(1.)).bg(tokens::line()))
+                .child(section("TORRENTS", "Magnet links and .torrent files"))
+                .child(toggle_row(
+                    "ps-keep-torrents",
+                    "Keep torrent downloads",
+                    "Save the file in Downloads\\3RTC Torrents (qBittorrent can finish it). Off: deleted when you stop. Also in the torrent's file picker",
+                    view.settings.keep_torrents,
+                    true,
+                    RoomView::set_keep_torrents,
                     cx,
                 ))
                 .child(div().h(px(1.)).bg(tokens::line()))

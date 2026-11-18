@@ -10,6 +10,8 @@
 //!   `3rtc://` links.
 //! - **Remote control** of a shared screen: the viewer's input played back with `SendInput`,
 //!   a banner, and the sharer taking control back (a hotkey, their own mouse).
+//! - **The webcam** (ADR 0010): the cameras on the computer, and reading one as NV12 pictures
+//!   through Media Foundation.
 //! - Small things: hiding and showing the window, its icon, a sound, whether the app in front
 //!   runs as administrator (then Windows won't let us see its keys).
 //!
@@ -18,7 +20,11 @@
 //! block says why it is sound.
 
 pub mod art;
+mod camera_types;
 pub mod keys;
+
+#[cfg(windows)]
+mod camera;
 
 #[cfg(windows)]
 mod control;
@@ -44,6 +50,11 @@ mod video;
 mod win;
 
 #[cfg(windows)]
+pub use camera::{Camera, cameras};
+pub use camera_types::{
+    CameraError, CameraEvent, CameraEvents, CameraFrame, CameraFrames, CameraInfo, CameraWant, best_mode,
+};
+#[cfg(windows)]
 pub use control::RemoteControl;
 #[cfg(windows)]
 pub use gpu::{gpu_choice, gpus, set_gpu_choice};
@@ -62,10 +73,12 @@ pub use other::ShareHud;
 #[cfg(not(windows))]
 pub use other::{AppSound, audio_apps};
 #[cfg(not(windows))]
+pub use other::{Camera, cameras};
+#[cfg(not(windows))]
 pub use other::{H264Encoder, ParentWindow, VideoPlayer};
 #[cfg(not(windows))]
 pub use other::{
-    KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state,
+    KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state, double_click_ms,
     foreground_admin_app, hide_window, keys_down, links, lock_pointer, play_wav, raw_hwnd,
     set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };
@@ -80,7 +93,7 @@ pub use ui_thread::{ParentWindow, UiThread};
 pub use video::{EncodedUnit, Rect, StreamSource, Track, TrackKind, VideoAction, VideoEvent, VideoSource};
 #[cfg(windows)]
 pub use win::{
-    KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state,
+    KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state, double_click_ms,
     foreground_admin_app, hide_window, keys_down, links, lock_pointer, play_wav, raw_hwnd,
     set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };

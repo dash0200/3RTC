@@ -24,6 +24,8 @@ import type { ActivityInfo } from '../features/activities/activityState';
 import type { ActivityDefinition } from '../features/activities/registry';
 import type { ActivityStatus, ActivityViewKind } from '../features/activities/activityHost';
 import type { ChatMessage, ChatReplyRef } from '../features/chat/useChat';
+import { transferStatusText } from '../features/chat/chatMessages';
+import FolderOfferCard from '../features/chat/FolderOfferCard';
 import type { MediaItem, ConnectedPeer, SelfInfo } from '../types';
 import type { QuickPickVideo } from '../utils/quickPicks';
 
@@ -65,6 +67,11 @@ export interface LiveChatMessage {
     fileName: string;
     fileSize: number;
     percent?: number;
+    isPaused?: boolean;
+    /** Cancelled (by us, by its sender, or nobody was receiving it): no controls, just the word. */
+    isCancelled?: boolean;
+    /** Theirs, big: Accept or Decline. */
+    isOffered?: boolean;
   };
   [key: string]: unknown;
 }
@@ -79,6 +86,8 @@ export interface LiveChatProps {
   onPauseTransfer?: (transferId: string) => void;
   onResumeTransfer?: (transferId: string) => void;
   onCancelTransfer?: (transferId: string) => void;
+  /** A big file (or a folder's file) offered to us: get it. */
+  onAcceptTransfer?: (transferId: string) => void;
   onClearLogs?: () => void;
   onTestSound?: () => void;
   isP2PConnected: boolean;
@@ -145,6 +154,7 @@ export default function LiveChat({
   onPauseTransfer,
   onResumeTransfer,
   onCancelTransfer,
+  onAcceptTransfer,
   onClearLogs,
   onTestSound,
   isP2PConnected,
@@ -979,52 +989,89 @@ export default function LiveChat({
                                     {msg.imageTransfer.fileName}
                                   </span>
                                   <span className="transfer-status">
-                                    {msg.imageTransfer.isPaused
-                                      ? '⏸️ Paused'
-                                      : `${msg.isSelf ? 'Sending' : 'Receiving'} • ${msg.imageTransfer.percent || 0}% (${formatFileSize(msg.imageTransfer.fileSize)})`}
+                                    {transferStatusText(msg.imageTransfer, msg.isSelf, formatFileSize(msg.imageTransfer.fileSize))}
                                   </span>
                                 </div>
                               </div>
-                              <div className="transfer-progress-track">
-                                <div
-                                  className="transfer-progress-fill"
-                                  style={{
-                                    width: `${Math.max(4, msg.imageTransfer.percent || 0)}%`,
-                                    filter: msg.imageTransfer.isPaused ? 'grayscale(0.8)' : undefined
-                                  }}
-                                />
-                              </div>
-                              {/* Pause / Resume & Cancel Controls */}
-                              <div className="transfer-actions">
-                                {msg.imageTransfer.isPaused ? (
+                              {!msg.imageTransfer.isOffered && !msg.imageTransfer.isCancelled && (
+                                <div className="transfer-progress-track">
+                                  <div
+                                    className="transfer-progress-fill"
+                                    style={{
+                                      width: `${Math.max(4, msg.imageTransfer.percent || 0)}%`,
+                                      filter:
+                                        msg.imageTransfer.isPaused || msg.imageTransfer.isCancelled
+                                          ? 'grayscale(0.8)'
+                                          : undefined
+                                    }}
+                                  />
+                                </div>
+                              )}
+                              {/* A big file offered to us: Accept or Decline */}
+                              {msg.imageTransfer.isOffered && !msg.imageTransfer.isCancelled && (
+                                <div className="transfer-actions">
                                   <button
                                     type="button"
-                                    className="transfer-action-btn"
-                                    onClick={() => onResumeTransfer?.(msg.transferId || '')}
-                                    title="Resume transfer"
+                                    className="transfer-action-btn is-accept"
+                                    onClick={() => onAcceptTransfer?.(msg.transferId || '')}
+                                    title="Download this file"
                                   >
-                                    ▶ Resume
+                                    ⬇ Accept
                                   </button>
-                                ) : (
                                   <button
                                     type="button"
-                                    className="transfer-action-btn"
-                                    onClick={() => onPauseTransfer?.(msg.transferId || '')}
-                                    title="Pause transfer"
+                                    className="transfer-action-btn is-cancel"
+                                    onClick={() => onCancelTransfer?.(msg.transferId || '')}
+                                    title="Don't download this file"
                                   >
-                                    ⏸ Pause
+                                    Decline
                                   </button>
-                                )}
-                                <button
-                                  type="button"
-                                  className="transfer-action-btn is-cancel"
-                                  onClick={() => onCancelTransfer?.(msg.transferId || '')}
-                                  title="Cancel transfer"
-                                >
-                                  ✕ Cancel
-                                </button>
-                              </div>
+                                </div>
+                              )}
+                              {/* Pause / Resume & Cancel Controls (sender and receivers alike) */}
+                              {!msg.imageTransfer.isCancelled && !msg.imageTransfer.isOffered && (
+                                <div className="transfer-actions">
+                                  {msg.imageTransfer.isPaused ? (
+                                    <button
+                                      type="button"
+                                      className="transfer-action-btn"
+                                      onClick={() => onResumeTransfer?.(msg.transferId || '')}
+                                      title="Resume transfer"
+                                    >
+                                      ▶ Resume
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="transfer-action-btn"
+                                      onClick={() => onPauseTransfer?.(msg.transferId || '')}
+                                      title="Pause transfer"
+                                    >
+                                      ⏸ Pause
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="transfer-action-btn is-cancel"
+                                    onClick={() => onCancelTransfer?.(msg.transferId || '')}
+                                    title="Cancel transfer"
+                                  >
+                                    ✕ Cancel
+                                  </button>
+                                </div>
+                              )}
                             </div>
+                          )}
+
+                          {/* A folder offered in chat: pick the files to get */}
+                          {msg.folder && (
+                            <FolderOfferCard
+                              folder={msg.folder}
+                              mine={msg.isSelf}
+                              sender={msg.isSelf ? 'You' : msg.sender}
+                              onAccept={(id) => onAcceptTransfer?.(id)}
+                              onCancel={(id) => onCancelTransfer?.(id)}
+                            />
                           )}
 
                           {/* Completed Image Thumbnail */}

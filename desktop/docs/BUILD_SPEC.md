@@ -470,6 +470,7 @@ Sources per game: `features/activities/<game>/` (`rules.ts`, `index.tsx`, `board
 | Last Card | hands hidden per peer (redaction), seat reclaim by client id |
 | Tycoon | global board, `$`, building, trades, "How to play", seat reclaim |
 | Whiteboard | strokes as chunked state, `wb-live`, `wb-cursor`, zoom-aware drawing |
+| Sketch | one draws, the rest guess; word redacted to the drawer, `tick` from the deciding app, a whiteboard per turn |
 
 Order of work for each game:
 
@@ -495,6 +496,17 @@ verdict). Messages: `net-ping`/`net-pong`, all `diag-*`, `DGN1` frames. The conn
 ### 6.13 Notices and logs
 
 `features/notices/useNotices.ts`: toasts, the Logs tab, the same texts.
+
+### 6.14 Webcam
+
+Sources: `features/camera/useCamera.ts`, `CameraTiles.tsx`, `CameraStage.tsx`, `spotlight.ts`,
+`cameraDevices.ts`, `webrtc/cameraLine.ts`. Messages: `camera` in `peer-identity`, `camera-status`,
+the second video line (ADR 0010). Dock button with a camera picker, tiles above the dock, a click
+puts a camera on the stage for that viewer only. Between desktop apps the camera goes at its own
+size (up to 1080p30); web viewers get 640×360, 24 fps, 350 kbps.
+
+Accept: `desktop_camera_test.py` (both connection directions, desktop to desktop at full size, a late
+joiner, off); `checklists/camera.md` on Windows with a real camera.
 
 ---
 
@@ -683,6 +695,11 @@ checklist the owner runs on a real PC (write it to `docs/checklists/M<n>.md`).
   board (saved strokes as one picture, strokes being drawn painted over it), `wb-live` /
   `wb-cursor` in `rtc-protocol` (already in `docs/PROTOCOL.md`); `desktop_whiteboard_test.py`
   (18). Not yet: the text tool and "Save as a picture".
+  Sketch: the rules (`games/src/sketch.rs`, vectors with redaction), the screen
+  (`app/src/sketch.rs`: word picker, hint blanks, timer, scores, guesses feed and guess box) and
+  each turn's board drawn by the whiteboard view in game mode (`whiteboard::Mode`: read-only for
+  guessers, no light / dark, only the drawer clears); the deciding app sends `tick` twice a
+  second; `desktop_sketch_test.py` (32).
   **Added before the stream doctor (owner's request, 14 Nov; ADR 0007; waiting for the owner's
   Windows run, `docs/checklists/M6.md`):** host controls hide what others mustn't use (play,
   pause, seekbar, Skip, Exit, queue play/next/clear, adding a video); the shared screen goes full

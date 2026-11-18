@@ -14,7 +14,7 @@ export function Logo({ size = 30 }: LogoProps) {
           width={Math.round(size * 0.42)}
           height={Math.round(size * 0.42)}
         >
-          <path d="M3 1.5v11l9.5-5.5z" fill="#fff" />
+          <path d="M11 1.5v11L1.5 7z" fill="#fff" />
         </svg>
       </span>
       <span className="rd-logo-word">3RTC</span>

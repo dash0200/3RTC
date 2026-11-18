@@ -76,6 +76,8 @@ pub(crate) struct Settings {
     pub(crate) overlay_corner: u8,
     /// Sharing your screen: the tallest picture sent (0: the screen's own size).
     pub(crate) screen_max_height: u32,
+    /// The camera to use (its id; empty: the default one). ADR 0010.
+    pub(crate) camera_device: String,
     /// Sharing your screen: frames a second (60 or 30).
     pub(crate) screen_fps: u32,
     /// Watching someone's screen: the tallest picture you want (0: as sent).
@@ -96,6 +98,9 @@ pub(crate) struct Settings {
     pub(crate) player_mouse_nav_seek: bool,
     /// Arrow keys seek and adjust volume (default: true).
     pub(crate) player_arrow_keys: bool,
+    /// Torrents: keep the downloaded file in `Downloads\3RTC Torrents` (default: true); off, a
+    /// temporary copy is deleted when the torrent stops.
+    pub(crate) keep_torrents: bool,
     /// Play / pause shortcut key (default: Space).
     pub(crate) key_player_play_pause: Binding,
     /// Full screen shortcut key (default: F).
@@ -218,6 +223,7 @@ impl Default for Settings {
             overlay: false,
             overlay_corner: 0,
             screen_max_height: 0,
+            camera_device: String::new(),
             screen_fps: 60,
             screen_quality: 0,
             screen_sound: true,
@@ -228,6 +234,7 @@ impl Default for Settings {
             player_scroll_volume: true,
             player_mouse_nav_seek: true,
             player_arrow_keys: true,
+            keep_torrents: true,
             key_player_play_pause: Binding::key(Key::SPACE),
             key_player_fullscreen: Binding::key(Key(0x46)),
             key_player_seek_backward: Binding::key(Key(0x25)),

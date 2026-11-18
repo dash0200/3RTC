@@ -1,17 +1,31 @@
 //! BitTorrent sequential streaming service (`librqbit`).
 //!
 //! Provides background downloading and streaming of magnet links and `.torrent` files.
+//! Opening one first lists its files without downloading anything; when it holds more than one
+//! file the user picks one (`TorrentProgress::ChooseFile`, answered by `TorrentService::choose_file`),
+//! and only that file's pieces are downloaded (librqbit `only_files`).
+//!
+//! With "Keep torrent downloads" on (the default) files are kept in
+//! `Downloads\3RTC Torrents\<torrent name>\…`, the layout qBittorrent uses ("Original"), so a
+//! download can be finished there; off, they go to a temporary folder that is deleted when the
+//! torrent stops (and at the next start). Nothing is ever uploaded to the swarm
+//! (`disable_upload`): the host's upload is kept for the room's viewers.
 //! Video streams are exposed via a local loopback HTTP server (supporting HTTP Range requests)
 //! for instant playback in `mpv`, while downloaded pieces on disk are shared with room peers
 //! over 3RTC's WebRTC bulk range channels (`RNG1`).
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use librqbit::{AddTorrent, Api, ManagedTorrent, Session, SessionOptions, http_api::HttpApi};
+use librqbit::{
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, Api, ManagedTorrent, Session, SessionOptions,
+    http_api::HttpApi,
+};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -22,6 +36,15 @@ pub(crate) enum TorrentProgress {
     Connecting {
         /// Magnet or torrent name if known.
         title: String,
+    },
+    /// The torrent holds several files: the user picks the one to stream.
+    ChooseFile {
+        /// Torrent name or video title.
+        title: String,
+        /// The torrent's real files (the picker groups them with `group_by_folder`).
+        files: Vec<TorrentFileEntry>,
+        /// The file id we'd pick on our own (the largest video).
+        suggested: usize,
     },
     /// Metadata resolved, video file identified inside the torrent.
     Resolved {
@@ -73,6 +96,15 @@ pub(crate) enum TorrentProgress {
     Error(String),
 }
 
+/// "Keep torrent downloads" (the setting, also switched from the file picker): read when the
+/// torrent's file is picked, so the picker's switch counts for that torrent.
+static KEEP: AtomicBool = AtomicBool::new(true);
+
+/// Sets whether the next picked torrent file is kept in `Downloads\3RTC Torrents`.
+pub(crate) fn set_keep(on: bool) {
+    KEEP.store(on, Ordering::Relaxed);
+}
+
 /// Global handle to the application Tokio runtime.
 static RUNTIME_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 
@@ -92,13 +124,21 @@ pub(crate) fn runtime_handle() -> Option<tokio::runtime::Handle> {
 /// Global singleton session managing the local BitTorrent daemon and HTTP streaming server.
 static TORRENT_SERVICE: OnceLock<TorrentService> = OnceLock::new();
 
+/// The torrent playing, and whether its files are deleted when it stops (not kept).
+type Active = (Arc<ManagedTorrent>, bool);
+
 /// The active torrent streaming service.
 #[derive(Clone)]
 pub(crate) struct TorrentService {
     session: Arc<Session>,
     http_port: u16,
-    active_handle: Arc<Mutex<Option<Arc<ManagedTorrent>>>>,
+    /// The session's own folder (temporary); each torrent gets its own `output_folder`.
+    session_dir: PathBuf,
+    /// The torrent playing, and whether its files go when it stops (not kept).
+    active_handle: Arc<Mutex<Option<Active>>>,
     active_cancel: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// Waiting for the user to pick a file from a multi-file torrent.
+    pending_choice: Arc<Mutex<Option<tokio::sync::oneshot::Sender<usize>>>>,
 }
 
 impl TorrentService {
@@ -108,7 +148,9 @@ impl TorrentService {
             return Ok(svc.clone());
         }
 
-        let dir = std::env::temp_dir().join("3RTC").join("torrents");
+        // the temporary folder: what wasn't kept last time goes now (nothing plays yet)
+        let dir = temp_download_dir();
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
 
         // Bind an ephemeral loopback port for HTTP range streaming to mpv
@@ -123,6 +165,8 @@ impl TorrentService {
         // Create the librqbit session
         let session_opts = SessionOptions {
             persistence: None, // In-memory session tracking for ephemeral streams
+            // leech only: no bitfield, no haves, piece requests refused
+            disable_upload: true,
             ..Default::default()
         };
         let session = Session::new_with_opts(dir.clone(), session_opts)
@@ -151,8 +195,10 @@ impl TorrentService {
         let svc = Self {
             session,
             http_port,
+            session_dir: dir,
             active_handle: Arc::new(Mutex::new(None)),
             active_cancel: Arc::new(Mutex::new(None)),
+            pending_choice: Arc::new(Mutex::new(None)),
         };
 
         let _ = TORRENT_SERVICE.set(svc.clone());
@@ -173,23 +219,39 @@ impl TorrentService {
         });
     }
 
+    /// The user picked a file (by torrent file id) from the `ChooseFile` list. Returns `false`
+    /// when no torrent is waiting for a pick (it was cancelled or replaced).
+    pub(crate) fn choose_file(file_id: usize) -> bool {
+        let Some(svc) = TORRENT_SERVICE.get() else {
+            return false;
+        };
+        let pending = svc.pending_choice.lock().ok().and_then(|mut p| p.take());
+        pending.is_some_and(|tx| tx.send(file_id).is_ok())
+    }
+
     /// Stops and removes the active torrent from the session.
     pub(crate) async fn stop_active(&self) {
+        // dropping the sender ends a pending file pick
+        if let Ok(mut pending) = self.pending_choice.lock() {
+            pending.take();
+        }
         if let Ok(mut cancel) = self.active_cancel.lock()
             && let Some(tx) = cancel.take()
         {
             let _ = tx.send(());
         }
         let handle = self.active_handle.lock().ok().and_then(|mut h| h.take());
-        if let Some(h) = handle {
+        if let Some((h, delete_files)) = handle {
             info!("Stopping and removing active torrent {:?}", h.info_hash());
-            let _ = self.session.delete(h.id().into(), false).await;
+            // kept downloads stay on disk; temporary ones go
+            let _ = self.session.delete(h.id().into(), delete_files).await;
         }
     }
 
     /// Starts streaming from a magnet link or `.torrent` file.
     ///
-    /// Progress updates are reported via the provided channel sender.
+    /// Progress updates are reported via the provided channel sender. Where the file goes is
+    /// `set_keep`'s, read once the file is picked.
     pub(crate) fn start_stream(
         runtime: &tokio::runtime::Handle,
         input: TorrentInput,
@@ -236,7 +298,7 @@ impl TorrentService {
 
         let _ = tx.send(TorrentProgress::Connecting { title: title.clone() });
 
-        let add_torrent = match input {
+        let source = match input {
             TorrentInput::Magnet(magnet) => AddTorrent::from_url(magnet),
             TorrentInput::TorrentFile(path) => {
                 let bytes = tokio::fs::read(&path)
@@ -246,15 +308,86 @@ impl TorrentService {
             }
         };
 
-        let opts = librqbit::AddTorrentOptions {
+        // Phase 1: metadata only (trackers/DHT for a magnet). Nothing is downloaded or created.
+        let list_opts = AddTorrentOptions {
+            list_only: true,
+            ..Default::default()
+        };
+        let listed = tokio::select! {
+            _ = &mut cancel_rx => {
+                info!("Torrent stream cancelled during metadata resolution.");
+                return Ok(());
+            }
+            res = self.session.add_torrent(source, Some(list_opts)) => {
+                res.map_err(|e| anyhow::anyhow!("Metadata resolution failed: {e}"))?
+            }
+            () = tokio::time::sleep(Duration::from_secs(45)) => {
+                anyhow::bail!("Timed out resolving torrent metadata (no active peers found).");
+            }
+        };
+        let AddTorrentResponse::ListOnly(listed) = listed else {
+            anyhow::bail!("Couldn't read the torrent's file list.");
+        };
+
+        let files = file_entries(listed.info.iter_file_details().map(|d| {
+            let padding = d.attrs().padding;
+            (d.filename.to_pathbuf(), d.len, padding)
+        }));
+        let suggested = default_file(&files).ok_or_else(|| anyhow::anyhow!("Torrent contains no files"))?;
+
+        // Several files: the user picks one.
+        let file_id = if files.len() > 1 {
+            let (choice_tx, choice_rx) = tokio::sync::oneshot::channel();
+            if let Ok(mut pending) = self.pending_choice.lock() {
+                *pending = Some(choice_tx);
+            }
+            let _ = tx.send(TorrentProgress::ChooseFile {
+                title: title.clone(),
+                files: files.clone(),
+                suggested,
+            });
+            tokio::select! {
+                _ = &mut cancel_rx => {
+                    info!("Torrent stream cancelled while choosing a file.");
+                    return Ok(());
+                }
+                picked = choice_rx => match picked {
+                    Ok(id) => id,
+                    Err(_) => return Ok(()), // cancelled / replaced
+                }
+            }
+        } else {
+            suggested
+        };
+        let chosen = files
+            .iter()
+            .find(|f| f.id == file_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("That file isn't in this torrent."))?;
+
+        // Phase 2: add it for real, downloading only the chosen file's pieces.
+        let only = vec![chosen.id];
+        // librqbit's own folder for it (the torrent's name for several files), under ours
+        let sub = listed
+            .output_folder
+            .strip_prefix(&self.session_dir)
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let keep = KEEP.load(Ordering::Relaxed);
+        let base = if keep { download_dir() } else { self.session_dir.clone() };
+        let opts = AddTorrentOptions {
             overwrite: true,
+            output_folder: Some(base.join(sub).to_string_lossy().into_owned()),
+            only_files: Some(only.clone()),
+            initial_peers: Some(listed.seen_peers),
             ..Default::default()
         };
         let add_resp = self
             .session
-            .add_torrent(add_torrent, Some(opts))
+            .add_torrent(AddTorrent::from_bytes(listed.torrent_bytes), Some(opts))
             .await
             .map_err(|e| anyhow::anyhow!("Failed to add torrent: {e}"))?;
+        let already_managed = matches!(add_resp, AddTorrentResponse::AlreadyManaged(..));
 
         let handle = add_resp
             .into_handle()
@@ -266,51 +399,36 @@ impl TorrentService {
                 .active_handle
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
-            *active = Some(handle.clone());
+            *active = Some((handle.clone(), !keep));
         }
 
-        // Wait for metadata resolution (trackers/DHT)
+        // Pieces already on disk get checked here (no network wait: the metadata is known)
         tokio::select! {
             _ = &mut cancel_rx => {
-                info!("Torrent stream cancelled during metadata resolution.");
+                info!("Torrent stream cancelled during initialization.");
                 return Ok(());
             }
             res = handle.wait_until_initialized() => {
-                res.map_err(|e| anyhow::anyhow!("Metadata resolution failed: {e}"))?;
-            }
-            () = tokio::time::sleep(Duration::from_secs(45)) => {
-                anyhow::bail!("Timed out resolving torrent metadata (no active peers found).");
+                res.map_err(|e| anyhow::anyhow!("Torrent initialization failed: {e}"))?;
             }
         }
+        // A torrent the session already had keeps its old selection: set ours.
+        if already_managed {
+            let set: HashSet<usize> = only.into_iter().collect();
+            self.session
+                .update_only_files(&handle, &set)
+                .await
+                .map_err(|e| anyhow::anyhow!("Couldn't select the file: {e}"))?;
+        }
 
-        // Identify the largest video file
-        let (file_id, video_filename, relative_path, video_size) = handle
-            .with_metadata(|meta| {
-                let mut best: Option<(usize, String, PathBuf, u64)> = None;
-                for (idx, details) in meta.info.iter_file_details().enumerate() {
-                    let pathbuf = details.filename.to_pathbuf();
-                    let filename = pathbuf
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    let len = details.len;
-                    let is_vid = is_video_name(&filename);
-
-                    match &best {
-                        None => {
-                            best = Some((idx, filename, pathbuf, len));
-                        }
-                        Some((_, _, _, best_len)) => {
-                            if (is_vid && len > *best_len / 2) || len > *best_len {
-                                best = Some((idx, filename, pathbuf, len));
-                            }
-                        }
-                    }
-                }
-                best
-            })
-            .map_err(|e| anyhow::anyhow!("Failed reading torrent metadata: {e}"))?
-            .ok_or_else(|| anyhow::anyhow!("Torrent contains no files"))?;
+        let TorrentFileEntry {
+            id: file_id,
+            name: video_filename,
+            path: _,
+            size: video_size,
+            playable: _,
+        } = chosen;
+        let relative_path = listed_relative_path(&files, file_id);
 
         let output_folder = handle.output_folder();
         let file_path = output_folder.join(&relative_path);
@@ -426,6 +544,174 @@ pub(crate) enum TorrentInput {
     TorrentFile(PathBuf),
 }
 
+/// Torrents not kept: a temporary folder, emptied at start and as each one stops.
+fn temp_download_dir() -> PathBuf {
+    std::env::temp_dir().join("3RTC").join("torrents")
+}
+
+/// Where kept torrents are saved: `Downloads\3RTC Torrents` (one folder per multi-file torrent, named
+/// after it, as qBittorrent does).
+pub(crate) fn download_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map_or_else(
+            || std::env::temp_dir().join("3RTC"),
+            |h| PathBuf::from(h).join("Downloads"),
+        )
+        .join("3RTC Torrents")
+}
+
+/// One file inside a torrent, as listed in the file picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TorrentFileEntry {
+    /// librqbit's file index (counts padding files too): the `stream/<id>` URL and `only_files`.
+    pub(crate) id: usize,
+    /// Path inside the torrent, `/`-separated (e.g. `Show/S01/E01.mkv`).
+    pub(crate) path: String,
+    /// The file name alone.
+    pub(crate) name: String,
+    /// Size in bytes.
+    pub(crate) size: u64,
+    /// A video the player can stream.
+    pub(crate) playable: bool,
+}
+
+/// The torrent's real files from `(path, length, is_padding)` in torrent order. Padding files
+/// (BEP 47) and empty files are left out; ids keep the torrent's own numbering.
+pub(crate) fn file_entries(files: impl IntoIterator<Item = (PathBuf, u64, bool)>) -> Vec<TorrentFileEntry> {
+    files
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (_, len, padding))| !*padding && *len > 0)
+        .map(|(id, (path, size, _))| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let path = path
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            TorrentFileEntry {
+                id,
+                playable: is_video_name(&name),
+                path,
+                name,
+                size,
+            }
+        })
+        .collect()
+}
+
+/// The file we'd stream on our own: the largest video, else the largest file.
+pub(crate) fn default_file(files: &[TorrentFileEntry]) -> Option<usize> {
+    files
+        .iter()
+        .filter(|f| f.playable)
+        .max_by_key(|f| f.size)
+        .or_else(|| files.iter().max_by_key(|f| f.size))
+        .map(|f| f.id)
+}
+
+/// One folder of the picker: its files, videos first then in name order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileFolder {
+    /// Folder path inside the torrent, `/`-separated, without the torrent's own top folder;
+    /// empty for files at the top.
+    pub(crate) folder: String,
+    pub(crate) files: Vec<TorrentFileEntry>,
+}
+
+/// The picker's folders: files at the top first, then folders in natural name order (`S2` before
+/// `S10`); in each, playable videos first, then natural name order (`E2` before `E10`). A top
+/// folder every file shares (the torrent's name) is left out of the folder names.
+pub(crate) fn group_by_folder(files: &[TorrentFileEntry]) -> Vec<FileFolder> {
+    let first = |p: &str| p.split_once('/').map(|(head, _)| head.to_owned());
+    let shared_root = files.first().and_then(|f| first(&f.path)).filter(|root| {
+        files
+            .iter()
+            .all(|f| first(&f.path).as_deref() == Some(root.as_str()))
+    });
+    let mut folders: Vec<FileFolder> = Vec::new();
+    for f in files {
+        let inside = match &shared_root {
+            Some(root) => f.path[root.len() + 1..].to_owned(),
+            None => f.path.clone(),
+        };
+        let folder = inside
+            .rsplit_once('/')
+            .map(|(dir, _)| dir.to_owned())
+            .unwrap_or_default();
+        match folders.iter_mut().find(|g| g.folder == folder) {
+            Some(g) => g.files.push(f.clone()),
+            None => folders.push(FileFolder {
+                folder,
+                files: vec![f.clone()],
+            }),
+        }
+    }
+    folders.sort_by(|a, b| {
+        b.folder
+            .is_empty()
+            .cmp(&a.folder.is_empty())
+            .then_with(|| natural_cmp(&a.folder, &b.folder))
+    });
+    for g in &mut folders {
+        g.files.sort_by(|a, b| {
+            b.playable
+                .cmp(&a.playable)
+                .then_with(|| natural_cmp(&a.name, &b.name))
+        });
+    }
+    folders
+}
+
+/// Case-insensitive compare where runs of digits compare as numbers (`E2` < `E10`).
+pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let mut n = String::new();
+                while let Some(c) = x.next_if(char::is_ascii_digit) {
+                    n.push(c);
+                }
+                let mut m = String::new();
+                while let Some(d) = y.next_if(char::is_ascii_digit) {
+                    m.push(d);
+                }
+                let (n, m) = (n.trim_start_matches('0'), m.trim_start_matches('0'));
+                let ord = n.len().cmp(&m.len()).then_with(|| n.cmp(m));
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(c), Some(d)) => {
+                let ord = c.to_lowercase().cmp(d.to_lowercase());
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
+}
+
+/// The chosen file's path relative to the torrent's output folder.
+fn listed_relative_path(files: &[TorrentFileEntry], id: usize) -> PathBuf {
+    files
+        .iter()
+        .find(|f| f.id == id)
+        .map(|f| f.path.split('/').fold(PathBuf::new(), |p, part| p.join(part)))
+        .unwrap_or_default()
+}
+
 /// Helper to check if a filename has a video extension.
 pub(crate) fn is_video_name(name: &str) -> bool {
     let n = name.to_lowercase();
@@ -472,6 +758,93 @@ mod tests {
 
         assert_eq!(parse_magnet_dn("https://youtube.com"), None);
         assert_eq!(parse_magnet_dn("magnet:?xt=urn:btih:12345"), None);
+    }
+
+    fn entry(id: usize, path: &str, size: u64) -> TorrentFileEntry {
+        let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+        TorrentFileEntry {
+            id,
+            path: path.to_owned(),
+            playable: is_video_name(&name),
+            name,
+            size,
+        }
+    }
+
+    #[test]
+    fn file_entries_skip_padding_and_keep_torrent_ids() {
+        let files = file_entries(vec![
+            (Path::new("Show").join("E01.mkv"), 700, false),
+            (Path::new(".pad").join("123"), 300, true),
+            (Path::new("Show").join("empty.txt"), 0, false),
+            (Path::new("Show").join("E02.mkv"), 650, false),
+        ]);
+        assert_eq!(
+            files,
+            vec![entry(0, "Show/E01.mkv", 700), entry(3, "Show/E02.mkv", 650)]
+        );
+    }
+
+    #[test]
+    fn default_file_prefers_the_largest_video() {
+        let files = vec![
+            entry(0, "Movie/extras.zip", 5_000),
+            entry(1, "Movie/sample.mkv", 50),
+            entry(2, "Movie/movie.mkv", 1_000),
+            entry(3, "Movie/movie.srt", 2),
+        ];
+        assert_eq!(default_file(&files), Some(2));
+        assert_eq!(
+            default_file(&[entry(0, "a.txt", 1), entry(1, "b.zip", 9)]),
+            Some(1)
+        );
+        assert_eq!(default_file(&[]), None);
+    }
+
+    #[test]
+    fn groups_files_by_folder_without_the_shared_top_folder() {
+        let files = vec![
+            entry(0, "Show/S10/E1.mkv", 1),
+            entry(1, "Show/S2/E10.mkv", 1),
+            entry(2, "Show/S2/notes.txt", 1),
+            entry(3, "Show/S2/E2.mkv", 1),
+            entry(4, "Show/readme.txt", 1),
+        ];
+        let groups = group_by_folder(&files);
+        let shape: Vec<(&str, Vec<usize>)> = groups
+            .iter()
+            .map(|g| (g.folder.as_str(), g.files.iter().map(|f| f.id).collect()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![("", vec![4]), ("S2", vec![3, 1, 2]), ("S10", vec![0])]
+        );
+    }
+
+    #[test]
+    fn keeps_top_folders_when_files_dont_share_one() {
+        let files = vec![entry(0, "a.mkv", 1), entry(1, "Extras/b.mkv", 1)];
+        let folders: Vec<String> = group_by_folder(&files).into_iter().map(|g| g.folder).collect();
+        assert_eq!(folders, vec![String::new(), "Extras".to_owned()]);
+    }
+
+    #[test]
+    fn natural_order_compares_numbers_by_value() {
+        use std::cmp::Ordering;
+        assert_eq!(natural_cmp("E2", "E10"), Ordering::Less);
+        assert_eq!(natural_cmp("e02", "E10"), Ordering::Less);
+        assert_eq!(natural_cmp("Season 9", "season 10"), Ordering::Less);
+        assert_eq!(natural_cmp("b", "A"), Ordering::Greater);
+    }
+
+    #[test]
+    fn relative_path_rebuilds_the_chosen_files_location() {
+        let files = vec![entry(0, "Show/S01/E01.mkv", 1), entry(5, "Show/E02.mkv", 1)];
+        assert_eq!(
+            listed_relative_path(&files, 0),
+            Path::new("Show").join("S01").join("E01.mkv")
+        );
+        assert_eq!(listed_relative_path(&files, 9), PathBuf::new());
     }
 
     #[test]

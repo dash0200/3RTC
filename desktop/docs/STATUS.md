@@ -1,6 +1,6 @@
 # Where the desktop app stands (handover)
 
-Last updated: 14 Nov 2026. If you're an agent picking this up, read this first. Then read
+Last updated: 18 Nov 2026. If you're an agent picking this up, read this first. Then read
 `AGENTS.md`, `docs/BUILD_SPEC.md` (the rules, the plan and §10's milestone progress) and the ADRs
 in `docs/adr/`. Keep this page current: update it at the end of every piece of work.
 
@@ -170,6 +170,126 @@ When a first connection to someone never comes up, both apps now say why and kee
   the engine sends them one at a time (`folder_queue`, `inflight`, `Msg::FramesDone`); QUIC
   receivers keep the layout (`relativePath`).
 - Not yet verified: `cargo fmt`, `clippy`, `cargo test`, and a run sending a folder between two PCs.
+
+## Sketch (17–18 Nov 2026)
+
+The web app's Sketch (one draws a word, everyone else guesses) on desktop, playable with browsers:
+- Rules: `crates/games/src/sketch.rs` (the web app's `sketch/rules.ts`: word list, guess
+  normalising, "close" guesses, hints at half and three-quarter time, points, redaction of the
+  word to the drawer). Vectors: `client-ts/tests/vectors/players/sketch.ts` →
+  `crates/games/vectors/sketch.json`.
+- Each turn's board is `act:sketch:t<turn>` (a whiteboard index and its chunks, `reducer_for`).
+  `app/src/whiteboard.rs` now draws any board (`BoardUi::base`, `board(…, &Mode, …)`): read-only
+  for guessers, no light / dark or footer in a game, only the drawer clears.
+- Screen: `app/src/sketch.rs` (joins on open, word picker, hint blanks, timer, scores, guesses
+  feed and its own guess box, Skip, Play again, chime when it's your turn). The deciding app sends
+  `tick` twice a second (the app's clock, and `examples/chat.rs` for tests).
+- Interop: `client-ts/tests/e2e/desktop_sketch_test.py` (in `run_all.py`).
+- No blink when a stroke is saved (whiteboard and Sketch): the board's canvas paints the saved
+  strokes' picture itself and keeps the last decoded one up, with the strokes it lacks painted
+  over it, until the new one has decoded (`img()` showed nothing meanwhile). Replaced pictures
+  are freed (they used to pile up in gpui's asset cache, one per stroke).
+- Building on Windows needs the MSVC toolchain: `rustup set default-host x86_64-pc-windows-msvc`
+  (a GNU default host makes `rust-toolchain.toml` pick the MinGW toolchain, and `webrtc-sys`
+  fails).
+- Not yet verified: `cargo fmt`, `clippy`, `cargo test` (incl. the sketch vectors),
+  `desktop_sketch_test.py`, and a real game on Windows.
+
+## Local / torrent video player feel (18 Nov 2026)
+
+Mouse handling for the mpv player (`app/src/local_video.rs`, `app/src/watch.rs`,
+`platform-win/src/mpv.rs`):
+- The video window is created `WS_DISABLED`: Windows skips it (and mpv's window inside it) for the
+  mouse, so clicks, double clicks, the wheel and the pointer reach the app's own stage, which
+  handles them. mpv passed clicks on unreliably (single clicks never paused).
+- A click's play / pause waits 250 ms (or the system double-click time if shorter); a double
+  click cancels it, or undoes it if the second click came later, and toggles full screen. Before,
+  every double click paused (a 300 ms play/pause debounce swallowed the "undo").
+- In full screen the controls bar `occlude`s the stage under it: clicking Exit full screen (or
+  any bar button) no longer also counts as a click on the video.
+- Full screen: the bar shows only while the pointer is at the bottom edge (0.8 s grace after it
+  leaves, kept while a menu or dialog is open); the pointer hides after 2 s still off the bar.
+- The bar's clip on the video window is applied as soon as the bar shows or hides, only when it
+  changes, and mpv repaints at once (a paused video kept showing the old bar).
+- Not yet verified: `cargo fmt`, `clippy`, `test`, and a run with a local file and a torrent.
+  If clicks on the picture do nothing at all, the `WS_DISABLED` routing is the suspect.
+
+## Torrent file picker (18 Nov 2026)
+
+Opening a torrent with several files lets the user pick one; only that file downloads
+(`app/src/torrent.rs`, `app/src/watch.rs`):
+- The torrent is first added `list_only` (metadata only: nothing downloaded, no files created),
+  then re-added from the resolved metainfo with `only_files: [chosen]` and the peers seen while
+  resolving. A torrent the session already had gets `update_only_files` too.
+- More than one real file (padding and empty files left out): a "Pick a file to stream" list
+  under the paste box, grouped by folder (the torrent's own top folder left out; headers show
+  file count and size and fold shut on click; natural order, so `S2` before `S10`, `E2` before
+  `E10`; videos first and tagged; the largest video marked "Suggested"). The list scrolls (rows
+  are `flex_none`: shrinking to fit the box, they never overflowed). Cancel stops it. One file:
+  plays straight away as before.
+- Room peers: unchanged and no wire change. The host shares the chosen file (`share_file`
+  name/size), so everyone streams that same file from the host. The web app has no torrent
+  support, so nothing changed there.
+- Tests: `torrent.rs` (file list, default pick, folder grouping, natural order, chosen path).
+- "Keep torrent downloads" (`keep_torrents`, on by default): a switch in the file picker and in
+  Player Shortcuts & Controls → TORRENTS; read when the file is picked (`torrent::set_keep`). On: saved in `Downloads\3RTC Torrents` in qBittorrent's "Original"
+  layout (`<torrent name>\<folders>\file`) and kept when it stops. Off: `%TEMP%\3RTC\torrents`,
+  deleted when it stops and emptied when the service starts. To finish a kept download in
+  qBittorrent: add the same torrent with save path `Downloads\3RTC Torrents`, hash check on.
+  Unpicked files exist as empty files. "Show file" next to the swarm stats (kept only) opens it.
+- No upload to the swarm: librqbit's `disable-upload` feature, `SessionOptions::disable_upload`
+  (no bitfield or haves sent, piece requests refused). The host's upload goes to the room only.
+  Some swarm peers may choke us for it (tit-for-tat), so downloads can be slower.
+- Not yet verified: `cargo fmt`, `clippy`, `test`, and a run with a multi-file magnet.
+
+## Webcam (18 Nov 2026, ADR 0010)
+
+Desktop and browser users see each other's cameras (the web app's `features/camera`, b0140d0):
+- Wire: `camera: true` in `peer-identity`, `camera-status { on }`, the second video line
+  (`protocol/src/peer.rs`; core: `Command::SetCamera`, `Member::camera / camera_on`,
+  `Room::cameras()` in order, status to newcomers).
+- Connections (`engine/src/peers.rs`): as the initiator we add the camera line once and offer it;
+  as the answerer our camera track is added up front and takes the second offered video line (no
+  `set_direction` in libwebrtc 0.4). `video_sender` is now the first video line's only.
+  Never call a transceiver's `current_direction()`/`fired_direction()`: the vendored webrtc-sys
+  reads them with `optional::value()`, which aborts the app (0xc0000409) on a line not negotiated yet.
+- Sending (`engine/src/camera.rs`): desktop viewers get the camera's full picture (up to 1080p30,
+  owner's call); web viewers 640×360, 24 fps, 350 kbps. Receiving: each camera that's on decoded to
+  a small feed. Capture: `platform-win/src/camera.rs` (Media Foundation, NV12; the blocked toast
+  "Camera blocked: allow it in Windows Settings → Privacy → Camera").
+- UI (`app/src/camera.rs`): dock button and caret (camera picker tray, saved as `cameraDevice`),
+  tiles above the dock, a click puts a camera on the stage for you only (the web app got the same,
+  and a camera picker: `features/camera/spotlight.ts`, `CameraStage.tsx`, `cameraDevices.ts`).
+- Headless client: `/camera on [WxH]` (test pattern), `/camera device [id]`, `/camera off`,
+  `/cameras`. Interop: `client-ts/tests/e2e/desktop_camera_test.py` (in `run_all.py`).
+- Icons regenerated from `icons.tsx` (`crates/ui/tools/gen_icons.py`): `camera`, `cameraOff`, and the
+  other icons the web set had gained since (bolt, download, pointer, …), unused for now.
+- Not yet run (nothing was built or run in the session that wrote it): `cargo fmt`, `clippy`,
+  `cargo test`, `desktop_camera_test.py`, the web app's `npm run typecheck` / `npm test`, and
+  `checklists/camera.md` on Windows with a real camera.
+
+## Chat files: cancel, Accept for big files, folders picked file by file (18 Nov 2026)
+
+- Rules in `docs/PROTOCOL.md` ("Big files wait for Accept", "Cancelling a chat file"); owner decisions:
+  only files of 8 MB+ need Accept (pictures too); folders are offered as a list and each file is
+  downloaded from a window with the folder's tree (files already in Downloads say so); older apps get
+  nothing until they update (no capability flag).
+- Wire: `p2p-file-control` gains `accept`; new `p2p-folder-offer` (`protocol/src/peer.rs`
+  `P2pFolderOffer`, `FolderEntry`; `client-ts/src/types/protocol.ts`).
+- Core: `transfers.rs` (waiting / sending / sent per receiver, `ACCEPT_MIN_BYTES`), `ChatLine::folder`,
+  `ChatFolder`, `Command::FolderSent`, `clean_folder`; tests in `core/tests/transfers.rs`.
+- Engine: `files.rs` (sending, offers, per-receiver sends, folder queue one file at a time per
+  receiver, saving bulk-received folder files, `Update::SendState`, `Update::FolderHere`, cancel);
+  `quic_flow.rs` sends per receiver on accept (`quic_send_to`) and only takes offers we accepted;
+  `images.rs` drops a transfer after two minutes with no frame (was: two minutes after it started);
+  `outgoing::Stop`. The old folder queue (`folder_queue`, `inflight`) is gone.
+- App: Accept / Decline and sender status on the file card (`chat.rs`), the folder card and window
+  (`folder.rs`, `Dialog::Folder`). `examples/chat.rs`: `/accept`, `/cancel`, `FOLDER_OFFER`, `SEND_STATE`.
+- Web: `features/chat/useFileTransfers.ts` (moved out of `useChat.ts`), `transferPeers.ts`,
+  `folderOffer.ts`, `chatMessages.ts`, `FolderOfferCard.tsx`; `p2pImageShare.ts` `announce()`, staleness
+  counted from the last frame; tests in `tests/unit/transferCancel.test.ts`.
+- A cancelled QUIC download keeps its `.3rtc-part` in Downloads (as after a failure; "Resume" offers it).
+- Not yet verified: `cargo fmt`, `clippy`, `cargo test`, `npm test`, typecheck, and a real run.
 
 ## Known limits (accepted)
 

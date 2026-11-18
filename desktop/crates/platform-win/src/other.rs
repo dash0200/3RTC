@@ -370,8 +370,38 @@ pub fn cursor_in_bottom_hwnd(_raw_hwnd: isize, _threshold_px: i32) -> bool {
     false
 }
 
+/// The system's double-click time in milliseconds (Windows' default here).
+#[must_use]
+pub fn double_click_ms() -> u64 {
+    500
+}
+
 /// Stand-in for cursor state check.
 #[must_use]
 pub fn cursor_window_state(_raw_hwnd: isize, _threshold_px: i32) -> Option<(i32, i32, bool)> {
     None
+}
+
+/// The cameras (none here: Windows only).
+#[must_use]
+pub fn cameras() -> Vec<crate::CameraInfo> {
+    Vec::new()
+}
+
+/// A camera (Windows only): opening one here says there's no camera.
+#[derive(Debug)]
+pub struct Camera;
+
+impl Camera {
+    /// Says at once that there's no camera.
+    #[must_use]
+    pub fn open(
+        _id: &str,
+        _want: crate::CameraWant,
+        _frames: crate::CameraFrames,
+        events: crate::CameraEvents,
+    ) -> Self {
+        events(crate::CameraEvent::Stopped(Some(crate::CameraError::NotFound)));
+        Self
+    }
 }

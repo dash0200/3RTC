@@ -14,6 +14,10 @@
 //! `WATCH showing=<key|-> queue=<ids> votes=<names>`.
 //! Used by the cross-app tests (desktop engine ↔ web app in Chromium): one line per event,
 //! `ROOM <code> muted=<bool> speaking=<bool> members=<name>[+][~speaking][!muted],…`.
+//! Camera (ADR 0010): `/camera on [WxH]` sends a moving test pattern (no camera needed), `/camera
+//! device [id]` a real camera, `/camera off`, `/cameras` lists the cameras here. Shown cameras
+//! print as `CAMERAS on=<bool> starting=<bool> mine=<bool> remote=<name>,…`, and each one's
+//! pictures as `CAMERA_FRAME <name> <w>x<h> fps=<n>` when their size or rate changes.
 
 #![allow(clippy::print_stdout)]
 
@@ -58,6 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let mut last_watch = String::new();
     let mut last_lock = String::new();
     let mut last_activity = String::new();
+    // who's who (camera lines print names), and the cameras whose pictures are being reported
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut camera_reported: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut last_stores: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     // what each game wants us to do on our own (the computer's turns on the deciding app, a
     // seat asked back, cards handed to a new deciding app), as the desktop app does it
@@ -72,7 +79,9 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if on.load(std::sync::atomic::Ordering::Relaxed)
-                    && tx.send((rtc_games::sketch::KEY.to_owned(), rtc_games::sketch::act::tick())).is_err()
+                    && tx
+                        .send((rtc_games::sketch::KEY.to_owned(), rtc_games::sketch::act::tick()))
+                        .is_err()
                 {
                     break;
                 }
@@ -94,6 +103,9 @@ async fn main() -> anyhow::Result<()> {
                         if s.online && !asked {
                             asked = true;
                             engine.command(room.map_or(Command::CreateRoom, Command::Join));
+                        }
+                        for (p, m) in &s.members {
+                            names.insert(p.as_str().to_owned(), m.username.clone().unwrap_or_else(|| "?".into()));
                         }
                         if let Phase::InRoom(id) = s.phase {
                             let names: Vec<_> = s
@@ -184,7 +196,15 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Update::Chat(c) => match &c.image {
                         Some(i) => println!("IMAGE_START {} {} {} {}: {}", i.transfer_id, i.file_name, i.file_size, c.name, c.text),
-                        None => println!("CHAT {}: {}", c.name, c.text),
+                        None => match &c.folder {
+                            Some(f) => {
+                                println!("FOLDER_OFFER {} {} {} {}: {}", f.folder_id, f.name, f.files.len(), c.name, c.text);
+                                for file in &f.files {
+                                    println!("FOLDER_FILE {} {} {}", f.folder_id, file.transfer_id, file.path);
+                                }
+                            }
+                            None => println!("CHAT {}: {}", c.name, c.text),
+                        },
                     },
                     Update::Reaction(r) => println!("REACTION {} {} x{}", r.name, r.emoji, r.combo),
                     Update::Board { from, live, body } => {
@@ -193,6 +213,12 @@ async fn main() -> anyhow::Result<()> {
                     Update::Sound(s) => println!("SOUND {} {}", s.name, s.sound_id),
                     Update::ImageProgress { transfer_id, percent } => println!("IMAGE_PROGRESS {transfer_id} {percent}"),
                     Update::FileSaved { transfer_id, path } => println!("FILE_SAVED {transfer_id} {}", path.display()),
+                    Update::TransferCancelled { transfer_id } => println!("TRANSFER_CANCELLED {transfer_id}"),
+                    Update::SendState { transfer_id, status } => println!(
+                        "SEND_STATE {transfer_id} waiting={} sending={} sent={}",
+                        status.waiting, status.sending, status.sent
+                    ),
+                    Update::FolderHere { folder_id, files } => println!("FOLDER_HERE {folder_id} {}", files.len()),
                     Update::ImageReady { transfer_id, bytes } => {
                         println!("IMAGE_READY {transfer_id} {} {:016x}", bytes.len(), fnv(&bytes));
                     }
@@ -298,6 +324,38 @@ async fn main() -> anyhow::Result<()> {
                         );
                         control = c;
                     }
+                    Update::Cameras(view) => {
+                        let who: Vec<String> = view
+                            .remote
+                            .iter()
+                            .map(|(p, _)| names.get(p.as_str()).cloned().unwrap_or_else(|| p.as_str().to_owned()))
+                            .collect();
+                        println!("CAMERAS on={} starting={} mine={} remote={}", view.on, view.starting, view.mine.is_some(), who.join(","));
+                        camera_reported.retain(|p| view.remote.iter().any(|(r, _)| r.as_str() == p));
+                        for (peer, feed) in view.remote {
+                            if !camera_reported.insert(peer.as_str().to_owned()) {
+                                continue;
+                            }
+                            let name = names.get(peer.as_str()).cloned().unwrap_or_else(|| peer.as_str().to_owned());
+                            // its size and frame rate as they arrive (for 60 s)
+                            tokio::spawn(async move {
+                                let mut last = (0, 0, 0);
+                                for _ in 0..120 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    let st = feed.stats();
+                                    let fps_band = st.fps / 5;
+                                    if st.width > 0 && (st.width, st.height, fps_band) != last {
+                                        last = (st.width, st.height, fps_band);
+                                        println!("CAMERA_FRAME {name} {}x{} fps={}", st.width, st.height, st.fps);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    Update::CameraDevices(list) => {
+                        let v: Vec<String> = list.iter().map(|c| format!("{}={}", c.id, c.name)).collect();
+                        println!("CAMERA_DEVICES {}", v.join(" | "));
+                    }
                     Update::StreamProgress(_) | Update::Devices(_) | Update::Net(_) => {}
                 }
             }
@@ -381,6 +439,8 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Some(l) if l.starts_with("/stream ") => engine.stream_from(l["/stream ".len()..].trim().to_owned()),
                     Some(l) if l == "/unshare" => engine.share_file(None),
+                    Some(l) if l.starts_with("/cancel ") => engine.cancel_transfer(l["/cancel ".len()..].trim().to_owned()),
+                    Some(l) if l.starts_with("/accept ") => engine.accept_transfer(l["/accept ".len()..].trim().to_owned()),
                     Some(l) if l.starts_with("/subs ") => {
                         // `/subs <path>`: share a subtitle file with the room
                         let path = l["/subs ".len()..].trim();
@@ -435,6 +495,19 @@ async fn main() -> anyhow::Result<()> {
                             println!("usage: /act <key> <json>");
                         }
                     }
+                    Some(l) if l.starts_with("/camera on") => {
+                        // /camera on [WxH]: a moving test pattern (640x360 unless said)
+                        let (width, height) = l["/camera on".len()..]
+                            .trim()
+                            .split_once('x')
+                            .map_or((640, 360), |(w, h)| (w.parse().unwrap_or(640), h.parse().unwrap_or(360)));
+                        engine.camera(Some(rtc_engine::CameraChoice::TestPattern { width, height }));
+                    }
+                    Some(l) if l == "/camera off" => engine.camera(None),
+                    Some(l) if l.starts_with("/camera device") => engine.camera(Some(rtc_engine::CameraChoice::Device(
+                        l["/camera device".len()..].trim().to_owned(),
+                    ))),
+                    Some(l) if l == "/cameras" => engine.list_cameras(),
                     Some(l) if l.starts_with("/screenopts") => {
                         // /screenopts <max height, 0 = native> <fps> [sound 1|0]
                         let v: Vec<u32> = l["/screenopts".len()..].split_whitespace().filter_map(|x| x.parse().ok()).collect();

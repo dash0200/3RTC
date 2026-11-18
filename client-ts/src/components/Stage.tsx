@@ -111,9 +111,11 @@ export interface StageProps {
   onStartActivity?: (id: string) => void;
   screenShare?: UseScreenShareReturn | null;
   /** Webcam (features/camera) */
-  camera?: Pick<UseCameraReturn, 'isOn' | 'isStarting' | 'toggle'> | null;
+  camera?: Pick<UseCameraReturn, 'isOn' | 'isStarting' | 'toggle' | 'cameras' | 'deviceId' | 'selectDevice' | 'refreshCameras'> | null;
   /** Camera tiles, shown in a row just above the dock (nothing covers the stage's controls) */
   cameraTiles?: React.ReactNode;
+  /** A camera shown over the stage, for this viewer only (features/camera/CameraStage.tsx) */
+  cameraStage?: React.ReactNode;
   bus?: RoomBus | null;
   onToggleChat?: () => void;
   isChatOpen?: boolean;
@@ -191,6 +193,7 @@ export default function Stage({
   screenShare = null,
   camera = null,
   cameraTiles = null,
+  cameraStage = null,
   bus = null
 }: StageProps) {
   const isPhone = layout === 'phone';
@@ -453,6 +456,9 @@ export default function Stage({
           showDock={false}
           hasMedia={isMediaActive}
         />
+
+        {/* A camera on the stage, over whatever plays (which keeps running) */}
+        {roomId && cameraStage}
       </div>
 
       {/* Live Synchronized SFX HUD Banner on Stage */}
@@ -515,6 +521,10 @@ export default function Stage({
           isCameraOn={camera?.isOn}
           isCameraStarting={camera?.isStarting}
           onToggleCamera={camera?.toggle}
+          cameras={camera?.cameras}
+          cameraDeviceId={camera?.deviceId}
+          onSelectCamera={camera?.selectDevice}
+          onOpenCameraPicker={camera?.refreshCameras}
           activityMenu={activityMenu}
           onStartActivity={onStartActivity}
           playbackLock={playbackLock}

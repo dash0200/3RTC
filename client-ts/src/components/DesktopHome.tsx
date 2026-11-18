@@ -161,11 +161,11 @@ export default function DesktopHome({
           <header className="dh-desktop-head">
             <span className="dh-desktop-tag">
               <Icon name="windows" size={14} />
-              <span>100% Free · Standalone Portable · Windows 10 &amp; 11</span>
+              <span>Free · Portable · Windows 10 &amp; 11</span>
             </span>
             <h2 id="dh-desktop-heading" className="dh-desktop-title">Prefer a native app? Meet 3RTC Desktop.</h2>
             <p className="dh-desktop-desc">
-              Engineered in Rust with GPU hardware decoding, direct BitTorrent swarm streaming, and system-wide gaming integrations. Zero browser tabs, zero throttling, zero compromises.
+              Everything the web app does, plus what a browser can't: play almost any video file, stream torrents, share your screen with sound, and stay in the call while you game.
             </p>
             <div className="dh-desktop-cta-row">
               <a
@@ -177,44 +177,27 @@ export default function DesktopHome({
                 <Icon name="download" size={20} strokeWidth={2.4} />
                 <span className="dh-desktop-btn-text">
                   <strong>Download for Windows (.zip)</strong>
-                  <small>v{BUILD_LABEL} · ~59 MB · Portable</small>
+                  <small>v{BUILD_LABEL} · Portable</small>
                 </span>
               </a>
-              <span className="dh-desktop-free-badge">✓ Always Free · No Sign-Up · No Ads · Open Source</span>
+              <span className="dh-desktop-free-badge">✓ Free · No sign-up · No ads</span>
             </div>
           </header>
 
-          {/* 6 Major Desktop-Exclusive Features */}
+          {/* What only the desktop app does */}
           <div className="dh-spotlight-grid">
             <div className="dh-spotlight-card">
               <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#6aa8ff' } as React.CSSProperties}>
                 <Icon name="tv" size={24} strokeWidth={2} />
               </div>
-              <span className="dh-spotlight-pill">Native mpv Engine</span>
-              <h3>Flawless 4K, HDR &amp; Anime Subtitles</h3>
+              <span className="dh-spotlight-pill">Any video · Torrents</span>
+              <h3>Plays what browsers can't</h3>
               <p>
-                Browsers fail on HEVC/H.265, 10-bit color, DTS/AC3 surround sound, or styled ASS anime subtitles. 3RTC Desktop embeds the battle-tested <strong>mpv</strong> media engine with Direct3D11 GPU hardware decoding for stutter-free playback and instant seeking.
+                MKV, HEVC, 4K HDR, surround sound and styled subtitles, decoded on your GPU. Paste a magnet link or drop a .torrent, pick the file, and everyone watches it as it downloads.
               </p>
               <ul className="dh-spotlight-list">
-                <li><Check /> Plays any MKV, MP4, 4K HDR &amp; anime video</li>
-                <li><Check /> Switch audio tracks &amp; ASS styled subtitles on the fly</li>
-                <li><Check /> Microsecond sync precision across all peers</li>
-              </ul>
-            </div>
-
-            <div className="dh-spotlight-card">
-              <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#ff7849' } as React.CSSProperties}>
-                <Icon name="magnet" size={24} strokeWidth={2} />
-              </div>
-              <span className="dh-spotlight-pill">BitTorrent Swarm</span>
-              <h3>Stream Any Magnet or Torrent Link</h3>
-              <p>
-                Web browsers are trapped within WebTorrent web seeds. 3RTC Desktop connects directly to the real global BitTorrent swarm (DHT, PEX, TCP &amp; uTP) to stream movies instantly in sync as they download.
-              </p>
-              <ul className="dh-spotlight-list">
-                <li><Check /> Paste any magnet URI or drop a .torrent file</li>
-                <li><Check /> Streams from millions of standard BitTorrent seeders</li>
-                <li><Check /> Full room sync: everyone watches the torrent together</li>
+                <li><Check /> Switch audio and subtitle tracks</li>
+                <li><Check /> Downloads only the file you picked</li>
               </ul>
             </div>
 
@@ -222,31 +205,14 @@ export default function DesktopHome({
               <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#38bdf8' } as React.CSSProperties}>
                 <Icon name="pointer" size={24} strokeWidth={2} />
               </div>
-              <span className="dh-spotlight-pill">Remote Control &amp; Screen</span>
-              <h3>Screen Share &amp; Remote Control</h3>
+              <span className="dh-spotlight-pill">Screen · Remote control</span>
+              <h3>Share your screen with sound</h3>
               <p>
-                Share your screen with high FPS and crystal-clear stereo game audio via WASAPI loopback. Hand trusted friends remote mouse and keyboard control to co-play or help navigate, with a 250Hz Game Mode and instant safety take-back.
+                Share a window or your whole screen with its app sound, hardware-encoded for smooth video. Let a friend take the mouse and keyboard to help or co-play.
               </p>
               <ul className="dh-spotlight-list">
-                <li><Check /> High-FPS capture with direct stereo app sound</li>
-                <li><Check /> Mouse &amp; keyboard control with 250Hz Game Mode</li>
-                <li><Check /> Emergency take-back via mouse or Ctrl+Alt+Shift+X</li>
-              </ul>
-            </div>
-
-            <div className="dh-spotlight-card">
-              <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#eab308' } as React.CSSProperties}>
-                <Icon name="bolt" size={24} strokeWidth={2} />
-              </div>
-              <span className="dh-spotlight-pill">Hardware Accelerated</span>
-              <h3>Zero Background Lag &amp; NVENC Encoding</h3>
-              <p>
-                Browsers throttle background tabs down to 1Hz when you game, dropping audio and freezing video. 3RTC Desktop runs natively with NVENC/AMF hardware encoding, never dropping frames or stuttering voice when Alt-Tabbed.
-              </p>
-              <ul className="dh-spotlight-list">
-                <li><Check /> NVENC / AMF / QSV hardware video encoding at 60 FPS</li>
-                <li><Check /> Zero background throttling: voice &amp; sync stay active in games</li>
-                <li><Check /> Ultra-lightweight native Rust footprint (~40MB RAM)</li>
+                <li><Check /> NVENC, AMF and Quick Sync encoding</li>
+                <li><Check /> Take control back with the mouse or Ctrl+Alt+Shift+X</li>
               </ul>
             </div>
 
@@ -254,200 +220,77 @@ export default function DesktopHome({
               <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#a78bfa' } as React.CSSProperties}>
                 <Icon name="layers" size={24} strokeWidth={2} />
               </div>
-              <span className="dh-spotlight-pill">Press F10 Anywhere</span>
-              <h3>In-Game Floating Overlay</h3>
+              <span className="dh-spotlight-pill">Game nights</span>
+              <h3>Stay in the call while you play</h3>
               <p>
-                Play your favorite games while hanging out. The floating overlay stays pinned on top of any game or fullscreen window with speaking indicators, chat, and playback controls.
+                Voice and sync keep going when the app is in the background, and the controls reach you inside your game.
               </p>
               <ul className="dh-spotlight-list">
-                <li><Check /> See who is speaking without Alt-Tabbing</li>
-                <li><Check /> Click-through mode never blocks your mouse or crosshair</li>
-                <li><Check /> Instant toggle with the F10 hotkey</li>
-              </ul>
-            </div>
-
-            <div className="dh-spotlight-card">
-              <div className="dh-spotlight-icon-wrap" style={{ ['--icon-tint']: '#36d399' } as React.CSSProperties}>
-                <Icon name="keyboard" size={24} strokeWidth={2} />
-              </div>
-              <span className="dh-spotlight-pill">System Integration &amp; P2P</span>
-              <h3>Global Push-to-Talk &amp; Massive Files</h3>
-              <p>
-                Browser shortcuts stop working the moment you click away. 3RTC Desktop provides true global hotkeys so push-to-talk responds from any game, plus direct disk-to-disk transfers for 10GB+ files without browser memory limits.
-              </p>
-              <ul className="dh-spotlight-list">
-                <li><Check /> Global push-to-talk in any game or application</li>
-                <li><Check /> Selective deafen: silence voices while keeping movie audio</li>
-                <li><Check /> Send 10GB+ files directly between SSDs with auto-resume</li>
+                <li><Check /> Push-to-talk that works in any game</li>
+                <li><Check /> Overlay shows who's talking (F10)</li>
+                <li><Check /> Deafen voices, keep the movie playing</li>
               </ul>
             </div>
           </div>
 
-          {/* Side-by-Side Comparison Table */}
+          {/* Web vs desktop at a glance */}
           <div className="dh-compare-section">
             <div className="dh-compare-head">
-              <h3>Web App vs. Desktop App</h3>
-              <p>Choose the experience that fits your setup. Both are 100% free with no sign-up.</p>
+              <h3>Web or desktop?</h3>
+              <p>Same rooms, so web and desktop users watch together. Use the web app to join in seconds from any device; get the desktop app for the extras.</p>
             </div>
 
             <div className="dh-compare-table-wrap">
               <table className="dh-compare-table">
                 <thead>
                   <tr>
-                    <th scope="col" className="dh-col-feature">Capability</th>
-                    <th scope="col" className="dh-col-web">Web App (3rtc.me)</th>
+                    <th scope="col" className="dh-col-feature">&nbsp;</th>
+                    <th scope="col" className="dh-col-web">Web app (3rtc.me)</th>
                     <th scope="col" className="dh-col-desktop">
-                      <span className="dh-desk-badge"><Icon name="windows" size={13} /> Desktop App</span>
+                      <span className="dh-desk-badge"><Icon name="windows" size={13} /> Desktop app</span>
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Price &amp; Accounts</strong>
-                      <span>Account requirement or subscriptions</span>
-                    </td>
-                    <td><span className="dh-tag-ok">100% Free · No Sign-Up</span></td>
-                    <td className="dh-highlight-col"><span className="dh-tag-ok">100% Free · No Sign-Up</span></td>
+                    <td className="dh-feature-cell"><strong>Runs on</strong></td>
+                    <td>Any browser: phone, Mac or PC</td>
+                    <td className="dh-highlight-col">Windows 10 &amp; 11, unzip and run</td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Installation</strong>
-                      <span>How you launch the app</span>
-                    </td>
-                    <td>Instant in browser (Zero install)</td>
-                    <td className="dh-highlight-col"><strong>Portable .zip (Unzip &amp; run, no install)</strong></td>
+                    <td className="dh-feature-cell"><strong>Watch together, voice, chat, games</strong></td>
+                    <td><span className="dh-tag-ok">✓ Yes</span></td>
+                    <td className="dh-highlight-col"><span className="dh-tag-ok">✓ Yes</span></td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Local Video Player</strong>
-                      <span>Decoding high-bitrate &amp; MKV files</span>
-                    </td>
-                    <td>Browser HTML5 (Codec-limited, no HEVC/DTS)</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">Native mpv with GPU decoding</strong>
-                      <small className="dh-subtext">Plays any 4K/MKV, multi-track audio &amp; ASS subs</small>
-                    </td>
+                    <td className="dh-feature-cell"><strong>Your own video files</strong></td>
+                    <td>What your browser plays (mostly MP4 and WebM)</td>
+                    <td className="dh-highlight-col"><strong className="dh-text-accent">Almost any format</strong></td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Torrent &amp; Magnet Streaming</strong>
-                      <span>Stream directly from BitTorrent swarms</span>
-                    </td>
-                    <td>WebTorrent web seeds only (Limited swarm)</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ Full BitTorrent swarm (DHT, PEX, TCP &amp; uTP)</strong>
-                      <small className="dh-subtext">Paste any magnet link to stream in real-time sync</small>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Screen Sharing &amp; Audio</strong>
-                      <span>Sharing displays, games &amp; app sound</span>
-                    </td>
-                    <td>Standard browser screen capture</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ High-FPS capture + stereo game audio (WASAPI)</strong>
-                      <small className="dh-subtext">Smooth, low-latency desktop &amp; window sharing</small>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Interactive Remote Control</strong>
-                      <span>Control friends' shared screen to co-play</span>
-                    </td>
+                    <td className="dh-feature-cell"><strong>Torrents &amp; magnet links</strong></td>
                     <td><Icon name="minus" size={16} className="dh-icon-dash" /></td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ Mouse &amp; keyboard control + Game Mode</strong>
-                      <small className="dh-subtext">250Hz pointer aim + emergency take-back</small>
-                    </td>
+                    <td className="dh-highlight-col"><strong className="dh-text-accent">✓ Stream while downloading</strong></td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Background Performance</strong>
-                      <span>When gaming or Alt-Tabbed to another window</span>
-                    </td>
-                    <td>Throttled to 1Hz by browser (Voice/sync lag)</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ Zero throttling</strong>
-                      <small className="dh-subtext">Persistent background voice &amp; WebRTC while gaming</small>
-                    </td>
+                    <td className="dh-feature-cell"><strong>Screen sharing</strong></td>
+                    <td>Browser screen share</td>
+                    <td className="dh-highlight-col"><strong className="dh-text-accent">✓ With app sound, hardware-encoded</strong></td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Video Hardware Encoding</strong>
-                      <span>GPU-accelerated screen capture pipeline</span>
-                    </td>
-                    <td>Software canvas capture (CPU heavy)</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ NVENC / AMF / QSV GPU hardware encoder</strong>
-                      <small className="dh-subtext">Lag-free 60 FPS sharing with near-zero CPU usage</small>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>In-Game Floating Overlay</strong>
-                      <span>Overlay over games and other windows</span>
-                    </td>
+                    <td className="dh-feature-cell"><strong>Remote control</strong></td>
                     <td><Icon name="minus" size={16} className="dh-icon-dash" /></td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ Transparent overlay (F10)</strong>
-                      <small className="dh-subtext">Float chat &amp; voice over any game</small>
-                    </td>
+                    <td className="dh-highlight-col"><strong className="dh-text-accent">✓ Mouse &amp; keyboard</strong></td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Global Push-to-Talk</strong>
-                      <span>Talking while in a game or other app</span>
-                    </td>
-                    <td>Active browser tab only</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ System-wide hotkey</strong>
-                      <small className="dh-subtext">Works anywhere in Windows</small>
-                    </td>
+                    <td className="dh-feature-cell"><strong>While you game</strong></td>
+                    <td>Push-to-talk only in the tab; background tabs can slow down</td>
+                    <td className="dh-highlight-col"><strong className="dh-text-accent">✓ Global push-to-talk + overlay</strong></td>
                   </tr>
                   <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Large File Transfers</strong>
-                      <span>Direct peer-to-peer file sharing limits</span>
-                    </td>
-                    <td>Browser RAM limit (~1–2 GB)</td>
-                    <td className="dh-highlight-col">
-                      <strong className="dh-text-accent">✓ 10GB+ native resumable transfers</strong>
-                      <small className="dh-subtext">Direct disk-to-disk streaming with no RAM limits</small>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Player Shortcuts</strong>
-                      <span>Customizing play/pause/seek keys</span>
-                    </td>
-                    <td>Fixed browser shortcuts</td>
-                    <td className="dh-highlight-col"><strong>✓ Fully customizable keybindings</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Selective Deafen</strong>
-                      <span>Muting voices while watching a movie</span>
-                    </td>
-                    <td>Mutes all room audio</td>
-                    <td className="dh-highlight-col"><strong>✓ Mutes voices only, movie audio keeps playing</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Resource Efficiency</strong>
-                      <span>CPU and memory overhead</span>
-                    </td>
-                    <td>Standard browser tab usage (~500MB–1.5GB)</td>
-                    <td className="dh-highlight-col"><strong>Ultra-lightweight native Rust (~40MB RAM)</strong></td>
-                  </tr>
-                  <tr>
-                    <td className="dh-feature-cell">
-                      <strong>Voice, Chat &amp; Games</strong>
-                      <span>High-definition voice, sync &amp; soundboard</span>
-                    </td>
-                    <td>✓ Full support</td>
-                    <td className="dh-highlight-col">✓ Full support</td>
+                    <td className="dh-feature-cell"><strong>Big file transfers</strong></td>
+                    <td>Everyday files</td>
+                    <td className="dh-highlight-col"><strong className="dh-text-accent">✓ Huge files straight to disk, resumable</strong></td>
                   </tr>
                 </tbody>
               </table>
@@ -459,7 +302,7 @@ export default function DesktopHome({
             <div className="dh-banner-copy">
               <span className="dh-banner-eyebrow">READY FOR MOVIE NIGHT?</span>
               <h3>Download 3RTC Portable for Windows</h3>
-              <p>Extract the zip archive and run 3rtc.exe anywhere. No administrator rights, setup wizard, or installation required.</p>
+              <p>Unzip and run 3rtc.exe. No installer and no admin rights needed.</p>
             </div>
             <div className="dh-banner-actions">
               <a
@@ -469,9 +312,9 @@ export default function DesktopHome({
                 title="Download 3RTC Portable Zip"
               >
                 <Icon name="download" size={18} strokeWidth={2.4} />
-                <span>Download .zip (~59 MB)</span>
+                <span>Download .zip</span>
               </a>
-              <span className="dh-banner-sub">Compatible with Windows 10 &amp; 11 (64-bit) · 100% Free</span>
+              <span className="dh-banner-sub">Windows 10 &amp; 11 (64-bit) · Free</span>
             </div>
           </div>
         </div>
