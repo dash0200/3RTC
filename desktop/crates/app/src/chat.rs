@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use gpui_kit::{
     AnyElement, Context, ExternalPaths, FontStyle, FontWeight, HighlightStyle, Hsla, ImageSource,
-    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, SharedString,
-    RenderImage, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _, StyledText,
-    UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
+    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, RenderImage,
+    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _,
+    StyledText, UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
 };
 use rtc_core::Quote;
 use rtc_core::chat_format::{MentionTarget, format_chat};
@@ -664,7 +664,10 @@ impl RoomView {
     /// open (the bubble's preview shows meanwhile) and freed when it closes.
     pub(crate) fn open_lightbox(&mut self, transfer_id: String, cx: &mut Context<'_, Self>) {
         self.free_lightbox(cx);
-        let file = self.pictures.get(&transfer_id).and_then(|p| p.file.clone().or_else(|| p.saved.clone()));
+        let file = self
+            .pictures
+            .get(&transfer_id)
+            .and_then(|p| p.file.clone().or_else(|| p.saved.clone()));
         self.lightbox = Some(transfer_id.clone());
         self.open_dialog(Dialog::Image, cx);
         let Some(file) = file else { return };
@@ -676,7 +679,10 @@ impl RoomView {
             let made = work.await;
             let _ = this.update(cx, |v, cx| match made {
                 // still open on this picture
-                Some(big) if v.lightbox.as_deref() == Some(transfer_id.as_str()) && v.dialog == Some(Dialog::Image) => {
+                Some(big)
+                    if v.lightbox.as_deref() == Some(transfer_id.as_str())
+                        && v.dialog == Some(Dialog::Image) =>
+                {
                     v.lightbox_image = Some(big);
                     cx.notify();
                 }
@@ -1056,8 +1062,12 @@ pub(crate) fn pending_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> O
                     .bg(tokens::raised())
                     .map(|el| {
                         if let Some(i) = p.preview.clone() {
-                            el.child(img(ImageSource::from(i)).size(px(48.)).object_fit(ObjectFit::Cover))
-                                .into_any_element()
+                            el.child(
+                                img(ImageSource::from(i))
+                                    .size(px(48.))
+                                    .object_fit(ObjectFit::Cover),
+                            )
+                            .into_any_element()
                         } else {
                             el.flex()
                                 .items_center()

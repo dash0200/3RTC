@@ -61,7 +61,8 @@ impl LivePicture {
                     }
                 }
                 if let Some((_, render)) = shown.borrow().as_ref() {
-                    let _ = window.paint_image(bounds, bounds, Corners::default(), Arc::clone(render), 0, false);
+                    let _ =
+                        window.paint_image(bounds, bounds, Corners::default(), Arc::clone(render), 0, false);
                 }
             },
         )

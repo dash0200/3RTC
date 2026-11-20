@@ -157,7 +157,11 @@ impl EchoFeed {
     /// (the web player's processes) and is added to the mixer's copy.
     pub fn set_replace(&self, on: bool) {
         if self.0.echo_replace.swap(on, Ordering::Relaxed) != on {
-            self.0.echo_extra.lock().unwrap_or_else(PoisonError::into_inner).clear();
+            self.0
+                .echo_extra
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear();
         }
     }
 
@@ -821,13 +825,19 @@ mod tests {
         assert!(f.iter().all(|s| *s == 0.0) && !full, "nothing: silence");
         feed.push(&[0.25; 200]);
         let (f, full) = shared.echo_extra_frame();
-        assert!((f[199] - 0.25).abs() < 1e-6 && f[200] == 0.0, "a short frame is filled with silence");
+        assert!(
+            (f[199] - 0.25).abs() < 1e-6 && f[200] == 0.0,
+            "a short frame is filled with silence"
+        );
         assert!(!full);
         // added to the mixer's copy (the web player), or standing in for it (mpv, in our process)
         assert!((shared.reference_sample(0.5, 0.25, true) - 0.75).abs() < 1e-6);
         feed.set_replace(true);
         assert!((shared.reference_sample(0.5, 0.25, true) - 0.25).abs() < 1e-6);
-        assert!((shared.reference_sample(0.5, 0.0, false) - 0.5).abs() < 1e-6, "short: the mixer's copy");
+        assert!(
+            (shared.reference_sample(0.5, 0.0, false) - 0.5).abs() < 1e-6,
+            "short: the mixer's copy"
+        );
         feed.set_replace(false);
         // a burst keeps only the newest 40 ms
         feed.push(&[0.1; super::FRAME * 10]);

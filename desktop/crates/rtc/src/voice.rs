@@ -280,7 +280,11 @@ impl Voice {
                 if frames.is_multiple_of(500) {
                     // the screen sound test reads this line
                     let (l, r) = side_levels(&frame.data, frame.num_channels);
-                    tracing::info!("audio: {who}'s screen: {frames} frames, left {l:.2}, right {r:.2}");
+                    // every few seconds: the console only, not the log file
+                    tracing::info!(
+                        target: "rtc_engine::periodic",
+                        "audio: {who}'s screen: {frames} frames, left {l:.2}, right {r:.2}"
+                    );
                 }
                 if frame.num_channels == 2 {
                     feed.push(&frame.data);

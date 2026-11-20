@@ -1,18 +1,23 @@
-//! Ludo on screen (`ludo/index.tsx`, `board.ts`): the board (drawn as one SVG picture, rebuilt
-//! when the game changes; tokens you can move are buttons over it), the dice, the seats, the
-//! house rules, and on the deciding app the computer's turns, turns of people who left, and idle
-//! turns.
+//! Ludo on screen (`ludo/index.tsx`, `board.ts`): the board (the squares drawn once as an SVG
+//! picture that never changes; the tokens drawn over it, a moved token hopping square by square
+//! to its new spot; tokens you can move are buttons over it), the dice (tumbling on each roll),
+//! the seats, the house rules, and on the deciding app the computer's turns, turns of people who
+//! left, and idle turns.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::rc::Rc;
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Bounds, Context, FontWeight, Pixels, canvas, div, px};
+use gpui_kit::{
+    Animation, AnimationExt as _, AnyElement, Bounds, Context, Div, ElementId, FontWeight, Pixels, canvas,
+    div, px,
+};
 use rtc_core::ActivityCommand;
 use rtc_engine::Snapshot;
-use rtc_games::ludo::{self, COLORS, HOME, LAST_TRACK, State, act};
+use rtc_games::ludo::{self, COLORS, Event, HOME, LAST_TRACK, State, act};
 use rtc_ui::button::{Button, Variant};
 use rtc_ui::tokens;
 use serde_json::Value;
@@ -23,6 +28,10 @@ const KEY: &str = "act:ludo";
 const BOT_DELAY: Duration = Duration::from_millis(900);
 const AWAY_DELAY: Duration = Duration::from_millis(4000);
 const IDLE_DELAY: Duration = Duration::from_millis(30_000);
+/// One square of a moved token's walk (`HOP_MS` in `index.tsx`).
+const HOP: Duration = Duration::from_millis(130);
+/// The dice tumbling after a roll.
+const ROLL: Duration = Duration::from_millis(600);
 
 const RULES: [(&str, &str, &str); 5] = [
     (
@@ -47,11 +56,111 @@ pub(crate) struct LudoUi {
     auto_sent: Option<(i64, bool, u64)>,
     /// The seat asked back.
     reclaim_sent: Option<String>,
-    /// The board picture and the state it shows.
-    /// The board picture (freed as each move replaces it).
+    /// The board picture (the squares only: it never changes, so it's decoded once).
     picture: crate::picture::LivePicture,
+    /// The last game step drawn; a newer one starts its animation.
+    seen_seq: Cell<Option<i64>>,
+    /// The token walking to its new square, if one is.
+    hop: RefCell<Option<Hop>>,
+    /// The roll the dice is tumbling for: (seq, when it came).
+    roll: Cell<Option<(i64, Instant)>>,
     /// Where the game area is.
     pub(crate) area: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+/// A move being shown square by square.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Hop {
+    seq: i64,
+    color: String,
+    token: usize,
+    from: i64,
+    to: i64,
+    /// Tokens it sent back to base: they stay on the square until it lands.
+    captured: Vec<(String, usize)>,
+    started: Instant,
+}
+
+impl Hop {
+    /// The walk to show for `event` (a move, capture or reaching home).
+    fn of(event: &Event, seq: i64, now: Instant) -> Option<Self> {
+        if !matches!(event.kind.as_str(), "move" | "capture" | "home") {
+            return None;
+        }
+        let (from, to) = (event.from?, event.to?);
+        if to <= from {
+            return None;
+        }
+        Some(Self {
+            seq,
+            color: event.color.clone()?,
+            token: usize::try_from(event.token?).ok()?,
+            from,
+            to,
+            captured: event
+                .captured
+                .iter()
+                .flatten()
+                .filter_map(|c| Some((c.color.clone(), usize::try_from(c.token).ok()?)))
+                .collect(),
+            started: now,
+        })
+    }
+
+    fn duration(&self) -> Duration {
+        #[allow(clippy::cast_possible_truncation)]
+        let steps = path_of(self.from, self.to).len() as u32;
+        HOP * steps.max(1)
+    }
+}
+
+/// The squares a token passes through from `from` to `to` (`pathOf` in `board.ts`).
+fn path_of(from: i64, to: i64) -> Vec<i64> {
+    if from == -1 {
+        return vec![0];
+    }
+    (from + 1..=to).collect()
+}
+
+/// Where a hopping token is at `d` (0 to 1 of the whole walk) along `points`: square by square,
+/// easing into each one, with a little lift in the middle of each hop.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn hop_point(points: &[Pt], d: f32) -> Pt {
+    let n = points.len().saturating_sub(1);
+    if n == 0 {
+        return points.first().copied().unwrap_or_default();
+    }
+    let at = f64::from(d.clamp(0., 1.)) * n as f64;
+    let k = (at.floor() as usize).min(n - 1);
+    let f = at - k as f64;
+    let (a, b) = (points[k], points[k + 1]);
+    let e = f * f * (3.0 - 2.0 * f);
+    let lift = (f * std::f64::consts::PI).sin() * 0.22;
+    (a.0 + (b.0 - a.0) * e, a.1 + (b.1 - a.1) * e - lift)
+}
+
+/// The face the dice shows while it tumbles (`d` from 0 to 1), landing on `value`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn tumble_face(seq: i64, d: f32, value: Option<i64>) -> Option<i64> {
+    const ORDER: [i64; 6] = [3, 6, 2, 5, 1, 4];
+    if d >= 0.8 {
+        return value;
+    }
+    let k = (d.max(0.) * 14.0) as usize + seq.rem_euclid(6) as usize;
+    Some(ORDER[k % 6])
+}
+
+/// The dice's size while it tumbles: it pops a little, then settles.
+fn tumble_scale(d: f32) -> f32 {
+    if d < 0.5 {
+        0.8 + 0.6 * d
+    } else {
+        1.1 - 0.2 * (d - 0.5)
+    }
 }
 
 impl std::fmt::Debug for LudoUi {
@@ -211,8 +320,14 @@ fn place(state: &State, movable: &[(String, i64)]) -> Vec<(String, usize, f64, f
     out
 }
 
-/// The board as SVG (`Board` in `index.tsx`).
-fn board_svg(state: &State, movable: &[(String, i64)]) -> String {
+/// The board's squares as SVG (`Board` in `index.tsx`), the same all game: the turn's glow and
+/// the tokens are drawn over it, so a move never makes a new picture to decode.
+fn board_svg() -> &'static str {
+    static SVG: OnceLock<String> = OnceLock::new();
+    SVG.get_or_init(build_board_svg)
+}
+
+fn build_board_svg() -> String {
     let mut s = String::from(
         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 15 15" width="900" height="900"><rect x="0" y="0" width="15" height="15" fill="#f6f1e7"/>"##,
     );
@@ -248,23 +363,17 @@ fn board_svg(state: &State, movable: &[(String, i64)]) -> String {
         let (x, y) = t[((ludo::start_of(color) + 8) % 52) as usize];
         let _ = write!(
             s,
-            r##"<text x="{}" y="{}" font-size="0.62" fill="#9a907e" text-anchor="middle">★</text>"##,
+            r##"<text x="{}" y="{}" font-size="0.62" fill="#9a907e" text-anchor="middle" font-family="'Segoe UI Symbol', 'Segoe UI', sans-serif">★</text>"##,
             x + 0.5,
             y + 0.72
         );
     }
     for color in COLORS {
         let (bx, by) = base_origin(color);
-        let turn = state.turn.as_deref() == Some(color);
         let _ = write!(
             s,
-            r##"<rect x="{bx}" y="{by}" width="6" height="6" fill="{}" stroke="rgba(0,0,0,0.12)" stroke-width="0.04"{}/>"##,
-            hex(color),
-            if turn {
-                r#" style="filter:brightness(1.12)""#
-            } else {
-                ""
-            }
+            r##"<rect x="{bx}" y="{by}" width="6" height="6" fill="{}" stroke="rgba(0,0,0,0.12)" stroke-width="0.04"/>"##,
+            hex(color)
         );
         let _ = write!(
             s,
@@ -302,28 +411,44 @@ fn board_svg(state: &State, movable: &[(String, i64)]) -> String {
             r##"<circle cx="{x}" cy="{y}" r="0.14" fill="rgba(255,255,255,0.85)"/>"##
         );
     }
-    for (color, i, x, y, r) in place(state, movable) {
-        let is_movable = movable.iter().any(|(c, m)| *c == color && *m as usize == i);
-        if is_movable {
-            let _ = write!(
-                s,
-                r##"<circle cx="{x}" cy="{y}" r="{}" fill="none" stroke="#111" stroke-width="0.07" stroke-dasharray="0.25 0.15"/>"##,
-                r + if r < 0.3 { 0.08 } else { 0.2 }
-            );
-        }
-        let _ = write!(
-            s,
-            r##"<circle cx="{x}" cy="{y}" r="{r}" fill="{}" stroke="#fff" stroke-width="0.09"/>"##,
-            hex(&color)
-        );
-        let _ = write!(
-            s,
-            r##"<circle cx="{x}" cy="{y}" r="{}" fill="rgba(255,255,255,0.55)"/>"##,
-            r * 0.45
-        );
-    }
     s.push_str("</svg>");
     s
+}
+
+/// A token of radius `r` squares (`unit` px a square), not yet placed: white rim, a shine in the
+/// middle. Its box is `token_size` px across.
+#[allow(clippy::cast_possible_truncation)]
+fn token_el(color: &str, r: f64, unit: f32) -> Div {
+    let size = token_size(r, unit);
+    div()
+        .absolute()
+        .size(px(size))
+        .rounded_full()
+        .bg(color_token(color))
+        .border(px(0.09 * unit))
+        .border_color(tokens::white())
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .size(px((r * 0.9) as f32 * unit))
+                .rounded_full()
+                .bg(tokens::white().opacity(0.55)),
+        )
+}
+
+/// A token's box across (px): the circle plus the outer half of its rim, as the SVG drew it.
+#[allow(clippy::cast_possible_truncation)]
+fn token_size(r: f64, unit: f32) -> f32 {
+    (r * 2.0 + 0.09) as f32 * unit
+}
+
+/// Puts a box `size` px across with its centre on `at` (squares).
+#[allow(clippy::cast_possible_truncation)]
+fn at(el: Div, at: Pt, size: f32, unit: f32) -> Div {
+    el.left(px(at.0 as f32 * unit - size / 2.0))
+        .top(px(at.1 as f32 * unit - size / 2.0))
 }
 
 fn status_text(state: &State, mine: Option<&str>) -> String {
@@ -394,7 +519,8 @@ fn mini_btn(id: impl Into<gpui_kit::ElementId>, label: &str) -> gpui_kit::Statef
         .child(label.to_owned())
 }
 
-fn dice(value: Option<i64>, color: Option<&str>) -> impl IntoElement {
+fn dice(value: Option<i64>, color: Option<&str>, size: f32) -> Div {
+    let k = size / 56.0;
     let pips: &[(f32, f32)] = match value {
         Some(1) => &[(1., 1.)],
         Some(2) => &[(0., 0.), (2., 2.)],
@@ -407,17 +533,18 @@ fn dice(value: Option<i64>, color: Option<&str>) -> impl IntoElement {
     let face = color.map_or_else(|| tokens::hex(0xdd_dddd), color_token);
     div()
         .relative()
-        .size(px(56.))
-        .rounded(px(10.))
+        .flex_none()
+        .size(px(size))
+        .rounded(px(10. * k))
         .bg(face)
-        .border_2()
+        .border(px(2. * k))
         .border_color(tokens::white().opacity(0.85))
-        .children(pips.iter().map(|(x, y)| {
+        .children(pips.iter().map(move |(x, y)| {
             div()
                 .absolute()
-                .left(px(3.0 + x * 16.8 + 2.4))
-                .top(px(3.0 + y * 16.8 + 2.4))
-                .size(px(10.))
+                .left(px((3.0 + x * 16.8 + 2.4) * k))
+                .top(px((3.0 + y * 16.8 + 2.4) * k))
+                .size(px(10. * k))
                 .rounded_full()
                 .bg(tokens::white())
         }))
@@ -548,14 +675,105 @@ pub(crate) fn view(
         Vec::new()
     };
 
-    // the board picture, rebuilt when the game changes
-    let svg = board_svg(&s, &movable);
-    let picture = view.activity.ludo.picture.for_svg(svg, cx);
-    let area = view.activity.ludo.area.get();
+    // a new step of the game: start its animation (not for the step we find when we first look)
+    let ui = &view.activity.ludo;
+    let prev = ui.seen_seq.replace(Some(s.seq));
+    if prev != Some(s.seq) {
+        let fresh = prev.is_some();
+        let now = Instant::now();
+        let event = s.event.as_ref().filter(|_| fresh);
+        *ui.hop.borrow_mut() = event.and_then(|e| Hop::of(e, s.seq, now));
+        ui.roll.set(
+            event
+                .filter(|e| matches!(e.kind.as_str(), "roll" | "no-move" | "three-sixes"))
+                .map(|_| (s.seq, now)),
+        );
+    }
+    let hop = ui
+        .hop
+        .borrow()
+        .clone()
+        .filter(|h| h.seq == s.seq && h.started.elapsed() < h.duration() + HOP);
+
+    // the board picture: the squares, the same all game
+    let picture = ui.picture.for_svg(board_svg().to_owned(), cx);
+    let area = ui.area.get();
     let avail_w = area.map_or(640.0, |a| f32::from(a.size.width) - 300.0 - 40.0);
     let avail_h = area.map_or(640.0, |a| f32::from(a.size.height) - 32.0);
     let size = avail_w.min(avail_h).clamp(240.0, 900.0);
     let unit = size / 15.0;
+    let t = track();
+    // whose turn it is: their base glows
+    let glow = s.turn.as_deref().filter(|_| s.phase == "playing").map(|c| {
+        let (bx, by) = base_origin(c);
+        div()
+            .absolute()
+            .left(px(bx as f32 * unit))
+            .top(px(by as f32 * unit))
+            .size(px(6.0 * unit))
+            .bg(tokens::white().opacity(0.14))
+    });
+    // the tokens: the one that just moved last (on top), walking there
+    let mut placed = place(&s, &movable);
+    let is_mover = |c: &str, i: usize| hop.as_ref().is_some_and(|h| h.color == c && h.token == i);
+    placed.sort_by_key(|(c, i, ..)| is_mover(c.as_str(), *i));
+    let pieces: Vec<AnyElement> = placed
+        .iter()
+        .flat_map(|(c, i, x, y, r)| {
+            let (c, i, final_at, r) = (c.as_str(), *i, (*x, *y), *r);
+            let tsize = token_size(r, unit);
+            let mut out: Vec<AnyElement> = Vec::new();
+            if movable.iter().any(|(mc, mi)| mc == c && *mi as usize == i) {
+                let ring_r = r + if r < 0.3 { 0.08 } else { 0.2 };
+                #[allow(clippy::cast_possible_truncation)]
+                let ring = ((ring_r * 2.0 + 0.07) as f32) * unit;
+                out.push(
+                    at(div().absolute(), final_at, ring, unit)
+                        .size(px(ring))
+                        .rounded_full()
+                        .border(px(0.07 * unit))
+                        .border_dashed()
+                        .border_color(tokens::hex(0x11_1111))
+                        .into_any_element(),
+                );
+            }
+            let token = token_el(c, r, unit);
+            let walk = hop.as_ref().filter(|_| is_mover(c, i));
+            let sent_home = hop
+                .as_ref()
+                .filter(|h| h.captured.iter().any(|(cc, ci)| cc == c && *ci == i));
+            out.push(if let Some(h) = walk {
+                // from where it was, square by square, to its spot on the square it lands on
+                let mut points: Vec<Pt> = std::iter::once(h.from)
+                    .chain(path_of(h.from, h.to))
+                    .map(|p| token_point(&t, c, i, p))
+                    .collect();
+                if let Some(last) = points.last_mut() {
+                    *last = final_at;
+                }
+                token
+                    .with_animation(
+                        ElementId::Name(format!("ludo-hop-{}-{c}-{i}", h.seq).into()),
+                        Animation::new(h.duration()),
+                        move |el, d| at(el, hop_point(&points, d), tsize, unit),
+                    )
+                    .into_any_element()
+            } else if let Some(h) = sent_home {
+                // captured: it stays on the square until the capturing token lands
+                let square = token_point(&t, &h.color, h.token, h.to);
+                token
+                    .with_animation(
+                        ElementId::Name(format!("ludo-sent-{}-{c}-{i}", h.seq).into()),
+                        Animation::new(h.duration()),
+                        move |el, d| at(el, if d < 1.0 { square } else { final_at }, tsize, unit),
+                    )
+                    .into_any_element()
+            } else {
+                at(token, final_at, tsize, unit).into_any_element()
+            });
+            out
+        })
+        .collect();
     let hits = place(&s, &movable).into_iter().filter_map(|(c, i, x, y, r)| {
         movable
             .iter()
@@ -585,7 +803,9 @@ pub(crate) fn view(
         .size(px(size))
         .rounded(px(10.))
         .overflow_hidden()
-        .child(div().size(px(size)).child(view.activity.ludo.picture.paint(picture)))
+        .child(div().size(px(size)).child(ui.picture.paint(picture)))
+        .children(glow)
+        .children(pieces)
         .children(hits);
 
     // ---- the panel ----
@@ -616,7 +836,33 @@ pub(crate) fn view(
                 .flex()
                 .items_center()
                 .gap(px(14.))
-                .child(dice(shown, dcolor.as_deref()))
+                .child(
+                    match ui
+                        .roll
+                        .get()
+                        .filter(|(seq, when)| *seq == s.seq && when.elapsed() < ROLL)
+                    {
+                        Some((seq, _)) => div()
+                            .size(px(56.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .with_animation(
+                                ("ludo-dice", usize::try_from(seq).unwrap_or_default()),
+                                Animation::new(ROLL),
+                                move |el, d| {
+                                    el.child(dice(
+                                        tumble_face(seq, d, shown),
+                                        dcolor.as_deref(),
+                                        56.0 * tumble_scale(d),
+                                    ))
+                                },
+                            )
+                            .into_any_element(),
+                        None => dice(shown, dcolor.as_deref(), 56.0).into_any_element(),
+                    },
+                )
                 .child(if my_turn {
                     Button::new("ludo-roll", "Roll")
                         .variant(Variant::Primary)
@@ -912,4 +1158,64 @@ fn tag(text: &str) -> impl IntoElement {
         .bg(tokens::raised())
         .text_color(tokens::text_2())
         .child(text.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_walks_every_square() {
+        assert_eq!(path_of(-1, 0), vec![0]);
+        assert_eq!(path_of(3, 7), vec![4, 5, 6, 7]);
+        assert_eq!(path_of(50, 56), vec![51, 52, 53, 54, 55, 56]);
+    }
+
+    #[test]
+    fn hop_starts_and_lands_on_the_squares() {
+        let near = |a: Pt, b: Pt| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+        let pts = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
+        assert!(near(hop_point(&pts, 0.0), (0.0, 0.0)));
+        assert!(near(hop_point(&pts, 1.0), (2.0, 0.0)));
+        let (x, y) = hop_point(&pts, 0.25);
+        assert!(x > 0.0 && x < 1.0, "between the first two squares: {x}");
+        assert!(y < 0.0, "lifted mid-hop: {y}");
+        assert!(near(hop_point(&pts[..1], 0.5), (0.0, 0.0)));
+    }
+
+    #[test]
+    fn only_moves_walk() {
+        let now = Instant::now();
+        let mut e = Event {
+            kind: "move".into(),
+            color: Some("red".into()),
+            token: Some(2),
+            from: Some(4),
+            to: Some(9),
+            value: Some(5),
+            captured: Some(vec![ludo::Captured {
+                color: "blue".into(),
+                token: 1,
+            }]),
+        };
+        let h = Hop::of(&e, 7, now).unwrap_or_else(|| unreachable!());
+        assert_eq!((h.token, h.from, h.to), (2, 4, 9));
+        assert_eq!(h.captured, vec![("blue".to_owned(), 1)]);
+        assert_eq!(h.duration(), HOP * 5);
+        e.kind = "roll".into();
+        assert!(Hop::of(&e, 7, now).is_none());
+    }
+
+    #[test]
+    fn dice_lands_on_the_roll() {
+        assert_eq!(tumble_face(3, 1.0, Some(4)), Some(4));
+        assert!(tumble_face(3, 0.1, Some(4)).is_some_and(|v| (1..=6).contains(&v)));
+        assert!((tumble_scale(1.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn board_picture_has_no_tokens() {
+        assert!(board_svg().ends_with("</svg>"));
+        assert!(std::ptr::eq(board_svg(), board_svg()));
+    }
 }

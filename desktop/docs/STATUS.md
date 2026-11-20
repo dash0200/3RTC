@@ -386,6 +386,10 @@ one per move through `img()`.
   (`logfile.rs` `watch_memory`, `rtc_platform_win::memory_mb`), so a next leak shows what was
   going on while it grew.
 - Checked and fine: camera tiles and screen share frames already call `drop_image`.
+- All games checked: Chess and Last Card draw fixed asset SVGs (cached once); Tycoon's tokens are
+  cached per token and colour. Ludo's ★ had no font (usvg warned and fell back on every redraw):
+  `Segoe UI Symbol` now. The screen sound's every-5-s line is `rtc_engine::periodic` (not in the
+  log file). Left: YouTube thumbnails (quick picks, queue) stay for the session (~0.7 MB each).
 - Chat pictures (done after): they're no longer kept in memory (`chat_pictures.rs`). A picture's
   bytes go to `%TEMP%\3RTC\chat` (or stay in the file it was picked from); the bubble and the
   attachment card show a preview of at most 480 px (GIFs keep up to 150 frames, scaled down);

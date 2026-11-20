@@ -38,7 +38,11 @@ pub(crate) fn cache_path(transfer_id: &str, mime: &str) -> PathBuf {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(64)
         .collect();
-    let stem = if safe.is_empty() { "picture".to_owned() } else { safe };
+    let stem = if safe.is_empty() {
+        "picture".to_owned()
+    } else {
+        safe
+    };
     let ext = mime.strip_prefix("image/").map_or("bin", |e| match e {
         "jpeg" => "jpg",
         "png" | "gif" | "webp" | "bmp" | "tiff" => e,
@@ -111,7 +115,9 @@ pub(crate) fn decode_scaled(bytes: &[u8], max: u32) -> Option<Arc<RenderImage>> 
     } else {
         img.thumbnail(w, h)
     };
-    Some(Arc::new(RenderImage::new(vec![Frame::new(to_bgra(img.to_rgba8()))])))
+    Some(Arc::new(RenderImage::new(vec![Frame::new(to_bgra(
+        img.to_rgba8(),
+    ))])))
 }
 
 #[cfg(test)]
