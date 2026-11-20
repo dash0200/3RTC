@@ -39,6 +39,14 @@ pub(crate) enum TorrentProgress {
         /// Magnet or torrent name if known.
         title: String,
     },
+    /// A magnet link's file list is being fetched from peers (a `.torrent` file has it already):
+    /// sent each second while it takes.
+    GettingFiles {
+        /// Magnet name if known.
+        title: String,
+        /// Seconds so far.
+        secs: u64,
+    },
     /// The torrent holds several files: the user picks the one to stream.
     ChooseFile {
         /// Torrent name or video title.
@@ -80,6 +88,8 @@ pub(crate) enum TorrentProgress {
         total_peers: usize,
         /// Download speed in bytes per second.
         speed_bps: u64,
+        /// An MP4 whose index sits at the end of the file: that's still being fetched.
+        index_pending: bool,
     },
     /// The stream has enough buffer to play smoothly.
     ReadyToPlay {
@@ -324,16 +334,31 @@ impl TorrentService {
             list_only: true,
             ..Default::default()
         };
-        let listed = tokio::select! {
-            _ = &mut cancel_rx => {
-                info!("Torrent stream cancelled during metadata resolution.");
-                return Ok(());
-            }
-            res = self.session.add_torrent(source, Some(list_opts)) => {
-                res.map_err(|e| anyhow::anyhow!("Metadata resolution failed: {e}"))?
-            }
-            () = tokio::time::sleep(Duration::from_secs(45)) => {
-                anyhow::bail!("Timed out resolving torrent metadata (no active peers found).");
+        // a magnet's file list comes from peers: say so each second, give up after LIST_WAIT
+        let adding = self.session.add_torrent(source, Some(list_opts));
+        tokio::pin!(adding);
+        let started = std::time::Instant::now();
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.tick().await; // the first tick is now
+        let listed = loop {
+            tokio::select! {
+                _ = &mut cancel_rx => {
+                    info!("Torrent stream cancelled during metadata resolution.");
+                    return Ok(());
+                }
+                res = &mut adding => {
+                    break res.map_err(|e| anyhow::anyhow!("Couldn't get the torrent's file list: {e}"))?;
+                }
+                _ = tick.tick() => {
+                    let secs = started.elapsed().as_secs();
+                    if started.elapsed() >= LIST_WAIT {
+                        anyhow::bail!(
+                            "Couldn't get the file list from peers in {} minutes: the magnet may have no seeders right now. Try again later, or use its .torrent file.",
+                            LIST_WAIT.as_secs() / 60
+                        );
+                    }
+                    let _ = tx.send(TorrentProgress::GettingFiles { title: title.clone(), secs });
+                }
             }
         };
         let AddTorrentResponse::ListOnly(listed) = listed else {
@@ -384,7 +409,9 @@ impl TorrentService {
             .collect();
 
         // Phase 2: add it for real, downloading only the chosen files' pieces.
-        let only: Vec<usize> = std::iter::once(chosen.id).chain(subtitles.iter().map(|f| f.id)).collect();
+        let only: Vec<usize> = std::iter::once(chosen.id)
+            .chain(subtitles.iter().map(|f| f.id))
+            .collect();
         // librqbit's own folder for it (the torrent's name for several files), under ours
         let sub = listed
             .output_folder
@@ -392,7 +419,11 @@ impl TorrentService {
             .map(Path::to_path_buf)
             .unwrap_or_default();
         let keep = KEEP.load(Ordering::Relaxed);
-        let base = if keep { download_dir() } else { self.session_dir.clone() };
+        let base = if keep {
+            download_dir()
+        } else {
+            self.session_dir.clone()
+        };
         let opts = AddTorrentOptions {
             overwrite: true,
             output_folder: Some(base.join(sub).to_string_lossy().into_owned()),
@@ -472,6 +503,22 @@ impl TorrentService {
             file_path: file_path.clone(),
         });
 
+        // MP4 / MOV: the index (`moov`) is read before Play, wherever it is in the file
+        let index_ready = Arc::new(AtomicBool::new(!is_mp4_name(&video_filename)));
+        if !index_ready.load(Ordering::Relaxed) {
+            let ready = Arc::clone(&index_ready);
+            let torrent = handle.clone();
+            tokio::spawn(async move {
+                match tokio::time::timeout(INDEX_WAIT, fetch_mp4_index(torrent, file_id, video_size)).await {
+                    Ok(Ok(Some(at))) => info!("MP4 index read ahead (at {at} of {video_size} bytes)"),
+                    Ok(Ok(None)) => {}
+                    Ok(Err(e)) => warn!("couldn't read the MP4 index ahead: {e:#}"),
+                    Err(_) => warn!("the MP4 index didn't arrive in {INDEX_WAIT:?}; starting anyway"),
+                }
+                ready.store(true, Ordering::Relaxed);
+            });
+        }
+
         // Pre-buffering threshold: first ~15 MB or 5% of file (whichever is smaller)
         let target_buffer = (video_size / 20).clamp(5 * 1024 * 1024, 20 * 1024 * 1024);
         let mut last_check = std::time::Instant::now();
@@ -480,7 +527,13 @@ impl TorrentService {
         // subtitle files still downloading: (file id, size, where)
         let mut subs_left: Vec<(usize, u64, PathBuf)> = subtitles
             .iter()
-            .map(|f| (f.id, f.size, output_folder.join(listed_relative_path(&files, f.id))))
+            .map(|f| {
+                (
+                    f.id,
+                    f.size,
+                    output_folder.join(listed_relative_path(&files, f.id)),
+                )
+            })
             .collect();
 
         loop {
@@ -531,10 +584,13 @@ impl TorrentService {
                     peers,
                     total_peers,
                     speed_bps: speed,
+                    index_pending: !index_ready.load(Ordering::Relaxed),
                 });
 
-                // When target buffer reached, or if file is small, signal ready to play
-                if downloaded >= target_buffer || downloaded >= video_size || stats.finished {
+                // When target buffer reached, or if file is small, signal ready to play (an MP4
+                // also needs its index: without it the player can't start)
+                let buffered = downloaded >= target_buffer || downloaded >= video_size;
+                if stats.finished || (buffered && index_ready.load(Ordering::Relaxed)) {
                     info!(
                         "Torrent pre-buffer ready: {} / {} bytes",
                         downloaded, target_buffer
@@ -565,6 +621,77 @@ impl TorrentService {
             );
         }
     }
+}
+
+/// How long a magnet link may take to bring its file list (from DHT, trackers and peers).
+const LIST_WAIT: Duration = Duration::from_secs(120);
+
+/// How long Play waits for an MP4's index before starting anyway.
+const INDEX_WAIT: Duration = Duration::from_secs(300);
+
+/// MP4 and its relatives keep their index in a `moov` box, often after the media.
+pub(crate) fn is_mp4_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    [".mp4", ".m4v", ".mov"].iter().any(|e| lower.ends_with(e))
+}
+
+/// A top-level MP4 box from its header at `at`: its type and its whole length (header included;
+/// a length of 0 means "to the end of the file"). `None` when it doesn't look like a box.
+pub(crate) fn mp4_box(header: &[u8], at: u64, file_len: u64) -> Option<([u8; 4], u64)> {
+    let size = u32::from_be_bytes(header.get(0..4)?.try_into().ok()?);
+    let kind: [u8; 4] = header.get(4..8)?.try_into().ok()?;
+    if !kind.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        return None;
+    }
+    let len = match size {
+        0 => file_len.checked_sub(at)?,
+        1 => u64::from_be_bytes(header.get(8..16)?.try_into().ok()?),
+        n => u64::from(n),
+    };
+    (len >= 8).then_some((kind, len))
+}
+
+/// Reads an MP4's index (`moov`) through the torrent, so its pieces come first: when it sits after
+/// the media (a 10 GB `mdat`), the player would otherwise ask for the end of the file first and
+/// give up waiting. Walks the top-level boxes (each header read fetches one piece). Returns where
+/// the index was, or `None` when there isn't one to find.
+async fn fetch_mp4_index(
+    torrent: Arc<ManagedTorrent>,
+    file_id: usize,
+    len: u64,
+) -> anyhow::Result<Option<u64>> {
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+    let mut s = torrent.stream(file_id).await?;
+    let mut at = 0u64;
+    for _ in 0..64 {
+        if at.saturating_add(8) > len {
+            return Ok(None);
+        }
+        s.seek(SeekFrom::Start(at)).await?;
+        let mut head = [0u8; 16];
+        let want = usize::try_from((len - at).min(16)).unwrap_or(16);
+        s.read_exact(&mut head[..want]).await?;
+        let Some((kind, size)) = mp4_box(&head[..want], at, len) else {
+            return Ok(None);
+        };
+        if &kind == b"moov" {
+            s.seek(SeekFrom::Start(at)).await?;
+            let mut left = size.min(len - at);
+            let mut buf = vec![0u8; 256 * 1024];
+            while left > 0 {
+                let n = usize::try_from(left.min(buf.len() as u64)).unwrap_or(buf.len());
+                let got = s.read(&mut buf[..n]).await?;
+                if got == 0 {
+                    break;
+                }
+                left -= got as u64;
+            }
+            return Ok(Some(at));
+        }
+        at = at.saturating_add(size);
+    }
+    Ok(None)
 }
 
 /// The input source for a torrent.
@@ -643,6 +770,20 @@ pub(crate) fn default_file(files: &[TorrentFileEntry]) -> Option<usize> {
         .map(|f| f.id)
 }
 
+/// Whether the picker may make `id` the file Play starts: a video, or any file that isn't a
+/// subtitle when the torrent has no video at all (so a picture or a `.txt` is never "played").
+pub(crate) fn can_play_pick(files: &[TorrentFileEntry], id: usize) -> bool {
+    let Some(f) = files.iter().find(|f| f.id == id) else {
+        return false;
+    };
+    f.playable || (!f.subtitle && !files.iter().any(|f| f.playable))
+}
+
+/// Every subtitle file's id, in list order ("Select all" in the picker).
+pub(crate) fn subtitle_ids(files: &[TorrentFileEntry]) -> Vec<usize> {
+    files.iter().filter(|f| f.subtitle).map(|f| f.id).collect()
+}
+
 /// The subtitle files that go with the video `video`: in its folder named after it
 /// (`Movie.mkv` → `Movie.en.srt`), in a `Subs` / `Subtitles` folder beside it (in a sub-folder
 /// named after it, or straight in it), or, when it's the only video in its folder, any there.
@@ -654,7 +795,11 @@ pub(crate) fn matching_subtitles(files: &[TorrentFileEntry], video: usize) -> Ve
     let stem_of = |n: &str| n.rsplit_once('.').map_or(n, |(s, _)| s).to_lowercase();
     let vdir = dir_of(&v.path);
     let vstem = stem_of(&v.name);
-    let alone = files.iter().filter(|f| f.playable && dir_of(&f.path) == vdir).count() == 1;
+    let alone = files
+        .iter()
+        .filter(|f| f.playable && dir_of(&f.path) == vdir)
+        .count()
+        == 1;
     // named after it: its name, then the end or a separator (`E1` isn't `E10`)
     let named = |n: &str| {
         n.to_lowercase()
@@ -749,6 +894,97 @@ pub(crate) fn group_by_folder(files: &[TorrentFileEntry]) -> Vec<FileFolder> {
     folders
 }
 
+/// One row of the picker's tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TreeRow {
+    /// A folder (its path is what folding it goes by).
+    Folder {
+        /// Its path inside the torrent, `/`-separated, without the torrent's own top folder.
+        path: String,
+        /// Its own name.
+        name: String,
+        /// How deep it is (0: at the top).
+        depth: usize,
+        /// Files in it and in every folder under it.
+        files: usize,
+        /// Their size in bytes.
+        size: u64,
+        /// Not folded shut (its contents follow).
+        open: bool,
+    },
+    /// A file, `depth` deep.
+    File {
+        /// The file.
+        file: TorrentFileEntry,
+        /// How deep it is (0: at the top).
+        depth: usize,
+    },
+}
+
+/// The picker's tree, every depth, as the rows to show: in each folder its folders first (natural
+/// name order), then its files (videos first, then natural name order). Only the folders in
+/// `expanded` show what's in them (every folder starts folded shut). The torrent's own top folder
+/// (shared by every file) isn't a row.
+pub(crate) fn tree_rows(files: &[TorrentFileEntry], expanded: &HashSet<String>) -> Vec<TreeRow> {
+    let groups = group_by_folder(files);
+    // every folder, with the ones that only hold folders
+    let mut folders: Vec<String> = Vec::new();
+    for g in &groups {
+        let mut path = String::new();
+        for part in g.folder.split('/').filter(|p| !p.is_empty()) {
+            if !path.is_empty() {
+                path.push('/');
+            }
+            path.push_str(part);
+            if !folders.contains(&path) {
+                folders.push(path.clone());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    tree_level("", 0, &groups, &folders, expanded, &mut out);
+    out
+}
+
+/// The rows inside folder `dir` (`""`: the top), `depth` deep.
+fn tree_level(
+    dir: &str,
+    depth: usize,
+    groups: &[FileFolder],
+    folders: &[String],
+    expanded: &HashSet<String>,
+    out: &mut Vec<TreeRow>,
+) {
+    let parent_of = |p: &str| p.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
+    let mut subs: Vec<&String> = folders.iter().filter(|f| parent_of(f) == dir).collect();
+    subs.sort_by(|a, b| natural_cmp(a, b));
+    for sub in subs {
+        let (count, size) = groups
+            .iter()
+            .filter(|g| g.folder == *sub || g.folder.starts_with(&format!("{sub}/")))
+            .flat_map(|g| &g.files)
+            .fold((0, 0), |(n, s), f| (n + 1, s + f.size));
+        let open = expanded.contains(sub.as_str());
+        out.push(TreeRow::Folder {
+            path: sub.clone(),
+            name: sub.rsplit('/').next().unwrap_or(sub).to_owned(),
+            depth,
+            files: count,
+            size,
+            open,
+        });
+        if open {
+            tree_level(sub, depth + 1, groups, folders, expanded, out);
+        }
+    }
+    if let Some(g) = groups.iter().find(|g| g.folder == dir) {
+        out.extend(g.files.iter().map(|f| TreeRow::File {
+            file: f.clone(),
+            depth,
+        }));
+    }
+}
+
 /// Case-insensitive compare where runs of digits compare as numbers (`E2` < `E10`).
 pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
@@ -797,7 +1033,9 @@ fn listed_relative_path(files: &[TorrentFileEntry], id: usize) -> PathBuf {
 /// A subtitle file the player can load.
 pub(crate) fn is_subtitle_name(name: &str) -> bool {
     let n = name.to_lowercase();
-    [".srt", ".ass", ".ssa", ".vtt", ".sub"].iter().any(|e| n.ends_with(e))
+    [".srt", ".ass", ".ssa", ".vtt", ".sub"]
+        .iter()
+        .any(|e| n.ends_with(e))
 }
 
 /// Helper to check if a filename has a video extension.
@@ -871,7 +1109,11 @@ mod tests {
         ];
         assert_eq!(matching_subtitles(&files, 0), vec![1]);
         assert_eq!(matching_subtitles(&files, 2), vec![3]);
-        let numbered = vec![entry(0, "E1.mkv", 9), entry(1, "E10.mkv", 9), entry(2, "E10.srt", 1)];
+        let numbered = vec![
+            entry(0, "E1.mkv", 9),
+            entry(1, "E10.mkv", 9),
+            entry(2, "E10.srt", 1),
+        ];
         assert_eq!(matching_subtitles(&numbered, 0), Vec::<usize>::new());
         assert_eq!(matching_subtitles(&numbered, 1), vec![2]);
     }
@@ -895,6 +1137,49 @@ mod tests {
         ];
         assert_eq!(matching_subtitles(&pack, 1), vec![3, 4]);
         assert_eq!(matching_subtitles(&pack, 9), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn mp4_boxes_lead_to_the_index_even_after_a_huge_mdat() {
+        let file_len = 10_000_000_000u64;
+        assert!(is_mp4_name("Movie.IMAX.2160p.MP4"));
+        assert!(!is_mp4_name("Movie.mkv"));
+        let ftyp = [0, 0, 0, 32, b'f', b't', b'y', b'p'];
+        assert_eq!(mp4_box(&ftyp, 0, file_len), Some((*b"ftyp", 32)));
+        // a 64-bit length: the media, ~10 GB
+        let mut mdat = vec![0, 0, 0, 1, b'm', b'd', b'a', b't'];
+        mdat.extend_from_slice(&9_990_000_000u64.to_be_bytes());
+        assert_eq!(mp4_box(&mdat, 32, file_len), Some((*b"mdat", 9_990_000_000)));
+        // a length of 0 runs to the end
+        let moov = [0, 0, 0, 0, b'm', b'o', b'o', b'v'];
+        assert_eq!(
+            mp4_box(&moov, 9_990_000_032, file_len),
+            Some((*b"moov", 9_999_968))
+        );
+        // not a box: garbage, too short, a length under the header's
+        assert_eq!(mp4_box(&[0, 0, 0, 32, 0, 1, 2, 3], 0, file_len), None);
+        assert_eq!(mp4_box(&[0, 0, 0], 0, file_len), None);
+        assert_eq!(mp4_box(&[0, 0, 0, 4, b'f', b'r', b'e', b'e'], 0, file_len), None);
+    }
+
+    #[test]
+    fn select_all_ticks_every_subtitle_and_nothing_else() {
+        let files = vec![
+            entry(0, "Show/E01.mkv", 900),
+            entry(1, "Show/Subs/E01/2_English.srt", 1),
+            entry(2, "Show/Subs/E01/3_French.srt", 1),
+            entry(3, "Show/E01.nfo", 1),
+            entry(4, "Show/E01.ass", 1),
+        ];
+        assert_eq!(subtitle_ids(&files), vec![1, 2, 4]);
+        assert!(subtitle_ids(&files[..1]).is_empty());
+        // only the video can be what Play starts; a picture or .nfo can't
+        assert!(can_play_pick(&files, 0));
+        assert!(!can_play_pick(&files, 3));
+        assert!(!can_play_pick(&files, 1));
+        assert!(!can_play_pick(&files, 9));
+        // no video at all: any non-subtitle file may be tried
+        assert!(can_play_pick(&files[3..4], 3));
     }
 
     #[test]
@@ -959,6 +1244,60 @@ mod tests {
         let files = vec![entry(0, "a.mkv", 1), entry(1, "Extras/b.mkv", 1)];
         let folders: Vec<String> = group_by_folder(&files).into_iter().map(|g| g.folder).collect();
         assert_eq!(folders, vec![String::new(), "Extras".to_owned()]);
+    }
+
+    #[test]
+    fn the_tree_shows_every_depth_folders_first() {
+        let files = vec![
+            entry(0, "Show/readme.txt", 1),
+            entry(1, "Show/S2/E1.mkv", 10),
+            entry(2, "Show/S2/Subs/E1/English.srt", 2),
+            entry(3, "Show/S10/E1.mkv", 20),
+            entry(4, "Show/S2/E2.mkv", 10),
+        ];
+        let shape = |rows: Vec<TreeRow>| -> Vec<String> {
+            rows.into_iter()
+                .map(|r| match r {
+                    TreeRow::Folder {
+                        path,
+                        depth,
+                        files,
+                        size,
+                        ..
+                    } => format!("{depth} [{path}] {files} {size}"),
+                    TreeRow::File { file, depth } => format!("{depth} {}", file.name),
+                })
+                .collect()
+        };
+        let every: HashSet<String> = ["S2", "S2/Subs", "S2/Subs/E1", "S10"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            shape(tree_rows(&files, &every)),
+            vec![
+                "0 [S2] 3 22",
+                "1 [S2/Subs] 1 2",
+                "2 [S2/Subs/E1] 1 2",
+                "3 English.srt",
+                "1 E1.mkv",
+                "1 E2.mkv",
+                "0 [S10] 1 20",
+                "1 E1.mkv",
+                "0 readme.txt",
+            ]
+        );
+        // a folder not opened hides everything under it
+        let some: HashSet<String> = ["S2".to_owned(), "S2/Subs/E1".to_owned()].into();
+        assert_eq!(
+            shape(tree_rows(&files, &some))[..4],
+            ["0 [S2] 3 22", "1 [S2/Subs] 1 2", "1 E1.mkv", "1 E2.mkv"]
+        );
+        // nothing opened yet: only the top
+        assert_eq!(
+            shape(tree_rows(&files, &HashSet::new())),
+            vec!["0 [S2] 3 22", "0 [S10] 1 20", "0 readme.txt"]
+        );
     }
 
     #[test]

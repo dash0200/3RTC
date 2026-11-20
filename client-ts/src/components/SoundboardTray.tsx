@@ -87,7 +87,7 @@ export default function SoundboardTray({
               type="range"
               min="0"
               max="1"
-              step="0.05"
+              step="0.01"
               value={isMuted ? 0 : volume}
               onChange={(e) => {
                 const val = parseFloat(e.target.value);
@@ -118,7 +118,7 @@ export default function SoundboardTray({
               type="button"
               className={`sfx-card ${isPlayingThis ? 'is-playing' : ''}`}
               onClick={() => onPlayClip?.(clip)}
-              title={`${clip.name}: ${clip.description}`}
+              title={clip.name}
               aria-label={`Play sound effect: ${clip.name}`}
             >
               <div
@@ -132,10 +132,6 @@ export default function SoundboardTray({
                 {isPlayingThis && <span className="sfx-ping-ring" style={{ borderColor: clip.color }} />}
               </div>
 
-              <div className="sfx-info">
-                <span className="sfx-name">{clip.name}</span>
-                <span className="sfx-category">{clip.category}</span>
-              </div>
             </button>
           );
         })}

@@ -1,6 +1,6 @@
 # Where the desktop app stands (handover)
 
-Last updated: 18 Nov 2026. If you're an agent picking this up, read this first. Then read
+Last updated: 20 Nov 2026. If you're an agent picking this up, read this first. Then read
 `AGENTS.md`, `docs/BUILD_SPEC.md` (the rules, the plan and §10's milestone progress) and the ADRs
 in `docs/adr/`. Keep this page current: update it at the end of every piece of work.
 
@@ -232,6 +232,14 @@ Opening a torrent with several files lets the user pick one; only that file down
 - Room peers: unchanged and no wire change. The host shares the chosen file (`share_file`
   name/size), so everyone streams that same file from the host. The web app has no torrent
   support, so nothing changed there.
+- The picker is a real tree, every depth (`torrent::tree_rows`, drawn in `watch::torrent_picker`):
+  in each folder its folders first, then its files, each level indented 16 px; every folder shows
+  its file count and size (with what's under it). Every folder starts folded shut and opens on a
+  click (`TorrentChoice::expanded`).
+- Magnet links: the file list comes from peers first; meanwhile the status says "Getting the file
+  list … from peers… N s" (`TorrentProgress::GettingFiles`, each second), and it gives up after 2
+  minutes (`LIST_WAIT`, was 45 s) with a clear message. The picker and status also show in the
+  Queue tab (`watch::torrent_box`), for a magnet pasted there while a video plays.
 - Subtitle files (`.srt` `.ass` `.ssa` `.vtt` `.sub`) in the picker: tagged SUB with a box to tick.
   A click on a file selects it, Play starts it; the subtitles matching it are ticked
   (`matching_subtitles`: named after it in its folder, in `Subs`/`Subtitles` beside it, or any
@@ -317,6 +325,116 @@ One folder, sorted by kind (`core/src/saves.rs`, `rtc_core::saves::dir(Kind)`):
 - `Downloads\3RTC\Pictures`: where Save on a chat picture starts (`app/src/chat.rs`).
 Files received before this, straight in Downloads, aren't found for resume or "already here".
 Not yet verified: build, tests (`saves` has one), a run.
+
+## Chat selection, sliders, soundboard, torrent picker, Sketch words (20 Nov 2026)
+
+- **Chat text can be selected and copied** (drag, then Ctrl+C; across several messages too):
+  `app/src/selectable.rs` `SelectableRich`, gpui-base's text-selection participant (as its
+  `SelectableText`) drawn over the styled text, so bold, mentions and links stay; a click (not a
+  drag) on a link still opens it. `chat.rs` `rich_text` uses it. The window's `TextSelectionLayer`
+  and copy action come with `gpui_kit::Root`. Each text redraws the window when its
+  part of the selection changes (`refresh_window_on_change`): the highlight follows the mouse. Double-clicking a bubble still sends ❤️ (as on the web).
+- **Shortcuts while typing:** `RoomView::typing` missed Sketch's guess box and the queue's link box,
+  so F / Space / M fired from them. Every `InputState` must be listed there. The web app was fine
+  (its handlers skip inputs; the guess box also stops key propagation).
+- **Volume sliders:** the dock's per-person tray (`room.rs` `Pop::Volume`) is a continuous 0–200%
+  slider (was 50/100/150/200 buttons), the soundboard tray a 0–100% slider (`view.rs`
+  `make_sfx_slider`, shows 0 while muted, dragging unmutes). Both keep whole percents. The web
+  sliders now step 1% too.
+- **Soundboard while muted:** nothing plays, ours or anyone's; the banner still shows
+  (`sounds::clip_gain`). Bugs were: clicking a clip while muted unmuted the soundboard, and 0% still
+  played at 10%. Web: same rule moved to `features/soundboard/gain.ts` (it had no bug).
+- **16 more soundboard clips** (`boing laser tada ding whoosh bubble coin levelup buzzer correct
+  slidewhistle heartbeat siren ticktock doorbell thunder`), category "Synth", same ids, names and
+  emoji in both apps. All synthesised from scratch by `packaging/make-sounds.py` (seeded, CC0):
+  it writes the web MP3s (`client-ts/public/sounds`) with ffmpeg and decodes them to the desktop's
+  PCM, as the older clips were made; levels match the older clips. The tray shows icons only (name
+  as tooltip) and scrolls (wheel moves the row); the web tray is an icon grid that scrolls.
+- **Torrent picker:** "Select all" / "Deselect all" for subtitle files with a count
+  (`torrent::subtitle_ids`). Clicking a file no longer re-ticks subtitles once the user has
+  chosen any (`TorrentChoice::subs_chosen`), and pictures / text files can't be picked to play
+  (`torrent::can_play_pick`); before, a click on the .jpg ticked every subtitle. The file list scrolls on its own: gpui scrolled every scrollable box
+  under the pointer, so the page moved with it (`on_scroll_wheel` stops it at the list).
+- **Sketch words:** 817 words (was 222), the same list in both apps. No word comes back in the room
+  until the list is used up: new state field `seen` (word indices of everything offered, played or
+  passed over; kept by Play again; emptied when fewer than 3 are left). Passed-over choices join
+  when drawing starts and the word at the reveal, so it never gives the word away. Per room rather
+  than per game, so Play again doesn't bring back words. No download (BUILD_SPEC §2 rule 9).
+  `docs/PROTOCOL.md` notes the field. Tests: `sketch.rs`
+  `no_word_comes_back_in_the_room_until_the_list_is_used_up`, `tests/unit/sketch.test.ts`.
+- Not yet run: `cargo fmt`, `clippy`, `cargo test`, the regenerated sketch vectors
+  (`npx tsx tests/vectors/export.ts sketch`; `client-ts` had no `node_modules`), `npm test`,
+  typecheck, and a look at chat selection, the sliders and the trays in the app. If chat selection
+  misbehaves, `selectable.rs` is self-contained: `rich_text` can go back to `StyledText` /
+  `InteractiveText`.
+
+## Big MP4 torrents that "can't be played" (20 Nov 2026)
+
+A 10 GB, 3-hour MP4 from a torrent stopped with "This file can't be played". Likely cause (not
+confirmed: that run wasn't logged): its index (`moov`) sits after the media, so mpv asks for the
+end of the file first, and mpv's 60 s network timeout ran out while those pieces came from the
+swarm. Now:
+- Before Play, an MP4 / M4V / MOV's top-level boxes are walked through librqbit's stream and the
+  `moov` box is read, so its pieces come first (`torrent.rs` `fetch_mp4_index`, `mp4_box`; at most
+  5 minutes, then it starts anyway). The status says "Fetching the video's index from the end of
+  the file" meanwhile.
+- mpv waits up to 10 minutes on our own 127.0.0.1 torrent stream (`network-timeout`, `mpv.rs`).
+- mpv's own warnings go to the log file, so a next failure says why.
+Test: `mp4_boxes_lead_to_the_index_even_after_a_huge_mdat`. Not yet run or tried with that torrent.
+
+## Log file beside the exe (20 Nov 2026)
+
+`logs\3rtc-<date>.log` in the folder 3rtc.exe runs from (installed: `%LOCALAPPDATA%\Programs\3RTC`;
+falls back to `%LOCALAPPDATA%\3RTC\logs` if that can't be written). Local only, nothing is sent
+anywhere (BUILD_SPEC §2 rule 9). `app/src/logfile.rs`, a second `tracing` layer in `main.rs`.
+- **What goes in** (`logfile::wanted`): errors and warnings (not librqbit's swarm warnings), our own
+  crates' info lines, the room's connection events (`rtc_engine::room`). Left out: debug, the
+  every-few-seconds stats (`rtc_engine::periodic`), playback / soundboard / remote-control input
+  lines (`rtc_engine::activity`, `engine/src/log_kind.rs`), libwebrtc's info lines.
+- **New lines worth having:** connection with a person up / dropped / failed (`peers.rs`); a poor
+  connection (round trip over 400 ms, over 5% of their voice filled in, or their voice held back
+  over 250 ms: `rtc::stats::Flow::trouble`), at most once a minute per person, and "fine again";
+  the signaling server unreachable (first try, then every 10th), reached again, connection lost.
+- **Crashes:** a panic is written with its thread, place and message (backtrace in dev builds).
+  A run that never closed properly (native crash, ended in Task Manager, power cut) is reported at
+  the next start: the `running` marker it leaves behind. Each start writes a header (version, exe
+  path, process id, Windows version: `rtc_platform_win::windows_version`).
+- **Kept readable:** the same line again is counted, at most 120 lines a minute, 8 MB a day, 14
+  days kept. The Logs tab has "Open log file". The uninstaller deletes `{app}\logs`.
+- Tests: `logfile.rs` (filter, repeats, bursts, old files), `log_kind.rs`, `stats.rs`
+  `trouble_only_when_people_would_notice`, signaling `being_offline_logs_now_and_then_not_every_try`.
+- Not yet run: build, clippy, tests, and a look at a real log after a session.
+
+## Dev builds: no red DirectX error at start (20 Nov 2026)
+
+`ERROR : … SDK component that is missing or mismatched. (0x887A002D)` at every dev start came from
+gpui's renderer (`gpui-pre-windows` `directx_devices.rs`) asking for the DirectX debug layer in debug
+builds (Windows' optional "Graphics Tools" isn't installed). Harmless; `Cargo.toml` now builds that
+one crate without debug assertions in dev (`[profile.dev.package.gpui-pre-windows]`), so it doesn't
+ask. Release builds never did. Not yet verified: a dev run.
+
+## Releases off git: GitHub Releases (20 Nov 2026)
+
+Release binaries used to be copied into `client-ts/public/desktop` and committed: 12 commits left
+36 binary versions (~650 MB packed) in history, almost all of `.git`. Now:
+- `packaging/package.ps1 -Publish` uploads the exe, `3RTC-portable.zip`, `3RTC-Setup.exe`,
+  `libmpv-2.dll` and `latest.json` as the GitHub Release `desktop-<build>` (`gh release create
+  … --latest`) and copies only `latest.json` into `client-ts/public/desktop`. `latest.json` points
+  at `https://github.com/dash0200/3RTC/releases/download/desktop-<build>/…` and now also lists
+  `mpv` (ADR 0004 said it would; installs without the player fetch it). The updater (`ureq`)
+  follows GitHub's redirect to its download host; no app change.
+- The website's download links stay `/desktop/3RTC-portable.zip` and `/desktop/3RTC-Setup.exe`:
+  `redirects` in `client-ts/vercel.json` (and the root `vercel.json`) send them to
+  `releases/latest/download/…`, so the newest release marked latest wins.
+- `.gitignore` and `.vercelignore` (`client-ts/` and repo root): `client-ts/public/desktop/*` except
+  `latest.json`, so neither git nor a Vercel deploy (CLI uploads files only on disk; Vite copies
+  all of `public/` into `dist`) carries the binaries. Old Vercel deployments still hold ~120 MB
+  each until removed or expired (Settings → Security → Deployment Retention Policy). The exe and zip of
+  261118.1935 are out of the index (`git rm --cached`, still on disk) and `latest.json` points at
+  a release `desktop-261118.1935` the owner uploads from those files (commands in
+  `desktop/README.md` → Releases). Upload before pushing, or downloads 404 until then.
+- History still holds the old binaries; rewriting it (`git filter-repo`) is the owner's call, not
+  done. Not yet verified: an upload, a deploy, an app updating from the release.
 
 ## Known limits (accepted)
 

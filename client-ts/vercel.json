@@ -2,6 +2,18 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "redirects": [
+    {
+      "source": "/desktop/3RTC-portable.zip",
+      "destination": "https://github.com/dash0200/3RTC/releases/latest/download/3RTC-portable.zip",
+      "permanent": false
+    },
+    {
+      "source": "/desktop/3RTC-Setup.exe",
+      "destination": "https://github.com/dash0200/3RTC/releases/latest/download/3RTC-Setup.exe",
+      "permanent": false
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

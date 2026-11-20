@@ -506,7 +506,7 @@ impl Engine {
             Injection::Move { .. } => tracing::trace!("control: {inj:?}"),
             Injection::Wheel { .. } => tracing::debug!("control: {inj:?}"),
             // buttons and keys show in the log (the cross-app test reads them)
-            _ => tracing::info!("control: input {inj:?}"),
+            _ => tracing::info!(target: "rtc_engine::activity", "control: input {inj:?}"),
         }
         if let Some(s) = &self.control.session {
             s.input(inj);

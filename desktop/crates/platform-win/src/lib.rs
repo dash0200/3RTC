@@ -98,6 +98,33 @@ pub use win::{
     set_cursor_visible, set_window_icon, show_window, unlock_pointer,
 };
 
+/// Which Windows this is, for the log file: "Windows 11 Home 24H2 (build 26100.2314)". Read from
+/// the registry; `None` when it can't be (and on other systems).
+#[must_use]
+pub fn windows_version() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let key = windows_registry::LOCAL_MACHINE
+            .open(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            .ok()?;
+        let build = key.get_string("CurrentBuildNumber").ok()?;
+        let mut name = key
+            .get_string("ProductName")
+            .unwrap_or_else(|_| "Windows".to_owned());
+        // Windows 11 still calls itself "Windows 10" here; its builds start at 22000
+        if build.parse::<u32>().is_ok_and(|b| b >= 22_000) {
+            name = name.replace("Windows 10", "Windows 11");
+        }
+        let release = key.get_string("DisplayVersion").unwrap_or_default();
+        let patch = key.get_u32("UBR").map(|u| format!(".{u}")).unwrap_or_default();
+        Some(format!("{name} {release} (build {build}{patch})").replace("  ", " "))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// The graphics card the app asks Windows for (it applies from the next start).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]

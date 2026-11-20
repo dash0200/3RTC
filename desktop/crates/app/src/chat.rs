@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use gpui_kit::{
     AnyElement, Context, ExternalPaths, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
-    InteractiveElement as _, InteractiveText, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions,
-    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _,
-    StyledText, UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
+    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, SharedString,
+    StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _, StyledText,
+    UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
 };
 use rtc_core::Quote;
 use rtc_core::chat_format::{MentionTarget, format_chat};
@@ -1322,19 +1322,10 @@ pub(crate) fn rich_text(id: SharedString, text: &str, targets: &[MentionTarget])
             highlights.push((range, style));
         }
     }
-    let styled = StyledText::new(shown).with_highlights(highlights);
-    if links.is_empty() {
-        return styled.into_any_element();
-    }
-    let ranges: Vec<std::ops::Range<usize>> = links.iter().map(|(r, _)| r.clone()).collect();
-    let hrefs: Vec<String> = links.into_iter().map(|(_, h)| h).collect();
-    InteractiveText::new(id, styled)
-        .on_click(ranges, move |ix, _, cx| {
-            if let Some(href) = hrefs.get(ix) {
-                cx.open_url(href);
-            }
-        })
-        .into_any_element()
+    // selectable (drag, then Ctrl+C); links still open on a click
+    let shown = SharedString::from(shown);
+    let styled = StyledText::new(shown.clone()).with_highlights(highlights);
+    crate::selectable::SelectableRich::new(id, shown, styled, links).into_any_element()
 }
 
 /// The message a chat line replies to, above its bubble.

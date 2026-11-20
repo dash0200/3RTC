@@ -6280,11 +6280,15 @@ video::cue {
 /* Category Filter Pills */
 
 /* 6. Soundboard Grid & SFX Cards */
+/* icons only (the name is the tooltip); scrolls when there are more clips than fit, without
+   scrolling the page behind it */
 .soundboard-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
   gap: 8px;
+  max-height: 216px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 2px;
 }
 
@@ -6292,8 +6296,9 @@ video::cue {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
+  justify-content: center;
+  aspect-ratio: 1;
+  padding: 5px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;

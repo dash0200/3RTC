@@ -169,6 +169,10 @@ pub(crate) struct RoomView {
     pub(crate) volume_slider: Option<Entity<SliderState>>,
     #[allow(dead_code, reason = "kept alive, never read")]
     volume_sub: Option<Subscription>,
+    /// The soundboard's volume slider (made when the soundboard opens).
+    pub(crate) sfx_slider: Option<Entity<SliderState>>,
+    #[allow(dead_code, reason = "kept alive, never read")]
+    sfx_sub: Option<Subscription>,
     /// The volume last given to the engine for each person this room.
     volumes_sent: HashMap<PeerId, f32>,
     /// The voice settings' mic meter (0..1, falls back slowly) and what keeps it moving.
@@ -399,6 +403,8 @@ impl RoomView {
             volume_for: None,
             volume_slider: None,
             volume_sub: None,
+            sfx_slider: None,
+            sfx_sub: None,
             volumes_sent: HashMap::new(),
             mic_meter: 0.0,
             meter_task: None,
@@ -793,6 +799,9 @@ impl RoomView {
 
     pub(crate) fn toggle_pop(&mut self, pop: Pop, cx: &mut Context<'_, Self>) {
         self.pop = if self.pop == Some(pop) { None } else { Some(pop) };
+        if self.pop == Some(Pop::Sounds) {
+            self.make_sfx_slider(cx);
+        }
         if self.pop == Some(Pop::Devices)
             && let Some(e) = &self.engine
         {
@@ -970,7 +979,8 @@ impl RoomView {
         muted: bool,
         cx: &mut Context<'_, Self>,
     ) {
-        let volume = ((volume * 20.0).round() / 20.0).clamp(0.0, 2.0);
+        // continuous (the slider), kept to whole percents
+        let volume = ((volume * 100.0).round() / 100.0).clamp(0.0, 2.0);
         let client_id = self
             .room
             .as_ref()
@@ -994,7 +1004,7 @@ impl RoomView {
         if let Some(slider) = &self.volume_slider
             && self.volume_for.as_ref() == Some(peer)
         {
-            // a preset or mute moved it: the slider shows the new value
+            // mute or reset moved it: the slider shows the new value
             let shown = if muted { 0.0 } else { volume };
             if (slider.read(cx).value().start() - shown).abs() > 0.001 {
                 self.make_volume_slider(shown, cx);
@@ -1039,7 +1049,7 @@ impl RoomView {
             SliderState::new()
                 .min(0.0)
                 .max(2.0)
-                .step(0.05)
+                .step(0.01)
                 .default_value(value)
         });
         self.volume_sub = Some(cx.subscribe(&state, |this, _, e: &SliderEvent, cx| {
@@ -1051,6 +1061,29 @@ impl RoomView {
             }
         }));
         self.volume_slider = Some(state);
+    }
+
+    /// The soundboard's volume slider (0–100%), showing 0 while muted as on the web.
+    pub(crate) fn make_sfx_slider(&mut self, cx: &mut Context<'_, Self>) {
+        let value = if self.settings.soundboard_muted {
+            0.0
+        } else {
+            self.settings.soundboard_volume
+        };
+        let state = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.01)
+                .default_value(value)
+        });
+        self.sfx_sub = Some(cx.subscribe(&state, |this, _, e: &SliderEvent, cx| {
+            if let SliderEvent::Change(v) = e {
+                // dragging it unmutes, as on the web
+                this.set_soundboard_volume(v.start(), cx);
+            }
+        }));
+        self.sfx_slider = Some(state);
     }
 
     pub(crate) fn make_host(&self, peer: rtc_protocol::PeerId) {
@@ -1511,10 +1544,14 @@ impl RoomView {
         format!("https://3rtc.me/?room={room}")
     }
 
+    /// A text box has the keys (BUILD_SPEC §5.6: shortcuts never fire while typing). Every
+    /// `InputState` the app makes must be listed here.
     fn typing(&self, window: &Window, cx: &Context<'_, Self>) -> bool {
         [
             &self.name,
             &self.message,
+            &self.sketch_guess,
+            &self.watch.queue_link,
             &self.link,
             &self.server_url,
             &self.reaction_input,

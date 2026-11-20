@@ -578,6 +578,11 @@ const P_TRACKS: u64 = 6;
 const P_VOLUME: u64 = 7;
 const P_MUTE: u64 = 8;
 
+/// A stream served by this app itself (the torrent service on 127.0.0.1).
+fn is_local_stream(url: &str) -> bool {
+    url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:")
+}
+
 fn setup(
     shared: &Arc<Shared>,
     parent: ParentWindow,
@@ -618,6 +623,14 @@ fn setup(
         ("audio-display", "no"),
     ] {
         mpv.option(lib, k, v);
+    }
+    // A torrent streamed from our own BitTorrent service (127.0.0.1): a read can wait on pieces
+    // still coming from the swarm, far past mpv's 60 s network timeout (it then said the file
+    // can't be played). Wait up to 10 minutes; the player shows it buffering meanwhile.
+    if let VideoSource::Url(u) = source
+        && is_local_stream(u)
+    {
+        mpv.option(lib, "network-timeout", "600");
     }
     mpv.option(lib, "wid", &(host.0 as isize as i64).to_string());
     if let Some(conf) = input_conf() {
