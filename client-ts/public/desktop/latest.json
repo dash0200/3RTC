@@ -1,9 +1,14 @@
 {
-    "build":  "261120.1819",
+    "build":  "261120.1916",
     "notes":  "",
     "exe":  {
-                "url":  "https://3rtc.me/desktop/3rtc-261120.1819.exe",
-                "sha256":  "176870cdf589c676f620847f3616dbd45a55c18801f006efb86939eea5311367",
+                "url":  "https://github.com/dash0200/3RTC/releases/download/desktop-261120.1916/3rtc-261120.1916.exe",
+                "sha256":  "0958f240da412922a84e52442c761c76131ab0aa5a0ab2b1b1574c2854898fdc",
                 "size":  55970816
+            },
+    "mpv":  {
+                "url":  "https://github.com/dash0200/3RTC/releases/download/desktop-261120.1916/libmpv-2.dll",
+                "sha256":  "e6b4e0372285579832e19ebb9f1725a1e12c699a76d439486b5afc0080c25910",
+                "size":  102636032
             }
 }
