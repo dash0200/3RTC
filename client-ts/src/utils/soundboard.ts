@@ -219,7 +219,7 @@ export const SOUNDBOARD_CLIPS: SoundboardClip[] = [
     color: '#14b8a6',
     category: 'Synth',
     url: '/sounds/doorbell.mp3',
-    description: 'Ding-dong, who's there?'
+    description: 'Ding-dong, who\'s there?'
   },
   {
     id: 'thunder',
