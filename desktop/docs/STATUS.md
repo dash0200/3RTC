@@ -496,7 +496,8 @@ ask. Release builds never did. Not yet verified: a dev run.
 
 Release binaries used to be copied into `client-ts/public/desktop` and committed: 12 commits left
 36 binary versions (~650 MB packed) in history, almost all of `.git`. Now:
-- `packaging/package.ps1 -Publish` uploads the exe, `3RTC-portable.zip`, `3RTC-Setup.exe`,
+- `packaging/package.ps1` (publishing is the default; `-NoPublish` only builds, `-UploadOnly`
+  republishes the build in `target/dist`) uploads the exe, `3RTC-portable.zip`, `3RTC-Setup.exe`,
   `libmpv-2.dll` and `latest.json` as the GitHub Release `desktop-<build>` (`gh release create
   … --latest`) and copies only `latest.json` into `client-ts/public/desktop`. `latest.json` points
   at `https://github.com/dash0200/3RTC/releases/download/desktop-<build>/…` and now also lists

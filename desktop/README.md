@@ -84,17 +84,15 @@ copies all of `public/` into the build, and a CLI deploy uploads files that are 
 
 To publish (needs the GitHub CLI once: `winget install GitHub.cli`, then `gh auth login`):
 
-1. `.\packaging\package.ps1 -Publish -Notes "what's new"`: builds, uploads the release
-   (`gh release create desktop-<build> … --latest`), then copies only `latest.json` into
-   `client-ts\public\desktop`.
-2. Commit that `latest.json` and deploy the web app. Apps update from then on; the upload has to
-   finish first, or they'd find a release that isn't there yet.
+1. `.\packaging\package.ps1 -Notes "what's new"`: builds, writes `latest.json` with the
+   release's addresses, uploads the release (`gh release create desktop-<build> … --latest`),
+   then copies only `latest.json` into `client-ts\public\desktop`.
+2. Commit that `latest.json` and merge to `main`. Apps update once the web app is deployed; the
+   upload has to finish first, or they'd find a release that isn't there yet.
 
-Without `-Publish` the files stay in `target\dist`; upload them by hand with
-`gh release create desktop-<build> target\dist\3rtc-<build>.exe target\dist\3RTC-portable.zip
-target\dist\3RTC-Setup.exe target\dist\libmpv-2.dll target\dist\latest.json --repo dash0200/3RTC
---title "3RTC desktop <build>" --notes "what's new" --latest`, then copy `target\dist\latest.json` to
-`client-ts\public\desktop` (step 2).
+If the upload fails part-way, `.\packaging\package.ps1 -UploadOnly` publishes the build already
+in `target\dist` without rebuilding (an existing release gets its files replaced).
+`-NoPublish` only builds into `target\dist`.
 
 Apps check `latest.json` 15 s after starting and every 6 hours and update in place (More → Desktop
 → Updates); installs without `libmpv-2.dll` fetch it too. The build number is the UTC time of the
