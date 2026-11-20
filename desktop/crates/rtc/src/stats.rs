@@ -73,7 +73,42 @@ impl Flow {
         #[allow(clippy::cast_precision_loss)]
         (samples > 0).then(|| 1000.0 * (self.jitter_buffer_secs - before.jitter_buffer_secs) / samples as f64)
     }
+
+    /// What is wrong with the voice on this connection since `before` (an earlier report), in
+    /// words for the log file; empty when it's fine. Thresholds where people notice: a round trip
+    /// over [`SLOW_RTT_MS`], more than [`BREAKING_UP_SHARE`] of their voice filled in, their voice
+    /// waiting over [`LATE_VOICE_MS`].
+    #[must_use]
+    pub fn trouble(&self, before: &Self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(rtt) = self.rtt_ms.filter(|r| *r > SLOW_RTT_MS) {
+            out.push(format!("slow network (round trip {rtt:.0} ms)"));
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let played = self.samples_received.saturating_sub(before.samples_received) as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let filled = self.concealed.saturating_sub(before.concealed) as f64;
+        if played > 0.0 && filled > BREAKING_UP_SHARE * played {
+            out.push(format!(
+                "their voice is breaking up ({:.0}% filled in: packets lost or late)",
+                100.0 * filled / played
+            ));
+        }
+        if let Some(wait) = self.jitter_buffer_ms_since(before).filter(|w| *w > LATE_VOICE_MS) {
+            out.push(format!(
+                "their voice arrives late (waits {wait:.0} ms to smooth out the network)"
+            ));
+        }
+        out
+    }
 }
+
+/// A round trip slower than this (ms) makes talking awkward.
+pub const SLOW_RTT_MS: f64 = 400.0;
+/// More of someone's voice than this made up to cover gaps sounds choppy.
+pub const BREAKING_UP_SHARE: f64 = 0.05;
+/// Their voice held back longer than this (ms) to smooth out the network is a noticeable delay.
+pub const LATE_VOICE_MS: f64 = 250.0;
 
 fn kind(t: Option<IceCandidateType>) -> &'static str {
     match t {
@@ -333,6 +368,41 @@ impl Speaking {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trouble_only_when_people_would_notice() {
+        let before = Flow {
+            samples_received: 48_000,
+            concealed: 100,
+            jitter_buffer_secs: 48_000.0 * 0.06,
+            jitter_buffer_samples: 48_000,
+            ..Flow::default()
+        };
+        let fine = Flow {
+            samples_received: 96_000,
+            concealed: 600,
+            jitter_buffer_secs: 96_000.0 * 0.06,
+            jitter_buffer_samples: 96_000,
+            rtt_ms: Some(80.0),
+            ..Flow::default()
+        };
+        assert!(fine.trouble(&before).is_empty());
+        let bad = Flow {
+            samples_received: 96_000,
+            concealed: 100 + 9_600,
+            jitter_buffer_secs: 48_000.0 * 0.06 + 48_000.0 * 0.4,
+            jitter_buffer_samples: 96_000,
+            rtt_ms: Some(650.0),
+            ..Flow::default()
+        };
+        let t = bad.trouble(&before);
+        assert_eq!(t.len(), 3, "{t:?}");
+        assert!(t[0].contains("650 ms"));
+        assert!(t[1].contains("20%"));
+        assert!(t[2].contains("400 ms"));
+        // nothing played (they're muted): no verdict on breaking up
+        assert!(before.trouble(&before).is_empty());
+    }
 
     #[test]
     fn speaking_holds_between_words() {

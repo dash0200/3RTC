@@ -7,6 +7,10 @@ Your settings are kept in settings.json next to 3rtc.exe (the empty file named "
 tells 3RTC to keep them here instead of in your user profile), so you can carry this folder
 on a USB stick or keep several copies.
 
+Logs: problems (errors, crashes, connection trouble) are written to the "logs" folder here,
+one file a day, kept for 14 days. The Logs tab in a room has "Open log file". Send that file
+along when you report a problem.
+
 Updates: 3RTC checks https://3rtc.me for new versions and puts them in place in this folder by
 itself (More > Desktop > Updates). Turn "Update automatically" off there to keep this version.
 

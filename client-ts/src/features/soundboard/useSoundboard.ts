@@ -13,6 +13,7 @@ import {
 } from '../../utils/soundboard';
 import type { Room } from '../../types';
 import { usePeerMessageOn } from '../../core/RoomContext';
+import { soundboardGain } from './gain';
 
 const BANNER_MS = 1800;
 const LOCAL_MIN_GAP_MS = 30; // rapid clicks are fine; this only drops accidental double events
@@ -68,7 +69,8 @@ export function useSoundboard({
 
   const playLocally = useCallback(
     (soundId: string) => {
-      const volume = settingsRef.current?.muted ? 0 : (settingsRef.current?.volume ?? 0.75);
+      // muted (or 0%): nothing plays, ours or theirs; the banner still shows
+      const volume = soundboardGain(settingsRef.current);
       if (!isAudioBlockedRef.current && volume > 0) {
         soundboard.play(soundId, volume);
       }

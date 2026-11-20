@@ -17,6 +17,11 @@
  *
  * Time: the authority's app sends `tick` about twice a second (accepted only from the authority);
  * deadlines are on its clock.
+ *
+ * Words: no word comes back in this room until every word has been offered. `seen` holds the
+ * `WORDS` index of every word offered so far, played or passed over; it outlives "Play again" and
+ * empties only once fewer than 3 words are left. The 2 passed-over choices join it when drawing
+ * starts and the played word at the reveal, so it never gives the word away.
  */
 import { WORDS } from './words';
 
@@ -68,6 +73,8 @@ export interface SketchState {
   revealed: string;
   /** words played this game (added at each reveal, so never a secret) */
   used: string[];
+  /** `WORDS` indices offered in this room so far (played or passed over; see the top) */
+  seen: number[];
   feed: FeedLine[];
 }
 
@@ -86,6 +93,7 @@ export const INITIAL: SketchState = {
   gained: {},
   revealed: '',
   used: [],
+  seen: [],
   feed: []
 };
 
@@ -166,6 +174,28 @@ export function pickChoices(rand: () => number, avoid: string[] = []): string[] 
   return out;
 }
 
+/** `seen` with `words` added (their `WORDS` indices, once each; unknown words left out). */
+export function addSeen(seen: number[] | undefined, words: string[]): number[] {
+  const out = Array.isArray(seen) ? [...seen] : [];
+  for (const w of words) {
+    const i = WORDS.indexOf(w);
+    if (i >= 0 && !out.includes(i)) out.push(i);
+  }
+  return out;
+}
+
+/** `seen` for the next pick: emptied once fewer than 3 words are left to offer (a new round of the list). */
+export function seenForPick(seen: number[] | undefined): number[] {
+  const list = Array.isArray(seen) ? seen : [];
+  const known = new Set(list.filter((i) => Number.isInteger(i) && i >= 0 && i < WORDS.length));
+  return WORDS.length - known.size < 3 ? [] : list;
+}
+
+/** The words a `seen` list stands for. */
+export function seenWords(seen: number[]): string[] {
+  return seen.map((i) => WORDS[i]).filter((w): w is string => typeof w === 'string');
+}
+
 /** Points for guessing: more the sooner it is, 50 to 100. */
 export function guessPoints(remainingShare: number): number {
   return 50 + Math.round(50 * Math.max(0, Math.min(1, remainingShare)));
@@ -207,11 +237,13 @@ function startTurn(s: SketchState, meta: SketchMeta, now: number, rand: () => nu
   }
   const drawer = nextDrawer(s, meta);
   if (!drawer) return { ...s, phase: 'over' };
+  const seen = seenForPick(s.seen);
   return {
     ...s,
     phase: 'picking',
     drawer,
-    choices: pickChoices(rand, s.used),
+    choices: pickChoices(rand, [...seenWords(seen), ...s.used]),
+    seen,
     word: '',
     hint: '',
     length: 0,
@@ -228,6 +260,8 @@ function beginDrawing(s: SketchState, word: string, now: number): SketchState {
     phase: 'drawing',
     word,
     choices: [],
+    // the two passed over (the word itself joins at the reveal)
+    seen: addSeen(s.seen, s.choices.filter((c) => c !== word)),
     hint: hintFor(word),
     length: word.replace(/ /g, '').length,
     deadline: now + DRAW_MS,
@@ -247,6 +281,8 @@ function endTurn(s: SketchState, reason: string, now: number): SketchState {
     hint: word ? hintFor(word, [...word].map((_, i) => i)) : '',
     turn: s.turn + 1,
     used: word ? [...s.used, word].slice(-200) : s.used,
+    // the word, or all 3 choices when the turn ended while picking
+    seen: addSeen(s.seen, word ? [word, ...s.choices] : s.choices),
     deadline: now + REVEAL_MS,
     turnStarted: 0,
     feed: addFeed(s, { by: '', name: '', text: word ? `${reason} The word was “${word}”.` : reason, kind: 'info' })
@@ -332,7 +368,8 @@ export function makeReducer(deps: ReducerDeps = realDeps) {
       }
       case 'again': {
         if (s.phase !== 'over' || !me) return s;
-        return { ...INITIAL, players: s.players.map((p) => ({ ...p, score: 0 })) };
+        // words offered stay offered: the next game gets new ones
+        return { ...INITIAL, players: s.players.map((p) => ({ ...p, score: 0 })), seen: s.seen ?? [] };
       }
       case 'tick': {
         if (!fromAuthority(meta)) return s;

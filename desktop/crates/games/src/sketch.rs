@@ -18,6 +18,11 @@
 //!
 //! Time: the deciding app sends `tick` about twice a second (taken only from itself); deadlines are
 //! on its clock.
+//!
+//! Words: no word comes back in this room until every word has been offered. [`State::seen`] holds
+//! the [`WORDS`] index of every word offered so far, played or passed over; it outlives "Play
+//! again" and empties only once fewer than 3 words are left. The 2 passed-over choices join it when
+//! drawing starts and the played word at the reveal, so it never gives the word away.
 
 use std::collections::BTreeMap;
 
@@ -116,6 +121,10 @@ pub struct State {
     pub revealed: String,
     /// Words played this game.
     pub used: Vec<String>,
+    /// [`WORDS`] indices offered in this room so far, played or passed over (absent from older
+    /// apps' state).
+    #[serde(default)]
+    pub seen: Vec<i64>,
     /// Guesses and news.
     pub feed: Vec<FeedLine>,
 }
@@ -139,6 +148,7 @@ impl State {
             gained: BTreeMap::new(),
             revealed: String::new(),
             used: Vec::new(),
+            seen: Vec::new(),
             feed: Vec::new(),
         }
     }
@@ -186,35 +196,105 @@ impl State {
 
 // ---- words and guesses ----------------------------------------------------------------------
 
-/// Words to draw: simple things anyone can sketch in a minute (`words.ts`).
+/// Words to draw: simple things anyone can sketch in a minute (`words.ts`, the same list in the
+/// same order: `State::seen` holds indices into it).
 #[rustfmt::skip]
 pub const WORDS: &[&str] = &[
-    "apple", "banana", "mango", "grapes", "pineapple", "watermelon", "carrot", "tomato",
-    "onion", "potato", "corn", "mushroom", "pizza", "burger", "sandwich", "ice cream",
-    "cake", "cookie", "donut", "popcorn", "noodles", "samosa", "dosa", "idli", "chai",
-    "coffee", "teapot", "cup", "bottle", "spoon", "fork", "knife", "plate", "bowl", "cat",
-    "dog", "cow", "horse", "elephant", "tiger", "lion", "monkey", "giraffe", "zebra",
-    "rabbit", "mouse", "snake", "frog", "turtle", "fish", "shark", "whale", "dolphin",
-    "octopus", "crab", "bird", "parrot", "peacock", "owl", "penguin", "duck", "chicken",
-    "butterfly", "bee", "spider", "ant", "snail", "camel", "kangaroo", "sun", "moon", "star",
-    "cloud", "rain", "rainbow", "snowman", "lightning", "tree", "flower", "rose", "leaf",
-    "mountain", "volcano", "island", "beach", "river", "waterfall", "desert", "cactus",
-    "house", "castle", "tent", "bridge", "tower", "lighthouse", "school", "hospital",
+    "apple", "banana", "mango", "grapes", "pineapple", "watermelon", "carrot", "tomato", "onion",
+    "potato", "corn", "mushroom", "pizza", "burger", "sandwich", "ice cream", "cake", "cookie",
+    "donut", "popcorn", "noodles", "samosa", "dosa", "idli", "chai", "coffee", "teapot", "cup",
+    "bottle", "spoon", "fork", "knife", "plate", "bowl", "cat", "dog", "cow", "horse", "elephant",
+    "tiger", "lion", "monkey", "giraffe", "zebra", "rabbit", "mouse", "snake", "frog", "turtle",
+    "fish", "shark", "whale", "dolphin", "octopus", "crab", "bird", "parrot", "peacock", "owl",
+    "penguin", "duck", "chicken", "butterfly", "bee", "spider", "ant", "snail", "camel", "kangaroo",
+    "sun", "moon", "star", "cloud", "rain", "rainbow", "snowman", "lightning", "tree", "flower",
+    "rose", "leaf", "mountain", "volcano", "island", "beach", "river", "waterfall", "desert",
+    "cactus", "house", "castle", "tent", "bridge", "tower", "lighthouse", "school", "hospital",
     "temple", "church", "windmill", "igloo", "pyramid", "car", "bus", "train", "bicycle",
     "motorcycle", "airplane", "helicopter", "rocket", "boat", "ship", "truck", "tractor",
     "auto rickshaw", "scooter", "submarine", "ball", "bat", "cricket", "football", "kite",
-    "balloon", "guitar", "drum", "piano", "flute", "trumpet", "violin", "clock", "watch",
-    "phone", "laptop", "television", "camera", "headphones", "remote", "keyboard",
-    "computer", "robot", "lamp", "candle", "umbrella", "glasses", "hat", "crown", "shoe",
-    "sock", "shirt", "dress", "backpack", "key", "lock", "door", "window", "chair", "table",
-    "bed", "sofa", "ladder", "bucket", "broom", "scissors", "pencil", "book", "envelope",
-    "gift", "heart", "smile", "ghost", "dragon", "unicorn", "mermaid", "pirate", "wizard",
-    "ninja", "superhero", "alien", "astronaut", "king", "queen", "clown", "fire", "tornado",
-    "snowflake", "anchor", "sword", "shield", "bow", "arrow", "treasure", "map", "compass",
-    "magnet", "battery", "bulb", "toothbrush", "toilet", "bathtub", "shower", "mirror",
-    "comb", "ring", "necklace", "wallet", "coin", "money", "goal", "swing", "slide",
-    "seesaw", "tennis", "basketball", "bowling", "medal", "trophy", "selfie", "birthday",
-    "wedding", "diwali", "holi", "fireworks",
+    "balloon", "guitar", "drum", "piano", "flute", "trumpet", "violin", "clock", "watch", "phone",
+    "laptop", "television", "camera", "headphones", "remote", "keyboard", "computer", "robot",
+    "lamp", "candle", "umbrella", "glasses", "hat", "crown", "shoe", "sock", "shirt", "dress",
+    "backpack", "key", "lock", "door", "window", "chair", "table", "bed", "sofa", "ladder",
+    "bucket", "broom", "scissors", "pencil", "book", "envelope", "gift", "heart", "smile", "ghost",
+    "dragon", "unicorn", "mermaid", "pirate", "wizard", "ninja", "superhero", "alien", "astronaut",
+    "king", "queen", "clown", "fire", "tornado", "snowflake", "anchor", "sword", "shield", "bow",
+    "arrow", "treasure", "map", "compass", "magnet", "battery", "bulb", "toothbrush", "toilet",
+    "bathtub", "shower", "mirror", "comb", "ring", "necklace", "wallet", "coin", "money", "goal",
+    "swing", "slide", "seesaw", "tennis", "basketball", "bowling", "medal", "trophy", "selfie",
+    "birthday", "wedding", "diwali", "holi", "fireworks", "strawberry", "cherry", "lemon", "orange",
+    "peach", "pear", "coconut", "avocado", "broccoli", "cucumber", "pumpkin", "pepper", "chilli",
+    "garlic", "peas", "eggplant", "lettuce", "cabbage", "radish", "bread", "toast", "egg",
+    "pancake", "waffle", "cheese", "butter", "jam", "honey", "soup", "salad", "hot dog", "taco",
+    "sushi", "dumpling", "pasta", "rice", "chocolate", "candy", "lollipop", "cupcake", "pie",
+    "muffin", "pretzel", "milkshake", "juice", "biscuit", "jalebi", "laddoo", "biryani", "mug",
+    "jug", "kettle", "pan", "pot", "frying pan", "oven", "fridge", "microwave", "toaster", "whisk",
+    "rolling pin", "lunchbox", "straw", "chopsticks", "pig", "sheep", "goat", "donkey", "deer",
+    "fox", "wolf", "bear", "panda", "koala", "squirrel", "hedgehog", "hippo", "rhino", "gorilla",
+    "leopard", "cheetah", "crocodile", "lizard", "dinosaur", "jellyfish", "starfish", "seahorse",
+    "lobster", "shrimp", "squid", "seal", "walrus", "polar bear", "eagle", "crow", "pigeon",
+    "flamingo", "swan", "ostrich", "hen", "rooster", "worm", "caterpillar", "ladybug", "dragonfly",
+    "mosquito", "scorpion", "beetle", "grasshopper", "puppy", "kitten", "comet", "planet", "saturn",
+    "galaxy", "satellite", "telescope", "storm", "wind", "snow", "fog", "sunrise", "sunset",
+    "ocean", "wave", "lake", "pond", "cave", "forest", "jungle", "hill", "glacier", "iceberg",
+    "puddle", "palm tree", "pine tree", "christmas tree", "sunflower", "tulip", "lotus", "daisy",
+    "bush", "grass", "seed", "bamboo", "acorn", "hut", "skyscraper", "barn", "garage", "fence",
+    "gate", "wall", "roof", "chimney", "stairs", "elevator", "escalator", "fountain", "statue",
+    "museum", "library", "airport", "station", "park", "playground", "zoo", "farm", "market",
+    "bakery", "cinema", "stadium", "circus", "well", "bench", "mailbox", "traffic light",
+    "street lamp", "road", "tunnel", "dam", "skateboard", "roller skates", "sled", "canoe", "kayak",
+    "sailboat", "raft", "parachute", "hot air balloon", "jet", "spaceship", "ufo", "ambulance",
+    "fire truck", "police car", "taxi", "van", "jeep", "bulldozer", "crane", "forklift", "tram",
+    "cable car", "racket", "shuttlecock", "hockey stick", "golf", "skipping rope", "dumbbell",
+    "boxing glove", "helmet", "surfboard", "ski", "skates", "frisbee", "yoyo", "spinning top",
+    "marbles", "dice", "chess", "jigsaw", "teddy bear", "doll", "rattle", "sitar", "tabla",
+    "harmonica", "saxophone", "accordion", "microphone", "speaker", "radio", "harp", "xylophone",
+    "tambourine", "hammer", "screwdriver", "wrench", "saw", "nail", "screw", "drill", "axe",
+    "shovel", "rake", "hose", "wheelbarrow", "paintbrush", "rope", "chain", "hook", "tape", "glue",
+    "stapler", "paper clip", "needle", "thread", "button", "zipper", "safety pin", "pen", "eraser",
+    "ruler", "crayon", "marker", "notebook", "calendar", "clipboard", "stamp", "postcard",
+    "newspaper", "globe", "blackboard", "chalk", "calculator", "pants", "shorts", "skirt", "jacket",
+    "sweater", "scarf", "gloves", "mittens", "boots", "sandals", "slippers", "sneakers", "cap",
+    "turban", "saree", "tie", "bow tie", "belt", "pyjamas", "raincoat", "apron", "mask", "cape",
+    "bracelet", "earring", "tiara", "sunglasses", "handbag", "suitcase", "fan", "pillow", "blanket",
+    "alarm clock", "cupboard", "drawer", "shelf", "bookshelf", "rug", "curtain", "armchair",
+    "stool", "cradle", "hammock", "toothpaste", "soap", "towel", "sponge", "tissue", "tap", "sink",
+    "hairbrush", "razor", "hair dryer", "perfume", "lipstick", "tablet", "printer", "projector",
+    "plug", "wire", "torch", "lantern", "padlock", "doorbell", "keyhole", "diamond", "circle",
+    "square", "triangle", "spiral", "zigzag", "laugh", "cry", "sleepy", "sneeze", "yawn", "wink",
+    "hug", "witch", "vampire", "zombie", "mummy", "skeleton", "fairy", "elf", "genie", "giant",
+    "knight", "princess", "prince", "magic wand", "crystal ball", "doctor", "nurse", "teacher",
+    "chef", "farmer", "firefighter", "police officer", "pilot", "artist", "singer", "dancer",
+    "builder", "postman", "soldier", "sailor", "detective", "scientist", "party hat", "confetti",
+    "santa", "reindeer", "snowball", "easter egg", "diya", "rangoli", "flag", "binoculars",
+    "magnifying glass", "microscope", "test tube", "wind turbine", "solar panel", "campfire",
+    "smoke", "earthquake", "footprint", "fingerprint", "hand", "foot", "eye", "ear", "nose",
+    "mouth", "tooth", "tongue", "hair", "beard", "moustache", "brain", "bone", "skull", "muscle",
+    "treehouse", "cannon", "spear", "ice cube", "popsicle", "cotton candy", "nest", "feather",
+    "egg shell", "spider web", "honeycomb", "beehive", "paw", "tail", "horn", "wing", "claw",
+    "shell", "pearl", "coral", "seaweed", "sandcastle", "bucket and spade", "sun hat",
+    "fishing rod", "net", "bait", "campervan", "map pin", "signpost", "stop sign", "speed bump",
+    "petrol pump", "tyre", "steering wheel", "seat belt", "engine", "wheel", "gear", "spring",
+    "robot arm", "train station", "rail", "ticket", "passport", "luggage", "boarding pass",
+    "kite string", "paper plane", "origami", "letterbox", "parcel", "shopping cart",
+    "cash register", "price tag", "piggy bank", "safe", "gold bar", "coin purse", "jewel",
+    "trophy cup", "podium", "finish line", "whistle", "stopwatch", "scoreboard", "referee",
+    "goalkeeper", "wicket", "stumps", "bat and ball", "badminton", "table tennis", "volleyball",
+    "baseball", "rugby ball", "archery", "fencing", "karate", "yoga", "swimming", "diving",
+    "surfing", "snowboard", "sledding", "fishing", "camping", "hiking", "picnic", "barbecue",
+    "water bottle", "flask", "sippy cup", "baby", "pram", "crib", "bib", "grandma", "grandpa",
+    "family", "friends", "school bus", "classroom", "graduation", "diploma", "gold medal",
+    "cooking", "baking", "washing machine", "iron", "vacuum cleaner", "mop", "dustpan",
+    "laundry basket", "clothes peg", "hanger", "wardrobe", "dressing table", "ceiling fan",
+    "air conditioner", "heater", "radiator", "fireplace", "candle holder", "vase", "flower pot",
+    "watering can", "garden", "lawn mower", "scarecrow", "haystack", "river boat", "houseboat",
+    "ferry", "harbour", "dock", "pier", "lifeboat", "lifebuoy", "life jacket", "oar", "paddle",
+    "treasure map", "pirate hat", "eye patch", "parrot cage", "bird cage", "fish tank", "aquarium",
+    "dog bone", "dog house", "cat bed", "litter box", "horseshoe", "saddle", "cowboy hat", "lasso",
+    "cactus flower", "desert island", "palm leaf", "coconut shell", "mango tree", "banyan tree",
+    "peepal leaf", "tea cup", "saucer", "sugar cube", "salt shaker", "ketchup", "mustard",
+    "mayonnaise", "french fries", "onion rings", "nachos", "popcorn bucket",
 ];
 
 /// Latin letters with accents (and full-width letters, ligatures, superscripts) as plain ones:
@@ -395,6 +475,44 @@ pub fn shown_letters(word: &str, elapsed_share: f64, seed: i64) -> Vec<usize> {
     out
 }
 
+/// `seen` with `words` added (their [`WORDS`] indices, once each; unknown words left out).
+fn add_seen(seen: &[i64], words: &[String]) -> Vec<i64> {
+    let mut out = seen.to_vec();
+    for w in words {
+        if let Some(i) = WORDS.iter().position(|x| x == w) {
+            let i = i as i64;
+            if !out.contains(&i) {
+                out.push(i);
+            }
+        }
+    }
+    out
+}
+
+/// `seen` for the next pick: emptied once fewer than 3 words are left to offer.
+fn seen_for_pick(seen: &[i64]) -> Vec<i64> {
+    let mut known: Vec<i64> = seen
+        .iter()
+        .copied()
+        .filter(|&i| i >= 0 && i < WORDS.len() as i64)
+        .collect();
+    known.sort_unstable();
+    known.dedup();
+    if WORDS.len() - known.len() < 3 {
+        Vec::new()
+    } else {
+        seen.to_vec()
+    }
+}
+
+/// The words a `seen` list stands for.
+fn seen_words(seen: &[i64]) -> Vec<String> {
+    seen.iter()
+        .filter_map(|&i| usize::try_from(i).ok().and_then(|i| WORDS.get(i)))
+        .map(|w| (*w).to_owned())
+        .collect()
+}
+
 /// Three different words, not used in this game yet if possible.
 fn pick_choices(meta: &mut Meta<'_>, avoid: &[String]) -> Vec<String> {
     let pool: Vec<&str> = WORDS
@@ -517,7 +635,10 @@ fn start_turn(s: &State, meta: &mut Meta<'_>, now: i64) -> State {
     };
     o.phase = "picking".into();
     o.drawer = Some(drawer);
-    o.choices = pick_choices(meta, &s.used);
+    o.seen = seen_for_pick(&s.seen);
+    let mut avoid = seen_words(&o.seen);
+    avoid.extend(s.used.iter().cloned());
+    o.choices = pick_choices(meta, &avoid);
     o.word = String::new();
     o.hint = String::new();
     o.length = 0;
@@ -539,6 +660,9 @@ fn begin_drawing(s: &State, word: &str, now: i64) -> State {
         .unwrap_or_else(|| "Someone".into());
     o.phase = "drawing".into();
     o.word = word.to_owned();
+    // the two passed over (the word itself joins at the reveal)
+    let passed: Vec<String> = s.choices.iter().filter(|c| *c != word).cloned().collect();
+    o.seen = add_seen(&s.seen, &passed);
     o.choices = Vec::new();
     o.hint = hint_for(word, &[]);
     o.length = word.encode_utf16().filter(|&u| u != u16::from(b' ')).count() as i64;
@@ -562,6 +686,13 @@ fn end_turn(s: &State, reason: &str, now: i64) -> State {
         hint_for(&word, &all)
     };
     o.turn = s.turn + 1;
+    // the word, or all 3 choices when the turn ended while picking
+    let mut offered: Vec<String> = Vec::new();
+    if !word.is_empty() {
+        offered.push(word.clone());
+    }
+    offered.extend(s.choices.iter().cloned());
+    o.seen = add_seen(&s.seen, &offered);
     if !word.is_empty() {
         o.used.push(word.clone());
         if o.used.len() > 200 {
@@ -724,6 +855,8 @@ fn step(s: &State, a: &Value, meta: &mut Meta<'_>) -> Option<State> {
                     ..p.clone()
                 })
                 .collect();
+            // words offered stay offered: the next game gets new ones
+            o.seen.clone_from(&s.seen);
             Some(o)
         }
         Some("tick") => {
@@ -864,7 +997,85 @@ mod tests {
         assert_eq!(hint_for("ice cream", &[0]), "i__ _____");
         assert_eq!(guess_points(1.0), 100);
         assert_eq!(guess_points(-3.0), 50);
-        assert_eq!(WORDS.len(), 222);
+        assert_eq!(WORDS.len(), 817);
+    }
+
+    fn act(s: &State, by: &str, a: &Value, now: f64, rnd: &mut dyn FnMut() -> f64) -> State {
+        let present: Vec<String> = ["a", "b", "c"].iter().map(|p| (*p).to_owned()).collect();
+        let client_of = |_: &str| -> Option<String> { None };
+        let mut meta = Meta {
+            by,
+            is_host: false,
+            self_id: "a",
+            host_id: None,
+            present: &present,
+            client_of: &client_of,
+            playback_lock: false,
+            now_ms: now,
+            random: rnd,
+        };
+        step(s, a, &mut meta).unwrap_or_else(|| s.clone())
+    }
+
+    #[test]
+    fn no_word_comes_back_in_the_room_until_the_list_is_used_up() {
+        let mut seed: i64 = 1;
+        let mut rnd = move || {
+            seed = seed * 16_807 % 2_147_483_647;
+            seed as f64 / 2_147_483_647.0
+        };
+        let mut now = 1_000_000.0;
+        let mut s = State::initial();
+        for id in ["a", "b", "c"] {
+            s = act(
+                &s,
+                id,
+                &serde_json::json!({ "kind": "join", "name": id }),
+                now,
+                &mut rnd,
+            );
+        }
+        s = act(&s, "a", &serde_json::json!({ "kind": "start" }), now, &mut rnd);
+        let per_cycle = WORDS.len() / 3;
+        let mut offered: Vec<String> = Vec::new();
+        for turn in 0..=per_cycle {
+            assert_eq!(s.phase, "picking", "turn {turn}");
+            if turn < per_cycle {
+                for c in &s.choices {
+                    assert!(!offered.contains(c), "“{c}” came back at turn {turn}");
+                }
+                offered.extend(s.choices.iter().cloned());
+            } else {
+                assert!(s.seen.is_empty(), "the list is used up, so it starts over");
+            }
+            // passing over all 3 (a skip while picking) counts them as offered
+            let drawer = s.drawer.clone().unwrap();
+            s = act(&s, &drawer, &serde_json::json!({ "kind": "skip" }), now, &mut rnd);
+            now += REVEAL_MS as f64;
+            s = act(&s, "a", &serde_json::json!({ "kind": "tick" }), now, &mut rnd);
+            if s.phase == "over" {
+                // "Play again" keeps what was offered
+                s = act(&s, "b", &serde_json::json!({ "kind": "again" }), now, &mut rnd);
+                assert!(!s.seen.is_empty() || turn == per_cycle);
+                s = act(&s, "c", &serde_json::json!({ "kind": "start" }), now, &mut rnd);
+            }
+        }
+    }
+
+    #[test]
+    fn seen_holds_word_indices_and_starts_over_when_used_up() {
+        let words: Vec<String> = vec!["cat".into(), "nope".into(), "dog".into(), "cat".into()];
+        let seen = add_seen(&[], &words);
+        assert_eq!(seen_words(&seen), vec!["cat".to_owned(), "dog".to_owned()]);
+        assert_eq!(seen_for_pick(&seen), seen);
+        let almost: Vec<i64> = (0..WORDS.len() as i64 - 2).collect();
+        assert!(
+            seen_for_pick(&almost).is_empty(),
+            "2 left: a new round of the list"
+        );
+        let enough: Vec<i64> = (0..WORDS.len() as i64 - 3).chain([-1, 99_999]).collect();
+        assert_eq!(seen_for_pick(&enough), enough, "3 left (odd entries don't count)");
+        assert!(seen_words(&[-1, 99_999]).is_empty());
     }
 
     #[test]

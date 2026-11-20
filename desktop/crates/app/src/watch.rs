@@ -169,8 +169,11 @@ pub(crate) struct TorrentChoice {
     pub(crate) selected: usize,
     /// Subtitle files ticked to load with it (those matching it at first).
     pub(crate) subs: HashSet<usize>,
-    /// Folders the user folded shut.
-    pub(crate) collapsed: HashSet<String>,
+    /// Folders the user opened (every folder starts folded shut).
+    pub(crate) expanded: HashSet<String>,
+    /// The user ticked, unticked, selected or deselected subtitles: picking another file leaves
+    /// their choice alone.
+    pub(crate) subs_chosen: bool,
 }
 
 /// Swarm statistics for active torrent playback.
@@ -800,15 +803,19 @@ impl RoomView {
         cx.notify();
     }
 
-    /// Picker: this file is the one Play starts; its matching subtitles get ticked instead.
+    /// Picker: this file is the one Play starts. Its matching subtitles get ticked instead, until
+    /// the user has ticked or unticked any themselves (then their choice stays).
     pub(crate) fn select_torrent_file(&mut self, file_id: usize, cx: &mut Context<'_, Self>) {
         if let Some(choice) = &mut self.watch.torrent_choice
             && choice.selected != file_id
+            && crate::torrent::can_play_pick(&choice.files, file_id)
         {
             choice.selected = file_id;
-            choice.subs = crate::torrent::matching_subtitles(&choice.files, file_id)
-                .into_iter()
-                .collect();
+            if !choice.subs_chosen {
+                choice.subs = crate::torrent::matching_subtitles(&choice.files, file_id)
+                    .into_iter()
+                    .collect();
+            }
             cx.notify();
         }
     }
@@ -819,15 +826,29 @@ impl RoomView {
             if !choice.subs.remove(&file_id) {
                 choice.subs.insert(file_id);
             }
+            choice.subs_chosen = true;
             cx.notify();
         }
     }
 
-    /// Folds a folder of the torrent file picker shut, or opens it again.
+    /// Picker: tick every subtitle file (`on`) or none ("Select all" / "Deselect all").
+    pub(crate) fn set_all_torrent_subtitles(&mut self, on: bool, cx: &mut Context<'_, Self>) {
+        if let Some(choice) = &mut self.watch.torrent_choice {
+            choice.subs = if on {
+                crate::torrent::subtitle_ids(&choice.files).into_iter().collect()
+            } else {
+                HashSet::new()
+            };
+            choice.subs_chosen = true;
+            cx.notify();
+        }
+    }
+
+    /// Opens a folder of the torrent file picker, or folds it shut again.
     pub(crate) fn toggle_torrent_folder(&mut self, folder: String, cx: &mut Context<'_, Self>) {
         if let Some(choice) = &mut self.watch.torrent_choice {
-            if !choice.collapsed.remove(&folder) {
-                choice.collapsed.insert(folder);
+            if !choice.expanded.remove(&folder) {
+                choice.expanded.insert(folder);
             }
             cx.notify();
         }
@@ -863,6 +884,11 @@ impl RoomView {
                             v.watch.torrent_status =
                                 Some(format!("🧲 Connecting to BitTorrent swarm for “{title}”…").into());
                         }
+                        crate::torrent::TorrentProgress::GettingFiles { title, secs } => {
+                            v.watch.torrent_status = Some(
+                                format!("🧲 Getting the file list for “{title}” from peers… {secs} s").into(),
+                            );
+                        }
                         crate::torrent::TorrentProgress::ChooseFile {
                             title,
                             files,
@@ -878,7 +904,8 @@ impl RoomView {
                                 suggested,
                                 selected: suggested,
                                 subs,
-                                collapsed: HashSet::new(),
+                                expanded: HashSet::new(),
+                                subs_chosen: false,
                             });
                         }
                         crate::torrent::TorrentProgress::Subtitle { path } => {
@@ -905,14 +932,22 @@ impl RoomView {
                             peers,
                             total_peers,
                             speed_bps,
+                            index_pending,
                         } => {
                             let d_mb = downloaded as f64 / (1024.0 * 1024.0);
                             let t_mb = target as f64 / (1024.0 * 1024.0);
                             let sp_mb = speed_bps as f64 / (1024.0 * 1024.0);
                             v.watch.torrent_status = Some(
-                                format!(
-                                    "⏳ Pre-buffering: {d_mb:.1} / {t_mb:.1} MB • s:{seeds} p:{peers}({total_peers}) • {sp_mb:.1} MB/s"
-                                )
+                                if index_pending && downloaded >= target {
+                                    // an MP4 with its index at the end: that part comes first
+                                    format!(
+                                        "⏳ Fetching the video's index from the end of the file • s:{seeds} p:{peers}({total_peers}) • {sp_mb:.1} MB/s"
+                                    )
+                                } else {
+                                    format!(
+                                        "⏳ Pre-buffering: {d_mb:.1} / {t_mb:.1} MB • s:{seeds} p:{peers}({total_peers}) • {sp_mb:.1} MB/s"
+                                    )
+                                }
                                 .into(),
                             );
                             v.watch.torrent_stats = Some(TorrentStatsInfo {
@@ -1581,6 +1616,22 @@ pub(crate) fn browser(view: &mut RoomView, room: &Snapshot, cx: &mut Context<'_,
 /// Under the paste box: a multi-file torrent's file picker, live torrent status or why a link
 /// can't be played.
 pub(crate) fn link_error(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Option<AnyElement> {
+    if let Some(torrent) = torrent_box(view, cx) {
+        return Some(torrent);
+    }
+    let e = view.watch.link_error.clone()?;
+    Some(
+        div()
+            .text_size(px(14.))
+            .text_color(tokens::danger_text())
+            .child(e)
+            .into_any_element(),
+    )
+}
+
+/// A torrent being opened: its file picker, or its live status (with Cancel). Under the paste
+/// box, and in the Queue tab (a magnet pasted there while a video plays).
+pub(crate) fn torrent_box(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Option<AnyElement> {
     if let Some(choice) = &view.watch.torrent_choice {
         return Some(torrent_picker(choice, view.settings.keep_torrents, cx));
     }
@@ -1624,183 +1675,187 @@ pub(crate) fn link_error(view: &RoomView, cx: &mut Context<'_, RoomView>) -> Opt
                 .into_any_element(),
         );
     }
-    let e = view.watch.link_error.clone()?;
-    Some(
-        div()
-            .text_size(px(14.))
-            .text_color(tokens::danger_text())
-            .child(e)
-            .into_any_element(),
-    )
+    None
 }
 
-/// "Pick a file to stream": the torrent's files by folder (folders fold shut), each row with
-/// name and size, videos first and tagged. A click selects the file Play starts; subtitle files
+/// How far a tree row of the torrent picker is indented, `depth` folders deep.
+#[allow(clippy::cast_precision_loss)]
+fn tree_indent(depth: usize) -> f32 {
+    depth.min(12) as f32 * 16.
+}
+
+/// "Pick a file to stream": the torrent's files as a tree of its folders, every depth (each
+/// folder starts folded shut and opens on a click, `torrent::tree_rows`), each row with name and size, videos first and tagged. A click selects the file Play starts; subtitle files
 /// get a box to tick (those matching the selected file are ticked). The list scrolls.
 fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomView>) -> AnyElement {
-    let groups = crate::torrent::group_by_folder(&choice.files);
-    let headed = groups.iter().any(|g| !g.folder.is_empty());
+    let rows = crate::torrent::tree_rows(&choice.files, &choice.expanded);
     let mut items: Vec<AnyElement> = Vec::new();
-    for (n, g) in groups.into_iter().enumerate() {
-        let open = !choice.collapsed.contains(&g.folder);
-        let indent = if g.folder.is_empty() { 0. } else { 16. };
-        if headed && !g.folder.is_empty() {
-            let total: u64 = g.files.iter().map(|f| f.size).sum();
-            let count = g.files.len();
-            let folder = g.folder.clone();
-            items.push(
-                div()
-                    .id(("torrent-folder", n))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .w_full()
-                    .px(px(8.))
-                    .py(px(6.))
-                    .rounded(px(6.))
-                    .hover(|s| s.bg(tokens::raised()))
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(12.))
-                            .text_size(px(11.))
-                            .text_color(tokens::text_3())
-                            .child(if open { "▾" } else { "▸" }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::BOLD)
-                            .child(format!("📁 {folder}")),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(12.))
-                            .text_color(tokens::text_3())
-                            .child(format!(
-                                "{count} file{} · {}",
-                                if count == 1 { "" } else { "s" },
-                                rtc_protocol::image::format_size(total)
-                            )),
-                    )
-                    .on_click(cx.listener(move |v, _, _, cx| v.toggle_torrent_folder(folder.clone(), cx)))
-                    .into_any_element(),
-            );
-        }
-        if !open {
-            continue;
-        }
-        for f in g.files {
-            let id = f.id;
-            let suggested = id == choice.suggested;
-            let selected = id == choice.selected;
-            let ticked = f.subtitle && choice.subs.contains(&id);
-            let size = rtc_protocol::image::format_size(f.size);
-            let (tag, tag_color) = if f.playable {
-                ("VIDEO", tokens::live_text())
-            } else if f.subtitle {
-                ("SUB", tokens::warn())
-            } else {
-                ("FILE", tokens::text_3())
-            };
-            items.push(
-                div()
-                    .id(("torrent-file", id))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.))
-                    .ml(px(indent))
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(if selected {
-                        tokens::accent()
-                    } else {
-                        tokens::line()
-                    })
-                    .bg(if selected {
-                        tokens::panel()
-                    } else {
-                        tokens::raised()
-                    })
-                    .hover(|s| s.border_color(tokens::line_strong()).bg(tokens::panel()))
-                    .cursor_pointer()
-                    // subtitles: a box to tick (loaded with the video)
-                    .children(f.subtitle.then(|| {
-                        div()
-                            .flex_none()
-                            .size(px(16.))
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(if ticked {
-                                tokens::accent()
-                            } else {
-                                tokens::line_strong()
-                            })
-                            .bg(if ticked { tokens::accent() } else { tokens::bg() })
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(tokens::white())
-                            .child(if ticked { "✓" } else { "" })
-                    }))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(tag_color)
-                            .child(tag),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(13.5))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(if f.playable || ticked {
-                                tokens::text()
-                            } else {
-                                tokens::text_2()
-                            })
-                            .child(f.name),
-                    )
-                    .children(suggested.then(|| {
-                        div()
-                            .flex_none()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(tokens::accent())
-                            .child("Suggested")
-                    }))
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(12.5))
-                            .text_color(tokens::text_2())
-                            .child(size),
-                    )
-                    .on_click(cx.listener(move |v, _, _, cx| {
-                        if f.subtitle {
-                            v.toggle_torrent_subtitle(id, cx);
+    for (n, row) in rows.into_iter().enumerate() {
+        let (f, depth) = match row {
+            crate::torrent::TreeRow::Folder {
+                path,
+                name,
+                depth,
+                files: count,
+                size: total,
+                open,
+            } => {
+                items.push(
+                    div()
+                        .id(("torrent-folder", n))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .ml(px(tree_indent(depth)))
+                        .px(px(8.))
+                        .py(px(6.))
+                        .rounded(px(6.))
+                        .hover(|s| s.bg(tokens::raised()))
+                        .cursor_pointer()
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(12.))
+                                .text_size(px(11.))
+                                .text_color(tokens::text_3())
+                                .child(if open { "▾" } else { "▸" }),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(format!("📁 {name}")),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(12.))
+                                .text_color(tokens::text_3())
+                                .child(format!(
+                                    "{count} file{} · {}",
+                                    if count == 1 { "" } else { "s" },
+                                    rtc_protocol::image::format_size(total)
+                                )),
+                        )
+                        .on_click(cx.listener(move |v, _, _, cx| v.toggle_torrent_folder(path.clone(), cx)))
+                        .into_any_element(),
+                );
+                continue;
+            }
+            crate::torrent::TreeRow::File { file, depth } => (file, depth),
+        };
+        let indent = tree_indent(depth);
+        let id = f.id;
+        let suggested = id == choice.suggested;
+        let selected = id == choice.selected;
+        let ticked = f.subtitle && choice.subs.contains(&id);
+        // pictures, .txt and the like: nothing to play (unless the torrent has no video)
+        let pickable = f.subtitle || crate::torrent::can_play_pick(&choice.files, id);
+        let size = rtc_protocol::image::format_size(f.size);
+        let (tag, tag_color) = if f.playable {
+            ("VIDEO", tokens::live_text())
+        } else if f.subtitle {
+            ("SUB", tokens::warn())
+        } else {
+            ("FILE", tokens::text_3())
+        };
+        items.push(
+            div()
+                .id(("torrent-file", id))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .ml(px(indent))
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(if selected {
+                    tokens::accent()
+                } else {
+                    tokens::line()
+                })
+                .bg(if selected {
+                    tokens::panel()
+                } else {
+                    tokens::raised()
+                })
+                .when(pickable, |el| {
+                    el.hover(|s| s.border_color(tokens::line_strong()).bg(tokens::panel()))
+                        .cursor_pointer()
+                })
+                // subtitles: a box to tick (loaded with the video)
+                .children(f.subtitle.then(|| {
+                    div()
+                        .flex_none()
+                        .size(px(16.))
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(if ticked {
+                            tokens::accent()
                         } else {
-                            v.select_torrent_file(id, cx);
-                        }
-                    }))
-                    .into_any_element(),
-            );
-        }
+                            tokens::line_strong()
+                        })
+                        .bg(if ticked { tokens::accent() } else { tokens::bg() })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(tokens::white())
+                        .child(if ticked { "✓" } else { "" })
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(tag_color)
+                        .child(tag),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.5))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if f.playable || ticked {
+                            tokens::text()
+                        } else {
+                            tokens::text_2()
+                        })
+                        .child(f.name),
+                )
+                .children(suggested.then(|| {
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(tokens::accent())
+                        .child("Suggested")
+                }))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(12.5))
+                        .text_color(tokens::text_2())
+                        .child(size),
+                )
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    if f.subtitle {
+                        v.toggle_torrent_subtitle(id, cx);
+                    } else if pickable {
+                        v.select_torrent_file(id, cx);
+                    }
+                }))
+                .into_any_element(),
+        );
     }
     // what Play starts: the selected file and the ticked subtitles
     let selected_name = choice
@@ -1810,6 +1865,42 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
         .map(|f| f.name.clone())
         .unwrap_or_default();
     let sub_count = choice.subs.len();
+    let sub_total = crate::torrent::subtitle_ids(&choice.files).len();
+    let pill = |id: &'static str, label: &'static str, on: bool, cx: &mut Context<'_, RoomView>| {
+        div()
+            .id(id)
+            .flex_none()
+            .px(px(10.))
+            .py(px(3.))
+            .rounded(px(6.))
+            .bg(tokens::raised())
+            .border_1()
+            .border_color(tokens::line_strong())
+            .hover(|s| s.bg(tokens::panel()))
+            .cursor_pointer()
+            .text_size(px(12.))
+            .font_weight(FontWeight::BOLD)
+            .child(label)
+            .on_click(cx.listener(move |v, _, _, cx| v.set_all_torrent_subtitles(on, cx)))
+    };
+    // subtitles (often dozens of languages): tick all or none at once
+    let subs_bar = (sub_total > 0).then(|| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.5))
+                    .text_color(tokens::text_2())
+                    .child(format!("Subtitles: {sub_count} of {sub_total} ticked")),
+            )
+            .child(pill("torrent-subs-all", "Select all", true, cx))
+            .child(pill("torrent-subs-none", "Deselect all", false, cx))
+    });
     div()
         .flex()
         .flex_col()
@@ -1864,6 +1955,7 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                         .on_click(cx.listener(|v, _, _, cx| v.cancel_torrent(cx))),
                 ),
         )
+        .children(subs_bar)
         .child(
             // rows are `flex_none`: shrinking to fit, they never overflowed, so nothing scrolled
             div()
@@ -1871,6 +1963,9 @@ fn torrent_picker(choice: &TorrentChoice, keep: bool, cx: &mut Context<'_, RoomV
                 .flex_none()
                 .max_h(px(360.))
                 .overflow_y_scroll()
+                // gpui scrolls every scrollable box under the pointer: only the list moves, the
+                // page behind it stays put
+                .on_scroll(|_, _, cx| cx.stop_propagation())
                 .flex()
                 .flex_col()
                 .gap(px(6.))
@@ -2366,6 +2461,8 @@ pub(crate) fn queue_tab(
         .when_some(view.watch.queue_error.clone(), |el, e| {
             el.child(div().text_size(px(13.)).text_color(tokens::danger_text()).child(e))
         })
+        // a magnet pasted here: its file list and status show here too (the stage may be playing)
+        .children(torrent_box(view, cx))
         // up next
         .child(
             div()

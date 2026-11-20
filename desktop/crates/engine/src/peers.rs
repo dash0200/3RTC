@@ -31,6 +31,8 @@ const LEVELS_EVERY: Duration = Duration::from_millis(150);
 pub(crate) static LOW_POWER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// How often the voice totals go to the log (in level ticks: about every 10 s).
 const FLOW_EVERY_TICKS: u32 = 67;
+/// A poor connection is logged again at most this often while it stays poor.
+const TROUBLE_REPEAT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Something a peer connection did (from libwebrtc's threads).
 #[derive(Debug)]
@@ -657,9 +659,18 @@ impl Peers {
             } => {
                 self.current(&peer, generation).then_some(())?;
                 let state = match state {
-                    PeerConnectionState::Connected => LinkState::Connected,
-                    PeerConnectionState::Disconnected => LinkState::Disconnected,
-                    PeerConnectionState::Failed => LinkState::Failed,
+                    PeerConnectionState::Connected => {
+                        tracing::info!("connection with {peer} is up");
+                        LinkState::Connected
+                    }
+                    PeerConnectionState::Disconnected => {
+                        tracing::warn!("connection with {peer} dropped; trying to get it back");
+                        LinkState::Disconnected
+                    }
+                    PeerConnectionState::Failed => {
+                        tracing::warn!("connection with {peer} failed");
+                        LinkState::Failed
+                    }
                     _ => return None,
                 };
                 Some(Input::Link { peer, state })
@@ -874,6 +885,8 @@ async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: S
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut ticks: u32 = 0;
     let mut last_flow = stats::Flow::default();
+    // a poor connection: when it was last logged (`None`: it's fine)
+    let mut trouble_logged: Option<std::time::Instant> = None;
     let mut skip = false;
     loop {
         tick.tick().await;
@@ -891,12 +904,27 @@ async fn watch_levels(pc: PeerConnection, peer: PeerId, generation: u64, sink: S
             if ticks % FLOW_EVERY_TICKS == 1 {
                 let flow = stats::flow(&report);
                 let ms = |v: Option<f64>| v.map_or_else(|| "?".to_owned(), |v| format!("{v:.0} ms"));
+                let path = flow.path.as_deref().unwrap_or("(path unknown)");
                 tracing::info!(
-                    "audio with {peer}: {flow}; network round trip {} {}; their voice waits {} in our jitter buffer",
+                    target: "rtc_engine::periodic",
+                    "audio with {peer}: {flow}; network round trip {} {path}; their voice waits {} in our jitter buffer",
                     ms(flow.rtt_ms),
-                    flow.path.as_deref().unwrap_or("(path unknown)"),
                     ms(flow.jitter_buffer_ms_since(&last_flow)),
                 );
+                // the log file gets the poor stretches only, not the numbers every 10 s
+                let trouble = flow.trouble(&last_flow);
+                if trouble.is_empty() {
+                    if trouble_logged.take().is_some() {
+                        tracing::info!(target: "rtc_engine::quality", "connection with {peer} is fine again");
+                    }
+                } else if trouble_logged.is_none_or(|t| t.elapsed() >= TROUBLE_REPEAT) {
+                    trouble_logged = Some(std::time::Instant::now());
+                    tracing::warn!(
+                        target: "rtc_engine::quality",
+                        "poor connection with {peer}: {}; {path}",
+                        trouble.join(", ")
+                    );
+                }
                 last_flow = flow;
             }
             sink(PeerEvent::Levels {

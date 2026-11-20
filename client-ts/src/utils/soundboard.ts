@@ -83,6 +83,152 @@ export const SOUNDBOARD_CLIPS: SoundboardClip[] = [
     category: 'Discord SFX',
     url: '/sounds/discord_ping.mp3',
     description: 'Official Discord message ping notification'
+  },
+
+  // --- Synthesised in 3RTC (desktop/packaging/make-sounds.py, CC0); the desktop app has the same ---
+  {
+    id: 'boing',
+    name: 'Boing',
+    emoji: '🦘',
+    color: '#f97316',
+    category: 'Synth',
+    url: '/sounds/boing.mp3',
+    description: 'A springy boing'
+  },
+  {
+    id: 'laser',
+    name: 'Laser',
+    emoji: '🛸',
+    color: '#22d3ee',
+    category: 'Synth',
+    url: '/sounds/laser.mp3',
+    description: 'Pew! A sci-fi laser zap'
+  },
+  {
+    id: 'tada',
+    name: 'Ta-da',
+    emoji: '🎉',
+    color: '#f43f5e',
+    category: 'Synth',
+    url: '/sounds/tada.mp3',
+    description: 'Ta-da! A little fanfare'
+  },
+  {
+    id: 'ding',
+    name: 'Ding',
+    emoji: '🛎️',
+    color: '#facc15',
+    category: 'Synth',
+    url: '/sounds/ding.mp3',
+    description: 'A service bell ding'
+  },
+  {
+    id: 'whoosh',
+    name: 'Whoosh',
+    emoji: '💨',
+    color: '#94a3b8',
+    category: 'Synth',
+    url: '/sounds/whoosh.mp3',
+    description: 'Something flies past'
+  },
+  {
+    id: 'bubble',
+    name: 'Bubble Pop',
+    emoji: '🫧',
+    color: '#38bdf8',
+    category: 'Synth',
+    url: '/sounds/bubble.mp3',
+    description: 'Pop, pop, pop'
+  },
+  {
+    id: 'coin',
+    name: 'Coin',
+    emoji: '🪙',
+    color: '#eab308',
+    category: 'Synth',
+    url: '/sounds/coin.mp3',
+    description: 'A coin picked up'
+  },
+  {
+    id: 'levelup',
+    name: 'Level Up',
+    emoji: '⭐',
+    color: '#a855f7',
+    category: 'Synth',
+    url: '/sounds/levelup.mp3',
+    description: 'A rising level-up arpeggio'
+  },
+  {
+    id: 'buzzer',
+    name: 'Wrong',
+    emoji: '❌',
+    color: '#dc2626',
+    category: 'Synth',
+    url: '/sounds/buzzer.mp3',
+    description: 'Wrong answer buzzer'
+  },
+  {
+    id: 'correct',
+    name: 'Correct',
+    emoji: '✅',
+    color: '#22c55e',
+    category: 'Synth',
+    url: '/sounds/correct.mp3',
+    description: 'Right answer chime'
+  },
+  {
+    id: 'slidewhistle',
+    name: 'Slide Whistle',
+    emoji: '🎶',
+    color: '#ec4899',
+    category: 'Synth',
+    url: '/sounds/slidewhistle.mp3',
+    description: 'Wheee, up and down'
+  },
+  {
+    id: 'heartbeat',
+    name: 'Heartbeat',
+    emoji: '💓',
+    color: '#e11d48',
+    category: 'Synth',
+    url: '/sounds/heartbeat.mp3',
+    description: 'Lub-dub: the suspense'
+  },
+  {
+    id: 'siren',
+    name: 'Siren',
+    emoji: '🚨',
+    color: '#ef4444',
+    category: 'Synth',
+    url: '/sounds/siren.mp3',
+    description: 'Nee-naw alarm'
+  },
+  {
+    id: 'ticktock',
+    name: 'Tick Tock',
+    emoji: '⏰',
+    color: '#64748b',
+    category: 'Synth',
+    url: '/sounds/ticktock.mp3',
+    description: 'The clock is ticking'
+  },
+  {
+    id: 'doorbell',
+    name: 'Doorbell',
+    emoji: '🚪',
+    color: '#14b8a6',
+    category: 'Synth',
+    url: '/sounds/doorbell.mp3',
+    description: 'Ding-dong, who's there?'
+  },
+  {
+    id: 'thunder',
+    name: 'Thunder',
+    emoji: '⛈️',
+    color: '#6366f1',
+    category: 'Synth',
+    url: '/sounds/thunder.mp3',
+    description: 'A dramatic thunderclap'
   }
 ];
 
@@ -94,6 +240,22 @@ export const SOUND_URL_MAP: Record<string, string> = {
   sadhorn: '/sounds/sadhorn.mp3',
   badumtss: '/sounds/badumtss.mp3',
   discord_ping: '/sounds/discord_ping.mp3',
+  boing: '/sounds/boing.mp3',
+  laser: '/sounds/laser.mp3',
+  tada: '/sounds/tada.mp3',
+  ding: '/sounds/ding.mp3',
+  whoosh: '/sounds/whoosh.mp3',
+  bubble: '/sounds/bubble.mp3',
+  coin: '/sounds/coin.mp3',
+  levelup: '/sounds/levelup.mp3',
+  buzzer: '/sounds/buzzer.mp3',
+  correct: '/sounds/correct.mp3',
+  slidewhistle: '/sounds/slidewhistle.mp3',
+  heartbeat: '/sounds/heartbeat.mp3',
+  siren: '/sounds/siren.mp3',
+  ticktock: '/sounds/ticktock.mp3',
+  doorbell: '/sounds/doorbell.mp3',
+  thunder: '/sounds/thunder.mp3',
   // Backwards compatibility aliases
   wompwomp: '/sounds/sadhorn.mp3',
   applause: '/sounds/golfclap.mp3',

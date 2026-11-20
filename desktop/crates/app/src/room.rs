@@ -817,14 +817,14 @@ fn horizontal_tray(
             let muted = view.settings.soundboard_muted;
             let clips = crate::sounds::CLIPS.iter().enumerate().map(|(i, c)| {
                 let playing = view.fun.banner.as_ref().is_some_and(|(s, _)| s.sound_id == c.id);
+                let tip = SharedString::from(c.name);
                 div()
                     .id(SharedString::from(format!("tray-sfx-{}", c.id)))
-                    .h(px(44.))
-                    .px(px(12.))
+                    .size(px(44.))
                     .flex()
                     .flex_none()
                     .items_center()
-                    .gap(px(8.))
+                    .justify_center()
                     .rounded(px(12.))
                     .border_1()
                     .border_color(if playing {
@@ -843,15 +843,18 @@ fn horizontal_tray(
                     .cursor_pointer()
                     .hover(|s| s.bg(tokens::white().opacity(0.1)))
                     .on_click(cx.listener(move |v, _, _, _| v.play_clip(i)))
-                    .child(div().text_size(px(18.)).child(c.emoji))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(tokens::text())
-                            .child(c.name),
-                    )
+                    // icons only; the name is the tooltip
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                    .child(div().text_size(px(22.)).child(c.emoji))
             });
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let sfx_pct = if muted {
+                0
+            } else {
+                (view.settings.soundboard_volume * 100.0).round() as u32
+            };
             div()
                 .flex_1()
                 .min_w_0()
@@ -908,8 +911,8 @@ fn horizontal_tray(
                                 .flex()
                                 .flex_none()
                                 .items_center()
-                                .gap(px(2.))
-                                .px(px(6.))
+                                .gap(px(6.))
+                                .px(px(8.))
                                 .h(px(42.))
                                 .rounded(px(11.))
                                 .bg(tokens::surface())
@@ -921,33 +924,24 @@ fn horizontal_tray(
                                         .text_size(px(12.))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(tokens::text_2())
-                                        .child("Vol:"),
+                                        .child("Vol"),
                                 )
-                                .children([0.25f32, 0.5, 0.75, 1.0].map(|lvl| {
-                                    let active =
-                                        !muted && (view.settings.soundboard_volume - lvl).abs() < 0.13;
-                                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                                    let pct = (lvl * 100.0).round() as u32;
+                                .when_some(view.sfx_slider.as_ref(), |el, state| {
+                                    el.child(
+                                        div().w(px(120.)).child(
+                                            Slider::new(state).accessibility_label("Soundboard volume"),
+                                        ),
+                                    )
+                                })
+                                .child(
                                     div()
-                                        .id(SharedString::from(format!("tray-sfx-vol-{pct}")))
-                                        .px(px(6.))
-                                        .py(px(4.))
-                                        .rounded(px(6.))
-                                        .cursor_pointer()
-                                        .when(active, |s| s.bg(tokens::white().opacity(0.18)))
+                                        .w(px(40.))
+                                        .text_right()
                                         .text_size(px(12.))
-                                        .font_weight(if active {
-                                            FontWeight::BOLD
-                                        } else {
-                                            FontWeight::NORMAL
-                                        })
-                                        .text_color(if active { tokens::text() } else { tokens::text_2() })
-                                        .hover(|s| s.bg(tokens::white().opacity(0.1)))
-                                        .on_click(cx.listener(move |v, _, _, cx| {
-                                            v.set_soundboard_volume(lvl, cx);
-                                        }))
-                                        .child(format!("{pct}%"))
-                                })),
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(tokens::text_2())
+                                        .child(format!("{sfx_pct}%")),
+                                ),
                         )
                         .child(
                             div()
@@ -1141,33 +1135,6 @@ fn horizontal_tray(
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let pct = (volume * 100.0).round() as u32;
             let (mute_who, reset_who) = (peer.clone(), peer.clone());
-            let preset_btn = |label: &'static str, val: f32, cx: &mut Context<'_, RoomView>| {
-                let on = !muted && (volume - val).abs() < 0.04;
-                let who = peer.clone();
-                div()
-                    .id(label)
-                    .h(px(38.))
-                    .px(px(10.))
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(9.))
-                    .border_1()
-                    .border_color(if on { tokens::focus() } else { tokens::line() })
-                    .bg(if on {
-                        alpha(tokens::focus(), 0.15)
-                    } else {
-                        tokens::surface()
-                    })
-                    .text_color(if on { tokens::focus() } else { tokens::text_2() })
-                    .text_size(px(12.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(tokens::line_strong()))
-                    .on_click(cx.listener(move |v, _, _, cx| v.set_peer_volume(&who, val, false, cx)))
-                    .child(label)
-            };
             div()
                 .flex_1()
                 .min_w_0()
@@ -1208,16 +1175,24 @@ fn horizontal_tray(
                                         }),
                                 ),
                         )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.))
-                                .child(preset_btn("50%", 0.5, cx))
-                                .child(preset_btn("100%", 1.0, cx))
-                                .child(preset_btn("150%", 1.5, cx))
-                                .child(preset_btn("200%", 2.0, cx)),
-                        )
+                        .when_some(view.volume_slider.as_ref(), |el, state| {
+                            // continuous, 0–200%
+                            el.child(
+                                div()
+                                    .w(px(240.))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .text_size(px(11.))
+                                    .text_color(tokens::text_2())
+                                    .child("0%")
+                                    .child(div().flex_1().child(
+                                        Slider::new(state).accessibility_label(format!("Volume for {name}")),
+                                    ))
+                                    .child("200%"),
+                            )
+                        })
                         .child(
                             tray_pill(
                                 SharedString::from("tray-vol-mute"),
@@ -1929,7 +1904,7 @@ fn devices_pop(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElem
 }
 
 /// A person's volume for you (`PeerAudioPopover` in `PeerVoiceRoster.tsx`): the slider
-/// (0–200%), presets, mute for me and reset.
+/// (0–200%, continuous), mute for me and reset.
 fn volume_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) -> AnyElement {
     let Some((peer, m)) = view
         .volume_for
@@ -1967,31 +1942,6 @@ fn volume_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) 
         tokens::warn()
     } else {
         tokens::focus()
-    };
-    let preset = |label: &'static str, val: f32| {
-        let on = !muted && (volume - val).abs() < 0.04;
-        let who = peer.clone();
-        div()
-            .id(label)
-            .flex_1()
-            .py(px(6.))
-            .flex()
-            .justify_center()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(if on { tokens::focus() } else { tokens::line() })
-            .bg(if on {
-                alpha(tokens::focus(), 0.12)
-            } else {
-                tokens::bg()
-            })
-            .text_color(if on { tokens::focus() } else { tokens::text_2() })
-            .text_size(px(12.))
-            .font_weight(FontWeight::SEMIBOLD)
-            .cursor_pointer()
-            .hover(|s| s.border_color(tokens::line_strong()))
-            .on_click(cx.listener(move |v, _, _, cx| v.set_peer_volume(&who, val, false, cx)))
-            .child(label)
     };
     let (mute_who, reset_who) = (peer.clone(), peer.clone());
     deferred(
@@ -2056,15 +2006,6 @@ fn volume_pop(view: &RoomView, room: &Snapshot, cx: &mut Context<'_, RoomView>) 
                                 .child("0%")
                                 .child("100%")
                                 .child("200%"),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(6.))
-                                .child(preset("50%", 0.5))
-                                .child(preset("100%", 1.0))
-                                .child(preset("150%", 1.5))
-                                .child(preset("200%", 2.0)),
                         )
                         .child(
                             div()
@@ -3277,6 +3218,13 @@ fn logs_tab(view: &RoomView, cx: &mut Context<'_, RoomView>) -> impl IntoElement
                         .flex_1()
                         .child(format!("{} events recorded", view.logs.len())),
                 )
+                .when_some(crate::logfile::to_show(), |el, path| {
+                    // the saved log (errors, warnings, connection trouble), to send with a report
+                    el.child(
+                        Button::new("open-log-file", "Open log file")
+                            .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&path))),
+                    )
+                })
                 .when_some(connection_log, |el, log| {
                     el.child(
                         Button::new(

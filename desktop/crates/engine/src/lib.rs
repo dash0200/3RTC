@@ -11,6 +11,7 @@ mod camera;
 mod control;
 mod files;
 mod images;
+mod log_kind;
 mod peers;
 // QUIC file transfer between desktop apps (ADR 0009): the transport, and the chat's use of it
 mod outgoing;
@@ -888,6 +889,7 @@ impl Engine {
             })
             .collect();
         tracing::info!(
+            target: "rtc_engine::periodic",
             "audio: mixing {}; microphone after cleaning: level {:.3}",
             people.join(", "),
             self.voice.mic_level()
@@ -1455,7 +1457,12 @@ impl Engine {
                     let _ = self.updates.send(Update::Chat(line));
                 }
                 Effect::Ui(UiEvent::Log(text)) => {
-                    tracing::info!("{text}");
+                    // the log file keeps connection events, not what people did with the player
+                    if log_kind::is_activity(&text) {
+                        tracing::info!(target: "rtc_engine::activity", "{text}");
+                    } else {
+                        tracing::info!(target: "rtc_engine::room", "{text}");
+                    }
                     let _ = self.updates.send(Update::Log(text));
                 }
                 Effect::Ui(UiEvent::Notice(n)) => {

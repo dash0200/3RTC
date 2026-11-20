@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+use gpui_kit::component::slider::Slider;
 use gpui_kit::{
     AnyElement, Context, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, deferred, div, prelude::FluentBuilder as _,
@@ -125,16 +126,10 @@ impl RoomView {
         });
     }
 
-    /// Plays a soundboard clip for everyone.
+    /// Plays a soundboard clip for everyone. Muted, it's still sent (and the banner shows) but
+    /// nothing plays here, as on the web; clicking a clip no longer unmutes.
     pub(crate) fn play_clip(&mut self, index: usize) {
         let Some(c) = CLIPS.get(index) else { return };
-        if self.settings.soundboard_muted {
-            self.settings.soundboard_muted = false;
-            if self.settings.soundboard_volume <= 0.05 {
-                self.settings.soundboard_volume = 0.75;
-            }
-            self.settings.save();
-        }
         self.command(rtc_core::Command::PlaySound {
             sound_id: c.id.to_owned(),
             sound_name: c.name.to_owned(),
@@ -209,14 +204,10 @@ impl RoomView {
         self.animate(cx);
     }
 
-    /// A clip to play (ours or someone's): play it at the soundboard volume and say who.
+    /// A clip to play (ours or someone's): play it at the soundboard volume and say who. Muted
+    /// (or at 0%) nothing plays, ours or theirs; the banner still shows.
     pub(crate) fn on_sound(&mut self, s: Sound, cx: &mut Context<'_, Self>) {
-        let is_local = s.from.is_none();
-        let volume = if self.settings.soundboard_muted && !is_local {
-            0.0
-        } else {
-            self.settings.soundboard_volume.max(0.1)
-        };
+        let volume = sounds::clip_gain(self.settings.soundboard_muted, self.settings.soundboard_volume);
         if volume > 0.0
             && let Some(clip) = sounds::clip(&s.sound_id)
         {
@@ -288,7 +279,8 @@ impl RoomView {
     }
 
     pub(crate) fn set_soundboard_volume(&mut self, volume: f32, cx: &mut Context<'_, Self>) {
-        self.settings.soundboard_volume = ((volume * 20.0).round() / 20.0).clamp(0.0, 1.0);
+        // continuous (the slider), kept to whole percents
+        self.settings.soundboard_volume = ((volume * 100.0).round() / 100.0).clamp(0.0, 1.0);
         if self.settings.soundboard_muted && volume > 0.0 {
             self.settings.soundboard_muted = false;
         }
@@ -302,6 +294,10 @@ impl RoomView {
             self.settings.soundboard_volume = 0.75;
         }
         self.settings.save();
+        if self.pop == Some(crate::view::Pop::Sounds) {
+            // the slider shows 0 while muted
+            self.make_sfx_slider(cx);
+        }
         cx.notify();
     }
 
@@ -893,7 +889,6 @@ pub(crate) fn sounds_pop(view: &RoomView, cx: &mut Context<'_, RoomView>) -> imp
     };
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let pct = (volume * 100.0).round() as u32;
-    let vol_buttons = [0.0f32, 0.25, 0.5, 0.75, 1.0];
     deferred(
         div().absolute().bottom(px(56.)).left(px(-150.)).occlude().child(
             div()
@@ -1019,28 +1014,12 @@ pub(crate) fn sounds_pop(view: &RoomView, cx: &mut Context<'_, RoomView>) -> imp
                                 )),
                         )
                         .child(
-                            div()
-                                .flex_1()
-                                .flex()
-                                .gap(px(4.))
-                                .children(vol_buttons.iter().map(|v| {
-                                    let v = *v;
-                                    let on = !muted && volume + 0.001 >= v && v > 0.0;
-                                    div()
-                                        .id(SharedString::from(format!("sfx-vol-{v}")))
-                                        .flex_1()
-                                        .h(px(8.))
-                                        .rounded_full()
-                                        .bg(if on {
-                                            tokens::sfx_lilac()
-                                        } else {
-                                            tokens::white().opacity(0.1)
-                                        })
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            view.set_soundboard_volume(v, cx);
-                                        }))
-                                })),
+                            div().flex_1().flex().gap(px(4.)).when_some(
+                                view.sfx_slider.as_ref(),
+                                |el, state| {
+                                    el.child(Slider::new(state).accessibility_label("Soundboard volume"))
+                                },
+                            ),
                         )
                         .child(
                             div()

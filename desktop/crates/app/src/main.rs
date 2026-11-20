@@ -21,11 +21,13 @@ mod home;
 mod lastcard;
 mod links;
 mod local_video;
+mod logfile;
 mod ludo;
 mod net;
 mod quick_picks;
 mod room;
 mod screen;
+mod selectable;
 mod settings;
 mod single;
 mod sketch;
@@ -44,11 +46,26 @@ use crate::settings::Settings;
 use crate::view::RoomView;
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    {
+        use tracing_subscriber::layer::{Layer as _, SubscriberExt as _};
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        // the console (dev builds have one; `RUST_LOG` changes what it shows)
+        let console = tracing_subscriber::fmt::layer().with_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,rtc=info".into()),
-        )
-        .init();
+        );
+        // the log file beside the exe: only what helps afterwards (`logfile`)
+        let file = logfile::open().map(|writer| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false)
+                .without_time()
+                .with_filter(
+                    tracing_subscriber::filter::filter_fn(|m| logfile::wanted(m.level(), m.target()))
+                        .with_max_level_hint(tracing::level_filters::LevelFilter::INFO),
+                )
+        });
+        tracing_subscriber::registry().with(console).with(file).init();
+    }
 
     // Two worker threads are plenty: the media work happens on libwebrtc's own threads.
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -73,6 +90,7 @@ fn main() -> anyhow::Result<()> {
         single::Instance::Forwarded => return Ok(()),
         single::Instance::First(rx) => Some(rx),
     };
+    logfile::session_start(crate::view::BUILD);
     // started with Windows: wait quietly in the tray
     let start_hidden = std::env::args().any(|a| a == "--tray");
 
@@ -113,11 +131,18 @@ fn main() -> anyhow::Result<()> {
                 cx.quit();
             }
             cx.on_window_closed(|cx, _| cx.quit()).detach();
+            // every way of quitting (window, tray, update) passes here
+            cx.on_app_quit(|_| {
+                logfile::session_end();
+                async {}
+            })
+            .detach();
             if !start_hidden {
                 cx.activate(true);
             }
         });
     drop(runtime);
+    logfile::session_end();
     Ok(())
 }
 
