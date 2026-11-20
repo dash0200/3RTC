@@ -45,6 +45,18 @@ impl LivePicture {
         image
     }
 
+    /// Lets go of everything (the game closed): out of gpui's cache and off the GPU. Call it
+    /// outside drawing (all windows are reachable then).
+    pub(crate) fn free(&self, cx: &mut App) {
+        if let Some((image, render)) = self.shown.borrow_mut().take() {
+            image.remove_asset(cx);
+            cx.drop_image(render, None);
+        }
+        if let Some((_, image)) = self.source.borrow_mut().take() {
+            image.remove_asset(cx);
+        }
+    }
+
     /// Draws `image` over its whole box (give the box its size).
     pub(crate) fn paint(&self, image: Arc<Image>) -> impl IntoElement {
         let shown = Rc::clone(&self.shown);

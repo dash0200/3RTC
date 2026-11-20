@@ -68,6 +68,13 @@ pub(crate) struct LudoUi {
     pub(crate) area: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
+impl LudoUi {
+    /// The game closed: its board picture leaves gpui's cache and the GPU.
+    pub(crate) fn free_pictures(&self, cx: &mut gpui_kit::App) {
+        self.picture.free(cx);
+    }
+}
+
 /// A move being shown square by square.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Hop {

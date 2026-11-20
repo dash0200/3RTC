@@ -386,6 +386,15 @@ one per move through `img()`.
   (`logfile.rs` `watch_memory`, `rtc_platform_win::memory_mb`), so a next leak shows what was
   going on while it grew.
 - Checked and fine: camera tiles and screen share frames already call `drop_image`.
+- Closing a game frees its pictures (memory came back down only when the board was opened
+  again): `free_closed_game_pictures` after every room update (`activity.rs`) frees the
+  whiteboard / Sketch pictures (`free_board_pictures`, also a finished turn's `retired` ones,
+  which were only freed at a next paint) and Ludo's and Tycoon's (`LivePicture::free`).
+- Reactions: memory rose with every burst and stayed. gpui caches each glyph at each size it's
+  drawn at and never lets go; the floating emoji, combo counters and live badge animated their
+  font size smoothly, so each frame cached a new emoji picture. Animated text is now whole pixels
+  (`fun::glyph_px`): a few dozen sizes per emoji, cached once. Last Card's card text and the
+  home screen's window-scaled text are rounded too (they changed size on every resize step).
 - All games checked: Chess and Last Card draw fixed asset SVGs (cached once); Tycoon's tokens are
   cached per token and colour. Ludo's ★ had no font (usvg warned and fell back on every redraw):
   `Segoe UI Symbol` now. The screen sound's every-5-s line is `rtc_engine::periodic` (not in the

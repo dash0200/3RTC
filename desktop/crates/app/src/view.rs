@@ -567,6 +567,7 @@ impl RoomView {
                 self.tycoon_after(cx);
                 self.sketch_after(cx);
                 self.whiteboard_after(cx);
+                self.free_closed_game_pictures(cx);
                 if entered {
                     self.tab = if alone { Tab::Invite } else { Tab::Chat };
                     if let Some(id) = self.in_room() {

@@ -374,6 +374,15 @@ impl RoomView {
 
 /// Where a float is at `t` (0–1 of its life): sideways offset, height (share of its rise),
 /// scale, opacity (the web app's keyframes).
+///
+/// Text at a size it's animated through: whole pixels only. gpui caches each glyph at each size
+/// it's drawn at and never lets them go, so a size changing smoothly every frame cached a new
+/// picture of the emoji each frame: memory climbed with every burst of reactions and stayed.
+/// Whole pixels keep it to a few dozen sizes per emoji, cached once and reused.
+pub(crate) fn glyph_px(size: f32) -> gpui_kit::Pixels {
+    px(size.round().max(1.0))
+}
+
 fn float_at(f: &Float, t: f32) -> (f32, f32, f32, f32) {
     if f.calm {
         // up 30 px to 60 px; in by 20 %, out after 70 %
@@ -446,7 +455,7 @@ pub(crate) fn layer(view: &RoomView, beside: bool) -> impl IntoElement {
                 .opacity(opacity)
                 .child(
                     div()
-                        .text_size(px(32. * scale))
+                        .text_size(glyph_px(32. * scale))
                         .line_height(relative(1.))
                         .child(f.emoji.clone()),
                 )
@@ -503,10 +512,10 @@ pub(crate) fn layer(view: &RoomView, beside: bool) -> impl IntoElement {
                         .border_1()
                         .border_color(tokens::white().opacity(0.2))
                         .shadow(tokens::drop_shadow(4., 14., 0.4))
-                        .child(div().text_size(px(size * 1.15)).child(c.emoji.clone()))
+                        .child(div().text_size(glyph_px(size * 1.15)).child(c.emoji.clone()))
                         .child(
                             div()
-                                .text_size(px(size))
+                                .text_size(glyph_px(size))
                                 .font_weight(FontWeight::EXTRA_BOLD)
                                 .text_color(tokens::combo_gold())
                                 .child(format!("×{}", c.count)),
@@ -733,7 +742,7 @@ pub(crate) fn dock_reactions(view: &RoomView, _cx: &mut Context<'_, RoomView>) -
             .opacity(opacity)
             .child(
                 div()
-                    .text_size(px(22. * pop))
+                    .text_size(glyph_px(22. * pop))
                     .line_height(relative(1.))
                     .child(f.emoji.clone()),
             )
@@ -1309,6 +1318,14 @@ mod tests {
     use std::time::Instant;
 
     use super::{Float, float_at, milestone};
+
+    #[test]
+    fn animated_text_uses_a_few_sizes_not_one_per_frame() {
+        let mut sizes: Vec<f32> = (0..=1000).map(|i| f32::from(super::glyph_px(32.0 * (0.2 + 1.66 * i as f32 / 1000.0)))).collect();
+        sizes.dedup();
+        assert!(sizes.len() <= 60, "{} sizes", sizes.len());
+        assert!(sizes.iter().all(|s| s.fract().abs() < f32::EPSILON));
+    }
 
     #[test]
     fn a_float_pops_in_rises_and_fades() {

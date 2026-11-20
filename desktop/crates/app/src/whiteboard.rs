@@ -395,6 +395,25 @@ impl RoomView {
         self.command(rtc_core::Command::Board { live, body });
     }
 
+    /// The board closed (no whiteboard or Sketch open): its pictures leave gpui's cache and the
+    /// GPU (they stayed until it was opened again: memory didn't come back down on closing).
+    /// Runs outside drawing, so every window is reachable.
+    pub(crate) fn free_board_pictures(&mut self, cx: &mut gpui_kit::App) {
+        let b = &self.activity.board;
+        let mut gone: Vec<Drawn> = b.retired.borrow_mut().drain(..).collect();
+        gone.extend(b.drawn.borrow_mut().take());
+        for d in gone {
+            d.image.remove_asset(cx);
+            cx.drop_image(d.render, None);
+        }
+        if let Some((_, image)) = b.picture.borrow_mut().take() {
+            image.remove_asset(cx);
+        }
+        for (_, icon) in b.icons.borrow_mut().drain() {
+            icon.remove_asset(cx);
+        }
+    }
+
     /// After every room update: the open epoch's chunks are open, an old epoch's dropped.
     pub(crate) fn whiteboard_after(&mut self, cx: &mut Context<'_, Self>) {
         let base = self.wb_base();
