@@ -244,7 +244,9 @@ describe('sketch: a game', () => {
       // passing over all 3 (a skip while picking) counts them as offered
       g.act(g.s.drawer!, { kind: 'skip' });
       g.advance(REVEAL_MS);
-      if (g.s.phase === 'over') {
+      // a fresh read: the assert above narrowed `g.s.phase` to 'picking' for TypeScript
+      const after: SketchState = g.s;
+      if (after.phase === 'over') {
         g.act('b', { kind: 'again' }); // "Play again" keeps what was offered
         g.act('c', { kind: 'start' });
       }
