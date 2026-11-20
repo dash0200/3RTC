@@ -53,10 +53,161 @@ struct Open {
     playing: bool,
 }
 
+/// The web view player, and what tells our echo canceller what it plays.
+pub(crate) struct WebPlayer {
+    player: rtc_webview::Player,
+    /// Stops when the player goes.
+    _echo: WebEcho,
+}
+
+impl std::ops::Deref for WebPlayer {
+    type Target = rtc_webview::Player;
+
+    fn deref(&self) -> &Self::Target {
+        &self.player
+    }
+}
+
+/// The web player (a WebView2: its own processes, playing straight to Windows) isn't part of our
+/// audio path, so the echo canceller didn't know its sound: with speakers, the microphone sent
+/// the video to everyone as our voice. Its processes' sound is captured (process loopback) and
+/// given to the echo canceller only. Dropping this stops it.
+struct WebEcho(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for WebEcho {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// How often the web player's processes are looked for (they start after it opens).
+const WEB_ECHO_POLL: Duration = Duration::from_secs(2);
+
+/// Captures the WebView2 processes this app started into `feed` (added to the echo canceller's
+/// reference) until the returned guard is dropped. Without our own audio path, nothing.
+fn web_echo(feed: Option<rtc_engine::EchoFeed>) -> WebEcho {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(feed) = feed {
+        let push = move |s: &[f32]| feed.push(s);
+        let stopped = Arc::clone(&stop);
+        let started = std::thread::Builder::new()
+            .name("web-echo".to_owned())
+            .spawn(move || {
+                let me = std::process::id();
+                let mut tried: Vec<u32> = Vec::new();
+                let mut captures: Vec<rtc_platform_win::AppSound> = Vec::new();
+                while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                    for pid in rtc_platform_win::child_processes(me, "msedgewebview2.exe") {
+                        if tried.contains(&pid) {
+                            continue;
+                        }
+                        tried.push(pid);
+                        let push = push.clone();
+                        match rtc_platform_win::AppSound::start(pid, move |s| push(s)) {
+                            Ok(c) => {
+                                tracing::info!("video player sound (process {pid}) goes to the echo canceller");
+                                captures.push(c);
+                            }
+                            Err(e) => tracing::warn!(
+                                "couldn't hear the video player's sound for the echo canceller ({e}): with speakers, \
+                                 others may hear the video through your microphone"
+                            ),
+                        }
+                    }
+                    std::thread::sleep(WEB_ECHO_POLL);
+                }
+                drop(captures);
+            });
+        if let Err(e) = started {
+            tracing::warn!("couldn't start the video player's echo capture: {e}");
+        }
+    }
+    WebEcho(stop)
+}
+
+/// mpv (a file from this computer, a torrent, a room member's file), and what tells our echo
+/// canceller what it plays.
+pub(crate) struct MpvPlayer {
+    pub(crate) player: rtc_platform_win::VideoPlayer,
+    /// Stops when the player goes.
+    _echo: MpvEcho,
+}
+
+impl std::ops::Deref for MpvPlayer {
+    type Target = rtc_platform_win::VideoPlayer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.player
+    }
+}
+
+impl MpvPlayer {
+    pub(crate) fn new(player: rtc_platform_win::VideoPlayer, feed: Option<rtc_engine::EchoFeed>) -> Self {
+        Self {
+            player,
+            _echo: mpv_echo(feed),
+        }
+    }
+}
+
+/// mpv plays inside our own process, so Windows can't capture its sound apart from the call's.
+/// While it's open, everything this process (and its children) plays is captured and stands in
+/// for the mixer's copy as the echo canceller's reference (`EchoFeed::set_replace`), so the
+/// video's sound coming back into the microphone is removed too. Dropping this goes back to the
+/// mixer's copy.
+struct MpvEcho {
+    feed: Option<rtc_engine::EchoFeed>,
+    _capture: Option<rtc_platform_win::AppSound>,
+}
+
+/// mpv players whose echo capture is running (a new one can open before the old one goes).
+static MPV_ECHOES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Drop for MpvEcho {
+    fn drop(&mut self) {
+        if let Some(f) = &self.feed
+            && MPV_ECHOES.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) == 1
+        {
+            f.set_replace(false);
+        }
+    }
+}
+
+fn mpv_echo(feed: Option<rtc_engine::EchoFeed>) -> MpvEcho {
+    let Some(feed) = feed else {
+        return MpvEcho {
+            feed: None,
+            _capture: None,
+        };
+    };
+    let push = feed.clone();
+    match rtc_platform_win::AppSound::start(std::process::id(), move |s| push.push(s)) {
+        Ok(capture) => {
+            MPV_ECHOES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            feed.set_replace(true);
+            tracing::info!("video sound: our own playback goes to the echo canceller while mpv plays");
+            MpvEcho {
+                feed: Some(feed),
+                _capture: Some(capture),
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "couldn't hear our own playback for the echo canceller ({e}): with speakers, \
+                 others may hear the video through your microphone"
+            );
+            MpvEcho {
+                feed: None,
+                _capture: None,
+            }
+        }
+    }
+}
+
 /// The player in the stage: the web view (YouTube, links) or mpv (a file from this computer).
 pub(crate) enum Live {
-    Web(rtc_webview::Player),
-    Video(rtc_platform_win::VideoPlayer),
+    Web(WebPlayer),
+    Video(MpvPlayer),
 }
 
 impl Live {
@@ -111,7 +262,7 @@ impl Live {
     /// The local video player, if that's what plays.
     pub(crate) const fn video(&self) -> Option<&rtc_platform_win::VideoPlayer> {
         match self {
-            Self::Video(p) => Some(p),
+            Self::Video(p) => Some(&p.player),
             Self::Web(_) => None,
         }
     }
@@ -1127,7 +1278,12 @@ pub(crate) fn player_area(
             ) {
                 Ok(p) => {
                     p.set_visible(v.player_visible());
-                    *v.watch.player.borrow_mut() = Some(Live::Web(p));
+                    // its sound goes to the echo canceller too, so the mic doesn't send it on
+                    let echo = v.engine.as_ref().and_then(rtc_engine::Handle::echo_feed);
+                    *v.watch.player.borrow_mut() = Some(Live::Web(WebPlayer {
+                        player: p,
+                        _echo: web_echo(echo),
+                    }));
                     v.watch.lock_applied.set(None);
                 }
                 Err(e) => {

@@ -78,6 +78,10 @@ struct Shared {
     names: Mutex<(String, String)>,
     /// One program's sound, mixed into what we send (BUILD_SPEC §9 feature 8).
     app: Mutex<AppBuf>,
+    /// Sound 3RTC plays straight to Windows (the YouTube player): for the echo canceller only.
+    echo_extra: Mutex<std::collections::VecDeque<f32>>,
+    /// That sound is everything 3RTC plays (the call included): it replaces the mixer's copy.
+    echo_replace: AtomicBool,
 }
 
 /// One program's sound waiting to be sent (48 kHz mono).
@@ -128,7 +132,69 @@ impl AppFeed {
     }
 }
 
+/// Most echo-only sound kept waiting (40 ms): the reference must stay ahead of the echo it
+/// describes, so older sound goes.
+const ECHO_EXTRA_MAX: usize = FRAME * 4;
+
+/// Sound 3RTC plays without this pipeline (the YouTube / Vimeo / Twitch player, a WebView2 that
+/// plays straight to Windows), as heard by process loopback: added to what the echo canceller
+/// knows is coming out of the speakers, never played or sent. Without it a microphone that hears
+/// the speakers sent the video's sound to everyone as our voice.
+#[derive(Clone)]
+pub struct EchoFeed(Arc<Shared>);
+
+impl std::fmt::Debug for EchoFeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EchoFeed").finish_non_exhaustive()
+    }
+}
+
+impl EchoFeed {
+    /// `true`: what's pushed is everything 3RTC plays, the call included (a capture of our own
+    /// process, used while mpv plays inside it): it stands in for the mixer's copy of the call,
+    /// which would otherwise be in the reference twice. Whenever a full 10 ms of it isn't there,
+    /// the mixer's copy is used. `false`: what's pushed is only sound outside our audio path
+    /// (the web player's processes) and is added to the mixer's copy.
+    pub fn set_replace(&self, on: bool) {
+        if self.0.echo_replace.swap(on, Ordering::Relaxed) != on {
+            self.0.echo_extra.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        }
+    }
+
+    /// More of that sound (48 kHz mono, -1..1), from the capture thread.
+    pub fn push(&self, samples: &[f32]) {
+        let mut b = self.0.echo_extra.lock().unwrap_or_else(PoisonError::into_inner);
+        b.extend(samples.iter().copied());
+        let extra = b.len().saturating_sub(ECHO_EXTRA_MAX);
+        b.drain(..extra);
+    }
+}
+
 impl Shared {
+    /// The next 10 ms of echo-only sound (silence for what hasn't arrived), and whether a whole
+    /// 10 ms was there.
+    fn echo_extra_frame(&self) -> ([f32; FRAME], bool) {
+        let mut out = [0.0f32; FRAME];
+        let mut b = self.echo_extra.lock().unwrap_or_else(PoisonError::into_inner);
+        let n = b.len().min(FRAME);
+        for (o, s) in out.iter_mut().zip(b.drain(..n)) {
+            *o = s;
+        }
+        (out, n == FRAME)
+    }
+
+    /// One sample of the echo canceller's reference: what the mixer played (`mixed`) and the
+    /// echo-only sound (`extra`, `full` when a whole frame of it arrived).
+    fn reference_sample(&self, mixed: f32, extra: f32, full: bool) -> f32 {
+        if !self.echo_replace.load(Ordering::Relaxed) {
+            mixed + extra
+        } else if full {
+            extra
+        } else {
+            mixed
+        }
+    }
+
     /// The next 10 ms of app sound, if sharing and enough has arrived.
     fn app_frame(&self, out: &mut [f32; FRAME]) -> bool {
         let mut b = self.app.lock().unwrap_or_else(PoisonError::into_inner);
@@ -306,6 +372,12 @@ impl Audio {
     #[must_use]
     pub fn app_feed(&self) -> AppFeed {
         AppFeed(Arc::clone(&self.shared))
+    }
+
+    /// A handle that tells the echo canceller about sound 3RTC plays outside this pipeline.
+    #[must_use]
+    pub fn echo_feed(&self) -> EchoFeed {
+        EchoFeed(Arc::clone(&self.shared))
     }
 
     /// Whether the microphone and the speakers are open.
@@ -593,10 +665,12 @@ impl Pipeline {
                 return;
             }
             self.mixer.next(self.deafened, &mut frame);
-            // the echo canceller hears what's played, both sides together
+            // the echo canceller hears what's played, both sides together, and what the video
+            // player plays straight to Windows
+            let (extra, full) = self.shared.echo_extra_frame();
             let mut reference = [0i16; FRAME];
-            for (r, pair) in reference.iter_mut().zip(frame.chunks_exact(2)) {
-                *r = to_i16((pair[0] + pair[1]) * 0.5);
+            for ((r, pair), e) in reference.iter_mut().zip(frame.chunks_exact(2)).zip(extra) {
+                *r = to_i16(self.shared.reference_sample((pair[0] + pair[1]) * 0.5, e, full));
             }
             self.echo.render(&mut reference);
             if let Some(r) = &mut self.render {
@@ -737,6 +811,30 @@ mod tests {
         );
         feed.set(false, 0.5);
         assert!(!shared.app_frame(&mut out));
+    }
+
+    #[test]
+    fn echo_only_sound_stays_current_and_fills_with_silence() {
+        let shared = Arc::new(super::Shared::default());
+        let feed = super::EchoFeed(Arc::clone(&shared));
+        let (f, full) = shared.echo_extra_frame();
+        assert!(f.iter().all(|s| *s == 0.0) && !full, "nothing: silence");
+        feed.push(&[0.25; 200]);
+        let (f, full) = shared.echo_extra_frame();
+        assert!((f[199] - 0.25).abs() < 1e-6 && f[200] == 0.0, "a short frame is filled with silence");
+        assert!(!full);
+        // added to the mixer's copy (the web player), or standing in for it (mpv, in our process)
+        assert!((shared.reference_sample(0.5, 0.25, true) - 0.75).abs() < 1e-6);
+        feed.set_replace(true);
+        assert!((shared.reference_sample(0.5, 0.25, true) - 0.25).abs() < 1e-6);
+        assert!((shared.reference_sample(0.5, 0.0, false) - 0.5).abs() < 1e-6, "short: the mixer's copy");
+        feed.set_replace(false);
+        // a burst keeps only the newest 40 ms
+        feed.push(&[0.1; super::FRAME * 10]);
+        assert_eq!(
+            shared.echo_extra.lock().map(|b| b.len()).unwrap_or(0),
+            super::ECHO_EXTRA_MAX
+        );
     }
 
     #[test]

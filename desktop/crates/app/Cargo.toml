@@ -28,7 +28,8 @@ anyhow.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-image = { version = "0.25", default-features = false }
+# chat picture previews (the same formats gpui already builds the crate with: no new crates)
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 qrcode = { version = "0.14", default-features = false }
 ureq.workspace = true

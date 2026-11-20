@@ -20,7 +20,7 @@ use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
     QueryFullProcessImageNameW,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetDoubleClickTime};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetDoubleClickTime, GetFocus, SetFocus};
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_LARGE_ICON, NIIF_RESPECT_QUIET_TIME,
     NIIF_USER, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONUSERCLICK, NIN_SELECT,
@@ -240,6 +240,49 @@ fn hwnd_of(window: &impl HasWindowHandle) -> Option<HWND> {
     match window.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(HWND(h.hwnd.get() as *mut c_void)),
         _ => None,
+    }
+}
+
+/// This process's memory in MB: (working set, committed private bytes). For the log file.
+#[must_use]
+pub fn memory_mb() -> Option<(u64, u64)> {
+    use windows::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: a pseudo handle to this process; nothing to close.
+    let me = unsafe { GetCurrentProcess() };
+    // SAFETY: `counters` is the EX struct with its size in `cb`, as the call expects.
+    unsafe {
+        GetProcessMemoryInfo(
+            me,
+            (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+            counters.cb,
+        )
+    }
+    .ok()?;
+    let mb = |b: usize| (b / (1024 * 1024)) as u64;
+    Some((mb(counters.WorkingSetSize), mb(counters.PrivateUsage)))
+}
+
+/// Gives the keyboard back to the app window `hwnd` (from [`raw_hwnd`]) when another window of
+/// ours has it (the video player's web view, on its own thread) or none does (that web view closed
+/// while it had it: then no key reached the app at all). Call it outside the window's own event
+/// handling: Windows tells the window at once.
+pub fn take_keyboard_focus(hwnd: isize) {
+    if hwnd == 0 {
+        return;
+    }
+    let h = HWND(hwnd as *mut c_void);
+    // SAFETY: only reads which window has the keyboard in this thread's input.
+    let now = unsafe { GetFocus() };
+    if now != h {
+        // SAFETY: `h` is the app's own live top-level window, and this is its thread.
+        let _ = unsafe { SetFocus(Some(h)) };
     }
 }
 

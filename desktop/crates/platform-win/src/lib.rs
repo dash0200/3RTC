@@ -61,7 +61,7 @@ pub use gpu::{gpu_choice, gpus, set_gpu_choice};
 #[cfg(windows)]
 pub use hwenc::H264Encoder;
 #[cfg(windows)]
-pub use loopback::{AppSound, audio_apps};
+pub use loopback::{AppSound, audio_apps, child_processes};
 #[cfg(windows)]
 pub use mpv::VideoPlayer;
 #[cfg(not(windows))]
@@ -71,7 +71,7 @@ pub use other::RemoteControl;
 #[cfg(not(windows))]
 pub use other::ShareHud;
 #[cfg(not(windows))]
-pub use other::{AppSound, audio_apps};
+pub use other::{AppSound, audio_apps, child_processes};
 #[cfg(not(windows))]
 pub use other::{Camera, cameras};
 #[cfg(not(windows))]
@@ -79,8 +79,8 @@ pub use other::{H264Encoder, ParentWindow, VideoPlayer};
 #[cfg(not(windows))]
 pub use other::{
     KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state, double_click_ms,
-    foreground_admin_app, hide_window, keys_down, links, lock_pointer, play_wav, raw_hwnd,
-    set_cursor_visible, set_window_icon, show_window, unlock_pointer,
+    foreground_admin_app, hide_window, keys_down, links, lock_pointer, memory_mb, play_wav, raw_hwnd,
+    set_cursor_visible, set_window_icon, show_window, take_keyboard_focus, unlock_pointer,
 };
 #[cfg(not(windows))]
 pub use other::{gpu_choice, gpus, set_gpu_choice};
@@ -94,8 +94,8 @@ pub use video::{EncodedUnit, Rect, StreamSource, Track, TrackKind, VideoAction, 
 #[cfg(windows)]
 pub use win::{
     KeyWatcher, Tray, autostart, center_cursor, cursor_in_bottom_hwnd, cursor_window_state, double_click_ms,
-    foreground_admin_app, hide_window, keys_down, links, lock_pointer, play_wav, raw_hwnd,
-    set_cursor_visible, set_window_icon, show_window, unlock_pointer,
+    foreground_admin_app, hide_window, keys_down, links, lock_pointer, memory_mb, play_wav, raw_hwnd,
+    set_cursor_visible, set_window_icon, show_window, take_keyboard_focus, unlock_pointer,
 };
 
 /// Which Windows this is, for the log file: "Windows 11 Home 24H2 (build 26100.2314)". Read from

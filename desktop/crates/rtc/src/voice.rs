@@ -362,6 +362,13 @@ impl Voice {
         self.pipeline.as_ref().map(Audio::app_feed)
     }
 
+    /// Tells the echo canceller about sound 3RTC plays outside our audio path (the web video
+    /// player), so the microphone doesn't send it on (our own audio path only).
+    #[must_use]
+    pub fn echo_feed(&self) -> Option<rtc_audio::EchoFeed> {
+        self.pipeline.as_ref().map(Audio::echo_feed)
+    }
+
     /// RNNoise ("Voice Isolation") on or off.
     pub fn set_isolation(&self, on: bool) {
         if let Some(p) = &self.pipeline {

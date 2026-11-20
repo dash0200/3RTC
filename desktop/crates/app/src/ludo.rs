@@ -3,14 +3,13 @@
 //! house rules, and on the deciding app the computer's turns, turns of people who left, and idle
 //! turns.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::fmt::Write as _;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Bounds, Context, FontWeight, Image, ImageFormat, Pixels, canvas, div, img, px};
+use gpui_kit::{AnyElement, Bounds, Context, FontWeight, Pixels, canvas, div, px};
 use rtc_core::ActivityCommand;
 use rtc_engine::Snapshot;
 use rtc_games::ludo::{self, COLORS, HOME, LAST_TRACK, State, act};
@@ -49,7 +48,8 @@ pub(crate) struct LudoUi {
     /// The seat asked back.
     reclaim_sent: Option<String>,
     /// The board picture and the state it shows.
-    picture: RefCell<Option<(String, Arc<Image>)>>,
+    /// The board picture (freed as each move replaces it).
+    picture: crate::picture::LivePicture,
     /// Where the game area is.
     pub(crate) area: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -550,19 +550,7 @@ pub(crate) fn view(
 
     // the board picture, rebuilt when the game changes
     let svg = board_svg(&s, &movable);
-    let cached = view
-        .activity
-        .ludo
-        .picture
-        .borrow()
-        .as_ref()
-        .filter(|(old, _)| *old == svg)
-        .map(|(_, i)| Arc::clone(i));
-    let picture = cached.unwrap_or_else(|| {
-        let image = Arc::new(Image::from_bytes(ImageFormat::Svg, svg.clone().into_bytes()));
-        *view.activity.ludo.picture.borrow_mut() = Some((svg, Arc::clone(&image)));
-        image
-    });
+    let picture = view.activity.ludo.picture.for_svg(svg, cx);
     let area = view.activity.ludo.area.get();
     let avail_w = area.map_or(640.0, |a| f32::from(a.size.width) - 300.0 - 40.0);
     let avail_h = area.map_or(640.0, |a| f32::from(a.size.height) - 32.0);
@@ -597,7 +585,7 @@ pub(crate) fn view(
         .size(px(size))
         .rounded(px(10.))
         .overflow_hidden()
-        .child(img(picture).size(px(size)))
+        .child(div().size(px(size)).child(view.activity.ludo.picture.paint(picture)))
         .children(hits);
 
     // ---- the panel ----
