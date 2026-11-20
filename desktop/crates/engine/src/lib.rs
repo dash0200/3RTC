@@ -40,6 +40,7 @@ pub use rtc_core::{ChatImage, ChatLine, Member, Phase, Reaction, Sound, UiEvent}
 pub use rtc_platform_win::CameraInfo;
 pub use rtc_protocol::stream::{InputKind, ScreenInput};
 pub use rtc_webrtc::factory::IceServerConfig;
+pub use rtc_webrtc::rtc_audio::EchoFeed;
 pub use rtc_webrtc::voice::{Device, Devices, MicSource};
 pub use screen::{ScreenFeed, ScreenFrame, ScreenOptions, ScreenSource, ScreenStats, screen_sources};
 pub use stream::{ShareFileSpec, StreamProgress, StreamReader};
@@ -412,6 +413,8 @@ pub struct Handle {
     meter: Option<rtc_webrtc::rtc_audio::Meter>,
     /// Feeds one program's sound into the call (our own audio path).
     app: Option<rtc_webrtc::rtc_audio::AppFeed>,
+    /// Tells the echo canceller what the web video player plays (our own audio path).
+    echo: Option<rtc_webrtc::rtc_audio::EchoFeed>,
 }
 
 impl Handle {
@@ -573,6 +576,13 @@ impl Handle {
         self.app.clone()
     }
 
+    /// Where sound 3RTC plays outside our audio path (the YouTube / Vimeo / Twitch player) goes
+    /// so the echo canceller removes it from the microphone (`None` without our own audio path).
+    #[must_use]
+    pub fn echo_feed(&self) -> Option<rtc_webrtc::rtc_audio::EchoFeed> {
+        self.echo.clone()
+    }
+
     /// Low-power mode: connections are checked half as often.
     pub fn set_low_power(&self, on: bool) {
         peers::LOW_POWER.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -677,6 +687,7 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
     );
     let meter = voice.meter();
     let app = voice.app_feed();
+    let echo = voice.echo_feed();
     let peer_tx = queue_tx.clone();
     let raw_track = screen_track.clone();
     let peers = Peers::new(
@@ -766,6 +777,7 @@ pub fn start(config: Config) -> (Handle, mpsc::UnboundedReceiver<Update>) {
             tx: ui_tx,
             meter,
             app,
+            echo,
         },
         updates,
     )

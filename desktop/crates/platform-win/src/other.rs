@@ -139,6 +139,21 @@ impl Overlay {
     pub fn show(&self, _corner: crate::Corner, _lines: Vec<crate::OverlayLine>) {}
 }
 
+/// The processes `parent` started running `exe` (none known here).
+#[must_use]
+pub fn child_processes(_parent: u32, _exe: &str) -> Vec<u32> {
+    Vec::new()
+}
+
+/// This process's memory in MB (not known here).
+#[must_use]
+pub fn memory_mb() -> Option<(u64, u64)> {
+    None
+}
+
+/// Gives the keyboard back to the app window (nothing to do here).
+pub fn take_keyboard_focus(_hwnd: isize) {}
+
 /// Programs with sound open (none here).
 #[must_use]
 pub fn audio_apps() -> Vec<crate::AudioApp> {

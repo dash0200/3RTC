@@ -1,13 +1,13 @@
 {
-    "build":  "261120.1916",
-    "notes":  "",
+    "build":  "261121.0230",
+    "notes":  "Memory leak fixed",
     "exe":  {
-                "url":  "https://github.com/dash0200/3RTC/releases/download/desktop-261120.1916/3rtc-261120.1916.exe",
-                "sha256":  "0958f240da412922a84e52442c761c76131ab0aa5a0ab2b1b1574c2854898fdc",
-                "size":  55970816
+                "url":  "https://github.com/dash0200/3RTC/releases/download/desktop-261121.0230/3rtc-261121.0230.exe",
+                "sha256":  "a2123ee052ed3b90652d9d11b1ad57435b1c4a87b15013fb5af27f3a51dfb1b0",
+                "size":  56498176
             },
     "mpv":  {
-                "url":  "https://github.com/dash0200/3RTC/releases/download/desktop-261120.1916/libmpv-2.dll",
+                "url":  "https://github.com/dash0200/3RTC/releases/download/desktop-261121.0230/libmpv-2.dll",
                 "sha256":  "e6b4e0372285579832e19ebb9f1725a1e12c699a76d439486b5afc0080c25910",
                 "size":  102636032
             }

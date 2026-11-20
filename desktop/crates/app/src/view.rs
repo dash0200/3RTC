@@ -193,6 +193,8 @@ pub(crate) struct RoomView {
     pub(crate) reply_to: Option<rtc_core::Quote>,
     /// The picture the lightbox shows.
     pub(crate) lightbox: Option<String>,
+    /// Its screen-sized copy while the lightbox is open (freed when it closes).
+    pub(crate) lightbox_image: Option<std::sync::Arc<gpui_kit::RenderImage>>,
     /// The folder whose window is open.
     pub(crate) folder_open: Option<String>,
     /// Transfer ids of the files of folders offered in chat (saved quietly, shown in the window).
@@ -357,6 +359,8 @@ impl RoomView {
                 }
             },
         ));
+        // chat pictures left by the last run (a crash) go
+        crate::chat_pictures::clear_cache();
         let mut this = Self {
             settings,
             runtime: runtime.clone(),
@@ -417,6 +421,7 @@ impl RoomView {
             pending: None,
             reply_to: None,
             lightbox: None,
+            lightbox_image: None,
             folder_open: None,
             folder_files: std::collections::HashSet::new(),
             net: crate::net::NetState::default(),
@@ -539,8 +544,13 @@ impl RoomView {
                     self.pop = None;
                     self.dialog = None;
                     self.fun.clear();
-                    self.pictures.clear();
-                    self.pending = None;
+                    // chat pictures: previews off the GPU, cache files gone
+                    for (_, p) in self.pictures.drain() {
+                        crate::chat::free_picture(p, cx);
+                    }
+                    self.clear_pending(cx);
+                    self.free_lightbox(cx);
+                    crate::chat_pictures::clear_cache();
                     self.lightbox = None;
                     self.folder_open = None;
                     self.folder_files.clear();
@@ -557,6 +567,7 @@ impl RoomView {
                 self.tycoon_after(cx);
                 self.sketch_after(cx);
                 self.whiteboard_after(cx);
+                self.free_closed_game_pictures(cx);
                 if entered {
                     self.tab = if alone { Tab::Invite } else { Tab::Chat };
                     if let Some(id) = self.in_room() {
@@ -589,8 +600,10 @@ impl RoomView {
                 self.chat.push(line);
                 if self.chat.len() > CHAT_KEEP {
                     let gone = self.chat.remove(0);
-                    if let Some(i) = gone.image {
-                        self.pictures.remove(&i.transfer_id);
+                    if let Some(i) = gone.image
+                        && let Some(p) = self.pictures.remove(&i.transfer_id)
+                    {
+                        crate::chat::free_picture(p, cx);
                     }
                     if let Some(first) = self.chat_first_unread {
                         self.chat_first_unread = first.checked_sub(1);
@@ -623,7 +636,7 @@ impl RoomView {
             Update::Sound(s) => self.on_sound(s, cx),
             Update::Board { from, live, body } => self.on_board(from.as_str(), live, &body, cx),
             Update::ImageProgress { transfer_id, percent } => self.picture_progress(transfer_id, percent),
-            Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes),
+            Update::ImageReady { transfer_id, bytes } => self.picture_ready(&transfer_id, bytes, cx),
             Update::FileSaved { transfer_id, path } => self.file_saved(transfer_id, path, cx),
             Update::TransferCancelled { transfer_id } => self.transfer_cancelled(&transfer_id),
             Update::SendState { transfer_id, status } => self.send_state(&transfer_id, status),
@@ -1658,6 +1671,12 @@ impl RoomView {
 impl Render for RoomView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         window.set_window_title(&self.title());
+        // the lightbox closed (however it was closed): its big copy goes
+        if self.dialog != Some(Dialog::Image)
+            && let Some(big) = self.lightbox_image.take()
+        {
+            cx.drop_image(big, Some(window));
+        }
         let body = if let (Some(room), Some(id)) = (self.room.clone(), self.in_room()) {
             crate::room::render(self, &room, id, window, cx)
         } else {
@@ -1677,6 +1696,15 @@ impl Render for RoomView {
         div()
             .id("root")
             .track_focus(&self.focus)
+            // a click anywhere in the app takes the keyboard back from the video player's web
+            // view (or from nowhere, after that web view closed while it had it): without it the
+            // chat and Sketch's guess box couldn't be typed in, and keys went to YouTube
+            .capture_any_mouse_down(cx.listener(|_, _: &gpui_kit::MouseDownEvent, window, cx| {
+                let hwnd = rtc_platform_win::raw_hwnd(window);
+                // after this event: Windows tells the window at once, so not from inside it
+                cx.spawn(async move |_, _| rtc_platform_win::take_keyboard_focus(hwnd))
+                    .detach();
+            }))
             .on_key_down(cx.listener(Self::key))
             .on_drop(cx.listener(|v, paths: &gpui_kit::ExternalPaths, _, cx| v.dropped(paths, cx)))
             .relative()

@@ -71,6 +71,22 @@ impl RoomView {
         }
     }
 
+    /// After every room update: the pictures of games that aren't open any more are freed
+    /// (memory comes back down when a game closes, not only when it's opened again).
+    pub(crate) fn free_closed_game_pictures(&mut self, cx: &mut Context<'_, Self>) {
+        let open = self.activity_now().map(|a| a.current.id);
+        let open = open.as_deref();
+        if !matches!(open, Some("whiteboard" | "sketch")) {
+            self.free_board_pictures(cx);
+        }
+        if open != Some("ludo") {
+            self.activity.ludo.free_pictures(cx);
+        }
+        if open != Some("tycoon") {
+            self.activity.tycoon.free_pictures(cx);
+        }
+    }
+
     pub(crate) fn activity_command(&mut self, c: ActivityCommand, cx: &mut Context<'_, Self>) {
         self.command(Command::Activity(c));
         cx.notify();

@@ -280,7 +280,11 @@ impl Voice {
                 if frames.is_multiple_of(500) {
                     // the screen sound test reads this line
                     let (l, r) = side_levels(&frame.data, frame.num_channels);
-                    tracing::info!("audio: {who}'s screen: {frames} frames, left {l:.2}, right {r:.2}");
+                    // every few seconds: the console only, not the log file
+                    tracing::info!(
+                        target: "rtc_engine::periodic",
+                        "audio: {who}'s screen: {frames} frames, left {l:.2}, right {r:.2}"
+                    );
                 }
                 if frame.num_channels == 2 {
                     feed.push(&frame.data);
@@ -360,6 +364,13 @@ impl Voice {
     #[must_use]
     pub fn app_feed(&self) -> Option<rtc_audio::AppFeed> {
         self.pipeline.as_ref().map(Audio::app_feed)
+    }
+
+    /// Tells the echo canceller about sound 3RTC plays outside our audio path (the web video
+    /// player), so the microphone doesn't send it on (our own audio path only).
+    #[must_use]
+    pub fn echo_feed(&self) -> Option<rtc_audio::EchoFeed> {
+        self.pipeline.as_ref().map(Audio::echo_feed)
     }
 
     /// RNNoise ("Voice Isolation") on or off.

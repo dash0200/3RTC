@@ -93,6 +93,9 @@ pub(crate) struct BoardUi {
     /// The last picture that finished decoding: it stays on screen while a newer one decodes,
     /// so the board never goes blank when a stroke is saved.
     drawn: Rc<RefCell<Option<Drawn>>>,
+    /// Pictures of a board no longer shown (a Sketch turn ended): freed at the next paint, where
+    /// the window is at hand to take them off the GPU.
+    retired: Rc<RefCell<Vec<Drawn>>>,
     icons: RefCell<HashMap<(&'static str, bool), Arc<Image>>>,
     /// Where the board is drawn.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -392,6 +395,25 @@ impl RoomView {
         self.command(rtc_core::Command::Board { live, body });
     }
 
+    /// The board closed (no whiteboard or Sketch open): its pictures leave gpui's cache and the
+    /// GPU (they stayed until it was opened again: memory didn't come back down on closing).
+    /// Runs outside drawing, so every window is reachable.
+    pub(crate) fn free_board_pictures(&mut self, cx: &mut gpui_kit::App) {
+        let b = &self.activity.board;
+        let mut gone: Vec<Drawn> = b.retired.borrow_mut().drain(..).collect();
+        gone.extend(b.drawn.borrow_mut().take());
+        for d in gone {
+            d.image.remove_asset(cx);
+            cx.drop_image(d.render, None);
+        }
+        if let Some((_, image)) = b.picture.borrow_mut().take() {
+            image.remove_asset(cx);
+        }
+        for (_, icon) in b.icons.borrow_mut().drain() {
+            icon.remove_asset(cx);
+        }
+    }
+
     /// After every room update: the open epoch's chunks are open, an old epoch's dropped.
     pub(crate) fn whiteboard_after(&mut self, cx: &mut Context<'_, Self>) {
         let base = self.wb_base();
@@ -413,7 +435,11 @@ impl RoomView {
             b.confirm_clear = false;
             let old = b.drawn.borrow_mut().take();
             if let Some(d) = old {
-                d.image.remove_asset(cx);
+                b.retired.borrow_mut().push(d);
+            }
+            // a picture of the old board still decoding: never shown, only cached
+            if let Some((_, image)) = b.picture.borrow_mut().take() {
+                image.remove_asset(cx);
             }
         }
         let Some(ix) = self.wb_index() else {
@@ -807,6 +833,14 @@ impl RoomView {
     }
 }
 
+/// Frees a board picture that's no longer shown: out of gpui's asset cache, and its texture off
+/// the GPU (`remove_asset` alone left every one there: each saved stroke kept a 1600×1000
+/// picture, gigabytes after an hour of Sketch).
+fn free_drawn(old: Drawn, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App) {
+    old.image.remove_asset(cx);
+    cx.drop_image(old.render, Some(window));
+}
+
 fn tool_btn(id: impl Into<gpui_kit::ElementId>, on: bool) -> gpui_kit::Stateful<gpui_kit::Div> {
     div()
         .id(id)
@@ -914,7 +948,15 @@ pub(crate) fn board(
         .map(|(_, i)| Arc::clone(i));
     let picture = cached.unwrap_or_else(|| {
         let image = Arc::new(Image::from_bytes(ImageFormat::Svg, svg.clone().into_bytes()));
-        *ui.picture.borrow_mut() = Some((svg, Arc::clone(&image)));
+        let superseded = ui.picture.borrow_mut().replace((svg, Arc::clone(&image)));
+        // one that never made it to the screen (a newer stroke came first) is only in gpui's
+        // cache: free it now (the one on screen is freed once its successor shows)
+        if let Some((_, old)) = superseded {
+            let on_screen = ui.drawn.borrow().as_ref().is_some_and(|d| d.image.id == old.id);
+            if !on_screen {
+                old.remove_asset(cx);
+            }
+        }
         image
     });
     // While a new picture decodes, the last decoded one stays up with the strokes it lacks
@@ -940,6 +982,7 @@ pub(crate) fn board(
         (None, Vec::new())
     };
     let drawn = Rc::clone(&ui.drawn);
+    let retired = Rc::clone(&ui.retired);
     let board_bg = if ix.bg == "dark" {
         tokens::hex(0x15_161b)
     } else {
@@ -1005,6 +1048,10 @@ pub(crate) fn board(
             canvas(
                 move |b, _, _| bounds_cell.set(Some(b)),
                 move |b, (), window, cx| {
+                    // an old board's pictures: off the GPU and out of the cache
+                    for old in retired.borrow_mut().drain(..) {
+                        free_drawn(old, window, cx);
+                    }
                     // the saved strokes: the new picture once decoded, the last one until then
                     let fresh = Arc::clone(&picture).use_render_image(window, cx);
                     let mut last = drawn.borrow_mut();
@@ -1018,7 +1065,7 @@ pub(crate) fn board(
                             if let Some(old) = old
                                 && old.image.id != picture.id
                             {
-                                old.image.remove_asset(cx);
+                                free_drawn(old, window, cx);
                             }
                             false
                         }

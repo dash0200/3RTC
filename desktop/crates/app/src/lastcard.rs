@@ -64,20 +64,20 @@ fn face(id: i64, w: f32) -> gpui_kit::Div {
                 .child(img("lastcard/wheel.svg").absolute().size(px(size)))
                 .child(
                     div()
-                        .text_size(px(size * 0.42))
+                        .text_size(crate::fun::glyph_px(size * 0.42))
                         .font_weight(FontWeight::BLACK)
                         .text_color(tokens::white())
                         .child("+4"),
                 )
                 .into_any_element(),
             "D" => div()
-                .text_size(px(size * 0.8))
+                .text_size(crate::fun::glyph_px(size * 0.8))
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .text_color(tokens::white())
                 .child("+2")
                 .into_any_element(),
             n => div()
-                .text_size(px(size))
+                .text_size(crate::fun::glyph_px(size))
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .text_color(tokens::white())
                 .child(n.to_owned())
@@ -89,7 +89,7 @@ fn face(id: i64, w: f32) -> gpui_kit::Div {
             "S" => img("lastcard/skip.svg").size(px(size)).into_any_element(),
             "R" => img("lastcard/reverse.svg").size(px(size)).into_any_element(),
             _ => div()
-                .text_size(px(size))
+                .text_size(crate::fun::glyph_px(size))
                 .line_height(px(size))
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .text_color(tokens::white())
@@ -172,7 +172,7 @@ fn back(w: f32) -> gpui_kit::Div {
         )
         .child(
             div()
-                .text_size(px(12.0 * u))
+                .text_size(crate::fun::glyph_px(12.0 * u))
                 .font_weight(FontWeight::BLACK)
                 .text_color(tokens::white())
                 .child("LC"),

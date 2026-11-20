@@ -238,6 +238,9 @@ mod imp {
                         }
                     })
                     .with_autoplay(false)
+                    // never take the keyboard from the app's text boxes when it opens (keys then
+                    // went to YouTube: "f" made it full screen); a click in it still focuses it
+                    .with_focused(false)
                     .with_background_color((0, 0, 0, 255))
                     .with_bounds(rect(bounds))
                     .with_url(url)

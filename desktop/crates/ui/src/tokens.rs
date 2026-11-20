@@ -120,14 +120,15 @@ pub const RADIUS_SHEET: Pixels = px(24.);
 #[must_use]
 pub fn clamp_vw(window: &Window, min: f32, percent: f32, max: f32) -> Pixels {
     let w: f32 = window.viewport_size().width.into();
-    px((w * percent / 100.0).clamp(min, max))
+    // whole pixels: text sized by this is cached per size by gpui (one set per window width)
+    px((w * percent / 100.0).clamp(min, max).round())
 }
 
 /// CSS `clamp(min, <percent> of the window's height, max)`.
 #[must_use]
 pub fn clamp_vh(window: &Window, min: f32, percent: f32, max: f32) -> Pixels {
     let h: f32 = window.viewport_size().height.into();
-    px((h * percent / 100.0).clamp(min, max))
+    px((h * percent / 100.0).clamp(min, max).round())
 }
 
 /// Points the component library's theme at our tokens, so its inputs and carets match.

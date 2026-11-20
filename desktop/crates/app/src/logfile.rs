@@ -301,6 +301,50 @@ pub(crate) fn session_start(build: &str) {
         ),
     );
     install_panic_hook();
+    watch_memory();
+}
+
+/// How often the app's memory goes in the log.
+const MEMORY_EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+/// Committed memory (MB) worth a warning; each doubling past it warns again.
+pub(crate) const MEMORY_WARN_MB: u64 = 4096;
+
+/// The level (MB) to warn at for `committed` MB, when it's past the last one warned at: 4 GB,
+/// then 8, 16, 32... `None` when there's nothing new to say.
+pub(crate) fn memory_warning(committed: u64, warned: u64) -> Option<u64> {
+    let mut level = MEMORY_WARN_MB;
+    while level.saturating_mul(2) <= committed {
+        level = level.saturating_mul(2);
+    }
+    (committed >= MEMORY_WARN_MB && level > warned).then_some(level)
+}
+
+/// Every [`MEMORY_EVERY`]: the app's memory, and a warning when it grows past 4 GB, 8 GB... (a
+/// leak: the log then shows what was going on while it grew).
+fn watch_memory() {
+    let started = std::thread::Builder::new()
+        .name("memory-log".to_owned())
+        .spawn(|| {
+            let mut warned = 0;
+            loop {
+                std::thread::sleep(MEMORY_EVERY);
+                let Some((working, committed)) = rtc_platform_win::memory_mb() else {
+                    return;
+                };
+                tracing::info!("memory: {working} MB in use, {committed} MB committed");
+                if let Some(level) = memory_warning(committed, warned) {
+                    warned = level;
+                    tracing::warn!(
+                        "memory: over {} GB committed ({committed} MB): something is being kept that \
+                         should be freed; the lines before this say what was going on",
+                        level / 1024
+                    );
+                }
+            }
+        });
+    if let Err(e) = started {
+        tracing::warn!("couldn't start the memory log: {e}");
+    }
 }
 
 /// This run closes properly.
@@ -393,6 +437,17 @@ mod tests {
             g.pass(6, "next minute"),
             vec!["… 30 more lines that minute were left out", "next minute"]
         );
+    }
+
+    #[test]
+    fn memory_warns_at_4_gb_then_at_each_doubling() {
+        use super::memory_warning;
+        assert_eq!(memory_warning(900, 0), None);
+        assert_eq!(memory_warning(4096, 0), Some(4096));
+        assert_eq!(memory_warning(5000, 4096), None, "said already");
+        assert_eq!(memory_warning(8200, 4096), Some(8192));
+        assert_eq!(memory_warning(38_000, 8192), Some(32_768));
+        assert_eq!(memory_warning(38_000, 32_768), None);
     }
 
     #[test]

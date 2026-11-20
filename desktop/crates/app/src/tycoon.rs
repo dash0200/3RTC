@@ -83,11 +83,19 @@ pub(crate) struct TycoonUi {
     /// The card whose closing is timed (its seq).
     card_timer: i64,
     /// The picture over the board, and what it shows.
-    overlay: RefCell<Option<(String, Arc<Image>)>>,
+    /// What changes over the board (freed as each change replaces it).
+    overlay: crate::picture::LivePicture,
     /// Token pictures by token and colour.
     token_pics: RefCell<HashMap<(String, String), Arc<Image>>>,
     /// Where the game area is.
     pub(crate) area: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+impl TycoonUi {
+    /// The game closed: its board picture leaves gpui's cache and the GPU.
+    pub(crate) fn free_pictures(&self, cx: &mut gpui_kit::App) {
+        self.overlay.free(cx);
+    }
 }
 
 impl std::fmt::Debug for TycoonUi {
@@ -1397,17 +1405,7 @@ pub(crate) fn view(
         .then(|| s.pending_buy.and_then(|p| usize::try_from(p).ok()))
         .flatten();
     let svg = overlay_svg(&s, highlight);
-    let cached = ui
-        .overlay
-        .borrow()
-        .as_ref()
-        .filter(|(old, _)| *old == svg)
-        .map(|(_, i)| Arc::clone(i));
-    let overlay = cached.unwrap_or_else(|| {
-        let image = Arc::new(Image::from_bytes(ImageFormat::Svg, svg.clone().into_bytes()));
-        *ui.overlay.borrow_mut() = Some((svg, Arc::clone(&image)));
-        image
-    });
+    let overlay = ui.overlay.for_svg(svg, cx);
     let area = ui.area.get();
     let avail_w = area.map_or(640.0, |a| f32::from(a.size.width) - 340.0 - 40.0);
     let avail_h = area.map_or(640.0, |a| f32::from(a.size.height) - 32.0);
@@ -1448,7 +1446,7 @@ pub(crate) fn view(
         .rounded(px(10.))
         .overflow_hidden()
         .child(img("tycoon/board.svg").absolute().size(px(size)))
-        .child(img(overlay).absolute().size(px(size)))
+        .child(div().absolute().size(px(size)).child(ui.overlay.paint(overlay)))
         .children(hits)
         .when_some(card_shown, |el, (deck, seq, text, who)| {
             el.child(

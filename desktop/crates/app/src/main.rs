@@ -9,6 +9,7 @@
 mod activity;
 mod camera;
 mod chat;
+mod chat_pictures;
 mod chess;
 mod control;
 mod desktop;
@@ -24,6 +25,7 @@ mod local_video;
 mod logfile;
 mod ludo;
 mod net;
+mod picture;
 mod quick_picks;
 mod room;
 mod screen;

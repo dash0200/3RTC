@@ -297,7 +297,9 @@ pub(crate) fn open_player(
             }
             v.watch.local.playing = playing;
             v.watch.local.time = start;
-            *v.watch.player.borrow_mut() = Some(Live::Video(p));
+            // its sound goes to the echo canceller too, so the mic doesn't send it on
+            let echo = v.engine.as_ref().and_then(rtc_engine::Handle::echo_feed);
+            *v.watch.player.borrow_mut() = Some(Live::Video(crate::watch::MpvPlayer::new(p, echo)));
         }
         Err(e) => v.watch.error = Some(e.into()),
     }

@@ -368,6 +368,85 @@ Not yet verified: build, tests (`saves` has one), a run.
   misbehaves, `selectable.rs` is self-contained: `rich_text` can go back to `StyledText` /
   `InteractiveText`.
 
+## Memory leak: board pictures never freed (21 Nov 2026)
+
+The portable app reached 21 GB in use / 38 GB committed after about an hour (Sketch with YouTube
+on), and sometimes crashed. Cause: board pictures built from SVG were never taken off the GPU.
+`Image::remove_asset` only drops gpui's cached copy; the texture `paint_image` / `img()` put on
+the GPU stays until `drop_image`. The whiteboard (and so Sketch) built a new 1600×1000 picture
+(6.4 MB) for every saved or erased stroke and only called `remove_asset`; pictures replaced
+before they finished decoding weren't freed at all. Ludo (900×900) and Tycoon (1000×1000) kept
+one per move through `img()`.
+- `whiteboard.rs`: a replaced picture is freed from the cache and the GPU (`free_drawn`); one
+  superseded before it showed is freed from the cache; the last picture of a finished board
+  (a Sketch turn) is freed at the next paint (`retired`).
+- `picture.rs` `LivePicture` (new): the same for any picture rebuilt from SVG; Ludo's board and
+  Tycoon's overlay use it (drawn on a canvas; the last one stays up while the next decodes).
+- Memory in the log every 5 minutes, and a warning at 4 GB committed, then 8, 16...
+  (`logfile.rs` `watch_memory`, `rtc_platform_win::memory_mb`), so a next leak shows what was
+  going on while it grew.
+- Checked and fine: camera tiles and screen share frames already call `drop_image`.
+- Closing a game frees its pictures (memory came back down only when the board was opened
+  again): `free_closed_game_pictures` after every room update (`activity.rs`) frees the
+  whiteboard / Sketch pictures (`free_board_pictures`, also a finished turn's `retired` ones,
+  which were only freed at a next paint) and Ludo's and Tycoon's (`LivePicture::free`).
+- Reactions: memory rose with every burst and stayed. gpui caches each glyph at each size it's
+  drawn at and never lets go; the floating emoji, combo counters and live badge animated their
+  font size smoothly, so each frame cached a new emoji picture. Animated text is now whole pixels
+  (`fun::glyph_px`): a few dozen sizes per emoji, cached once. Last Card's card text and the
+  home screen's window-scaled text are rounded too (they changed size on every resize step).
+- All games checked: Chess and Last Card draw fixed asset SVGs (cached once); Tycoon's tokens are
+  cached per token and colour. Ludo's ★ had no font (usvg warned and fell back on every redraw):
+  `Segoe UI Symbol` now. The screen sound's every-5-s line is `rtc_engine::periodic` (not in the
+  log file). Left: YouTube thumbnails (quick picks, queue) stay for the session (~0.7 MB each).
+- Chat pictures (done after): they're no longer kept in memory (`chat_pictures.rs`). A picture's
+  bytes go to `%TEMP%\3RTC\chat` (or stay in the file it was picked from); the bubble and the
+  attachment card show a preview of at most 480 px (GIFs keep up to 150 frames, scaled down);
+  the lightbox decodes a copy of at most 2560 px from the file only while it's open. Each is
+  freed (off the GPU, cache file deleted) when its line goes past the 300 kept, the lightbox
+  closes, the attachment is dropped, or we leave the room; the cache is emptied at start. Before:
+  each picture was in memory twice (its bytes and gpui's full-size decode, 50–150 MB for a phone
+  photo) and gpui's copy was never freed. Save copies from the file. Small non-picture files
+  (under 8 MB) also wait on disk instead of in memory.
+Tests: `memory_warns_at_4_gb_then_at_each_doubling`, `previews_are_small_whatever_the_picture`,
+`cache_files_stay_in_the_cache_whatever_the_id`. Not yet run; check Task Manager after an
+hour of Sketch.
+
+## Typing blocked after a YouTube video (21 Nov 2026)
+
+A peer couldn't type in chat or Sketch's guess box, also after the video was closed, and "f" in
+the guess box made YouTube full screen. The web player is a WebView2 child window on its own
+thread: when it had Windows' keyboard focus (it took it when it opened, or from a click on it),
+keys went to YouTube instead of the app; when it closed while holding focus, no window had it and
+no key reached the app. GPUI focusing its own text box doesn't move Windows' focus.
+- The web view no longer takes focus when it opens (`with_focused(false)`, `webview/src/lib.rs`).
+- Any mouse press in the app takes Windows' keyboard focus back to the app window
+  (`view.rs` root `capture_any_mouse_down` → `rtc_platform_win::take_keyboard_focus`, run from a
+  spawned task so the focus messages don't arrive inside GPUI's own event handling). A click on
+  the video itself still gives it the keyboard (its own controls).
+Not yet run or tried.
+
+## YouTube sound sent through the microphone (20 Nov 2026)
+
+With a YouTube / Vimeo / Twitch video playing, the host's microphone sent the video's sound to
+everyone (the mic lit up with it). The echo canceller's reference was only what our own audio
+path plays (people, screen sound, the test sound); the web player is a WebView2 that plays
+straight to Windows, so its sound coming back into the microphone wasn't removed. (In a browser,
+Chrome's echo canceller hears the YouTube tab too, so the web app doesn't have this.)
+Now the WebView2 processes this app started (`msedgewebview2.exe`, children of our process:
+`rtc_platform_win::child_processes`) are captured with process loopback (`AppSound`) and added to
+the echo canceller's reference only, never played or sent (`rtc_audio::EchoFeed`, at most 40 ms
+queued so the reference stays ahead of the echo; `watch.rs` `WebPlayer` / `web_echo`, stopped
+with the player). Nothing changes for the voice echo cancelling when no web video plays.
+mpv (local files, torrents, a room member's file) plays inside our own process, so its sound
+can't be captured apart from the call's. While it's open, everything our process tree plays is
+captured instead and stands in for the mixer's copy as the reference (`EchoFeed::set_replace`;
+`watch.rs` `MpvPlayer` / `mpv_echo`, counted so a new player opening before the old one goes
+keeps it on); a 10 ms the capture hasn't delivered uses the mixer's copy. Risk to watch: that
+reference reaches the echo canceller a little later than the mixer's, so if voices echo more
+while a local video plays, this is why. Classic audio path: no change.
+Tests: `echo_only_sound_stays_current_and_fills_with_silence`. Not yet run or tried.
+
 ## Big MP4 torrents that "can't be played" (20 Nov 2026)
 
 A 10 GB, 3-hour MP4 from a torrent stopped with "This file can't be played". Likely cause (not
@@ -417,7 +496,8 @@ ask. Release builds never did. Not yet verified: a dev run.
 
 Release binaries used to be copied into `client-ts/public/desktop` and committed: 12 commits left
 36 binary versions (~650 MB packed) in history, almost all of `.git`. Now:
-- `packaging/package.ps1 -Publish` uploads the exe, `3RTC-portable.zip`, `3RTC-Setup.exe`,
+- `packaging/package.ps1` (publishing is the default; `-NoPublish` only builds, `-UploadOnly`
+  republishes the build in `target/dist`) uploads the exe, `3RTC-portable.zip`, `3RTC-Setup.exe`,
   `libmpv-2.dll` and `latest.json` as the GitHub Release `desktop-<build>` (`gh release create
   … --latest`) and copies only `latest.json` into `client-ts/public/desktop`. `latest.json` points
   at `https://github.com/dash0200/3RTC/releases/download/desktop-<build>/…` and now also lists

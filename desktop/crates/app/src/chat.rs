@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use gpui_kit::{
-    AnyElement, Context, ExternalPaths, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
-    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, SharedString,
-    StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _, StyledText,
-    UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
+    AnyElement, Context, ExternalPaths, FontStyle, FontWeight, HighlightStyle, Hsla, ImageSource,
+    InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _, PathPromptOptions, RenderImage,
+    SharedString, StatefulInteractiveElement as _, StrikethroughStyle, Styled as _, StyledImage as _,
+    StyledText, UnderlineStyle, Window, div, img, prelude::FluentBuilder as _, px,
 };
 use rtc_core::Quote;
 use rtc_core::chat_format::{MentionTarget, format_chat};
@@ -26,8 +26,14 @@ use crate::view::{Dialog, RoomView};
 #[derive(Default)]
 pub(crate) struct Picture {
     pub(crate) percent: u8,
-    pub(crate) image: Option<Arc<Image>>,
-    pub(crate) bytes: Option<Arc<[u8]>>,
+    /// The bubble's small preview (`chat_pictures::PREVIEW_MAX`), on the GPU while shown.
+    pub(crate) preview: Option<Arc<RenderImage>>,
+    /// Where its bytes are: our cache (`chat_pictures`) or the file it was picked from.
+    pub(crate) file: Option<PathBuf>,
+    /// It's all here (received whole, or ours).
+    pub(crate) here: bool,
+    /// Its preview is being made.
+    pub(crate) decoding: bool,
     /// Still on its way (in or out).
     pub(crate) moving: bool,
     /// Received over QUIC and saved here (ADR 0009): the card opens its folder.
@@ -47,7 +53,8 @@ pub(crate) struct Pending {
     pub(crate) name: String,
     pub(crate) mime: &'static str,
     pub(crate) bytes: Arc<[u8]>,
-    pub(crate) image: Option<Arc<Image>>,
+    /// A small preview of a picture.
+    pub(crate) preview: Option<Arc<RenderImage>>,
     /// Where it is on disk (a picked file), so big files can go over QUIC.
     pub(crate) path: Option<PathBuf>,
     /// Its size (the bytes may be left on disk).
@@ -118,18 +125,6 @@ pub(crate) fn folder_files(root: &Path) -> Result<Vec<FolderFile>, String> {
     Ok(out)
 }
 
-/// The format to show bytes as, from the type sent (`None`: we can't draw it, e.g. AVIF).
-fn format_for(mime: &str) -> Option<ImageFormat> {
-    Some(match mime {
-        "image/png" => ImageFormat::Png,
-        "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
-        "image/webp" => ImageFormat::Webp,
-        "image/gif" => ImageFormat::Gif,
-        "image/bmp" => ImageFormat::Bmp,
-        _ => return None,
-    })
-}
-
 /// The type of a picture file, from its first bytes (a pasted or dropped file may have no name).
 pub(crate) fn sniff(bytes: &[u8]) -> Option<&'static str> {
     Some(match bytes {
@@ -142,9 +137,25 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<&'static str> {
     })
 }
 
-fn picture(_mime: &str, bytes: &[u8]) -> Option<Arc<Image>> {
-    let fmt = sniff(bytes).and_then(format_for)?;
-    Some(Arc::new(Image::from_bytes(fmt, bytes.to_vec())))
+/// A picture's small preview for the bubble (`None` for other files).
+fn preview(mime: &str, bytes: &[u8]) -> Option<Arc<RenderImage>> {
+    if !mime.starts_with("image/") {
+        return None;
+    }
+    crate::chat_pictures::decode_scaled(bytes, crate::chat_pictures::PREVIEW_MAX)
+}
+
+/// Frees a chat picture that's gone (its line scrolled away, or we left): its preview off the
+/// GPU, its cache file deleted (never the user's own file).
+pub(crate) fn free_picture(p: Picture, cx: &mut gpui_kit::App) {
+    if let Some(preview) = p.preview {
+        cx.drop_image(preview, None);
+    }
+    if let Some(file) = p.file
+        && crate::chat_pictures::is_cached(&file)
+    {
+        let _ = std::fs::remove_file(file);
+    }
 }
 
 /// Where the save dialog for a chat picture starts: `Downloads\3RTC\Pictures` (made if missing).
@@ -206,7 +217,7 @@ impl RoomView {
                         name: format!("{name} · {count} file{}", if count == 1 { "" } else { "s" }),
                         mime: "application/octet-stream",
                         bytes: Arc::from(Vec::new()),
-                        image: None,
+                        preview: None,
                         path: Some(path.to_owned()),
                         size,
                         on_disk: true,
@@ -220,6 +231,7 @@ impl RoomView {
     }
 
     fn set_pending(&mut self, pending: Pending, cx: &mut Context<'_, Self>) {
+        self.clear_pending(cx);
         self.pending = Some(pending);
         if self.tab != crate::view::Tab::Chat {
             self.set_tab(crate::view::Tab::Chat, cx);
@@ -248,7 +260,7 @@ impl RoomView {
                     name,
                     mime: "application/octet-stream",
                     bytes: Arc::from(Vec::new()),
-                    image: None,
+                    preview: None,
                     path: Some(path.to_owned()),
                     size: meta.len(),
                     on_disk: true,
@@ -287,14 +299,14 @@ impl RoomView {
         } else {
             name
         };
-        let image = picture(mime, &bytes);
+        let preview = preview(mime, &bytes);
         let size = bytes.len() as u64;
         self.set_pending(
             Pending {
                 name,
                 mime,
                 bytes: bytes.into(),
-                image,
+                preview,
                 path,
                 size,
                 on_disk: false,
@@ -393,12 +405,28 @@ impl RoomView {
             return;
         }
         let transfer_id = new_transfer();
+        // its bytes for Save: the file it was picked from, else (a paste) our cache
+        let file = match (&p.path, p.on_disk) {
+            (_, true) => None,
+            (Some(path), false) => Some(path.clone()),
+            (None, false) => {
+                let path = crate::chat_pictures::cache_path(&transfer_id, p.mime);
+                let (to, bytes) = (path.clone(), Arc::clone(&p.bytes));
+                cx.background_executor()
+                    .spawn(async move {
+                        let _ = crate::chat_pictures::store(&to, &bytes);
+                    })
+                    .detach();
+                Some(path)
+            }
+        };
         self.pictures.insert(
             transfer_id.clone(),
             Picture {
                 percent: 0,
-                image: p.image,
-                bytes: (!p.on_disk).then(|| Arc::clone(&p.bytes)),
+                preview: p.preview,
+                file,
+                here: true,
                 moving: true,
                 // a file sent from disk: its card shows it in its folder
                 saved: if p.on_disk { p.path.clone() } else { None },
@@ -465,7 +493,7 @@ impl RoomView {
         p.percent = percent;
         // ours (the bytes, or a file sent from disk) is done; theirs waits for the last frame;
         // ours offered is done when nobody waits for or gets it any more (`send_state`)
-        if percent >= 100 && p.send.is_none() && (p.bytes.is_some() || p.saved.is_some()) {
+        if percent >= 100 && p.send.is_none() && (p.here || p.saved.is_some()) {
             p.moving = false;
         }
     }
@@ -545,7 +573,7 @@ impl RoomView {
     /// A chat file (or folder) was cancelled (here, by its sender, or nobody was receiving it).
     pub(crate) fn transfer_cancelled(&mut self, transfer_id: &str) {
         let p = self.pictures.entry(transfer_id.to_owned()).or_default();
-        if !p.moving && (p.bytes.is_some() || p.saved.is_some()) {
+        if !p.moving && (p.here || p.saved.is_some()) {
             // it got here (or went) whole before the cancel did
             return;
         }
@@ -554,19 +582,50 @@ impl RoomView {
         p.cancelled = true;
     }
 
-    pub(crate) fn picture_ready(&mut self, transfer_id: &str, bytes: Arc<[u8]>) {
+    /// A picture (or small file) arrived whole: its bytes go to our cache file and a small
+    /// preview is made, off the UI thread; nothing big stays in memory.
+    pub(crate) fn picture_ready(&mut self, transfer_id: &str, bytes: Arc<[u8]>, cx: &mut Context<'_, Self>) {
         let mime = self
             .chat
             .iter()
             .rev()
             .find_map(|l| l.image.as_ref().filter(|i| i.transfer_id == transfer_id))
-            .map_or("application/octet-stream", |i| i.mime.as_str());
+            .map_or("application/octet-stream", |i| i.mime.as_str())
+            .to_owned();
         let p = self.pictures.entry(transfer_id.to_owned()).or_default();
-        p.image = picture(mime, &bytes);
-        p.bytes = Some(bytes);
+        p.here = true;
+        p.decoding = true;
         p.percent = 100;
         p.moving = false;
         self.ui_sound(&crate::sounds::POP, crate::sounds::POP_WAV.as_slice());
+        let path = crate::chat_pictures::cache_path(transfer_id, &mime);
+        let work = cx.background_executor().spawn(async move {
+            let file = crate::chat_pictures::store(&path, &bytes).ok().map(|()| path);
+            (file, preview(&mime, &bytes))
+        });
+        let id = transfer_id.to_owned();
+        cx.spawn(async move |this, cx| {
+            let (file, made) = work.await;
+            let _ = this.update(cx, |v, cx| {
+                if let Some(p) = v.pictures.get_mut(&id) {
+                    p.file = file;
+                    p.preview = made;
+                    p.decoding = false;
+                } else {
+                    // its line went meanwhile
+                    free_picture(
+                        Picture {
+                            file,
+                            preview: made,
+                            ..Picture::default()
+                        },
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Saves the lightbox's picture where the user picks (`Downloads\3RTC\Pictures` first).
@@ -584,15 +643,15 @@ impl RoomView {
             cx.reveal_path(&path);
             return;
         }
-        let Some(bytes) = self.pictures.get(transfer_id).and_then(|p| p.bytes.clone()) else {
+        let Some(from) = self.pictures.get(transfer_id).and_then(|p| p.file.clone()) else {
             return;
         };
         let name = rtc_protocol::image::safe_file_save_name(&image.file_name, &image.mime);
         let ask = cx.prompt_for_new_path(&pictures_dir(), Some(&name));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(path))) = ask.await {
-                let said = match std::fs::write(&path, &bytes) {
-                    Ok(()) => format!("Saved {}", path.display()),
+                let said = match std::fs::copy(&from, &path) {
+                    Ok(_) => format!("Saved {}", path.display()),
                     Err(e) => format!("Couldn't save the file: {e}"),
                 };
                 let _ = this.update(cx, |v, cx| v.show_toast(said, cx));
@@ -601,9 +660,53 @@ impl RoomView {
         .detach();
     }
 
+    /// Opens the lightbox: a screen-sized copy is decoded from the picture's file while it's
+    /// open (the bubble's preview shows meanwhile) and freed when it closes.
     pub(crate) fn open_lightbox(&mut self, transfer_id: String, cx: &mut Context<'_, Self>) {
-        self.lightbox = Some(transfer_id);
+        self.free_lightbox(cx);
+        let file = self
+            .pictures
+            .get(&transfer_id)
+            .and_then(|p| p.file.clone().or_else(|| p.saved.clone()));
+        self.lightbox = Some(transfer_id.clone());
         self.open_dialog(Dialog::Image, cx);
+        let Some(file) = file else { return };
+        let work = cx.background_executor().spawn(async move {
+            let bytes = std::fs::read(file).ok()?;
+            crate::chat_pictures::decode_scaled(&bytes, crate::chat_pictures::LIGHTBOX_MAX)
+        });
+        cx.spawn(async move |this, cx| {
+            let made = work.await;
+            let _ = this.update(cx, |v, cx| match made {
+                // still open on this picture
+                Some(big)
+                    if v.lightbox.as_deref() == Some(transfer_id.as_str())
+                        && v.dialog == Some(Dialog::Image) =>
+                {
+                    v.lightbox_image = Some(big);
+                    cx.notify();
+                }
+                Some(big) => cx.drop_image(big, None),
+                None => {}
+            });
+        })
+        .detach();
+    }
+
+    /// The lightbox's big copy off the GPU (it closed, or shows another picture).
+    pub(crate) fn free_lightbox(&mut self, cx: &mut gpui_kit::App) {
+        if let Some(big) = self.lightbox_image.take() {
+            cx.drop_image(big, None);
+        }
+    }
+
+    /// Drops the attachment waiting to be sent (its preview off the GPU).
+    pub(crate) fn clear_pending(&mut self, cx: &mut gpui_kit::App) {
+        if let Some(p) = self.pending.take()
+            && let Some(preview) = p.preview
+        {
+            cx.drop_image(preview, None);
+        }
     }
 
     pub(crate) fn insert_emoji(&mut self, emoji: &str, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -782,7 +885,8 @@ pub(crate) fn picture_view(
     let cancelled = state.is_some_and(|p| p.cancelled);
     let offered = !mine && !cancelled && state.is_some_and(|p| p.offered);
     let moving = !cancelled && !offered && state.is_none_or(|p| p.moving);
-    let image = state.and_then(|p| p.image.clone());
+    let image = state.and_then(|p| p.preview.clone());
+    let decoding = state.is_some_and(|p| p.decoding);
     let size = format_size(info.file_size);
     let mut col = div().flex().flex_col().gap(px(6.)).w(px(240.));
     if cancelled {
@@ -846,13 +950,13 @@ pub(crate) fn picture_view(
                 .cursor_pointer()
                 .on_click(cx.listener(move |v, _, _, cx| v.open_lightbox(id.clone(), cx)))
                 .child(
-                    img(image)
+                    img(ImageSource::from(image))
                         .max_w(px(240.))
                         .max_h(px(240.))
                         .object_fit(ObjectFit::Contain),
                 ),
         );
-    } else if !moving && !cancelled && !offered {
+    } else if !moving && !cancelled && !offered && !decoding {
         // arrived, but not a type we can draw (non-image or AVIF): offer it to save
         let id = info.transfer_id.clone();
         let save_id = id.clone();
@@ -957,9 +1061,13 @@ pub(crate) fn pending_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> O
                     .overflow_hidden()
                     .bg(tokens::raised())
                     .map(|el| {
-                        if let Some(i) = p.image.clone() {
-                            el.child(img(i).size(px(48.)).object_fit(ObjectFit::Cover))
-                                .into_any_element()
+                        if let Some(i) = p.preview.clone() {
+                            el.child(
+                                img(ImageSource::from(i))
+                                    .size(px(48.))
+                                    .object_fit(ObjectFit::Cover),
+                            )
+                            .into_any_element()
                         } else {
                             el.flex()
                                 .items_center()
@@ -1004,7 +1112,7 @@ pub(crate) fn pending_card(view: &RoomView, cx: &mut Context<'_, RoomView>) -> O
                     .cursor_pointer()
                     .hover(|s| s.bg(tokens::raised()))
                     .on_click(cx.listener(|v, _, _, cx| {
-                        v.pending = None;
+                        v.clear_pending(cx);
                         cx.notify();
                     }))
                     .child("✕"),
@@ -1160,7 +1268,11 @@ pub(crate) fn lightbox(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
         .chat
         .iter()
         .find(|l| l.image.as_ref().is_some_and(|i| i.transfer_id == id));
-    let image = view.pictures.get(&id).and_then(|p| p.image.clone());
+    // the big copy once decoded, the bubble's preview until then
+    let image = view
+        .lightbox_image
+        .clone()
+        .or_else(|| view.pictures.get(&id).and_then(|p| p.preview.clone()));
     let (name, size, sender, caption) = line.map_or_else(Default::default, |l| {
         let i = l.image.as_ref();
         (
@@ -1235,7 +1347,7 @@ pub(crate) fn lightbox(view: &RoomView, cx: &mut Context<'_, RoomView>) -> AnyEl
                 })
                 .when_some(image, |el, i| {
                     el.child(
-                        img(i)
+                        img(ImageSource::from(i))
                             .max_w(px(860.))
                             .max_h(px(600.))
                             .object_fit(ObjectFit::Contain),

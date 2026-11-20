@@ -22,6 +22,9 @@ use windows::Win32::Media::Audio::{
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -53,6 +56,39 @@ impl Drop for Com {
             unsafe { CoUninitialize() };
         }
     }
+}
+
+/// The processes `parent` started whose program is `exe` (the WebView2 runtime's
+/// `msedgewebview2.exe` behind our video player), by id.
+#[must_use]
+pub fn child_processes(parent: u32, exe: &str) -> Vec<u32> {
+    // SAFETY: a snapshot of the process list; closed below.
+    let Ok(snap) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut entry = PROCESSENTRY32W {
+        dwSize: size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: a live snapshot, and an entry whose size field is set.
+    let mut more = unsafe { Process32FirstW(snap, &raw mut entry) }.is_ok();
+    while more {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+        if entry.th32ParentProcessID == parent && name.eq_ignore_ascii_case(exe) {
+            out.push(entry.th32ProcessID);
+        }
+        // SAFETY: as above.
+        more = unsafe { Process32NextW(snap, &raw mut entry) }.is_ok();
+    }
+    // SAFETY: the snapshot opened above, closed once.
+    let _ = unsafe { CloseHandle(snap) };
+    out
 }
 
 fn process_name(pid: u32) -> Option<String> {
