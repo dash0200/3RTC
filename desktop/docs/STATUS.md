@@ -413,6 +413,29 @@ builds (Windows' optional "Graphics Tools" isn't installed). Harmless; `Cargo.to
 one crate without debug assertions in dev (`[profile.dev.package.gpui-pre-windows]`), so it doesn't
 ask. Release builds never did. Not yet verified: a dev run.
 
+## Releases off git: GitHub Releases (20 Nov 2026)
+
+Release binaries used to be copied into `client-ts/public/desktop` and committed: 12 commits left
+36 binary versions (~650 MB packed) in history, almost all of `.git`. Now:
+- `packaging/package.ps1 -Publish` uploads the exe, `3RTC-portable.zip`, `3RTC-Setup.exe`,
+  `libmpv-2.dll` and `latest.json` as the GitHub Release `desktop-<build>` (`gh release create
+  … --latest`) and copies only `latest.json` into `client-ts/public/desktop`. `latest.json` points
+  at `https://github.com/dash0200/3RTC/releases/download/desktop-<build>/…` and now also lists
+  `mpv` (ADR 0004 said it would; installs without the player fetch it). The updater (`ureq`)
+  follows GitHub's redirect to its download host; no app change.
+- The website's download links stay `/desktop/3RTC-portable.zip` and `/desktop/3RTC-Setup.exe`:
+  `redirects` in `client-ts/vercel.json` (and the root `vercel.json`) send them to
+  `releases/latest/download/…`, so the newest release marked latest wins.
+- `.gitignore` and `.vercelignore` (`client-ts/` and repo root): `client-ts/public/desktop/*` except
+  `latest.json`, so neither git nor a Vercel deploy (CLI uploads files only on disk; Vite copies
+  all of `public/` into `dist`) carries the binaries. Old Vercel deployments still hold ~120 MB
+  each until removed or expired (Settings → Security → Deployment Retention Policy). The exe and zip of
+  261118.1935 are out of the index (`git rm --cached`, still on disk) and `latest.json` points at
+  a release `desktop-261118.1935` the owner uploads from those files (commands in
+  `desktop/README.md` → Releases). Upload before pushing, or downloads 404 until then.
+- History still holds the old binaries; rewriting it (`git filter-repo`) is the owner's call, not
+  done. Not yet verified: an upload, a deploy, an app updating from the release.
+
 ## Known limits (accepted)
 
 - Remote control can't type into apps running as administrator, or on the secure desktop (UAC

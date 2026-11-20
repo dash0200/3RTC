@@ -71,9 +71,31 @@ From `desktop\` on Windows: `.\packaging\package.ps1 -Notes "what's new"` builds
 |---|---|
 | `3RTC-Setup.exe` | per-user installer: `%LOCALAPPDATA%\Programs\3RTC`, Start menu, uninstaller, no admin |
 | `3RTC-portable.zip` | a folder to unzip anywhere; settings stay beside the exe |
-| `3rtc-<build>.exe`, `latest.json` | what installed and portable apps download to update themselves |
+| `3rtc-<build>.exe`, `libmpv-2.dll`, `latest.json` | what installed and portable apps download to update themselves |
 
-`-Publish` copies them into `client-ts\public\desktop`, so the next deploy of the web app serves
-them at `https://3rtc.me/desktop/`. Apps check `latest.json` 15 s after starting and every 6 hours
-and update in place (More → Desktop → Updates). The build number is the UTC time of the build,
-`YYMMDD.HHMM`; builds from source (`dev.cmd`, CI) have none and never update.
+The binaries are **not** kept in git (each release would add ~120 MB to the repository for good).
+They live on GitHub Releases of `dash0200/3RTC`, tag `desktop-<build>`; only `latest.json`, a few
+hundred bytes, is served by the website at `https://3rtc.me/desktop/latest.json` and points at the
+release's files. The website's download links (`/desktop/3RTC-portable.zip`,
+`/desktop/3RTC-Setup.exe`) redirect to the newest release (`redirects` in `client-ts/vercel.json`).
+`.gitignore` keeps everything in `client-ts/public/desktop` except `latest.json` out of git, and
+`.vercelignore` (in `client-ts/` and the repo root) keeps it out of Vercel deployments too: Vite
+copies all of `public/` into the build, and a CLI deploy uploads files that are only on disk.
+
+To publish (needs the GitHub CLI once: `winget install GitHub.cli`, then `gh auth login`):
+
+1. `.\packaging\package.ps1 -Publish -Notes "what's new"`: builds, uploads the release
+   (`gh release create desktop-<build> … --latest`), then copies only `latest.json` into
+   `client-ts\public\desktop`.
+2. Commit that `latest.json` and deploy the web app. Apps update from then on; the upload has to
+   finish first, or they'd find a release that isn't there yet.
+
+Without `-Publish` the files stay in `target\dist`; upload them by hand with
+`gh release create desktop-<build> target\dist\3rtc-<build>.exe target\dist\3RTC-portable.zip
+target\dist\3RTC-Setup.exe target\dist\libmpv-2.dll target\dist\latest.json --repo dash0200/3RTC
+--title "3RTC desktop <build>" --notes "what's new" --latest`, then copy `target\dist\latest.json` to
+`client-ts\public\desktop` (step 2).
+
+Apps check `latest.json` 15 s after starting and every 6 hours and update in place (More → Desktop
+→ Updates); installs without `libmpv-2.dll` fetch it too. The build number is the UTC time of the
+build, `YYMMDD.HHMM`; builds from source (`dev.cmd`, CI) have none and never update.

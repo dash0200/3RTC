@@ -81,3 +81,8 @@ __pycache__/
 
 # A root lockfile is only a side effect of installing from the repo root (Vercel installs from client-ts/)
 /package-lock.json
+
+# Desktop release binaries live on GitHub Releases, not in git (desktop/packaging/package.ps1 -Publish).
+# Only latest.json, the update feed the app reads, is served from the website.
+client-ts/public/desktop/*
+!client-ts/public/desktop/latest.json

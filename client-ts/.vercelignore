@@ -1,0 +1,5 @@
+# Desktop release binaries live on GitHub Releases (desktop/packaging/package.ps1 -Publish).
+# Never upload them to Vercel, even if copies are left on disk: vite copies all of public/ into dist.
+# Only latest.json, the update feed the app reads, is deployed.
+public/desktop/*
+!public/desktop/latest.json

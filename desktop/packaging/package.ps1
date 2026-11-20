@@ -11,21 +11,35 @@
     latest.json                   what the app reads to find updates
   The build number is the time now in UTC, YYMMDD.HHMM (what the app shows and compares).
 
+  The binaries are NOT kept in git: they go to a GitHub Release (tag desktop-<build>) on -Repo.
+  Only latest.json (a few hundred bytes) is served by the website, at
+  https://3rtc.me/desktop/latest.json, and it points at the release's files. The website's
+  download links (/desktop/3RTC-portable.zip, /desktop/3RTC-Setup.exe) redirect to the newest
+  release (client-ts/vercel.json).
+
+.PARAMETER Repo
+  The GitHub repository that holds the releases. Default dash0200/3RTC
+
 .PARAMETER BaseUrl
-  Where the files will be served from (latest.json points there). Default https://3rtc.me/desktop/
+  Where the files will be downloaded from (latest.json points there).
+  Default https://github.com/<Repo>/releases/download/desktop-<build>/
 
 .PARAMETER Notes
   One line about what's new (shown in the app's log when the update is ready).
 
 .PARAMETER Publish
-  Also copy the files into client-ts\public\desktop, so deploying the web app serves them.
+  Also upload the files as the GitHub Release desktop-<build> (needs the GitHub CLI, signed in:
+  winget install GitHub.cli, then gh auth login), then copy latest.json into
+  client-ts\public\desktop. Commit that latest.json and deploy the web app: from then on apps
+  update to this build. Nothing big is copied into client-ts\public.
 
 .EXAMPLE
   .\packaging\package.ps1 -Notes "Reactions, the soundboard and chat pictures"
-  .\packaging\package.ps1 -Publish
+  .\packaging\package.ps1 -Publish -Notes "Webcam and folder sharing"
 #>
 param(
-    [string]$BaseUrl = 'https://3rtc.me/desktop/',
+    [string]$Repo = 'dash0200/3RTC',
+    [string]$BaseUrl = '',
     [string]$Notes = '',
     [switch]$Publish
 )
@@ -37,7 +51,21 @@ Set-Location $desktop
 
 # Build number: India Standard Time (UTC+5:30), YYMMDD.HHMM (matches client-ts/vite.config.ts)
 $build = (Get-Date).ToUniversalTime().AddMinutes(330).ToString('yyMMdd.HHmm')
+$tag = "desktop-$build"
+if (-not $BaseUrl) { $BaseUrl = "https://github.com/$Repo/releases/download/$tag/" }
 if (-not $BaseUrl.EndsWith('/')) { $BaseUrl += '/' }
+# check for the GitHub CLI before the long build, not after
+if ($Publish) {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Host "-Publish needs the GitHub CLI: winget install GitHub.cli, then gh auth login" -ForegroundColor Red
+        exit 1
+    }
+    gh auth status --hostname github.com | Out-Null
+    if ($LASTEXITCODE) {
+        Write-Host "The GitHub CLI isn't signed in: run gh auth login" -ForegroundColor Red
+        exit 1
+    }
+}
 Write-Host "Building 3RTC $build (release; this takes a few minutes) ..." -ForegroundColor Cyan
 $env:RTC_BUILD = $build
 cargo build --release --locked -p rtc-app
@@ -84,29 +112,35 @@ if ($iscc) {
 
 # what the app reads to find updates
 $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+Copy-Item $mpv (Join-Path $dist 'libmpv-2.dll')
+$mpvHash = (Get-FileHash $mpv -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifest = [ordered]@{
     build = $build
     notes = $Notes
     exe   = [ordered]@{ url = "$BaseUrl$versioned"; sha256 = $hash; size = (Get-Item $exe).Length }
+    # the video player, for installs that don't have it yet (update.rs ensure_player)
+    mpv   = [ordered]@{ url = "${BaseUrl}libmpv-2.dll"; sha256 = $mpvHash; size = (Get-Item $mpv).Length }
 }
-Copy-Item $mpv (Join-Path $dist 'libmpv-2.dll')
 # UTF-8 without a byte-order mark (Windows PowerShell's -Encoding utf8 would add one)
 [IO.File]::WriteAllText((Join-Path $dist 'latest.json'), ($manifest | ConvertTo-Json -Depth 3), (New-Object Text.UTF8Encoding $false))
 
 if ($Publish) {
+    # 1. the binaries go to a GitHub Release (not into git): the versioned exe that latest.json
+    #    names, the fixed-name zip and installer the website's links redirect to, and the player
+    $assets = @($versioned, '3RTC-portable.zip', '3RTC-Setup.exe', 'libmpv-2.dll', 'latest.json') |
+        ForEach-Object { Join-Path $dist $_ } | Where-Object { Test-Path $_ }
+    $releaseNotes = if ($Notes) { $Notes } else { "3RTC desktop $build" }
+    Write-Host "Uploading $tag to github.com/$Repo (about 250 MB) ..." -ForegroundColor Cyan
+    gh release create $tag @assets --repo $Repo --title "3RTC desktop $build" --notes $releaseNotes --latest
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+    # 2. only latest.json goes to the website; apps update once the web app is deployed with it
     $public = Join-Path $repo 'client-ts\public\desktop'
     New-Item -ItemType Directory $public -Force | Out-Null
-    # only the newest version is kept there; libmpv-2.dll (>100MB) is excluded from git/Vercel
-    Get-ChildItem $public -File | Where-Object { $_.Name -like '3rtc-*.exe' -or $_.Name -like '3RTC-*' -or $_.Name -eq 'latest.json' } | Remove-Item
-    Copy-Item (Join-Path $dist 'latest.json') $public
-    Copy-Item (Join-Path $dist $versioned) $public
-    if (Test-Path (Join-Path $dist '3RTC-portable.zip')) {
-        Copy-Item (Join-Path $dist '3RTC-portable.zip') $public
-    }
-    if (Test-Path (Join-Path $dist '3RTC-Setup.exe')) {
-        Copy-Item (Join-Path $dist '3RTC-Setup.exe') $public
-    }
-    Write-Host "Copied to $public : deploy the web app to publish 3RTC $build." -ForegroundColor Green
+    # binaries the old flow left here (they're in .gitignore; the release has them now)
+    Get-ChildItem $public -File | Where-Object { $_.Name -ne 'latest.json' } | Remove-Item
+    Copy-Item (Join-Path $dist 'latest.json') $public -Force
+    Write-Host "Released $tag. Commit client-ts\public\desktop\latest.json and deploy the web app to publish 3RTC $build." -ForegroundColor Green
 }
 
 Write-Host ""
