@@ -63,3 +63,5 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: 
 ; left behind by an update in place
 Type: files; Name: "{app}\3rtc.old.exe"
 Type: files; Name: "{app}\3rtc.new.exe"
+; the app log files (logs\3rtc-<date>.log and the "running" marker)
+Type: filesandordirs; Name: "{app}\logs"

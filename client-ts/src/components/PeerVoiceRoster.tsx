@@ -226,7 +226,7 @@ export function PeerAudioPopover({
             type="range"
             min="0"
             max="2"
-            step="0.05"
+            step="0.01"
             value={isLocalMuted ? 0 : volume}
             onChange={handleSliderChange}
             className={`peer-volume-slider ${volumePercent > 100 ? 'is-boosted' : ''}`}
@@ -630,7 +630,7 @@ export function PeerVoicePanel({
                     type="range"
                     min="0"
                     max="2"
-                    step="0.05"
+                    step="0.01"
                     value={peer.isLocalMuted ? 0 : (peer.volume !== undefined ? peer.volume : 1.0)}
                     onChange={(e) => { if (targetId) onSetPeerVolume?.(targetId, parseFloat(e.target.value)); }}
                     className={`peer-volume-slider ${volumePercent > 100 ? 'is-boosted' : ''}`}

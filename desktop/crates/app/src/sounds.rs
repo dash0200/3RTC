@@ -23,8 +23,9 @@ pub(crate) struct Clip {
     pcm: &'static [u8],
 }
 
-/// `SOUNDBOARD_CLIPS`, in order.
-pub(crate) const CLIPS: [Clip; 7] = [
+/// `SOUNDBOARD_CLIPS`, in order. The "Synth" ones are made by `packaging/make-sounds.py`
+/// (synthesised from scratch, CC0), decoded from the web app's MP3s like the others.
+pub(crate) const CLIPS: [Clip; 23] = [
     Clip {
         id: "quack",
         name: "Quack",
@@ -88,6 +89,150 @@ pub(crate) const CLIPS: [Clip; 7] = [
         description: "Official Discord message ping notification",
         pcm: include_bytes!("../assets/sounds/discord_ping.pcm"),
     },
+    Clip {
+        id: "boing",
+        name: "Boing",
+        emoji: "🦘",
+        color: 0x00f9_7316,
+        category: "Synth",
+        description: "A springy boing (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/boing.pcm"),
+    },
+    Clip {
+        id: "laser",
+        name: "Laser",
+        emoji: "🛸",
+        color: 0x0022_d3ee,
+        category: "Synth",
+        description: "Pew! A sci-fi laser zap (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/laser.pcm"),
+    },
+    Clip {
+        id: "tada",
+        name: "Ta-da",
+        emoji: "🎉",
+        color: 0x00f4_3f5e,
+        category: "Synth",
+        description: "Ta-da! A little fanfare (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/tada.pcm"),
+    },
+    Clip {
+        id: "ding",
+        name: "Ding",
+        emoji: "🛎️",
+        color: 0x00fa_cc15,
+        category: "Synth",
+        description: "A service bell ding (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/ding.pcm"),
+    },
+    Clip {
+        id: "whoosh",
+        name: "Whoosh",
+        emoji: "💨",
+        color: 0x0094_a3b8,
+        category: "Synth",
+        description: "Something flies past (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/whoosh.pcm"),
+    },
+    Clip {
+        id: "bubble",
+        name: "Bubble Pop",
+        emoji: "🫧",
+        color: 0x0038_bdf8,
+        category: "Synth",
+        description: "Pop, pop, pop (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/bubble.pcm"),
+    },
+    Clip {
+        id: "coin",
+        name: "Coin",
+        emoji: "🪙",
+        color: 0x00ea_b308,
+        category: "Synth",
+        description: "A coin picked up (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/coin.pcm"),
+    },
+    Clip {
+        id: "levelup",
+        name: "Level Up",
+        emoji: "⭐",
+        color: 0x00a8_55f7,
+        category: "Synth",
+        description: "A rising level-up arpeggio (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/levelup.pcm"),
+    },
+    Clip {
+        id: "buzzer",
+        name: "Wrong",
+        emoji: "❌",
+        color: 0x00dc_2626,
+        category: "Synth",
+        description: "Wrong answer buzzer (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/buzzer.pcm"),
+    },
+    Clip {
+        id: "correct",
+        name: "Correct",
+        emoji: "✅",
+        color: 0x0022_c55e,
+        category: "Synth",
+        description: "Right answer chime (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/correct.pcm"),
+    },
+    Clip {
+        id: "slidewhistle",
+        name: "Slide Whistle",
+        emoji: "🎶",
+        color: 0x00ec_4899,
+        category: "Synth",
+        description: "Wheee, up and down (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/slidewhistle.pcm"),
+    },
+    Clip {
+        id: "heartbeat",
+        name: "Heartbeat",
+        emoji: "💓",
+        color: 0x00e1_1d48,
+        category: "Synth",
+        description: "Lub-dub: the suspense (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/heartbeat.pcm"),
+    },
+    Clip {
+        id: "siren",
+        name: "Siren",
+        emoji: "🚨",
+        color: 0x00ef_4444,
+        category: "Synth",
+        description: "Nee-naw alarm (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/siren.pcm"),
+    },
+    Clip {
+        id: "ticktock",
+        name: "Tick Tock",
+        emoji: "⏰",
+        color: 0x0064_748b,
+        category: "Synth",
+        description: "The clock is ticking (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/ticktock.pcm"),
+    },
+    Clip {
+        id: "doorbell",
+        name: "Doorbell",
+        emoji: "🚪",
+        color: 0x0014_b8a6,
+        category: "Synth",
+        description: "Ding-dong, who's there? (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/doorbell.pcm"),
+    },
+    Clip {
+        id: "thunder",
+        name: "Thunder",
+        emoji: "⛈️",
+        color: 0x0063_66f1,
+        category: "Synth",
+        description: "A dramatic thunderclap (made in 3RTC)",
+        pcm: include_bytes!("../assets/sounds/thunder.pcm"),
+    },
 ];
 
 /// The clip for an id, with the web app's old names (`SOUND_URL_MAP`).
@@ -129,6 +274,16 @@ static WAVS: LazyLock<HashMap<&'static str, Vec<u8>>> = LazyLock::new(|| {
         .map(|c| (c.id, rtc_platform_win::art::wav(&decode(c.pcm))))
         .collect()
 });
+
+/// How loud soundboard clips play here: nothing when muted or at 0% (`useSoundboard.ts`
+/// `playLocally`), else the soundboard volume.
+pub(crate) fn clip_gain(muted: bool, volume: f32) -> f32 {
+    if muted || volume <= 0.0 {
+        0.0
+    } else {
+        volume.min(1.0)
+    }
+}
 
 /// A clip's samples (48 kHz mono, −1..1).
 pub(crate) fn clip_samples(clip: &Clip) -> Option<Arc<[f32]>> {
@@ -237,7 +392,19 @@ pub(crate) static CHIME_WAV: LazyLock<Vec<u8>> = LazyLock::new(|| to_wav(&CHIME)
 
 #[cfg(test)]
 mod tests {
-    use super::{CHIME, CLIPS, POP, clip, clip_samples, reaction_pop};
+    use super::{CHIME, CLIPS, POP, clip, clip_gain, clip_samples, reaction_pop};
+
+    #[test]
+    fn muted_or_at_zero_nothing_plays_ours_or_theirs() {
+        assert!(clip_gain(true, 0.75) <= 0.0, "muted");
+        assert!(clip_gain(true, 1.0) <= 0.0, "muted at full volume");
+        assert!(
+            clip_gain(false, 0.0) <= 0.0,
+            "0% is silent (it used to play at 10%)"
+        );
+        assert!((clip_gain(false, 0.4) - 0.4).abs() < 1e-6);
+        assert!((clip_gain(false, 3.0) - 1.0).abs() < 1e-6);
+    }
 
     #[test]
     fn every_clip_is_there_and_old_names_work() {

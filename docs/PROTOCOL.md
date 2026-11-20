@@ -141,6 +141,10 @@ else are ignored); a new deciding app that doesn't know the word ends that turn 
 Each turn's board is a whiteboard of its own: index `act:sketch:t<turn>` and chunks
 `act:sketch:t<turn>:<epoch>:<n>` (the whiteboard rules), drawn live with `wb-live` / `wb-cursor`.
 Guesses are actions on `act:sketch`, not chat. No new message types.
+No word comes back in a room until the list is used up: the state field `seen` (added Nov 2026; older
+apps leave it out and ignore it) holds the `words.ts` index of every word offered so far, the 2 passed-over
+choices added when drawing starts and the played word at the reveal; "Play again" keeps it, and it empties
+once fewer than 3 words are left.
 
 ### Cards in hand (Last Card)
 Shared stores can pass `redact(state, peerId)` (core/sharedState.ts): every copy of the state sent to

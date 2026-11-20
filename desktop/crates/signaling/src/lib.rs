@@ -156,6 +156,9 @@ async fn run(
     let mut index = 0;
     // the server that has our room, once known: used for every reconnect
     let mut pinned: Option<String> = None;
+    // tries in a row that couldn't reach a server (logged at the first and then every
+    // `FAILS_LOGGED_EVERY`, so being offline doesn't flood the log)
+    let mut fails: u32 = 0;
     loop {
         let url = pinned
             .clone()
@@ -175,6 +178,10 @@ async fn run(
         match attempt {
             Ok(Ok((socket, _))) => {
                 backoff.reset();
+                if fails > 0 {
+                    tracing::info!("signaling server {url} reached after {fails} failed tries");
+                }
+                fails = 0;
                 let backup = config.urls.first().is_some_and(|first| *first != url);
                 if events
                     .send(Event::Up {
@@ -189,6 +196,7 @@ async fn run(
                 match connected(&config, socket, &mut requests, &events).await {
                     End::Stop => return,
                     End::Lost => {
+                        tracing::warn!("lost the connection to the signaling server {url}; reconnecting");
                         if events.send(Event::Down).is_err() {
                             return;
                         }
@@ -203,13 +211,22 @@ async fn run(
                 }
             }
             Ok(Err(e)) => {
-                tracing::debug!("signaling connect to {url} failed: {e}");
+                fails += 1;
+                if fails_worth_logging(fails) {
+                    tracing::warn!("can't reach the signaling server {url} (try {fails}): {e}");
+                }
                 if pinned.is_none() && !config.urls.is_empty() {
                     index = (index + 1) % config.urls.len();
                 }
             }
             Err(_) => {
-                tracing::debug!("signaling connect to {url} timed out");
+                fails += 1;
+                if fails_worth_logging(fails) {
+                    tracing::warn!(
+                        "can't reach the signaling server {url} (try {fails}): no answer in {:?}",
+                        config.connect_timeout
+                    );
+                }
                 if pinned.is_none() && !config.urls.is_empty() {
                     index = (index + 1) % config.urls.len();
                 }
@@ -225,6 +242,13 @@ async fn run(
             return;
         }
     }
+}
+
+/// Failed tries in a row worth a log line: the first, then every [`FAILS_LOGGED_EVERY`]th.
+const FAILS_LOGGED_EVERY: u32 = 10;
+
+fn fails_worth_logging(fails: u32) -> bool {
+    fails == 1 || fails.is_multiple_of(FAILS_LOGGED_EVERY)
 }
 
 /// Which of `urls` has room `room` (all asked at once), or `None` if none says yes in time
@@ -328,5 +352,16 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fails_worth_logging;
+
+    #[test]
+    fn being_offline_logs_now_and_then_not_every_try() {
+        let logged: Vec<u32> = (1..=35).filter(|n| fails_worth_logging(*n)).collect();
+        assert_eq!(logged, vec![1, 10, 20, 30]);
     }
 }

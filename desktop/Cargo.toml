@@ -90,6 +90,12 @@ opt-level = 2
 [profile.dev.package.rtc-games]
 opt-level = 2
 
+# gpui's Windows renderer, in a dev build, asks for the DirectX debug layer; without Windows'
+# "Graphics Tools" that logs a red ERROR (0x887A002D, an SDK component missing) at every start and
+# changes nothing. Built as in a release (no debug assertions), it doesn't ask.
+[profile.dev.package.gpui-pre-windows]
+debug-assertions = false
+
 # LiveKit's webrtc-sys with one change: never use Windows' built-in (DMO) echo canceller, which
 # records silence on some laptops. See vendor/README.md.
 [patch.crates-io]

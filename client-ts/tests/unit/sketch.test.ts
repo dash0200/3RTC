@@ -15,6 +15,9 @@ import {
   pickChoices,
   redact,
   shownLetters,
+  addSeen,
+  seenForPick,
+  seenWords,
   type SketchAction,
   type SketchMeta,
   type SketchState
@@ -67,6 +70,17 @@ describe('sketch: words and guesses', () => {
     const c = pickChoices(Math.random, WORDS.slice(0, WORDS.length - 3));
     assert.equal(new Set(c).size, 3);
     for (const w of c) assert.ok(WORDS.slice(-3).includes(w));
+  });
+
+  it('keeps offered words as WORDS indices and starts over when the list is used up', () => {
+    const seen = addSeen([], ['cat', 'nope', 'dog', 'cat']);
+    assert.deepEqual(seenWords(seen), ['cat', 'dog']);
+    assert.deepEqual(seenForPick(seen), seen);
+    const almost = WORDS.slice(0, -2).map((_, i) => i);
+    assert.deepEqual(seenForPick(almost), [], '2 left: a new round of the list');
+    const enough = [...WORDS.slice(0, -3).map((_, i) => i), -1, 99_999, 1.5];
+    assert.deepEqual(seenForPick(enough), enough, "3 left (odd entries don't count)");
+    assert.deepEqual(seenWords([-1, 99_999, 1.5]), []);
   });
 
   it('gives 50 to 100 points, more for guessing sooner', () => {
@@ -210,6 +224,31 @@ describe('sketch: a game', () => {
     assert.equal(g.s.phase, 'lobby');
     assert.equal(g.s.players.length, 2);
     assert.ok(g.s.players.every((p) => p.score === 0));
+  });
+
+  it('never offers a word twice in the room until the list is used up, across games', () => {
+    const g = game();
+    g.act('a', { kind: 'start' });
+    const perCycle = Math.floor(WORDS.length / 3);
+    const offered = new Set<string>();
+    for (let turn = 0; turn <= perCycle; turn++) {
+      assert.equal(g.s.phase, 'picking', `turn ${turn}`);
+      if (turn < perCycle) {
+        for (const c of g.s.choices) {
+          assert.ok(!offered.has(c), `“${c}” came back at turn ${turn}`);
+          offered.add(c);
+        }
+      } else {
+        assert.deepEqual(g.s.seen, [], 'the list is used up, so it starts over');
+      }
+      // passing over all 3 (a skip while picking) counts them as offered
+      g.act(g.s.drawer!, { kind: 'skip' });
+      g.advance(REVEAL_MS);
+      if (g.s.phase === 'over') {
+        g.act('b', { kind: 'again' }); // "Play again" keeps what was offered
+        g.act('c', { kind: 'start' });
+      }
+    }
   });
 
   it('rejects junk', () => {
