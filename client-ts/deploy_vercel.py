@@ -5,7 +5,7 @@ Deploy WebRTC Watch Party Client to Vercel.
 - Target: GitHub Account Integration (dash0200/3RTC) & 'main' Branch
 - Build Command: npm run build -> dist/
 - Production Signaling Server: Automatically connects to wss://34.57.36.145.sslip.io:443
-- SPA Routing: Configures vercel.json rewrites for seamless room URL sharing
+- Routing: rooms are /?room=CODE, so vercel.json has no SPA rewrite (unknown URLs stay real 404s)
 """
 
 import sys
@@ -155,44 +155,27 @@ def check_prerequisites(client_dir):
 
 
 def ensure_vercel_config(client_dir):
-    print_step("Step 2: Verifying Vercel SPA Routing Configuration")
+    print_step("Step 2: Checking vercel.json")
     vercel_json_path = client_dir / "vercel.json"
 
-    expected_config = {
-        "framework": "vite",
-        "buildCommand": "npm run build",
-        "outputDirectory": "dist",
-        "rewrites": [
-            {
-                "source": "/(.*)",
-                "destination": "/index.html"
-            }
-        ]
-    }
-
+    # No catch-all rewrite to /index.html on purpose: rooms are /?room=CODE, so nothing needs it,
+    # and with it every unknown URL would return the homepage with status 200 instead of a 404
+    # (search engines treat those as duplicate "soft 404" pages)
     if not vercel_json_path.exists():
-        print("Creating 'vercel.json' for Vite React Single Page Application routing...")
-        with open(vercel_json_path, "w", encoding="utf-8") as f:
-            json.dump(expected_config, f, indent=2)
-        print("[OK] Created client-ts/vercel.json with SPA rewrites.")
+        print("[!] client-ts/vercel.json is missing: the site's headers, redirects and the noindex")
+        print("    rules for preview hosts won't apply. Restore it from git before deploying.")
+        return
+    try:
+        with open(vercel_json_path, "r", encoding="utf-8") as f:
+            content = json.load(f)
+    except Exception as e:
+        print(f"[Notice] Could not read vercel.json ({e}).")
+        return
+    if any(r.get("destination") == "/index.html" for r in content.get("rewrites", [])):
+        print("[!] vercel.json sends every URL to /index.html, so unknown URLs return the homepage")
+        print("    with status 200 instead of a 404. Rooms use /?room=, so this rewrite isn't needed.")
     else:
-        try:
-            with open(vercel_json_path, "r", encoding="utf-8") as f:
-                content = json.load(f)
-            has_rewrites = "rewrites" in content and any(r.get("destination") == "/index.html" for r in content.get("rewrites", []))
-            if not has_rewrites:
-                print("Updating 'vercel.json' to ensure SPA routing rewrites are configured...")
-                content.setdefault("framework", "vite")
-                content.setdefault("buildCommand", "npm run build")
-                content.setdefault("outputDirectory", "dist")
-                content["rewrites"] = expected_config["rewrites"]
-                with open(vercel_json_path, "w", encoding="utf-8") as f:
-                    json.dump(content, f, indent=2)
-                print("[OK] Updated client-ts/vercel.json with SPA rewrites.")
-            else:
-                print("[OK] client-ts/vercel.json already configured for SPA routing.")
-        except Exception as e:
-            print(f"[Notice] Preserving existing vercel.json ({e}).")
+        print("[OK] client-ts/vercel.json found; unknown URLs return a real 404.")
 
 
 def authenticate_vercel(cmd_runner, client_dir):
